@@ -36,7 +36,7 @@ JavaScript。相应的防护措施:
   任何一方都可以随时吊销信任
   ([ADR-0024](./docs/adr/0024-multi-client-attested-pairing-and-broker.md)、
   [ADR-0025](./docs/adr/0025-any-side-revocation-epoch.md))。
-- **全局紧急停止开关。** 在 CLI、扩展或桌面应用中的一个动作即可停止一切,
+- **全局紧急停止开关。** 在 CLI 或扩展中的一个动作即可停止一切,
   直到你以在场证明 (proof of presence) 显式解除
   ([ADR-0030](./docs/adr/0030-global-kill-switch-and-audit.md))。每一个安全
   决策都会写入磁盘上的审计日志。
@@ -51,45 +51,11 @@ TCP 套接字, 服务器启动时会对此发出警告。Windows 支持是尽力
 [信任边界](./docs/security/trust-boundaries.md)、
 [逐工具风险矩阵](./docs/security/tool-risk-matrix.md)。
 
-## 使用桌面应用快速上手 (macOS)
-
-Chromium Bridge 桌面应用是首选安装路径。它内置了已签名的主机二进制和扩展;
-这条路径里唯一的命令, 是把服务器注册给 MCP 客户端的那一条。
-
-> 应用安装包尚未发布 (当前发布版只含 CLI 压缩包)。在此之前, 请在源码检出
-> 中用 `moon run run-app` 构建并启动应用, 或使用下面的 CLI 路径。
-
-1. **安装应用。** 获取 `Chromium Bridge.app` (见上面的说明) 并打开。首次启
-   动时它会向检测到的每一个 Chromium 系浏览器 (Chrome、Brave、Edge 等) 注
-   册原生消息主机, 并展示它写入了什么。
-2. **加载扩展。** 在应用的 Setup 页点击 "Reveal folder" 打开内置扩展目录,
-   然后在浏览器中打开 `chrome://extensions`, 启用开发者模式, 点击
-   "加载已解压的扩展程序", 选择该目录。重启浏览器使注册生效。
-3. **用 Touch ID 配对。** 在应用的 Pairing 页点击 Pair (会弹出 Touch ID),
-   然后在扩展的选项页核对并批准密钥指纹。macOS 上扩展默认要求完成此注册,
-   在指纹匹配之前拒绝执行任何操作
-   ([ADR-0021](./docs/adr/0021-enrollment-ceremony.md))。
-4. **接入你的 MCP 客户端。** 在 Setup 页点击 Install, 将 `chromium-bridge`
-   命令安装到 `~/.local/bin`, 然后在客户端里注册它。以 Claude Code 为例:
-
-   ```sh
-   claude mcp add chromium-bridge -- "$HOME/.local/bin/chromium-bridge"
-   ```
-
-   其他客户端以同一个二进制作为 `mcpServers` 条目; 见英文 README 的
-   [Connect your MCP client](./README.md#connect-your-mcp-client)。
-
-让客户端"列出我的浏览器标签页"试试。第一次操作新站点时, 点击 Chromium
-Bridge 工具栏图标并批准该站点。
-
-装好之后应用仍然有用: 它是配对、受信客户端、紧急停止开关和审计日志的控制
-面板, 危险操作在已注册的 Mac 上由 Touch ID 把守。见
-[docs/desktop-app.md](./docs/desktop-app.md)。
-
 ## 使用 CLI 快速上手 (macOS、Linux、Windows)
 
-CLI 与桌面应用地位对等: 应用能做的它都能做, 只依赖二进制本身。在 Linux、
-Windows、无界面机器和 CI 上它是自然选择。
+CLI 只依赖二进制本身, 在桌面机器、无界面机器和 CI 上都一样。目前唯一的例外
+是 macOS 上的配对, 它需要一个带应用标识符签名的构建; WebAuthn 在场验证轨道
+将取消这一要求。
 
 1. 从[最新发布版](https://github.com/Vivswan/chromium-bridge/releases/latest)
    下载对应平台的压缩包并解压。建议先校验; macOS/Linux 示例如下 (Windows
@@ -207,8 +173,8 @@ Windows、无界面机器和 CI 上它是自然选择。
 
 ## 工作原理
 
-一个 Rust 二进制、两种模式, 由一条经过认证的本地套接字连接。桌面应用和
-CLI 管理同一份状态。
+一个 Rust 二进制、两种模式, 由一条经过认证的本地套接字连接。CLI 管理
+状态。
 
 - **MCP 服务器 (默认模式)**: 由你的 MCP 客户端通过 stdio 启动, 说
   JSON-RPC 2.0 (MCP 协议 `2026-07-28`, 无状态, 临时兼容旧版客户端)。
@@ -217,9 +183,8 @@ CLI 管理同一份状态。
 - **`--native-host`**: 由浏览器按主机清单启动, 是把 Chrome 原生消息帧转成
   套接字上 NDJSON 的薄桥。每个安装的浏览器用自己的标签启动自己的主机, 一个
   broker 可以按名字寻址多个浏览器。
-- **桌面应用 / CLI**: 基于同一个核心的对等管理面 (注册、配对、吊销、紧急停
-  止开关、审计)。两者都不是信任根; 授予能力的操作最终都落在一次用户在场
-  验证上。
+- **CLI**: 基于同一个核心的管理面 (注册、配对、吊销、紧急停止开关、审
+  计)。它不是信任根; 授予能力的操作最终都落在一次用户在场验证上。
 
 为什么是两个进程? 浏览器负责拉起原生主机, MCP 客户端负责拉起服务器。两者
 不是父子进程, 所以需要一条 IPC。原生主机保持轻薄, 这样 MV3 服务工作线程的
@@ -231,7 +196,7 @@ CLI 管理同一份状态。
 
 | | 支持情况 |
 |---|---|
-| macOS | Apple Silicon (arm64) 预编译; 桌面应用和 Touch ID 门在这里。Intel 需从源码构建。 |
+| macOS | Apple Silicon (arm64) 预编译; Touch ID 门在这里。Intel 需从源码构建。 |
 | Linux | x64 预编译; 任何 Chromium 系浏览器; 用 CLI 管理。 |
 | Windows | x64 预编译 (原生, 无需管理员)。桥接安全性为尽力而为; 见 [SECURITY.md](./.github/SECURITY.md#platform-support)。 |
 | 浏览器 | 任何 Chromium 系浏览器, Manifest V3 |
@@ -274,11 +239,10 @@ Code 里用 `/mcp` 重连) 和 `chrome://extensions` 里扩展的 Service Worker
 
 | 文档 | 内容 |
 |------|------|
-| [docs/quickstart.zh_CN.md](./docs/quickstart.zh_CN.md) | 安装与首次使用 (应用 + CLI) |
+| [docs/quickstart.zh_CN.md](./docs/quickstart.zh_CN.md) | 安装与首次使用 |
 | [docs/architecture.md](./docs/architecture.md) | 组件、数据流、协议、安全模型、关键约束 |
 | [docs/security/](./docs/security/) | 威胁模型、信任边界、工具风险矩阵、事件响应 |
 | [docs/cli.md](./docs/cli.md) | 完整 CLI: doctor/--fix、uninstall、配对、吊销、紧急停止开关、审计 |
-| [docs/desktop-app.md](./docs/desktop-app.md) | 桌面应用: 管理什么、如何验证 |
 | [docs/operations.md](./docs/operations.md) | 二进制模式、日志/审计、运行时目录、重连 |
 | [docs/privacy-policy.zh_CN.md](./docs/privacy-policy.zh_CN.md) | 扩展的隐私政策 |
 | [docs/adr/](./docs/adr/) | 架构决策记录: 每一个"为什么这么选" |

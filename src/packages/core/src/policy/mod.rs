@@ -31,9 +31,8 @@ pub use cli::{
     PolicyHistoryEntryReport, PolicyHistoryReport, PolicyStatusReport, PolicyStoreState,
 };
 pub use store::{
-    clear_baseline_locked, load_history, restrict, set_signed, PolicyGrantFloor, PolicyHistory,
-    PolicyHistoryEntry, PolicyStore, PolicyWriteError, POLICY_HISTORY_VERSION,
-    POLICY_STORE_VERSION,
+    clear_baseline_locked, load_history, restrict, set_signed, PolicyHistory, PolicyHistoryEntry,
+    PolicyStore, PolicyWriteError, POLICY_HISTORY_VERSION, POLICY_STORE_VERSION,
 };
 
 use serde::{Deserialize, Serialize};
@@ -70,7 +69,7 @@ pub const DISABLED_TOOL_NAME_MAX_BYTES: usize = 128;
 /// The shared `disabledTools` bound check: [`PolicyDoc::validate`] applies it to documents, [`restrict`] to
 /// the merged overlay, so neither lane can persist a list the other side's parser or the store's read cap would refuse.
 /// It also refuses what the comma-joined argv transport (`cli::parse_tool_list` re-splits and trims) cannot
-/// round-trip, which the property test in `cli` pins; the desktop app's editor, import mapping, and set_args join refuse the same shapes.
+/// round-trip, which the property test in `cli` pins.
 ///
 /// ```text
 /// name holding a comma    -> would silently become two names
@@ -280,12 +279,11 @@ fn de_js_safe_opt_u64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u
 
 /// Just the 15 policy field values, detached from a document's version / revision / touched scoping: the
 /// shape the comparisons and the effective policy work in, and the `effective` payload of
-/// [`crate::policy::PolicyStatusReport`] that the CLI emits and the desktop app parses back.
+/// [`crate::policy::PolicyStatusReport`] that the CLI emits.
 ///
 /// Its own `deny_unknown_fields` is load-bearing: serde does NOT inherit a container attribute from an
 /// embedding type, so without it an unknown field inside a report's `effective` would parse silently.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PolicyValues {
     pub cdp_mode: bool,
@@ -430,12 +428,8 @@ impl PolicyDoc {
 /// that direction check is the consumer's business ([`relaxes`] against the
 /// effective policy), not this shape's.
 ///
-/// `ts_rs`-exported under the gen-only feature: the desktop app's editor
-/// sends its per-field edits in exactly this shape, strict-parsed by serde
-/// at the Tauri boundary (`deny_unknown_fields`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
-#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(optional_fields))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct PolicyOverlay {
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -1,7 +1,6 @@
 // The Control Tower token layer exists as hand-synchronized copies: the
-// desktop stylesheet (the canonical one), the extension stylesheet (same
-// tokens, different dark-mode wrapper), the TypeScript mirror for CSS-less
-// contexts (theme-colors.ts), and the landing page's palette blocks
+// extension stylesheet (the canonical one), the TypeScript mirror for
+// CSS-less contexts (theme-colors.ts), and the landing page's palette blocks
 // (src/apps/web/src/styles/landing.css). Comments ask editors to keep them
 // in sync; this test makes drift fail CI instead.
 
@@ -21,18 +20,10 @@ const extensionCss = readFileSync(
   join(repoRoot, "src/apps/extension/src/assets/styles.css"),
   "utf8",
 );
-const desktopCss = readFileSync(join(repoRoot, "src/apps/desktop/ui/src/styles.css"), "utf8");
 const landingCss = readFileSync(join(repoRoot, "src/apps/web/src/styles/landing.css"), "utf8");
 
 function stripComments(css: string): string {
   return css.replace(/\/\*[\s\S]*?\*\//g, "");
-}
-
-/** Every custom-property declaration, in source order, whitespace normalized. */
-function tokenDeclarations(css: string): string[] {
-  return Array.from(stripComments(css).matchAll(/--[\w-]+\s*:\s*[^;]+;/g), (m) =>
-    m[0].replace(/\s+/g, " "),
-  );
 }
 
 /** The name -> value map of the custom properties in one block body. */
@@ -70,7 +61,7 @@ function paletteBlocks(css: string): Array<{ scheme: string; palette: Record<str
 
 // Custom properties that exist only on the landing page (theme-flip labels,
 // per-scheme screenshot swaps, the hero button hover) - not app tokens, so
-// they have no desktop counterpart to compare against. Their expected
+// they have no extension counterpart to compare against. Their expected
 // per-scheme values are pinned here instead, so a dropped or drifted flip
 // token fails like any palette token would.
 const LANDING_ONLY: Record<"light" | "dark", Record<string, string>> = {
@@ -95,19 +86,7 @@ const LANDING_ONLY: Record<"light" | "dark", Record<string, string>> = {
 const NOT_ON_LANDING = new Set(["--pending-halo", "--danger-strong"]);
 
 describe("Control Tower token parity", () => {
-  test("extension and desktop stylesheets declare identical tokens, in order", () => {
-    const ext = tokenDeclarations(extensionCss);
-    expect(ext.length).toBeGreaterThan(50); // guard against a regex gone blind
-    expect(tokenDeclarations(desktopCss)).toEqual(ext);
-  });
-
-  test("each mode's palette block matches between the two stylesheets", () => {
-    for (const scheme of ["light", "dark"] as const) {
-      expect(paletteOf(desktopCss, scheme)).toEqual(paletteOf(extensionCss, scheme));
-    }
-  });
-
-  test("the landing page's four palette blocks match the desktop palette", () => {
+  test("the landing page's four palette blocks match the extension palette", () => {
     const blocks = paletteBlocks(landingCss);
     // dark fallback, forced-light override, media-light base, flipped-dark.
     expect(blocks.map((b) => b.scheme)).toEqual(["dark", "light", "light", "dark"]);
@@ -115,7 +94,7 @@ describe("Control Tower token parity", () => {
       const landingOnly = LANDING_ONLY[scheme as "light" | "dark"];
       const expected = {
         ...Object.fromEntries(
-          Object.entries(paletteOf(desktopCss, scheme as "light" | "dark")).filter(
+          Object.entries(paletteOf(extensionCss, scheme as "light" | "dark")).filter(
             ([name]) => !NOT_ON_LANDING.has(name),
           ),
         ),

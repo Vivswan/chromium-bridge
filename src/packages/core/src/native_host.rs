@@ -190,8 +190,8 @@ fn handle_kill_engage() -> AdminControl {
 
 /// Handle `kill_release` from the extension: REFUSE it, audited (ADR-0032
 /// decision 6). Release wholesale-restores capability and now moves to the
-/// strongest gates - `chromium-bridge unkill` and the desktop app, both behind
-/// the ADR-0031 presence ladder - so the extension no longer holds a release
+/// strongest gate - `chromium-bridge unkill`, behind the ADR-0031 presence
+/// ladder - so the extension no longer holds a release
 /// surface at all (its UI drops the control, keeping engage). This host answers
 /// the retired frame with a refusal rather than silently dropping it, so a
 /// stale extension's pending request resolves and the trail records the
@@ -202,18 +202,16 @@ fn handle_kill_release_refused() -> AdminControl {
         crate::audit::AuditRecord::new(crate::audit::AuditKind::KillRelease)
             .surface(crate::audit::Surface::Extension)
             .outcome("refused")
-            .detail(
-                "extension kill_release retired (ADR-0032 decision 6); release is app/CLI only",
-            ),
+            .detail("extension kill_release retired (ADR-0032 decision 6); release is CLI only"),
     );
     log_warn!(
         "native-host",
         "refusing extension-originated kill_release: retired (ADR-0032 decision 6); \
-         release via the desktop app or `chromium-bridge unkill`"
+         release via `chromium-bridge unkill`"
     );
     KillStatus::Unreadable {
-        error: "kill_release from the extension is retired (ADR-0032); release via the \
-                desktop app or `chromium-bridge unkill`"
+        error: "kill_release from the extension is retired (ADR-0032); release via \
+                `chromium-bridge unkill`"
             .into(),
     }
     .into_frame()
@@ -1046,7 +1044,7 @@ where
 /// ```text
 /// control frame (kill_engage, kill_status, kill_release)  -> answered; kill_release is the audited refusal
 /// bridge frame                                             -> dropped and logged; no socket is dialed
-/// release (CLI unkill or the app) seen by the revocation watch -> queued frames drained, then exit if the kill is still
+/// release (CLI unkill) seen by the revocation watch        -> queued frames drained, then exit if the kill is still
 ///                                                            released (the extension reconnects into a bridge host);
 ///                                                            a queued kill_engage or unreadable kill state stays here
 /// ```

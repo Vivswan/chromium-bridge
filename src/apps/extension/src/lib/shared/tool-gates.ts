@@ -4,8 +4,8 @@
 // effective policy through this map, so a gated tool cannot gain an
 // enforcement gate the policy contract does not carry. `satisfies` pins both
 // axes: keys must be catalogue op names, values must name a HOST-OWNED
-// policy field (ADR-0032 - the options page no longer renders these; the
-// app's policy editor does) whose value is a plain boolean grant
+// policy field (ADR-0032 - the options page no longer renders these;
+// `chromium-bridge policy` sets them) whose value is a plain boolean grant
 // (BooleanPolicyField below, so enforcement's `=== true` reads stay
 // type-honest and a gate can never point at a numeric or list field).
 

@@ -24,8 +24,8 @@ use serde::{Deserialize, Serialize};
 use crate::ipc;
 
 /// Current record schema version; unknown versions are surfaced as
-/// unrecognized by the reader, never guessed at. Public so co-equal reading
-/// surfaces (the desktop app's audit panel) apply the same strict check.
+/// unrecognized by the reader, never guessed at. Public so every reading
+/// surface applies the same strict check.
 pub const AUDIT_VERSION: u32 = 1;
 
 /// Size cap for the live audit file. When an append would exceed it, the live
@@ -47,7 +47,6 @@ const AUDIT_MAX_FIELD: usize = 512;
 /// arrive over the ADR-0030 `audit_event` control frame; everything else is
 /// recorded by the host-side surface that made the decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum AuditKind {
     /// One MCP tool invocation (outcome + taxonomy code).
@@ -114,14 +113,14 @@ pub enum AuditKind {
 
 /// Which trusted surface performed the recorded act.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum Surface {
     Cli,
     Extension,
     Broker,
     Host,
-    /// The library API (the future desktop app drives this).
+    /// The library API, called in-process rather than through the CLI or a
+    /// frame.
     Core,
 }
 
@@ -129,7 +128,6 @@ pub enum Surface {
 /// three is optional so one flat shape covers every kind without inventing a
 /// nested schema per event; `deny_unknown_fields` keeps reads strict.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "ts-export", derive(ts_rs::TS), ts(optional_fields))]
 #[serde(deny_unknown_fields)]
 pub struct AuditRecord {
     /// Schema version; see [`AUDIT_VERSION`]. Stamped by [`record`].
@@ -157,7 +155,7 @@ pub struct AuditRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
     /// Confirmation-correlation id for the extension `confirm_*` kinds (ADR-0030): minted once per confirmation and
-    /// stamped on the `confirm_shown` record AND its later verdict, so a reader (the desktop audit panel) joins a
+    /// stamped on the `confirm_shown` record AND its later verdict, so a reader joins a
     /// verdict to exactly its own shown row instead of guessing by tool/origin. Distinct from `req`, the host-side
     /// per-tool-call `u64`.
     ///
@@ -724,8 +722,8 @@ mod tests {
 
     #[test]
     fn confirm_record_carries_the_cid_through_serde() {
-        // A confirm_* record round-trips its correlation id, so the desktop
-        // panel can join a verdict to its own shown row.
+        // A confirm_* record round-trips its correlation id, so a reader
+        // can join a verdict to its own shown row.
         let mut rec = AuditRecord::new(AuditKind::ConfirmShown).surface(Surface::Extension);
         rec.cid = Some("11111111-2222-3333-4444-555555555555".into());
         rec.v = AUDIT_VERSION;

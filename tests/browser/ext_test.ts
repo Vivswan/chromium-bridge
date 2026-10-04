@@ -194,10 +194,10 @@ async function main(): Promise<void> {
 
     // ---- i18n: English default, three locales, native-name picker ----------
     // NOT covered here (flagged, ADR-0032 Phase 4): the language ROUND TRIP
-    // extension -> host -> app and back in all three locales needs a
-    // registered native host plus the desktop app, which this suite does not
-    // launch; it belongs with the BB_REAL_E2E integration run once the app
-    // rides it. The locale swap below exercises only the storage-driven half.
+    // extension -> host and back in all three locales needs a registered
+    // native host, which this suite does not launch; it belongs with the
+    // BB_REAL_E2E integration run. The locale swap below exercises only the
+    // storage-driven half.
     // CJK is written as \u escapes so the check-cjk gate's allowlist stays
     // limited to the locale bundles and the native-names module.
     const NATIVE = {
@@ -214,9 +214,9 @@ async function main(): Promise<void> {
     // in the locale bundles), proving the page body reads the locale bundle
     // (the original leak was the retired grid showing zh on en).
     const POLICY_MANAGED_TITLE = {
-      en: "Managed in the Chromium Bridge app",
-      zh_CN: "\u5728 Chromium Bridge \u5E94\u7528\u4E2D\u7BA1\u7406",
-      zh_TW: "\u5728 Chromium Bridge \u61C9\u7528\u7A0B\u5F0F\u4E2D\u7BA1\u7406",
+      en: "Set with chromium-bridge policy",
+      zh_CN: "\u7528 chromium-bridge policy \u8BBE\u7F6E",
+      zh_TW: "\u7528 chromium-bridge policy \u8A2D\u5B9A",
     };
 
     const page = await browser.newPage();

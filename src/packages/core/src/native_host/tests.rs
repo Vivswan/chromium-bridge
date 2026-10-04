@@ -314,7 +314,6 @@ fn policy_get_answers_the_signed_baseline_from_the_store() {
         },
         vec![crate::policy::PolicyField::PageEvalEnabled],
         crate::audit::Surface::Core,
-        crate::policy::PolicyGrantFloor::SignatureOnly,
     )
     .unwrap();
     match policy_current_reply() {

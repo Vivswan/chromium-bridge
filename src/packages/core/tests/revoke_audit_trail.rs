@@ -1,7 +1,7 @@
 //! Revocation must never rewrite trust state without a trail entry: the
 //! RevokeClient audit record is written by `Allowlist::revoke` itself, not by
 //! its callers, so every surface - the CLI handler, the extension's
-//! `client_revoke` control frame, the desktop app, and any future one -
+//! `client_revoke` control frame, and any future one -
 //! inherits it instead of having to remember it.
 //!
 //! Lives in its own integration-test binary because it points the WHOLE

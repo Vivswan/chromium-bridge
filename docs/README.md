@@ -6,11 +6,10 @@ This directory is the **single source of truth** for the chromium-bridge project
 
 | Doc | Contents | Audience |
 |------|------|------|
-| [quickstart.md](./quickstart.md) | Install and first use: the desktop app path and the CLI path ([Simplified](./quickstart.zh_CN.md) / [Traditional Chinese](./quickstart.zh_TW.md)) | Users (start here) |
+| [quickstart.md](./quickstart.md) | Install and first use: the CLI path ([Simplified](./quickstart.zh_CN.md) / [Traditional Chinese](./quickstart.zh_TW.md)) | Users (start here) |
 | [requirements.md](./requirements.md) | Requirements: goals, user stories, functional/non-functional requirements, scope boundaries | Everyone |
 | [architecture.md](./architecture.md) | Architecture: components, data flow, protocols, security model, key constraints, technology choices | Implementers, reviewers |
 | [cli.md](./cli.md) | The full CLI: doctor/--fix/uninstall, enrollment, trusted clients, kill switch, audit, troubleshooting | Users, troubleshooters |
-| [desktop-app.md](./desktop-app.md) | The desktop app: what it manages, building it, what to verify by hand | Users, maintainers |
 | [operations.md](./operations.md) | Operations: the wire modes, logging/audit, the runtime directory, reconnect, kill-state recovery | Users, operators |
 | [compatibility.md](./compatibility.md) | Compatibility: the three kinds of version, the internal protocol version, the capability/version handshake (contract status) | Implementers, reviewers |
 | [release.md](./release.md) | Releasing: the release-please pipeline, prebuilt archives + checksums + provenance, SBOM | Releasers, reviewers |

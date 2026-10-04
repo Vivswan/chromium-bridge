@@ -13,7 +13,7 @@
 #
 # moon (moon.yml at the repo root) is the canonical command interface: jobs
 # whose steps are multi-step task definitions (extension, contract, e2e,
-# adversarial, chaos, desktop) run `moon run <task>` so the definition lives
+# adversarial, chaos) run `moon run <task>` so the definition lives
 # in exactly one place, with proto (pinned by the setup-toolchain action)
 # providing moon + the tools from .prototools. Jobs that are a single thin
 # command (rust matrix, tooling, cjk, web, browser, linux-install,
@@ -150,7 +150,7 @@ jobs:
           moon-version: "2.4.5"
       - run: proto install bun
       - run: bun install --frozen-lockfile
-      - name: Typecheck (extension, desktop UI, tests, scripts, src/packages/shared)
+      - name: Typecheck (extension, tests, scripts, src/packages/shared)
         run: moon run typecheck
       - name: Biome (lint + format)
         run: moon run check-ts
@@ -200,7 +200,7 @@ jobs:
         run: moon run check-gen
       - name: Envelope asymmetry gate (schemars vs z.toJSONSchema)
         run: moon run check-envelope
-      - name: Gen-only tooling (schemars, ts-rs) stays out of every shipped binary's graph
+      - name: Gen-only tooling (schemars, p256) stays out of the shipped binary's graph
         run: moon run check-gen-isolation
 
   version-consistency:
@@ -557,46 +557,6 @@ jobs:
   audits:
     name: Security audits
     uses: ./.github/workflows/audits.yml
-
-  # The desktop app (src/apps/desktop): UI build + unit tests, then the Rust
-  # crate's clippy + tests. macOS only: the crate is macOS-focused (the
-  # bundled-host/Enclave layout), and compiling Tauri elsewhere needs the
-  # platform GUI toolchains (WebKitGTK on Linux, WebView2 on Windows) that
-  # nothing ships yet - extending this matrix is the documented cost of
-  # supporting those platforms (ADR-0029). The UI dist must exist before the
-  # crate compiles (tauri's generate_context! embeds it).
-  desktop:
-    name: Desktop app (UI build+test, clippy, test) on macOS
-    runs-on: macos-14
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0 # moon diffs against the PR base ref; a shallow clone lacks it
-      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
-        with:
-          cache: false
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      # Pinned versions must match .prototools (see the extension job).
-      - uses: moonrepo/setup-toolchain@261c62cb5b0f580c7be7c8cd0f023a2e96756095 # v0.6.4
-        with:
-          proto-version: "0.58.2"
-          moon-version: "2.4.5"
-      - run: proto install bun
-      - run: bun install --frozen-lockfile
-      - run: moon run desktop-ui:test
-      # check-app-rust covers the rest as one dependency chain (moon.yml):
-      # desktop-ui:build (tauri's generate_context! embeds the dist),
-      # gen-icons (tauri-build reads icons/icon.png at compile time; the
-      # rasters are generated from the committed SVGs, never checked in),
-      # check-gen-app (regenerate commands.gen.ts via the ts-export cargo
-      # test and fail on a stale diff - the file is deleted first and must
-      # be recreated, so a renamed or missing export test fails loudly),
-      # then clippy with --features ts-export (the gen-only derive code is
-      # linted too) and the crate's tests. Runs here, not in the ubuntu
-      # jobs: it compiles Tauri, which needs this job's macOS toolchain.
-      - name: Desktop crate gate (UI build, icons, commands.gen.ts, clippy, tests)
-        run: moon run check-app-rust
 
   # Docs-parity gates (SSoT audit, ADR-0028 follow-up): the living docs'
   # hand-stated identifiers, protocol versions, env vars, tool tables, and

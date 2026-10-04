@@ -33,7 +33,7 @@ Credential-bearing values (cookies and web storage) are **read-only** (the exten
 
 - **Per-site approval.** A site's pages cannot be read or acted on until you approve its origin in a prompt.
 - **Per-action confirmation.** High-risk actions (form submissions, key presses, tab close, file uploads, and every JavaScript evaluation) ask for confirmation in an extension-owned window that web pages cannot see or interact with. On a Mac enrolled with Touch ID, the highest-risk actions require a Touch ID approval. These confirmations are on by default; each is a setting you control.
-- **A kill switch.** You can halt all bridge activity at any time from the extension's options page, the desktop app, or the command line; releasing it requires your explicit, present approval.
+- **A kill switch.** You can halt all bridge activity at any time from the extension's options page or the command line; releasing it requires your explicit, present approval.
 
 ## What the extension stores locally
 

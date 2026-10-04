@@ -24,7 +24,7 @@ chromium-bridge drives a real, authenticated browser. It can read page content, 
 - **Read-only credentials.** Cookies and storage can be read (always masked: JWTs, long hex, long digit runs), never written. There is no `cookie_set` or `storage_set` by design.
 - **Authenticated, attested bridge.** On macOS and Linux the host processes talk over a private Unix-domain socket (no listening port). Every connection must pass a kernel peer-UID check, kernel-attested executable identity, and an HMAC challenge over a per-run secret.
 - **Trusted-client allowlist.** MCP clients are admitted against an allowlist keyed on attested code identity, and any side can revoke trust at any time ([ADR-0024](./docs/adr/0024-multi-client-attested-pairing-and-broker.md), [ADR-0025](./docs/adr/0025-any-side-revocation-epoch.md)).
-- **A global kill switch.** One action from the CLI, the extension, or the app halts everything until you release it with proof of presence ([ADR-0030](./docs/adr/0030-global-kill-switch-and-audit.md)). Every security decision lands in an on-disk audit trail.
+- **A global kill switch.** One action from the CLI or the extension halts everything until you release it with proof of presence ([ADR-0030](./docs/adr/0030-global-kill-switch-and-audit.md)). Every security decision lands in an on-disk audit trail.
 
 **Platform honesty.** The strong bridge guarantees exist on macOS and Linux only; Windows support is best-effort ([SECURITY.md](./.github/SECURITY.md#platform-support)).
 
@@ -35,38 +35,9 @@ chromium-bridge drives a real, authenticated browser. It can read page content, 
 
 Full details: [SECURITY.md](./.github/SECURITY.md), [threat model](./docs/security/threat-model.md), [trust boundaries](./docs/security/trust-boundaries.md), [per-tool risk matrix](./docs/security/tool-risk-matrix.md).
 
-## Quickstart with the app (macOS)
-
-The Chromium Bridge desktop app is the primary install path. It bundles the signed host binary and the extension, and the only command in this path is the one that registers the server with your MCP client.
-
-> App downloads are not published yet. Releases carry the CLI archive and extension zip; the release pipeline's desktop job stays dormant until its signing secrets are configured and the publish hold is lifted ([docs/release.md](./docs/release.md)). Until then, build the app from a source checkout (below) or use the CLI quickstart.
-
-| Build the app yourself | Command |
-|---|---|
-| Signed disk image | `moon run dmg-app` |
-| Build and put the app in /Applications | `moon run install-app` |
-| Build and launch it in place | `moon run run-app` |
-
-A build signed with the free development certificate runs only on Macs its provisioning profile lists. Public distribution also needs a paid Developer ID for notarization; both remain open.
-
-1. **Install the app.** Get `Chromium Bridge.app` (see the note above) and open it. On first launch it registers the native-messaging host with every Chromium browser it detects (Chrome, Brave, Edge, ...) and shows what it wrote.
-2. **Load the extension.** On the app's Setup page, click "Reveal folder" to open the bundled extension, then in your browser open `chrome://extensions`, enable Developer mode, click "Load unpacked", and select that folder. Restart the browser so it picks up the registration.
-3. **Pair with Touch ID.** On the app's Pairing page, click Pair (a Touch ID prompt appears), then approve the key fingerprint on the extension's options page. On macOS the extension requires this enrollment by default and refuses to act until the fingerprints match ([ADR-0021](./docs/adr/0021-enrollment-ceremony.md)).
-4. **Connect your MCP client.** On the Setup page, click Install to put the `chromium-bridge` command at `~/.local/bin`. Then register it with your client. For Claude Code:
-
-   ```sh
-   claude mcp add chromium-bridge -- "$HOME/.local/bin/chromium-bridge"
-   ```
-
-   Other clients take the same binary as an `mcpServers` entry; see [Connect your MCP client](#connect-your-mcp-client).
-
-Ask your client to "list my browser tabs". The first time you target a new site, click the Chromium Bridge toolbar icon and approve it.
-
-The app is also the ongoing control panel: pairing, trusted clients, the kill switch, and the audit trail, with the dangerous acts gated by Touch ID on an enrolled Mac. See [docs/desktop-app.md](./docs/desktop-app.md).
-
 ## Quickstart with the CLI (macOS, Linux, Windows)
 
-The CLI is co-equal: everything the app does, from a terminal, with no dependency beyond the binary itself. It is the natural path on Linux and Windows, on headless machines, and in CI.
+The CLI needs nothing beyond the binary itself, on desktops, headless machines, and CI alike. The one exception today is pairing on macOS, which needs a build codesigned with an application identifier; the WebAuthn presence track removes that requirement.
 
 1. Download the archive for your platform from the [latest release](https://github.com/Vivswan/chromium-bridge/releases/latest) and extract it. Optionally verify it first; on macOS/Linux (Windows archives are `.zip`, checked with your own sha256 tooling):
 
@@ -204,7 +175,7 @@ No write tools by design; cookie/storage writes are out of scope ([ADR-0010](./d
 
 ## How it works
 
-One Rust binary, two modes, joined by an authenticated local socket. A desktop app and the CLI manage the same state.
+One Rust binary, two modes, joined by an authenticated local socket. The CLI manages the state.
 
 ```
 MCP client A --stdio--> chromium-bridge (broker: first MCP server instance)
@@ -225,7 +196,7 @@ MCP client B --stdio--> chromium-bridge ----attach----^   |
   - The first instance owns the socket and becomes the broker; later instances attach as relays, so several clients share the browsers concurrently.
 - **`--native-host`**: launched by the browser via the host manifest. A thin bridge translating Chrome's native-messaging frames to NDJSON on the socket.
   - Each installed browser launches its own host with its own label, so one broker can address several browsers by name.
-- **Desktop app / CLI**: co-equal management surfaces over the same core (registration, pairing, revocation, kill switch, audit). Neither is a trust root; capability-granting acts end in a user-presence gate.
+- **CLI**: the management surface over the same core (registration, pairing, revocation, kill switch, audit). It is not a trust root; capability-granting acts end in a user-presence gate.
 
 **Why two processes?** The browser spawns the native host and the MCP client spawns the server, so they are not parent and child and need an IPC. The native host stays thin so that MV3 service-worker recycling (about every 5 minutes) and host restarts do not lose session state.
 
@@ -235,7 +206,7 @@ Deep dive: [docs/architecture.md](./docs/architecture.md).
 
 | | Supported |
 |---|---|
-| macOS | Apple Silicon (arm64) prebuilt; the desktop app and Touch ID gates live here. Intel builds from source. |
+| macOS | Apple Silicon (arm64) prebuilt; the Touch ID gates live here. Intel builds from source. |
 | Linux | x64 prebuilt; any Chromium-based browser; CLI management surface. |
 | Windows | x64 prebuilt (native, no admin). Bridge security is best-effort; see [SECURITY.md](./.github/SECURITY.md#platform-support). |
 | Browser | Any Chromium-based browser, Manifest V3 |
@@ -276,11 +247,10 @@ Full runbook: [docs/cli.md](./docs/cli.md) and [docs/operations.md](./docs/opera
 
 | Doc | What's in it |
 |-----|--------------|
-| [docs/quickstart.md](./docs/quickstart.md) | Install and first use, app and CLI (also in [Simplified](./docs/quickstart.zh_CN.md) and [Traditional Chinese](./docs/quickstart.zh_TW.md)) |
+| [docs/quickstart.md](./docs/quickstart.md) | Install and first use (also in [Simplified](./docs/quickstart.zh_CN.md) and [Traditional Chinese](./docs/quickstart.zh_TW.md)) |
 | [docs/architecture.md](./docs/architecture.md) | Components, data flow, protocols, security model, key constraints |
 | [docs/security/](./docs/security/) | Threat model, trust boundaries, tool risk matrix, incident response |
 | [docs/cli.md](./docs/cli.md) | The full CLI: doctor/--fix, uninstall, pairing, revocation, kill switch, audit |
-| [docs/desktop-app.md](./docs/desktop-app.md) | The desktop app: what it manages and how to verify it |
 | [docs/operations.md](./docs/operations.md) | The binary modes, logging/audit, the runtime directory, reconnect |
 | [docs/compatibility.md](./docs/compatibility.md) | Version discipline and the capability/protocol handshake |
 | [docs/release.md](./docs/release.md) | Release-please releases, prebuilt archives + checksums, SBOM |
@@ -305,7 +275,6 @@ Layout:
 |---|---|
 | `src/apps/host` | the Rust binary |
 | `src/apps/extension` | the MV3 extension (WXT) |
-| `src/apps/desktop` | the Tauri app |
 | `src/packages/core` | the Rust library and the single source for cross-process contracts |
 | `src/packages/shared` | generated TS contracts + validators |
 

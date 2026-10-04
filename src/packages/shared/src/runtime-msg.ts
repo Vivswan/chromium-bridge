@@ -44,8 +44,8 @@ export const RuntimeMsgSchema = z.discriminatedUnion("type", [
   // host query when the port is up; set_kill relays kill_engage to the native
   // host, which performs the transition and answers with the resulting state.
   // ENGAGE-ONLY by shape (ADR-0032 decision 6): the host refuses kill_release
-  // from the extension - release lives in the desktop app and `chromium-bridge
-  // unkill` - so `on` is pinned to the literal `true` and a release request
+  // from the extension - release lives in `chromium-bridge unkill` - so `on`
+  // is pinned to the literal `true` and a release request
   // cannot even be expressed at this boundary. The router requires an
   // extension-page sender for BOTH (the top-level gate): a page or content
   // script can neither read nor engage the switch.

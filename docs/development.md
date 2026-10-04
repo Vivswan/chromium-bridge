@@ -33,9 +33,6 @@ The TypeScript side is a bun workspace rooted at the repo top level (`package.js
 ```
 src/apps/host/           Rust binary "chromium-bridge" (thin argv dispatch over the library)
 src/apps/extension/      MV3 extension (WXT); builds to build/extension/ (gitignored)
-src/apps/desktop/        Tauri v2 desktop app (ADR-0026/0029): workspace member but
-                         NOT a default member; `moon run bundle-app` builds + signs
-                         it with the bundled host (see docs/desktop-app.md)
 src/packages/core/       Rust library "chromium-bridge-core": MCP server + native-host bridge
 src/packages/core/fuzz/  cargo-fuzz workspace: wire parsers + semantic validators
                          (nightly + libFuzzer; see the Fuzzing section below)
@@ -62,7 +59,7 @@ moon is the canonical command interface: every dev task is a moon task, and `moo
 
 ```sh
 moon run build     # build everything (see below)
-moon run dev       # dev everything: extension (WXT) + docs site (Astro) + desktop app (tauri)
+moon run dev       # dev everything: extension (WXT) + docs site (Astro) + a dev browser
 moon run test      # rust tests (nextest + doctests) + protocol e2e
 moon run ci        # THE GATE: the cross-platform CI steps (see below for what CI adds)
 moon run release   # pre-release gate: version checks + full ci
@@ -70,12 +67,11 @@ moon run install   # build the release binary, then register it (doctor --fix)
 moon run lint      # lint everything: clippy -D warnings + biome lint
 moon run fmt       # format everything: cargo fmt + biome format
 moon run fix       # auto-fix everything: biome check --write + cargo fmt
-moon run run-app   # build, sign, verify, then launch the desktop app
 ```
 
-`moon run build` builds the entire repo in one command: it renders the icons, typechecks `src/packages/shared`, bundles the extension, builds the desktop UI and the docs site, typechecks `scripts/`, and runs `cargo build --workspace`. Use it to prove the whole graph still compiles after a cross-cutting change.
+`moon run build` builds the entire repo in one command: it typechecks `src/packages/shared`, bundles the extension (rendering its icons first), builds the docs site, typechecks `scripts/`, and runs `cargo build --workspace`. Use it to prove the whole graph still compiles after a cross-cutting change.
 
-`moon run ci` runs the cross-platform gate steps - the same list the old `just ci` ran: rust fmt/clippy/nextest+doctests, typos/machete, TS typecheck/biome/tests/extension build, protocol e2e, and the contract + hygiene checks. CI runs more on top: the macOS/Windows rust matrices, dependency review, linux-install, the adversarial/chaos suites, the browser suites, the web build, and the macOS-only desktop gate.
+`moon run ci` runs the cross-platform gate steps - the same list the old `just ci` ran: rust fmt/clippy/nextest+doctests, typos/machete, TS typecheck/biome/tests/extension build, protocol e2e, and the contract + hygiene checks. CI runs more on top: the macOS/Windows rust matrices, dependency review, linux-install, the adversarial/chaos suites, the browser suites, and the web build.
 
 The root `package.json` scripts are thin aliases that delegate to the corresponding moon task, so both entry points share one implementation. The JS-flavored root verbs (`lint`, `format`, `format:check`, `check`, `test`) delegate to the `*-ts` tasks; `build`, `gen`, and `typecheck` delegate to the same-named tasks; the repo-wide verbs cover every language at once (`moon run lint` = clippy + biome lint, `moon run fmt` = cargo fmt + biome format, `moon run test` = Rust + protocol e2e). Each task body is a plain command you can also run by hand:
 
@@ -95,21 +91,20 @@ The full task menu, by area:
 | Area | Tasks |
 |------|-------|
 | Aggregates | `build`, `test`, `ci`, `release`, `lint`, `fmt`, `fix` |
-| Dev loops | `dev`, `dev-app`, `dev-web`, `extension:dev`, `desktop-ui:dev` |
+| Dev loops | `dev`, `dev-web`, `extension:dev` |
 | Rust | `core:fmt-check`, `core:lint`, `test-rust` (= `core:test` + `core:test-doc`), `build-release`, `build-repro`, `typos`, `machete`, `audit`, `fuzz-smoke` |
-| TypeScript | `typecheck`, `test-ts` (= `shared:test` + `extension:test` + `web:test`), `lint-ts`, `check-ts`, `fmt-ts`, `fmt-check-ts`, `extension:build`, `desktop-ui:build`, `web:build` |
-| Contract codegen | `gen` (= `gen-shared` + `gen-app-types`), `gen-icons`, `check-gen`, `check-gen-app`, `check-envelope`, `check-gen-isolation` |
+| TypeScript | `typecheck`, `test-ts` (= `shared:test` + `extension:test` + `web:test`), `lint-ts`, `check-ts`, `fmt-ts`, `fmt-check-ts`, `extension:build`, `web:build` |
+| Contract codegen | `gen` (= `gen-shared`), `gen-icons`, `check-gen`, `check-envelope`, `check-gen-isolation` |
 | Protocol suites | `test-e2e`, `test-adversarial`, `test-chaos`, `check-uv` |
 | Interop suites | `test-interop` (official MCP SDK v2 client against the release binary), `harness-smoke` (real harness CLIs, isolated config dirs; the ADR-0034 opening-method canary) |
 | Browser suites | `test-browser`, `test-integration` (isolated Chrome only; never in `ci`) |
-| Desktop app | `bundle-app`, `dmg-app`, `run-app`, `install-app`, `check-app-signing`, `check-app-rust`, `desktop-ui:test` |
 | Touch ID runbooks | `touchid-proof`, `touchid-gates` (USER-RUN: raise real Touch ID prompts) |
 | Versioning | `sync-version`, `check-version`, `check-extension-id` |
 | Repo hygiene | `check-cjk`, `check-typography`, `check-fuzz-smoke`, `check-toolchain`, `check-hasher`, `check-ignored`, `check-yaml`, `check-actions`, `check-docs-literals`, `check-docs-policy` |
 
 ## moon: the canonical command interface
 
-Every task has one definition with declared inputs: the repo-wide tasks and runbooks live in the root `moon.yml`, per-project tasks (`core`, `shared`, `extension`, `desktop-ui`, `web`) live in a `moon.yml` next to their code, and CI runs the same tasks (the repo-owned `.github/workflows/checks.yml` calls `moon run <task>` wherever the step is more than a single thin command).
+Every task has one definition with declared inputs: the repo-wide tasks and runbooks live in the root `moon.yml`, per-project tasks (`core`, `shared`, `extension`, `web`) live in a `moon.yml` next to their code, and CI runs the same tasks (the repo-owned `.github/workflows/checks.yml` calls `moon run <task>` wherever the step is more than a single thin command).
 
 **Gates are never cached.** The `ci` aggregate, every task reachable from it, every `check-*` task, the python suites, and the runbook/ceremony tasks all set `options.cache: false` in their moon.yml: a gate that a cache hit can satisfy is not a gate, because a wrong hash (moon cannot hash gitignored inputs like the generated `.wxt/tsconfig.json`, and a mistaken `hasher.ignorePattern` would silently drop tracked files from every hash) would let unverified code land. `moon run ci` therefore always executes the full suite, in the fixed order its `deps` list declares (`runDepsInParallel: false`). The underlying tools (cargo, tsc, vite, bun) keep their own incremental caches, so warm reruns stay fast.
 
@@ -121,8 +116,6 @@ moon run :test             # every project's test task
 moon ci                    # affected-only, based on touched files - a LOCAL
                            # convenience for quick iteration, NEVER the gate
 ```
-
-Two tasks are macOS-shaped: `gen-app-types` and `check-app-rust` compile the Tauri desktop crate, which needs the platform GUI toolchain (WebKitGTK on Linux; nothing ships that setup). They refuse with a pointer to `gen-shared` on a box without it, are not part of `moon run ci`, and CI runs them in the dedicated macOS `desktop` job.
 
 Cache trust, and the one edge that must never be narrowed: the Rust core is the canonical cross-process contract (ADR-0028), so the `shared` and `extension` tasks declare the whole core crate (plus `scripts/gen-ops.ts` and the cargo manifests) as inputs - the `rust-contract` file group in `.moon/tasks/all.yml`. That list is deliberately over-broad; a change anywhere in `src/packages/core` marks the downstream TS tasks affected, because a stale result on the contract path is the one failure mode this repo cannot accept. If you edit these task definitions, it is always safe to widen inputs and never safe to narrow them. Generated and downloaded output (target/, build/, .wxt/, rendered icons, ...) is kept out of every hash by `hasher.ignorePatterns` in `.moon/workspace.yml`; if you add a new gitignored output directory, add it there too (forgetting only over-invalidates, it cannot go stale), and `moon run check-hasher` (part of the gate) proves no tracked file matches any pattern. `.moon/cache/` is local state and gitignored; `rm -rf .moon/cache` is the reset button.
 
@@ -215,6 +208,6 @@ BB_LOG=error chromium-bridge          # quiet
 
 ## Releasing
 
-Releases are cut by release-please: conventional commits on `main` accumulate into a rolling release PR that bumps the version and writes `CHANGELOG.md`; merging it tags the release, and the same CI run builds the macOS Apple Silicon, Linux x64, and Windows x64 archives (binary + built extension) and the desktop .dmg, and publishes them to GitHub Releases (see [docs/release.md](./release.md)). The bump covers `Cargo.toml` and every synced JSON manifest (`versionedJsonFiles` in `scripts/lib.ts`: the extension and desktop UI `package.json` files), per release-please-config.json's extra-files.
+Releases are cut by release-please: conventional commits on `main` accumulate into a rolling release PR that bumps the version and writes `CHANGELOG.md`; merging it tags the release, and the same CI run builds the macOS Apple Silicon, Linux x64, and Windows x64 archives (binary + built extension), and publishes them to GitHub Releases (see [docs/release.md](./release.md)). The bump covers `Cargo.toml` and every synced JSON manifest (`versionedJsonFiles` in `scripts/lib.ts`: the extension `package.json`), per release-please-config.json's extra-files.
 
-`Cargo.toml` stays the single source of truth between releases: after a manual version change, `moon run sync-version` (`bun scripts/sync-version.ts`) propagates it to the synced JSON manifests (the extension `package.json`, which the WXT-built manifest reads its version from, and the desktop UI `package.json`), and CI enforces the consistency on every push (`moon run check-version`), so drift fails the build - including on the release PR itself. Each packaging job additionally refuses to run if the tag doesn't match the Cargo version.
+`Cargo.toml` stays the single source of truth between releases: after a manual version change, `moon run sync-version` (`bun scripts/sync-version.ts`) propagates it to the synced JSON manifests (the extension `package.json`, which the WXT-built manifest reads its version from), and CI enforces the consistency on every push (`moon run check-version`), so drift fails the build - including on the release PR itself. Each packaging job additionally refuses to run if the tag doesn't match the Cargo version.

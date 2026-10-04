@@ -103,7 +103,7 @@ fn status_report_round_trips_and_rejects_unknown_fields() {
     let json = serde_json::to_string(&r).unwrap();
     let back: PolicyStatusReport = serde_json::from_str(&json).unwrap();
     assert_eq!(r, back);
-    // deny_unknown_fields is the app's fail-closed guard.
+    // deny_unknown_fields is the consumer's fail-closed guard.
     let bad = r#"{"v":1,"store":"none","surprise":1}"#;
     assert!(serde_json::from_str::<PolicyStatusReport>(bad).is_err());
     // The sum makes a contradictory mixture a parse error, not a value:
@@ -118,7 +118,7 @@ fn status_report_round_trips_and_rejects_unknown_fields() {
 #[test]
 fn error_report_round_trips_and_rejects_unknown_fields() {
     // The write lanes' --json failure object: same frozen-wire posture
-    // as the status report (the desktop app v-gates then strict-parses).
+    // as the status report (a consumer v-gates then strict-parses).
     let r = PolicyErrorReport {
         v: 1,
         error: "policy signing refused: user cancelled".into(),

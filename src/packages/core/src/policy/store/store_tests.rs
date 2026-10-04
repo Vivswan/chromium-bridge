@@ -170,7 +170,6 @@ fn the_first_signed_baseline_consumes_the_pending_import() {
         },
         vec![PolicyField::PageEvalEnabled],
         Surface::Core,
-        PolicyGrantFloor::SignatureOnly,
     )
     .unwrap();
     assert_eq!(
@@ -193,7 +192,6 @@ fn the_first_signed_baseline_consumes_the_pending_import() {
         PolicyValues::default(),
         vec![PolicyField::PageEvalEnabled],
         Surface::Core,
-        PolicyGrantFloor::SignatureOnly,
     )
     .unwrap();
     assert_eq!(
@@ -250,7 +248,7 @@ fn a_crash_between_window_close_and_baseline_preserves_the_bag() {
         crate::pending_import::record_if_absent(serde_json::json!({ "forged": true })).unwrap(),
         crate::pending_import::RecordOutcome::AlreadyConsumed
     );
-    // The read surface still reports the retained bag for the app.
+    // The read surface still reports the retained bag.
     assert_eq!(
         crate::pending_import::gather_pending_import(),
         crate::pending_import::PendingImportReport::Consuming {
@@ -267,7 +265,6 @@ fn a_crash_between_window_close_and_baseline_preserves_the_bag() {
         },
         vec![PolicyField::PageEvalEnabled],
         Surface::Core,
-        PolicyGrantFloor::SignatureOnly,
     )
     .unwrap();
     assert!(PolicyStore::load().unwrap().is_some());
@@ -367,7 +364,6 @@ fn a_failed_tombstone_write_refuses_the_first_baseline() {
         PolicyValues::default(),
         vec![PolicyField::PageEvalEnabled],
         Surface::Core,
-        PolicyGrantFloor::SignatureOnly,
     );
     assert!(
         matches!(denied, Err(PolicyWriteError::Io(_))),
@@ -423,7 +419,6 @@ fn set_signed_writes_the_exact_signed_bytes_and_bumps_revisions() {
         values.clone(),
         vec![PolicyField::PageEvalEnabled],
         Surface::Core,
-        PolicyGrantFloor::SignatureOnly,
     )
     .unwrap();
     assert_eq!(rung, PresencePath::TouchId);
@@ -449,7 +444,6 @@ fn set_signed_writes_the_exact_signed_bytes_and_bumps_revisions() {
         PolicyValues::default(),
         vec![PolicyField::PageEvalEnabled],
         Surface::Core,
-        PolicyGrantFloor::SignatureOnly,
     )
     .unwrap();
     let second = PolicyStore::load().unwrap().unwrap();
@@ -488,7 +482,6 @@ fn set_signed_clears_touched_overlay_entries_and_keeps_the_rest() {
         },
         vec![PolicyField::ConfirmGraceMs],
         Surface::Core,
-        PolicyGrantFloor::SignatureOnly,
     )
     .unwrap();
 
@@ -534,7 +527,6 @@ fn folding_the_effective_values_leaves_effective_unchanged() {
             PolicyField::DisabledTools,
         ],
         Surface::Core,
-        PolicyGrantFloor::SignatureOnly,
     )
     .unwrap();
 
@@ -556,13 +548,7 @@ fn set_signed_signs_exactly_the_bytes_it_stores() {
         ..PolicyValues::default()
     };
     let touched = vec![PolicyField::PageEvalEnabled];
-    set_signed(
-        values.clone(),
-        touched.clone(),
-        Surface::Core,
-        PolicyGrantFloor::SignatureOnly,
-    )
-    .unwrap();
+    set_signed(values.clone(), touched.clone(), Surface::Core).unwrap();
     // The bytes the signing primitive was called with are the bytes the
     // store persists, byte for byte: the signature can only ever cover
     // exactly what is stored.
@@ -583,13 +569,7 @@ fn an_empty_touched_set_refuses_before_any_prompt() {
     // The mock panics if the signing primitive is reached: the refusal
     // must be promptless.
     policy_test_hook::set(Mock::PanicIfCalled);
-    let err = set_signed(
-        PolicyValues::default(),
-        vec![],
-        Surface::Core,
-        PolicyGrantFloor::AppConfirm,
-    )
-    .unwrap_err();
+    let err = set_signed(PolicyValues::default(), vec![], Surface::Core).unwrap_err();
     assert!(matches!(err, PolicyWriteError::Invalid(_)));
     assert!(PolicyStore::load().unwrap().is_none());
 }
@@ -604,7 +584,6 @@ fn revision_overflow_refuses_before_any_prompt() {
         PolicyValues::default(),
         vec![PolicyField::CdpMode],
         Surface::Core,
-        PolicyGrantFloor::AppConfirm,
     )
     .unwrap_err();
     assert!(matches!(err, PolicyWriteError::RevisionOverflow));
@@ -623,7 +602,6 @@ fn the_last_js_safe_revision_still_writes() {
         PolicyValues::default(),
         vec![PolicyField::CdpMode],
         Surface::Core,
-        PolicyGrantFloor::SignatureOnly,
     )
     .unwrap();
     assert_eq!(
@@ -660,13 +638,12 @@ fn a_refused_signature_never_falls_to_the_floor() {
     policy_test_hook::set(Mock::Return(PolicySignOutcome::Refused(
         "user cancelled".into(),
     )));
-    // The APP floor is offered and must not be consulted: a refusal is
-    // terminal (the no-downgrade rule), never an unsigned write.
+    // A refusal is terminal (the no-downgrade rule): never an unsigned
+    // write, never a softer prompt.
     let err = set_signed(
         PolicyValues::default(),
         vec![PolicyField::CdpMode],
         Surface::Core,
-        PolicyGrantFloor::AppConfirm,
     )
     .unwrap_err();
     assert!(matches!(err, PolicyWriteError::Refused(_)));
@@ -675,41 +652,19 @@ fn a_refused_signature_never_falls_to_the_floor() {
 }
 
 #[test]
-fn unavailable_hardware_refuses_a_signature_only_surface() {
-    let _dir = scratch_runtime_dir("policy-signature-only");
+fn unavailable_hardware_refuses_the_grant() {
+    let _dir = scratch_runtime_dir("policy-no-signing-key");
     let _reset = policy_test_hook::ResetOnDrop;
     // The default mock is Unavailable: a keyless machine.
     let err = set_signed(
         PolicyValues::default(),
         vec![PolicyField::CdpMode],
         Surface::Cli,
-        PolicyGrantFloor::SignatureOnly,
     )
     .unwrap_err();
     assert!(matches!(err, PolicyWriteError::NoSigningKey));
     assert!(PolicyStore::load().unwrap().is_none());
     assert!(audit_text().contains("no signing key"));
-}
-
-#[test]
-fn unavailable_hardware_writes_unsigned_on_the_app_floor() {
-    let _dir = scratch_runtime_dir("policy-app-floor");
-    let _reset = policy_test_hook::ResetOnDrop;
-    // Default Unavailable mock: the app's interactive floor stores the
-    // SAME document bytes unsigned (ADR-0032 decision 3).
-    let rung = set_signed(
-        PolicyValues::default(),
-        vec![PolicyField::ConfirmGraceMs],
-        Surface::Core,
-        PolicyGrantFloor::AppConfirm,
-    )
-    .unwrap();
-    assert_eq!(rung, PresencePath::AppConfirm);
-    let store = PolicyStore::load().unwrap().unwrap();
-    assert!(store.sig_b64.is_none());
-    assert!(store.key_id.is_none());
-    assert_eq!(store.baseline_doc().unwrap().revision, 1);
-    assert!(audit_text().contains("auth=app_confirm"));
 }
 
 #[test]
@@ -882,7 +837,6 @@ fn a_corrupt_history_file_never_blocks_policy_writes() {
         PolicyValues::default(),
         vec![PolicyField::CdpMode],
         Surface::Core,
-        PolicyGrantFloor::SignatureOnly,
     )
     .unwrap();
     restrict(
@@ -918,8 +872,8 @@ fn a_moved_baseline_revision_conflicts_instead_of_overwriting() {
             lock,
             observation(1),
             &bytes,
-            None,
-            None,
+            "c2ln".into(),
+            "key-id".into(),
             &[PolicyField::CdpMode],
         ))
     })
@@ -943,8 +897,8 @@ fn a_moved_baseline_revision_conflicts_instead_of_overwriting() {
                 host_key_epoch: 0,
             },
             &bytes,
-            None,
-            None,
+            "c2ln".into(),
+            "key-id".into(),
             &[PolicyField::CdpMode],
         ))
     })
@@ -955,8 +909,8 @@ fn a_moved_baseline_revision_conflicts_instead_of_overwriting() {
             lock,
             observation(2),
             &bytes,
-            None,
-            None,
+            "c2ln".into(),
+            "key-id".into(),
             &[PolicyField::CdpMode],
         ))
     })
@@ -1008,8 +962,8 @@ fn an_overlay_moved_mid_prompt_conflicts_instead_of_clobbering() {
             lock,
             observed,
             &bytes,
-            None,
-            None,
+            "c2ln".into(),
+            "key-id".into(),
             &[PolicyField::CdpMode],
         ))
     })
@@ -1031,8 +985,8 @@ fn an_overlay_moved_mid_prompt_conflicts_instead_of_clobbering() {
                 host_key_epoch: 0,
             },
             &bytes,
-            None,
-            None,
+            "c2ln".into(),
+            "key-id".into(),
             &[PolicyField::CdpMode],
         ))
     })
@@ -1068,8 +1022,8 @@ fn a_disposal_during_the_prompt_conflicts_even_with_no_store_on_both_sides() {
                 host_key_epoch: observed_epoch,
             },
             &bytes,
-            Some("c2ln".into()),
-            Some("key-id".into()),
+            "c2ln".into(),
+            "key-id".into(),
             &[PolicyField::CdpMode],
         ))
     })
@@ -1140,24 +1094,12 @@ fn a_relaxation_outside_the_touched_set_refuses_before_any_prompt() {
         page_eval_enabled: true,
         ..PolicyValues::default()
     };
-    let err = set_signed(
-        relaxing.clone(),
-        vec![PolicyField::CdpMode],
-        Surface::Core,
-        PolicyGrantFloor::AppConfirm,
-    )
-    .unwrap_err();
+    let err = set_signed(relaxing.clone(), vec![PolicyField::CdpMode], Surface::Core).unwrap_err();
     assert!(matches!(err, PolicyWriteError::Invalid(_)));
     // With no store at all the anchor is the deny baseline: an
     // undeclared first-write grant refuses the same way.
     fs::remove_file(PolicyStore::path()).unwrap();
-    let err = set_signed(
-        relaxing,
-        vec![PolicyField::CdpMode],
-        Surface::Core,
-        PolicyGrantFloor::AppConfirm,
-    )
-    .unwrap_err();
+    let err = set_signed(relaxing, vec![PolicyField::CdpMode], Surface::Core).unwrap_err();
     assert!(matches!(err, PolicyWriteError::Invalid(_)));
     assert!(PolicyStore::load().unwrap().is_none());
 }
@@ -1175,7 +1117,6 @@ fn a_touched_superset_of_the_relaxations_passes() {
         },
         vec![PolicyField::PageEvalEnabled, PolicyField::CdpMode],
         Surface::Core,
-        PolicyGrantFloor::SignatureOnly,
     )
     .unwrap();
     assert!(
@@ -1209,7 +1150,6 @@ fn a_restriction_lands_when_named_and_refuses_as_untouched_drift() {
         PolicyValues::default(),
         vec![PolicyField::ConfirmGraceMs],
         Surface::Core,
-        PolicyGrantFloor::SignatureOnly,
     );
     assert!(matches!(drift, Err(PolicyWriteError::Invalid(_))));
     // Named in touched, the same restriction lands (the coverage check
@@ -1219,7 +1159,6 @@ fn a_restriction_lands_when_named_and_refuses_as_untouched_drift() {
         PolicyValues::default(),
         vec![PolicyField::PageEvalEnabled],
         Surface::Core,
-        PolicyGrantFloor::SignatureOnly,
     )
     .unwrap();
     assert!(
@@ -1346,7 +1285,6 @@ fn a_signed_write_bumps_the_policy_epoch() {
         },
         vec![PolicyField::PageEvalEnabled],
         Surface::Core,
-        PolicyGrantFloor::SignatureOnly,
     )
     .unwrap();
     let after = crate::revocation::Revocation::current()

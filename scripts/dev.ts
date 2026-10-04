@@ -3,17 +3,14 @@
 //
 //   - extension (WXT):        FOREGROUND - real terminal output + live stdin
 //   - docs site (Astro):      background, output prefixed [web]
-//   - desktop app (tauri):    background, output prefixed [app]
 //   - dev browser:            background, output prefixed [browser]
 //
 // Why not `bun run --filter '*' dev`? The filter runner closes each child's
 // stdin; WXT's readline-based key listener hits EOF and shuts the dev server
 // down seconds after launch. WXT needs a live stdin for its keyboard shortcuts
 // (r to reload, Ctrl-C to quit). Only one child can own the terminal, so the
-// site, the app, and the browser lane run backgrounded with prefixed,
-// non-interactive output.
-//
-// `moon run dev-app` remains the app-only convenience loop.
+// site and the browser lane run backgrounded with prefixed, non-interactive
+// output.
 
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { join } from "node:path";
@@ -21,7 +18,6 @@ import { repoRoot } from "./lib.ts";
 
 const webDir = join(repoRoot, "src/apps/web");
 const extensionDir = join(repoRoot, "src/apps/extension");
-const appDir = join(repoRoot, "src/apps/desktop");
 
 const prefixLines = (label: string, chunk: unknown) =>
   String(chunk)
@@ -79,82 +75,6 @@ const killWeb = () => {
     // No server running, or stop timed out; the group signal already applied.
   }
 };
-
-// `moon run dev-app`'s steps MINUS its extension production build. WXT's dev lane writes
-// build/extension/chrome-mv3-dev, but the desktop resolves only build/extension/chrome-mv3
-// (src/apps/desktop/src/cli_tool.rs extension_dir), so the app's "Load unpacked" path stays missing until a
-// production build (`moon run dev-app` or `bun run --cwd src/apps/extension build`) has run once; this lane
-// never refreshes it. Detached because tauri dev fans out into cargo, vite, and the native app binary, none
-// of them setsid, so one negative-pid SIGTERM reaps the tree.
-//   appChild -> always the lane's CURRENT process (a prereq or tauri), so shutdown mid-prereq kills the right group
-let appChild: ChildProcess | null = null;
-let appKilled = false;
-const killApp = () => {
-  if (appKilled) return;
-  appKilled = true;
-  const child = appChild;
-  if (child?.pid === undefined) return;
-  // Signal the group even when the direct child already exited: its
-  // descendants (vite, cargo, the app window) share the pgid and can
-  // outlive it.
-  try {
-    process.kill(-child.pid, "SIGTERM");
-  } catch {
-    // Whole group already gone; nothing to clean up.
-  }
-};
-const runAppStep = (cmd: string, args: string[], cwd: string) =>
-  new Promise<number>((resolve) => {
-    const child = spawn(cmd, args, { cwd, stdio: ["ignore", "pipe", "pipe"], detached: true });
-    appChild = child;
-    pipePrefixed(child, "app");
-    child.on("error", (error) => {
-      console.error(`[app] failed to start ${cmd}: ${error.message}`);
-      resolve(1);
-    });
-    child.on("exit", (code, signal) => resolve(code ?? (signal ? 1 : 0)));
-  });
-const startApp = async () => {
-  const prereqs: [string, string[], string][] = [
-    ["bun", ["scripts/gen-icons.ts", "desktop"], repoRoot],
-    ["cargo", ["build"], repoRoot],
-  ];
-  for (const [cmd, args, cwd] of prereqs) {
-    const code = await runAppStep(cmd, args, cwd);
-    if (appKilled) return;
-    if (code !== 0) {
-      console.error(
-        `[app] prereq failed: ${cmd} ${args.join(" ")} (exit ${code}); ` +
-          "desktop app lane stopped - extension and site keep running",
-      );
-      return;
-    }
-  }
-  const app = spawn("bunx", ["tauri", "dev"], {
-    cwd: appDir,
-    stdio: ["ignore", "pipe", "pipe"],
-    detached: true,
-  });
-  appChild = app;
-  pipePrefixed(app, "app");
-  app.on("error", (error) => console.error(`[app] failed to start tauri dev: ${error.message}`));
-  app.on("exit", (code) => {
-    if (appKilled) return;
-    // The leader can die while its group (vite, cargo, the app window)
-    // lives - e.g. a tauri CLI crash - and that would squat port 1420.
-    // Sweep the group on any exit we did not initiate.
-    if (app.pid !== undefined) {
-      try {
-        process.kill(-app.pid, "SIGTERM");
-      } catch {
-        // Whole group already gone.
-      }
-    }
-    const how = code === null ? "on a signal" : `with code ${code}`;
-    console.error(`[app] tauri dev exited ${how}; extension and site keep running`);
-  });
-};
-void startApp();
 
 // Extension (WXT): foreground with the real terminal so its output shows and
 // its keyboard shortcuts work; stdin is piped so your keystrokes (WXT's `r`
@@ -223,7 +143,6 @@ const shutdown = () => {
   // slow, synchronous `astro dev stop`.
   killBrowser();
   killWxt();
-  killApp();
   killWeb();
 };
 process.on("SIGINT", shutdown);
@@ -244,7 +163,6 @@ wxt.on("error", (error: Error) => {
 
 wxt.on("exit", (code, signal) => {
   killBrowser();
-  killApp();
   killWeb();
   if (startFailed) process.exit(1);
   // Signal-terminated during our own shutdown is a clean stop; a signal from

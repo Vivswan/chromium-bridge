@@ -8,8 +8,7 @@
 # `wildcards = "deny"` with no path exception and never allows NCSA. This
 # file's third-party direct dependencies are libfuzzer-sys, arbitrary, and
 # serde_json (plus the core crate under test, and derive_arbitrary
-# transitively via arbitrary); its tree does NOT include the desktop/Tauri
-# tree, so it needs none of the root config's GTK advisory ignores.
+# transitively via arbitrary).
 
 [advisories]
 version = 2

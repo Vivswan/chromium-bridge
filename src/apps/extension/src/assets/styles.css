@@ -10,16 +10,14 @@
 /* Class-based dark mode (we toggle .dark on <html>, see src/lib/theme.ts). */
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* "Control Tower" token layer, a hand-synchronized copy of the canonical
-   one in src/apps/desktop/ui/src/styles.css (only the dark-mode wrapper
-   differs: .dark class here since src/lib/theme.ts toggles it from JS,
-   prefers-color-scheme there). Color is a strict signal vocabulary:
-   green = live/attested, amber = pending/needs you, red = kill/deny;
-   everything else is neutral surfaces + ink.
+/* "Control Tower" token layer, the canonical one (the dark-mode wrapper is
+   the .dark class, which src/lib/theme.ts toggles from JS). Color is a
+   strict signal vocabulary: green = live/attested, amber = pending/needs
+   you, red = kill/deny; everything else is neutral surfaces + ink.
 
-   The parity test in tests/shared/theme-tokens.test.ts fails CI when this
-   copy (or the landing page's, src/apps/web/src/styles/landing.css) drifts
-   from the desktop stylesheet.
+   The parity test in tests/shared/theme-tokens.test.ts fails CI when the
+   landing page's copy (src/apps/web/src/styles/landing.css) drifts from
+   this stylesheet.
 
    Contexts that cannot read CSS custom properties (action badges, the
    inline-styled content-script toast) mirror these hexes in
@@ -206,7 +204,7 @@ body {
 
 /* ---------- shared Control Tower motifs ----------
    Class components (no custom-property declarations here: the token parity
-   test pins those to the desktop stylesheet). */
+   test reads them from the token layer above). */
 
 /* status pill: uppercase mono capsule, status only */
 .pill {

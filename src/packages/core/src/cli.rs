@@ -1,10 +1,8 @@
 //! Command-line entry helpers: argv-based mode selection and the `--help`
 //! text. Kept in the library so they are unit-testable and reusable.
 
-/// The subcommand and flag spellings that co-equal surfaces re-issue: the
-/// desktop app drives this binary as a subprocess (ADR-0029) and builds argv
-/// from these consts, so [`parse`] and the app's Enclave buttons cannot
-/// drift apart silently.
+/// The subcommand and flag spellings as consts, so [`parse`], the help text,
+/// and every runner that re-issues a spelling cannot drift apart silently.
 pub mod argv {
     /// `pair`: the enrollment ceremony (ADR-0021).
     pub const PAIR: &str = "pair";
@@ -14,15 +12,12 @@ pub mod argv {
     pub const REVOKE: &str = "revoke";
     /// `enclave-status`: read-only enrollment state report.
     pub const ENCLAVE_STATUS: &str = "enclave-status";
-    /// `enclave-status --json`: the machine-readable form the app parses.
-    /// Shared by `policy show --json` / `policy history --json`.
+    /// `enclave-status --json`: the machine-readable form. Shared by
+    /// `policy show --json` / `policy history --json`.
     pub const JSON_FLAG: &str = "--json";
 
     // ---- policy (ADR-0032 decision 5) ----------------------------------------
-    // The host-owned policy read/edit surface. The desktop app is a co-equal
-    // write surface that drives this binary as a subprocess, so it builds argv
-    // from these same literals; keeping them here is what stops the two
-    // surfaces from drifting apart.
+    // The host-owned policy read/edit surface.
 
     /// `policy <sub>`: the host-owned policy read/edit surface.
     pub const POLICY: &str = "policy";
@@ -37,7 +32,7 @@ pub mod argv {
     /// `policy history [--json]`: the superseded-revision ring.
     pub const POLICY_HISTORY: &str = "history";
     /// `policy pending-import [--json]`: the recorded legacy-settings bag
-    /// awaiting the app's first-run import (ADR-0032 decision 8). READ-ONLY:
+    /// awaiting import (ADR-0032 decision 8). READ-ONLY:
     /// consuming happens only when the first baseline signs.
     pub const POLICY_PENDING_IMPORT: &str = "pending-import";
     /// `policy rollback --revision <n>`: re-derive a past revision's effective
@@ -87,8 +82,8 @@ pub enum Command {
     /// `revoke`: delete the enrollment key, fail the pinned extension closed.
     Revoke,
     /// `enclave-status [--json]`: read-only enrollment state report. `--json`
-    /// emits one machine-readable object for co-equal surfaces (the desktop
-    /// app drives this binary as a subprocess and parses it).
+    /// emits one machine-readable object for scripts that drive this binary
+    /// as a subprocess.
     EnclaveStatus { json: bool },
     /// `presence-selftest`: raise one per-action user-presence prompt
     /// (ADR-0031) and report the outcome. A diagnostic that exercises exactly
@@ -399,9 +394,8 @@ pub enum PolicyCommand {
     /// `policy history [--json]`: the superseded-revision ring.
     History { json: bool },
     /// `policy pending-import [--json]`: the pending legacy import's state
-    /// (ADR-0032 decision 8), the read surface the desktop app's first-run
-    /// import screen shells out to. READ-ONLY - it never records, consumes,
-    /// or repairs anything; `--json` is the only mode that prints the bag.
+    /// (ADR-0032 decision 8). READ-ONLY - it never records, consumes, or
+    /// repairs anything; `--json` is the only mode that prints the bag.
     PendingImport { json: bool },
     /// `policy set <field flags> [--json]`: the GRANT lane. `overlay`
     /// carries the user's per-field edits and `touched` names exactly the
@@ -409,8 +403,7 @@ pub enum PolicyCommand {
     /// baseline and signs. The parser guarantees `touched` is non-empty (an
     /// empty write is refused at the CLI boundary, never handed to the
     /// seam). `--json` swaps the prose for the versioned status report on
-    /// success and the versioned error object on refusal (the desktop app's
-    /// parse surface).
+    /// success and the versioned error object on refusal.
     Set {
         overlay: PolicyOverlay,
         touched: Vec<PolicyField>,
@@ -926,7 +919,7 @@ mod tests {
         assert_eq!(parse(&args(&["status", "--fix"])), Command::Doctor);
         assert_eq!(parse(&args(&["doctor", "--list"])), Command::Doctor);
         assert_eq!(parse(&args(&["uninstall"])), Command::Uninstall);
-        // The install verb does not exist; the app (or doctor --fix) registers.
+        // The install verb does not exist; doctor --fix registers.
         assert_eq!(parse(&args(&["install"])), Command::Unknown);
     }
 
@@ -1104,8 +1097,7 @@ mod tests {
         assert!(err(&["policy", "grant"]).contains("unknown policy subcommand"));
         // set / restrict demand at least one field flag (--json alone is
         // still an empty edit), and restrict does not take --json at all
-        // (the desktop app's restrict lane is in-process, not a parse
-        // surface).
+        // (the free lane has no report; nothing parses its output).
         assert!(err(&["policy", "set"]).contains("at least one field flag"));
         assert!(err(&["policy", "set", "--json"]).contains("at least one field flag"));
         assert!(err(&["policy", "restrict"]).contains("at least one field flag"));

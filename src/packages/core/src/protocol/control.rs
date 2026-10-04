@@ -239,7 +239,7 @@ impl PolicyUnavailableReason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyStatus {
     /// The store was readable: the EXACT signed baseline bytes (base64), the
-    /// optional signature (`None` is the app-floor unsigned baseline), and the
+    /// optional signature (`None` is an unsigned baseline), and the
     /// optional restriction overlay. A signature can never travel without the
     /// baseline it covers, because both live inside this one variant.
     Present {

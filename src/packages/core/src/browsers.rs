@@ -2,9 +2,8 @@
 //! machine, and where each one looks for our native-messaging registration.
 //!
 //! This is the ONE source of per-browser path knowledge, shared by `doctor`
-//! (diagnosis and `--fix` repair), `uninstall` (both in
-//! `crate::registration`), and the app's browser detection and registration.
-//! Everything here is a pure derivation from
+//! (diagnosis and `--fix` repair) and `uninstall` (both in
+//! `crate::registration`). Everything here is a pure derivation from
 //! an [`Os`] and a set of [`BaseDirs`]: no I/O happens in this module, so
 //! every layout (macOS, Linux, Windows) is unit-testable from any host and
 //! tests never touch a real user directory. Callers do the existence checks

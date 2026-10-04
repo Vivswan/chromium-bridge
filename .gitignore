@@ -10,14 +10,12 @@
 /src/packages/core/fuzz/failures/
 
 # Icon rasters rendered from the committed assets/icon/ SVGs by
-# scripts/gen-icons.ts (run by the extension and desktop builds) - build
-# artifacts, never committed
+# scripts/gen-icons.ts (run by the extension build) - build artifacts, never
+# committed
 /src/apps/extension/src/public/icons/
-/src/apps/desktop/icons/
 
-# Unified build-output folder: all build deliverables (extension bundle,
-# desktop UI, signed app copy, dmg staging + image) land in /build/, covered
-# by the managed Python section below.
+# Unified build-output folder: all build deliverables (extension bundle, web
+# site) land in /build/, covered by the managed Python section below.
 
 # Extension build staging (WXT codegen; the bundle itself goes to /build/)
 src/apps/extension/.wxt/
@@ -27,10 +25,6 @@ src/apps/extension/.wxt/
 
 # Downloaded isolated Chrome for Testing (browser suites; never committed)
 /tests/.chrome-for-testing/
-
-# Tauri desktop shell (src/apps/desktop): gen/ holds the capability schemas
-# tauri-build writes on every compile.
-/src/apps/desktop/gen/
 
 # Local install destination (binaries live in ~/.chromium-bridge/, but guard
 # against accidental copies into the repo)

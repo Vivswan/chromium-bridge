@@ -205,8 +205,8 @@ function deepFreeze<T>(value: T): T {
 
 /**
  * Per-field salvage for the LEGACY-SETTINGS IMPORT BAG ONLY (ADR-0032 decision 8): a corrupt field in the
- * snapshotted chrome.storage bag falls back to its deny-baseline default, and the app's first-run import
- * screen SHOWS that fallback to the user, who signs it under their tap; it is never silently enforced.
+ * snapshotted chrome.storage bag falls back to its deny-baseline default, and the import review SHOWS that
+ * fallback to the user, who signs it under their tap; it is never silently enforced.
  *
  * NEVER parse the stored effective policy with this: a per-field default fallback moves a corrupt field
  * toward its permissive pole relative to a user-restricted policy, the "garbage in, defaults out" relaxation

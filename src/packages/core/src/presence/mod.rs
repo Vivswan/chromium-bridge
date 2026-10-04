@@ -8,7 +8,7 @@
 //! the gate to a softer prompt.
 //! ```text
 //! macOS, enrollment key present  -> Secure Enclave signing gated on the key's user-presence ACL (Touch ID or the login password)
-//! macOS without a key, other OS  -> the caller's interactive floor (`Floor`)
+//! macOS without a key, other OS  -> the CLI floor: a typed confirmation behind the `TerminalStdin` witness
 //! hardware RAN and REFUSED       -> error; the floor never runs, capability stays exactly as reduced
 //! ```
 //!
@@ -53,9 +53,6 @@ pub enum PresencePath {
     /// Retained as a stable audit LABEL only (ADR-0032 decision 6 retired the
     /// extension floor that produced it); no host path emits it anymore.
     ExtensionConfirm,
-    /// The desktop app's confirmation dialog, attested by the app surface
-    /// that raised it.
-    AppConfirm,
 }
 
 impl PresencePath {
@@ -64,7 +61,6 @@ impl PresencePath {
             PresencePath::TouchId => "touch_id",
             PresencePath::CliConfirm => "cli_confirm",
             PresencePath::ExtensionConfirm => "extension_confirm",
-            PresencePath::AppConfirm => "app_confirm",
         }
     }
 }
@@ -125,8 +121,7 @@ impl fmt::Display for PresenceError {
             PresenceError::NotInteractive => write!(
                 f,
                 "stdin is not a terminal; this action restores or grants capability \
-                 and requires an interactive confirmation (run it from a terminal, \
-                 or use the desktop app)"
+                 and requires an interactive confirmation (run it from a terminal)"
             ),
             PresenceError::Declined => {
                 write!(
@@ -140,9 +135,9 @@ impl fmt::Display for PresenceError {
 }
 
 /// Proof that stdin was a real terminal when the CLI floor was selected: the anti-tap-phishing precondition made
-/// structural. The private field keeps [`require`](TerminalStdin::require) the only constructor, so a
-/// [`Floor::CliConfirm`] cannot exist for a piped or redirected stdin, and `echo release | chromium-bridge unkill`
-/// is refused before [`require_presence`], and therefore before any hardware prompt, can run at all.
+/// structural. The private field keeps [`require`](TerminalStdin::require) the only constructor, and
+/// [`require_presence`] demands the witness, so `echo release | chromium-bridge unkill` is refused before the
+/// presence request, and therefore before any hardware prompt, can run at all.
 ///
 /// ```text
 /// fd 0 swapped for a pipe between witness and floor -> the witness encodes ORDERING, not a permanent fact; cli_confirm
@@ -171,22 +166,6 @@ impl TerminalStdin {
     }
 }
 
-/// The interactive fallback a call site is entitled to when hardware is unavailable; each surface has
-/// exactly one honest option.
-/// ```text
-/// `CliConfirm`  -> carries the `TerminalStdin` witness, so selecting it IS the interactivity precondition
-/// `AppConfirm`  -> succeeds without further checks here: the evidence is the desktop app's own modal
-///                  confirmation, shown before it asks, so only the app's presence-gated actions may select it
-/// ```
-/// Any other `AppConfirm` caller would claim a confirmation that never happened; treat adding one as a
-/// security change (SECURITY.md). There is no extension floor: ADR-0032 decision 6 retired its only
-/// caller (the extension's `kill_release`), and a zero-caller constructible floor is a latent grant primitive.
-#[derive(Debug)]
-pub enum Floor {
-    CliConfirm(TerminalStdin),
-    AppConfirm,
-}
-
 /// What the hardware provider said. Public because it is the seam's
 /// contract: the Secure Enclave signing provider ([`macos`]) returns exactly
 /// this. Distinct from [`PresenceError`] so the refused/unavailable
@@ -201,9 +180,8 @@ pub enum HardwareOutcome {
 /// Outcome of one policy-signing presence act ([`sign_policy_as_presence`],
 /// ADR-0032). Same seam discipline as [`HardwareOutcome`]: `Refused` is
 /// terminal (the no-downgrade rule - never a fallthrough to a floor), and
-/// `Unavailable` means there is no hardware rung here at all, leaving what
-/// happens next to the calling surface (the app's interactive floor; the
-/// CLI refuses outright, ADR-0032 decision 5).
+/// `Unavailable` means there is no hardware rung here at all, and the grant
+/// refuses outright (ADR-0032 decision 5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicySignOutcome {
     /// The presence-gated Enclave signing succeeded: the tap IS the grant
@@ -221,8 +199,8 @@ pub enum PolicySignOutcome {
     /// No enrollment key on this machine (or not macOS) - genuine absence
     /// only. A key that exists but fails lookup or public-half export is
     /// ambiguity and maps to `Refused` (see the macOS provider's
-    /// `sign_policy`), because `Unavailable` is what entitles a floor to
-    /// write a persistent unsigned baseline.
+    /// `sign_policy`), so the "no signing key" refusal the user sees names
+    /// only genuine absence.
     Unavailable,
 }
 
@@ -411,20 +389,17 @@ pub(crate) mod policy_test_hook {
     }
 }
 
-/// Attest user presence for `reason`, hardware first, `floor` only when
-/// hardware is unavailable. See the module docs for the no-downgrade rule.
-///
-/// The CLI floor's precondition (stdin is a terminal) has necessarily
-/// already run: [`Floor::CliConfirm`] cannot be constructed without the
-/// [`TerminalStdin`] witness, so a script-driven invocation was refused
-/// promptless before this function - and its hardware prompt - was
-/// reachable (tap phishing, see the module docs).
-pub fn require_presence(reason: &str, floor: Floor) -> Result<PresenceAttestation, PresenceError> {
-    ladder(hardware_authenticate(reason), floor, |floor| match floor {
-        Floor::CliConfirm(terminal) => cli_confirm(reason, terminal),
-        Floor::AppConfirm => Ok(PresenceAttestation {
-            path: PresencePath::AppConfirm,
-        }),
+/// Attest user presence for `reason`, hardware first, the CLI floor (a typed
+/// confirmation on `terminal`) only when hardware is unavailable. See the
+/// module docs for the no-downgrade rule. The CLI floor is the only floor;
+/// adding another is a security change (SECURITY.md). The terminal
+/// precondition is [`TerminalStdin`]'s.
+pub fn require_presence(
+    reason: &str,
+    terminal: TerminalStdin,
+) -> Result<PresenceAttestation, PresenceError> {
+    ladder(hardware_authenticate(reason), terminal, |terminal| {
+        cli_confirm(reason, terminal)
     })
 }
 
@@ -432,10 +407,10 @@ pub fn require_presence(reason: &str, floor: Floor) -> Result<PresenceAttestatio
 /// outcome and the floor prompt injected so the no-downgrade rule is
 /// unit-testable: `Refused` must return an error WITHOUT the floor ever
 /// running.
-fn ladder(
+fn ladder<F>(
     hardware: HardwareOutcome,
-    floor: Floor,
-    confirm_floor: impl FnOnce(Floor) -> Result<PresenceAttestation, PresenceError>,
+    floor: F,
+    confirm_floor: impl FnOnce(F) -> Result<PresenceAttestation, PresenceError>,
 ) -> Result<PresenceAttestation, PresenceError> {
     match hardware {
         HardwareOutcome::Verified => Ok(PresenceAttestation {
@@ -506,9 +481,9 @@ mod tests {
     #[test]
     fn a_non_terminal_stdin_cannot_even_construct_the_cli_floor() {
         // The anti-tap-phishing precondition, structural form: under a test
-        // harness stdin is never a terminal, so the witness - and with it
-        // `Floor::CliConfirm` - is unconstructible, and no CLI-floor presence
-        // request (or hardware prompt) can exist at all.
+        // harness stdin is never a terminal, so the witness is unconstructible,
+        // and no CLI-floor presence request (or hardware prompt) can exist at
+        // all.
         let err = TerminalStdin::require().unwrap_err();
         assert!(matches!(err, PresenceError::NotInteractive));
     }
@@ -557,7 +532,7 @@ mod tests {
         // floor closure panics if consulted.
         let err = ladder(
             HardwareOutcome::Refused("biometry mismatch".into()),
-            Floor::AppConfirm,
+            TerminalStdin::assume_for_tests(),
             |_| panic!("a refused hardware check must never fall back to the floor"),
         )
         .unwrap_err();
@@ -568,7 +543,7 @@ mod tests {
     fn verified_hardware_attests_touch_id_without_the_floor() {
         let att = ladder(
             HardwareOutcome::Verified,
-            Floor::CliConfirm(TerminalStdin::assume_for_tests()),
+            TerminalStdin::assume_for_tests(),
             |_| panic!("verified hardware needs no floor"),
         )
         .unwrap();
@@ -577,51 +552,27 @@ mod tests {
 
     #[test]
     fn unavailable_hardware_uses_exactly_the_given_floor() {
-        let att = ladder(
-            HardwareOutcome::Unavailable,
-            Floor::CliConfirm(TerminalStdin::assume_for_tests()),
-            |floor| {
-                assert!(matches!(floor, Floor::CliConfirm(_)));
-                Ok(PresenceAttestation {
-                    path: PresencePath::CliConfirm,
-                })
-            },
-        )
+        // The floor value the ladder hands to the prompt is the one it was
+        // given (a sentinel here, since the witness carries no data).
+        let att = ladder(HardwareOutcome::Unavailable, 7, |floor| {
+            assert_eq!(floor, 7);
+            Ok(PresenceAttestation {
+                path: PresencePath::CliConfirm,
+            })
+        })
         .unwrap();
         assert_eq!(att.path(), PresencePath::CliConfirm);
     }
 
     #[test]
-    fn the_app_floor_attests_its_own_path() {
-        // With hardware unavailable, the app floor succeeds and names itself,
-        // so the audit trail can never conflate it with hardware. Injected
-        // through the pure ladder here; the full require_presence path is
-        // covered separately, driven through the cfg(test) mock (never real
-        // hardware). (The extension floor was retired, ADR-0032 decision 6.)
-        let att = ladder(
-            HardwareOutcome::Unavailable,
-            Floor::AppConfirm,
-            |floor| match floor {
-                Floor::CliConfirm(_) => panic!("wrong floor selected"),
-                Floor::AppConfirm => Ok(PresenceAttestation {
-                    path: PresencePath::AppConfirm,
-                }),
-            },
-        )
-        .unwrap();
-        assert_eq!(att.path(), PresencePath::AppConfirm);
-    }
-
-    #[test]
     fn a_non_interactive_cli_invocation_is_refused_before_any_prompt() {
         // The anti-tap-phishing precondition end to end, as a CLI surface
-        // performs it: build the witness first, only then the floor and the
-        // presence request. Under a test harness stdin is never a terminal,
-        // so the chain refuses at the witness - hardware_authenticate is
-        // structurally unreachable (there is no Floor to call it with).
+        // performs it: build the witness first, only then the presence
+        // request. Under a test harness stdin is never a terminal, so the
+        // chain refuses at the witness - hardware_authenticate is
+        // structurally unreachable (there is no witness to call it with).
         let err = TerminalStdin::require()
-            .map(Floor::CliConfirm)
-            .and_then(|floor| require_presence("test", floor))
+            .and_then(|terminal| require_presence("test", terminal))
             .unwrap_err();
         assert!(matches!(err, PresenceError::NotInteractive));
     }
@@ -631,33 +582,40 @@ mod tests {
         // The full require_presence path is driven end to end through the
         // cfg(test) mock (test_hook), proving no test ever reaches real
         // LocalAuthentication or the enrolled Enclave key: a verified mock
-        // attests touch_id, a refused mock never falls back to the floor, and
-        // an unavailable mock uses the floor. The RAII guard restores the
-        // default even if an assertion below panics, so no state leaks to a
-        // reused thread.
+        // attests touch_id and a refused mock never falls back to the floor.
+        // The unavailable mock is checked at the seam, not through the full
+        // path: the CLI floor reads stdin, and whether that prompts or
+        // refuses depends on the harness's stdin, which no test may assume.
+        // The RAII guard restores the default even if an assertion below
+        // panics, so no state leaks to a reused thread.
         let _reset = test_hook::ResetOnDrop;
 
         test_hook::set(test_hook::Mock::Verified);
-        let att = require_presence("test", Floor::AppConfirm).unwrap();
+        let att = require_presence("test", TerminalStdin::assume_for_tests()).unwrap();
         assert_eq!(att.path(), PresencePath::TouchId);
 
         test_hook::set(test_hook::Mock::Refused);
-        let err = require_presence("test", Floor::AppConfirm).unwrap_err();
+        let err = require_presence("test", TerminalStdin::assume_for_tests()).unwrap_err();
         assert!(matches!(err, PresenceError::HardwareRefused(_)));
 
         test_hook::set(test_hook::Mock::Unavailable);
-        let att = require_presence("test", Floor::AppConfirm).unwrap();
-        assert_eq!(att.path(), PresencePath::AppConfirm);
+        assert!(matches!(
+            hardware_authenticate("test"),
+            HardwareOutcome::Unavailable
+        ));
     }
 
     #[test]
     fn the_default_test_hook_reaches_no_hardware() {
-        // Without opting in, the mock is Unavailable, so require_presence with
-        // a surface floor succeeds via that floor - never a hardware call.
-        // This is the default posture every other test in the crate runs
-        // under.
-        let att = require_presence("test", Floor::AppConfirm).unwrap();
-        assert_eq!(att.path(), PresencePath::AppConfirm);
+        // Without opting in, the mock is Unavailable: the seam reports no
+        // hardware rung, so the ladder goes to the floor and never to a
+        // hardware call. This is the default posture every other test in the
+        // crate runs under. Read at the seam, not through the CLI floor,
+        // which would touch the harness's stdin.
+        assert!(matches!(
+            hardware_authenticate("test"),
+            HardwareOutcome::Unavailable
+        ));
     }
 
     #[test]
@@ -669,7 +627,6 @@ mod tests {
             PresencePath::ExtensionConfirm.wire_name(),
             "extension_confirm"
         );
-        assert_eq!(PresencePath::AppConfirm.wire_name(), "app_confirm");
     }
 
     #[test]

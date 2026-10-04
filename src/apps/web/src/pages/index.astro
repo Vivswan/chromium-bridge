@@ -16,10 +16,6 @@ import "@fontsource/jetbrains-mono/700.css";
 import "../styles/landing.css";
 import confirmDark from "../assets/screens/ext-confirm-eval-touchid-dark.png";
 import confirmLight from "../assets/screens/ext-confirm-eval-touchid-light.png";
-import overviewDark from "../assets/screens/overview-dark.png";
-import overviewLight from "../assets/screens/overview-light.png";
-import securityDark from "../assets/screens/security-dark.png";
-import securityLight from "../assets/screens/security-light.png";
 // The workspace version, read from the root Cargo.toml at build time so the
 // chip cannot drift from the release-please-managed number.
 import cargoToml from "../../../../../Cargo.toml?raw";
@@ -148,8 +144,7 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
 
       <p class="trust-note"><span class="status-dot live"></span>Green means
         attested and live. <span class="status-dot pending"></span>Amber means
-        waiting on you. In the app these lights are drawn from the host's
-        checks; here they only illustrate.</p>
+        waiting on you. Here they only illustrate.</p>
 
       <p class="trust-caveat">The portless socket, kernel peer check, and
         attestation hold on macOS and Linux. On Windows the bridge falls back to
@@ -159,20 +154,11 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
     </section>
 
     <section class="shots wrap" id="shots">
-      <p class="sec-label">The console</p>
-      <h2 class="sec-title">Every gate, one window.</h2>
-      <p class="sec-sub">The desktop app is the control panel: pairing, trusted
-        clients, the kill switch, the audit trail. Dark and light are both
-        first-class; flip the chip in the corner to see.</p>
-
-      <figure class="shot shot-wide">
-        <Image class="shot-dark" src={overviewDark} width={1280} height={860} densities={[1, 2]} loading="lazy"
-          alt="The app's Overview screen: a trust map from Claude Code through the chromium-bridge host to Brave, with the kill switch, enclave key fingerprint, and connected browsers below" />
-        <Image class="shot-light" src={overviewLight} width={1280} height={860} densities={[1, 2]} loading="lazy"
-          alt="The app's Overview screen in the light scheme: a trust map from Claude Code through the chromium-bridge host to Brave, with the kill switch, enclave key fingerprint, and connected browsers below" />
-        <figcaption>The Overview screen. The trust map is the same pipeline you
-          just read, drawn live from the host's checks.</figcaption>
-      </figure>
+      <p class="sec-label">The gate</p>
+      <h2 class="sec-title">Every confirmation, one window.</h2>
+      <p class="sec-sub">The extension draws every confirmation in its own
+        window, off the page. Dark and light are both first-class; flip the
+        chip in the corner to see.</p>
 
       <div class="shot-pair">
         <figure class="shot">
@@ -185,14 +171,6 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
             on an enrolled Mac with the default settings, approval is a Secure
             Enclave presence check - your touch or your login password - so
             nothing on screen, and no remote client, can press it for you.</figcaption>
-        </figure>
-        <figure class="shot">
-          <Image class="shot-dark" src={securityDark} width={1280} height={860} densities={[1, 2]} loading="lazy"
-            alt="The app's Security screen: client admission enforced at the host, and three presence gates (releasing the kill switch, trusting an MCP client, minting the enclave key) each marked Touch ID, always" />
-          <Image class="shot-light" src={securityLight} width={1280} height={860} densities={[1, 2]} loading="lazy"
-            alt="The app's Security screen in the light scheme: client admission enforced at the host, and three presence gates (releasing the kill switch, trusting an MCP client, minting the enclave key) each marked Touch ID, always" />
-          <figcaption>Policy as the host enforces it. The presence gates are
-            hard-wired: no setting can turn them off.</figcaption>
         </figure>
       </div>
     </section>
@@ -240,7 +218,7 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
         </div>
         <div class="g-cell">
           <h3>One switch halts everything.</h3>
-          <p>Engage it from the CLI, the extension, or the app; every client
+          <p>Engage it from the CLI or the extension; every client
             loses every browser at once. Releasing it takes proof of presence,
             never a silent API call.</p>
           <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/adr/0030-global-kill-switch-and-audit.md">ADR-0030</a>
@@ -270,48 +248,47 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
     </div>
     <section class="install wrap" id="install">
       <p class="sec-label">Install</p>
-      <h2 class="sec-title">Three steps, same as the app's Setup screen.</h2>
-      <p class="sec-sub">App downloads are not published yet: today you build
-        from a source checkout, and the dev-signed app runs on Macs its
-        provisioning profile lists. The CLI path on Linux and Windows is in the
+      <h2 class="sec-title">Three steps, one binary.</h2>
+      <p class="sec-sub">The release archive carries the host binary and the
+        built extension. The full guide, with verification, is in the
         <a href="https://github.com/Vivswan/chromium-bridge#quickstart-with-the-cli-macos-linux-windows">README</a>.</p>
 
       <ol class="steps">
         <li class="step">
           <span class="step-num">01</span>
           <div class="step-body">
-            <h3>Build the app, then connect a browser.</h3>
-            <p>Clone the repository and let <span class="mono-inline">moon</span>
-              build, sign, and place the app in /Applications. First launch only
-              detects your Chromium browsers and writes nothing into any of
-              them; you connect each one yourself on the Browsers page, or all
-              at once from the first-run card.</p>
-            <pre class="code-block"><code>git clone https://github.com/Vivswan/chromium-bridge
-cd chromium-bridge &amp;&amp; moon run bundle-app &amp;&amp; moon run install-app</code></pre>
+            <h3>Get the binary, then register it with your browsers.</h3>
+            <p>Download and extract the archive for your platform, put the
+              binary somewhere that will not move, and let it write the
+              native-messaging registrations. It registers only the browsers
+              it detects and touches nothing else.</p>
+            <pre class="code-block"><code>./chromium-bridge doctor --fix</code></pre>
           </div>
         </li>
         <li class="step">
           <span class="step-num">02</span>
           <div class="step-body">
             <h3>Load the extension, then pair.</h3>
-            <p>On the app's Setup page, click Reveal folder. In your browser,
-              open <span class="mono-inline">chrome://extensions</span>, enable
-              Developer mode, and Load unpacked from that folder. Then click Pair
-              in the app (a Touch ID prompt on an enrolled Mac) and approve the
-              key fingerprint on the extension's options page. Until the
-              fingerprints match, the extension refuses to act.</p>
+            <p>In your browser, open
+              <span class="mono-inline">chrome://extensions</span>, enable
+              Developer mode, and Load unpacked from the archive's
+              <span class="mono-inline">extension/dist</span> folder. On a Mac,
+              run <span class="mono-inline">chromium-bridge pair</span> (a Touch
+              ID prompt) and approve the printed key fingerprint on the
+              extension's options page. Until the fingerprints match, the
+              extension refuses to act. Pairing on macOS today needs a build
+              codesigned with an application identifier: the plain release
+              binary cannot mint the Enclave key. The WebAuthn presence track
+              removes that requirement.</p>
           </div>
         </li>
         <li class="step">
           <span class="step-num">03</span>
           <div class="step-body">
             <h3>Register with your MCP client.</h3>
-            <p>On the app's Setup page, click Install next to the command-line
-              tool: that places one symlink,
-              <span class="mono-inline">~/.local/bin/chromium-bridge</span>,
-              pointing at the bundled host. Point your client at it; for Claude
+            <p>Point your client at the binary's absolute path; for Claude
               Code:</p>
-            <pre class="code-block"><code>claude mcp add chromium-bridge -- "$HOME/.local/bin/chromium-bridge"</code></pre>
+            <pre class="code-block"><code>claude mcp add chromium-bridge -- /absolute/path/to/chromium-bridge</code></pre>
             <p>Ask it to list your browser tabs. The first time it targets a new
               site, approve the site from the toolbar icon.</p>
           </div>

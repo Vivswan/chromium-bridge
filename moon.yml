@@ -1,6 +1,5 @@
 # Root project: the ci gate, the repo-wide aggregates, contract codegen, the python protocol suites, and the
-# desktop bundle / signing / Touch ID runbooks. Unscoped task names resolve here via .moon/workspace.yml's
-# defaultProject.
+# Touch ID runbooks. Unscoped task names resolve here via .moon/workspace.yml's defaultProject.
 #
 # The ci aggregate, everything reachable from it, the check-* tasks, the python suites, and the runbooks all set
 # `options.cache: false`: moon's hasher cannot see gitignored inputs (the generated .wxt/tsconfig.json) and a
@@ -30,16 +29,10 @@ tasks:
   # ----- main aggregates ----------------------------------------------------
 
   build:
-    # gen-icons first, sequentially: `cargo build --workspace` compiles the
-    # desktop crate (tauri-build reads icons/icon.png at compile time), and
-    # the extension build regenerates its own icons - running the steps in
-    # the listed order keeps the two icon writers from racing.
-    description: 'Build everything: icons, shared typecheck, extension, desktop UI, web app, scripts typecheck, cargo workspace'
+    description: 'Build everything: shared typecheck, extension, web app, scripts typecheck, cargo workspace'
     deps:
-      - '~:gen-icons'
       - 'shared:typecheck'
       - 'extension:build'
-      - 'desktop-ui:build'
       - 'web:build'
     script: 'bunx tsc -p scripts && cargo build --workspace'
     toolchains: ['system']
@@ -53,9 +46,8 @@ tasks:
     # tests/extension build, protocol e2e, the excluded fuzz workspace's
     # locked check, and the contract + hygiene checks. CI runs MORE on top: the
     # macOS/Windows rust matrices, dependency review, linux-install, the
-    # adversarial/chaos suites, the browser suites (isolated Chrome), the
-    # web build, and the macOS-only desktop gate (check-app-rust needs the
-    # Tauri GUI toolchain). Every dep here is uncached (see the header) and
+    # adversarial/chaos suites, the browser suites (isolated Chrome), and
+    # the web build. Every dep here is uncached (see the header) and
     # runs in this exact order, sequentially - the gate always executes
     # fully; there is nothing a cache or a scheduler can skip or reorder.
     description: 'THE GATE: the local cross-platform gate steps (CI layers more jobs on top - see the comment); uncached, sequential, always full'
@@ -70,7 +62,6 @@ tasks:
       - '~:check-ts'
       - 'shared:test'
       - 'extension:test'
-      - 'desktop-ui:test'
       - 'extension:build'
       - '~:test-e2e'
       - '~:check-version'
@@ -141,22 +132,8 @@ tasks:
   # ----- dev loops (local only; never in CI) --------------------------------
 
   dev:
-    description: 'Dev everything: extension (WXT) + web app (Astro) + desktop app (tauri) in one terminal; Ctrl-C stops all'
+    description: 'Dev everything: extension (WXT) + web app (Astro) + a dev browser in one terminal; Ctrl-C stops all'
     command: 'bun scripts/dev.ts'
-    toolchains: ['system']
-    preset: 'server'
-
-  dev-app:
-    # Desktop app dev loop ONLY: Vite dev server + tauri dev (unsigned;
-    # Enclave ops need the built host as a sibling, hence the cargo build).
-    # `moon run dev` supersets this.
-    description: 'Desktop app dev loop only: cargo build + extension build, then Vite + tauri dev'
-    script: |
-      set -eu
-      bun scripts/gen-icons.ts desktop
-      cargo build
-      bun run --cwd src/apps/extension build
-      cd src/apps/desktop && bunx tauri dev
     toolchains: ['system']
     preset: 'server'
 
@@ -277,11 +254,10 @@ tasks:
   # ----- typescript aggregates ----------------------------------------------
 
   typecheck:
-    description: 'Type-check every TS project (extension, desktop UI, tests, scripts, src/packages/shared)'
+    description: 'Type-check every TS project (extension, tests, scripts, src/packages/shared)'
     script: |
       set -e
       bunx tsc -p src/apps/extension
-      bunx tsc -p src/apps/desktop/ui
       bunx tsc -p tests/browser
       bunx tsc -p tests/interop
       bunx tsc -p tests/harness
@@ -294,7 +270,7 @@ tasks:
       cache: false
 
   test-ts:
-    description: 'Unit-test shared + extension + web (the `bun run test` set; the desktop UI suite is desktop-ui:test)'
+    description: 'Unit-test shared + extension + web (the `bun run test` set)'
     deps:
       - 'shared:test'
       - 'extension:test'
@@ -426,10 +402,9 @@ tasks:
   # ----- contract codegen (the Rust core is the single source, ADR-0028) ----
 
   gen:
-    description: 'Regenerate ALL generated TS from Rust: the shared contract modules and the desktop Tauri command types'
+    description: 'Regenerate ALL generated TS from Rust: the shared contract modules'
     deps:
       - '~:gen-shared'
-      - '~:gen-app-types'
     toolchains: ['system']
     options:
       cache: false # mutates the tree
@@ -456,38 +431,8 @@ tasks:
     options:
       cache: false # mutates the tree; check-gen diffs its output
 
-  gen-app-types:
-    # Regenerates the desktop UI's Tauri command types from the desktop
-    # crate's command DTOs (src/apps/desktop/ui/src/lib/commands.gen.ts).
-    # ts-rs writes bindings by executing generated code, so the export runs
-    # as a cargo test (src/apps/desktop/src/ts_export.rs) behind the
-    # gen-only ts-export feature; the file is deleted first and must be
-    # recreated, so a renamed or missing export test fails here instead of
-    # silently leaving a stale file. Compiling the desktop crate needs the
-    # UI dist and the generated icon (hence the deps) - and the platform GUI
-    # toolchain, hence the precondition check below.
-    description: 'Regenerate the desktop UI Tauri command types (compiles the desktop crate; needs the Tauri GUI toolchain)'
-    deps:
-      - 'desktop-ui:build'
-      - '~:gen-icons'
-    script: |
-      set -e
-      if [ "$(uname -s)" != "Darwin" ] && ! pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
-        echo "error: gen-app-types compiles the Tauri desktop crate, which needs the platform GUI toolchain" >&2
-        echo "(WebKitGTK on Linux: install libwebkit2gtk-4.1-dev). Without it, run 'moon run gen-shared' for the" >&2
-        echo "shared contract modules; CI's macOS desktop job keeps commands.gen.ts honest (check-gen-app)." >&2
-        exit 1
-      fi
-      rm -f src/apps/desktop/ui/src/lib/commands.gen.ts
-      cargo test -p chromium-bridge-desktop --features ts-export export_commands_gen_ts
-      test -f src/apps/desktop/ui/src/lib/commands.gen.ts
-      bunx biome format --write src/apps/desktop/ui/src/lib/commands.gen.ts
-    toolchains: ['system']
-    options:
-      cache: false # mutates the tree; check-gen-app diffs its output
-
   gen-icons:
-    description: 'Render the extension + desktop icon rasters from the assets/icon/ SVGs (build artifacts, gitignored)'
+    description: 'Render the extension icon rasters from the assets/icon/ SVGs (build artifacts, gitignored)'
     command: 'bun scripts/gen-icons.ts'
     toolchains: ['system']
     options:
@@ -500,7 +445,6 @@ tasks:
     # newly written - the porcelain check catches untracked output); the
     # hand-written files sharing the directory are deliberately out of
     # scope, so local WIP there cannot false-fail the staleness gate.
-    # commands.gen.ts has its own macOS-side gate, check-gen-app.
     description: 'Staleness gate for the generated shared contract modules + envelope generator fail-closed rules'
     deps: ['~:gen-shared']
     script: |
@@ -519,21 +463,6 @@ tasks:
     toolchains: ['system']
     options:
       cache: false # in the ci gate: gates are never cached
-
-  check-gen-app:
-    # Staleness gate for the desktop command types. Not part of `moon run
-    # ci` for the same reason as check-app-rust (compiling Tauri needs the
-    # platform GUI toolchain); CI's macOS desktop job runs it.
-    description: 'Staleness gate for the desktop Tauri command types (macOS / Tauri toolchain only)'
-    deps: ['~:gen-app-types']
-    script: |
-      git diff --exit-code -- src/apps/desktop/ui/src/lib/commands.gen.ts || {
-        echo "error: commands.gen.ts is stale - run 'moon run gen' after editing the desktop command DTOs" >&2
-        exit 1
-      }
-    toolchains: ['system']
-    options:
-      cache: false # a gate: gates are never cached
 
   check-envelope:
     # Envelope asymmetry gate: the hand-written layer over the generated
@@ -554,20 +483,17 @@ tasks:
   check-gen-isolation:
     # Gen-only tooling must stay out of every shipped binary graph; p256 matters most, since a software P-256
     # stack has no business in a binary whose signing story is the Secure Enclave.
-    #   host: ts-rs, p256   -> refused anywhere in the graph
-    #   host: schemars      -> allowed only through rmcp, which uses schemars 1 at runtime (ADR-0034); our own
-    #                          gen-only envelope-schema feature (also schemars 1) must stay out
-    #   desktop: ts-rs      -> refused; schemars is not checked there (Tauri's macro stack carries its own 0.8)
-    description: 'Gen-only tooling (schemars via non-rmcp paths, ts-rs, p256) stays out of every shipped binary dependency graph'
+    #   host: p256      -> refused anywhere in the graph
+    #   host: schemars  -> allowed only through rmcp, which uses schemars 1 at runtime (ADR-0034); our own
+    #                      gen-only envelope-schema feature (also schemars 1) must stay out
+    description: 'Gen-only tooling (schemars via non-rmcp paths, p256) stays out of the shipped binary dependency graph'
     script: |
       set -eu
       tree="$(cargo tree -e normal -p chromium-bridge --locked)"
-      for crate in ts-rs p256; do
-          if printf '%s\n' "$tree" | grep -q "$crate"; then
-              echo "$crate leaked into the chromium-bridge binary dependency graph" >&2
-              exit 1
-          fi
-      done
+      if printf '%s\n' "$tree" | grep -q p256; then
+          echo "p256 leaked into the chromium-bridge binary dependency graph" >&2
+          exit 1
+      fi
       # Every path from schemars up to the host binary must go through rmcp:
       # the depth-1 entries of the inverse tree are schemars's direct
       # dependents, and rmcp must be the only one. Fail closed: if schemars
@@ -587,97 +513,23 @@ tasks:
               exit 1
           fi
       fi
-      tree="$(cargo tree -e normal -p chromium-bridge-desktop --locked)"
-      if printf '%s\n' "$tree" | grep -q ts-rs; then
-          echo "ts-rs leaked into the chromium-bridge-desktop binary dependency graph" >&2
-          exit 1
-      fi
     toolchains: ['system']
     options:
       cache: false # in the ci gate: gates are never cached
 
-  # ----- desktop app (macOS bundle / signing / runbooks) ---------------------
-
-  bundle-app:
-    description: 'Build + sign the Tauri desktop app with the bundled host + extension (macOS, ADR-0026/0029)'
-    command: 'bun scripts/desktop-bundle.ts'
-    toolchains: ['system']
-    options:
-      cache: false # signing ceremony: must really run
-      runInCI: false # ceremony: only ever run deliberately, never by `moon ci`
-
-  check-app-signing:
-    description: "Verify the signed desktop bundle's entitlement chain (app + nested host)"
-    command: 'bun scripts/check-desktop-signing.ts'
-    toolchains: ['system']
-    options:
-      cache: false # a check task: gates are never cached
-
-  check-app-rust:
-    # Desktop Rust crate: clippy + tests, plus the commands.gen.ts staleness
-    # gate (check-gen-app). Needs the UI dist (tauri's generate_context!
-    # embeds it) and the generated app icon (tauri-build reads
-    # icons/icon.png at compile time), hence the dependencies. Clippy runs
-    # with --features ts-export so the gen-only derive code is linted too.
-    # Not part of `moon run ci`: the crate is deliberately not a default
-    # workspace member, and compiling Tauri needs platform GUI toolchains
-    # (WebKitGTK on Linux); CI runs this on macOS in the dedicated desktop
-    # job.
-    description: 'Desktop crate gate: clippy + tests + the commands.gen.ts staleness gate (macOS / Tauri toolchain only)'
-    deps:
-      - 'desktop-ui:build'
-      - '~:gen-icons'
-      - '~:check-gen-app'
-    script: |
-      set -e
-      cargo clippy -p chromium-bridge-desktop --all-targets --features ts-export -- -D warnings
-      cargo test -p chromium-bridge-desktop
-    toolchains: ['system']
-    options:
-      cache: false # a gate: gates are never cached
-
-  run-app:
-    description: 'USER-RUN: build, sign, verify, then launch the desktop app (the GUI)'
-    deps: ['~:bundle-app']
-    script: 'open "build/app/Chromium Bridge.app"'
-    toolchains: ['system']
-    options:
-      cache: false # user-run: must really run
-      runInCI: false
-
-  dmg-app:
-    description: 'Build + sign the app and wrap it in a signed, verified .dmg (build/dmg/)'
-    command: 'bun scripts/desktop-bundle.ts --dmg'
-    toolchains: ['system']
-    options:
-      cache: false # signing ceremony: must really run
-      runInCI: false # ceremony: only ever run deliberately, never by `moon ci`
-
-  install-app:
-    description: 'Copy the built, signed app into /Applications (run dmg-app or bundle-app first)'
-    script: |
-      set -eu
-      APP="build/app/Chromium Bridge.app"
-      if [ ! -d "$APP" ]; then
-          echo "error: $APP not found; build it first: moon run bundle-app (or moon run dmg-app)" >&2
-          exit 1
-      fi
-      rm -rf "/Applications/Chromium Bridge.app"
-      ditto "$APP" "/Applications/Chromium Bridge.app"
-      echo "installed /Applications/Chromium Bridge.app"
-    toolchains: ['system']
-    options:
-      cache: false # user-run: must really run
-      runInCI: false
+  # ----- Touch ID runbooks (macOS, USER-RUN) ---------------------------------
 
   touchid-proof:
-    # Touch ID proof for the bundled host (USER-RUN: raises a real Touch ID
-    # prompt). Builds + verifies the bundle, then enrolls the enclave key
-    # via the BUNDLED host binary; on success the machine is genuinely
-    # enrolled. Undo with the same binary's `revoke` subcommand.
-    description: 'USER-RUN runbook: enroll the enclave key via the bundled host (raises a real Touch ID prompt)'
-    deps: ['~:bundle-app']
-    script: '"build/app/Chromium Bridge.app/Contents/Helpers/chromium-bridge.app/Contents/MacOS/chromium-bridge" pair'
+    # Touch ID proof for the host (USER-RUN: raises a real Touch ID prompt).
+    # Builds the release binary, then enrolls the enclave key with it; on
+    # success the machine is genuinely enrolled. Undo with the same binary's
+    # `revoke` subcommand. The data-protection keychain refuses an ad-hoc
+    # build (src/packages/core/src/enclave/macos.rs), so the binary must be
+    # codesigned with an application identifier first; no task does that
+    # signing yet.
+    description: 'USER-RUN runbook: enroll the enclave key via the release host binary (raises a real Touch ID prompt)'
+    deps: ['~:build-release']
+    script: './target/release/chromium-bridge pair'
     toolchains: ['system']
     options:
       cache: false # Touch ID ceremony: must really run
@@ -691,14 +543,12 @@ tasks:
     # the three capability-grant commands (pair-client, unkill, policy set)
     # for you to run in your own terminal: those require a real interactive
     # TTY by design (anti tap-phishing), which a task runner cannot provide.
-    # Needs an enrolled Enclave key (run `moon run touchid-proof` first) and
-    # uses the SIGNED BUNDLED host, since the enclave key lives in an
-    # entitled keychain group the plain release binary cannot reach.
+    # Needs an enrolled Enclave key (run `moon run touchid-proof` first).
     description: 'USER-RUN runbook: demo the Touch ID presence gates (runs the per-action gate; prints the rest)'
-    deps: ['~:bundle-app']
+    deps: ['~:build-release']
     script: |
       set -eu
-      BIN="build/app/Chromium Bridge.app/Contents/Helpers/chromium-bridge.app/Contents/MacOS/chromium-bridge"
+      BIN="./target/release/chromium-bridge"
       echo "== 1/4 per-action presence (page_eval / page_upload gate) =="
       echo "   expect a Touch ID prompt now:"
       "$BIN" presence-selftest
@@ -716,8 +566,7 @@ tasks:
       echo
       echo "== 4/4 policy grant (signed GRANT lane, ADR-0032) =="
       echo "   'policy set' mints a fresh SIGNED baseline, so it is signature-only:"
-      echo "   the Touch ID sheet has no floor to fall through to (the desktop app's"
-      echo "   Security screen drives this same lane). Run these yourself"
+      echo "   the Touch ID sheet has no floor to fall through to. Run these yourself"
       echo "   in this terminal - approve the first, DECLINE the second:"
       echo
       echo "     \"\$BIN\" policy set --page-eval on       # APPROVE the sheet, then check:"

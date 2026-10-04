@@ -45,7 +45,7 @@ popup:
   pending_allow_on: "允許 $1"
   pending_consequence: "允許後, 用戶端可以你的身分在此點擊、瀏覽和讀取, 直到你移除該網站。"
   pair_compare: "先比對, 再核准"
-  pair_explainer: "這台 Mac 上的 Chromium Bridge 應用程式此刻正顯示同樣的十二組字元。代碼一致意味著此擴充功能與你的主機之間沒有冒充者。"
+  pair_explainer: "這台 Mac 上的 `chromium-bridge pair` 剛剛印出了同樣的字元組。代碼一致意味著此擴充功能與你的主機之間沒有冒充者。"
   pair_consequence: "只有逐字元相符時才核准。代碼不同意味著有別的東西在冒充主機: 請拒絕。"
   pair_reject: "代碼不符"
   pair_approve: "相符, 配對"
@@ -56,10 +56,10 @@ popup:
   pair_cli_hint: "或執行"
   kill_note_pair: "立即切斷所有用戶端; 重新啟動後仍保持"
   kill_note_denies: "同時會拒絕此請求"
-  kill_note_release: "解除操作在 Chromium Bridge 應用程式中"
+  kill_note_release: "解除操作是 `chromium-bridge unkill`"
   killed_line: "緊急停止已啟用。"
   killed_consequence: "所有用戶端均被切斷。進行中的操作已被停止並記錄。你的網站清單保留不變。"
-  killed_release_note: "此彈出視窗只能啟用, 不能解除。請在 Chromium Bridge 應用程式中或用 `chromium-bridge unkill` 解除。"
+  killed_release_note: "此彈出視窗只能啟用, 不能解除。請用 `chromium-bridge unkill` 解除。"
   pair_foot: "在你完成配對之前, 此擴充功能不會做任何事。"
   open_settings: "開啟設定"
   ext_version: "ext $1"
@@ -117,7 +117,7 @@ confirm:
   hardware_note: "沒有允許按鈕: 核准就是觸控 ID 感應器本身, 螢幕上的任何東西、任何遠端用戶端都無法替你按下。"
   touchid_wait: "等待這台 Mac 上的觸控 ID"
   request_id: "請求 $1"
-  kill_note: "拒絕此請求, 並切斷所有用戶端與所有瀏覽器的連線。解除操作在 Chromium Bridge 應用程式中。"
+  kill_note: "拒絕此請求, 並切斷所有用戶端與所有瀏覽器的連線。解除操作是 `chromium-bridge unkill`。"
 
 options:
   title: "Chromium Bridge 設定"
@@ -132,8 +132,8 @@ options:
 
 settings:
   more_label: "詳細資訊"
-  policy_managed_title: "在 Chromium Bridge 應用程式中管理"
-  policy_managed_desc: "安全性原則 (page_eval、上傳、對話方塊、CDP 模式、各項確認、逾時和逐工具停用) 在 Chromium Bridge 應用程式中或用 `chromium-bridge policy` 設定, 由已配對的主機金鑰簽署, 並由此擴充功能強制執行。本頁不再編輯這些設定。"
+  policy_managed_title: "用 chromium-bridge policy 設定"
+  policy_managed_desc: "安全性原則 (page_eval、上傳、對話方塊、CDP 模式、各項確認、逾時和逐工具停用) 用 `chromium-bridge policy` 設定, 由已配對的主機金鑰簽署, 並由此擴充功能強制執行。本頁不再編輯這些設定。"
   group_tabs_title: "歸組橋接分頁"
   group_tabs_desc: "用戶端開啟的分頁會收進「Chromium Bridge」分頁群組, 讓機器驅動的分頁保持可見。"
   group_tabs_more: "ADR-0018。"
@@ -189,7 +189,7 @@ clients:
 
 kill:
   desc: "啟用後, 所有用戶端與所有瀏覽器的連線會被立即切斷, 進行中的操作也不例外。該狀態在重新啟動後仍然保持。"
-  release_pointer: "本頁只能啟用。解除在 Chromium Bridge 應用程式中, 或執行 `chromium-bridge unkill`: 沒有任何東西會悄悄解除它。"
+  release_pointer: "本頁只能啟用。解除需執行 `chromium-bridge unkill`: 沒有任何東西會悄悄解除它。"
   engage: "啟用緊急停止"
   state_alive: "未啟用: 橋接正在服務"
   state_alive_stale: "最後已知狀態: 未啟用 (主機無法連線, 未經驗證)"

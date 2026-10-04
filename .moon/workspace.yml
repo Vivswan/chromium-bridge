@@ -16,7 +16,6 @@ projects:
   core: 'src/packages/core'
   shared: 'src/packages/shared'
   extension: 'src/apps/extension'
-  desktop-ui: 'src/apps/desktop/ui'
   web: 'src/apps/web'
 
 vcs:
@@ -36,8 +35,6 @@ hasher:
     - '**/.moon/cache/**'
     - '**/.worktrees/**'
     - '**/build/**'
-    - '**/src/apps/desktop/gen/**'
-    - '**/src/apps/desktop/icons/**'
     - '**/.wxt/**'
     - '**/src/public/icons/**'
     - '**/.astro/**'

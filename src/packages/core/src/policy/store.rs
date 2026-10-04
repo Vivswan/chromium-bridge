@@ -49,7 +49,7 @@ pub struct PolicyStore {
     /// accepted spelling per byte string - see [`base64_decode`]).
     pub baseline_b64: String,
     /// The enclave signature over the policy-domain message, base64. `None`
-    /// is the app-floor unsigned baseline (ADR-0032 decision 3).
+    /// is an unsigned baseline, which no host write path produces anymore.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sig_b64: Option<String>,
     /// The signing key id, host bookkeeping only: the extension verifies
@@ -291,23 +291,6 @@ fn now_unix() -> u64 {
 
 // ---- The write seams (ADR-0032 decisions 3 and 5) ----------------------------
 
-/// What a grant-writing surface is entitled to when the hardware rung is
-/// genuinely unavailable (ADR-0032 decision 5). A REFUSED hardware prompt
-/// never consults this - the no-downgrade rule.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PolicyGrantFloor {
-    /// The desktop app's interactive floor: the one surface allowed to
-    /// store an unsigned baseline on a keyless machine, after its own modal
-    /// confirmation (the same obligation as [`crate::presence::Floor::AppConfirm`]).
-    AppConfirm,
-    /// The CLI (and any other surface without an interactive floor of its
-    /// own): the grant path exists only as the signature, and refuses
-    /// outright where no enclave key exists - a floor-gated CLI grant would
-    /// quietly create a baseline-writing path on every platform the CLI
-    /// ships to (decision 5's non-macOS hole).
-    SignatureOnly,
-}
-
 /// Why a policy write did not happen. Every variant leaves the store
 /// untouched.
 #[derive(Debug)]
@@ -348,7 +331,7 @@ impl std::fmt::Display for PolicyWriteError {
             PolicyWriteError::NoSigningKey => write!(
                 f,
                 "no enclave signing key on this machine; this surface's grant \
-                 path is signature-only and refuses (pair first, or use the app)"
+                 path is signature-only and refuses (pair first)"
             ),
             PolicyWriteError::NoBaseline => {
                 write!(f, "no policy baseline exists; there is nothing to restrict")
@@ -377,8 +360,9 @@ impl std::fmt::Display for PolicyWriteError {
 /// ([`crate::presence::sign_policy_as_presence`]), so this seam never takes a pre-made attestation and cannot
 /// double-prompt; everything is validated BEFORE the prompt so a malformed request never raises a sheet (ADR-0031).
 /// ```text
-/// hardware refused       -> terminal, never downgraded to `floor`
-/// hardware unavailable   -> `floor` decides; only the app's floor may store an unsigned baseline (decision 5)
+/// hardware refused       -> terminal, never downgraded to a softer prompt
+/// hardware unavailable   -> refused (`NoSigningKey`): the grant path exists only as the signature, so a keyless
+///                           machine has no baseline-writing path on any platform (decision 5)
 /// retained overlay       -> survives minus its entries on the `touched` fields, which the tap covers
 ///                           (the touched set travels inside the signed bytes)
 /// ```
@@ -387,7 +371,6 @@ pub fn set_signed(
     values: PolicyValues,
     touched: Vec<PolicyField>,
     surface: crate::audit::Surface,
-    floor: PolicyGrantFloor,
 ) -> Result<PresencePath, PolicyWriteError> {
     if touched.is_empty() {
         return Err(PolicyWriteError::Invalid(
@@ -490,11 +473,10 @@ pub fn set_signed(
         } => commit_signed_baseline(
             observed,
             &doc_bytes,
-            Some(base64_encode(&sig)),
-            Some(key_id),
+            base64_encode(&sig),
+            key_id,
             &touched,
             surface,
-            PresencePath::TouchId,
         ),
         PolicySignOutcome::Refused(e) => {
             // Log-after-decide: the refusal has already happened; the
@@ -510,29 +492,18 @@ pub fn set_signed(
             );
             Err(PolicyWriteError::Refused(e))
         }
-        PolicySignOutcome::Unavailable => match floor {
-            PolicyGrantFloor::AppConfirm => commit_signed_baseline(
-                observed,
-                &doc_bytes,
-                None,
-                None,
-                &touched,
-                surface,
-                PresencePath::AppConfirm,
-            ),
-            PolicyGrantFloor::SignatureOnly => {
-                crate::audit::record(
-                    crate::audit::AuditRecord::new(crate::audit::AuditKind::PolicyWrite)
-                        .surface(surface)
-                        .outcome("refused")
-                        .detail(&format!(
-                            "no signing key on a signature-only surface; touched={}",
-                            wire_name_list(&touched)
-                        )),
-                );
-                Err(PolicyWriteError::NoSigningKey)
-            }
-        },
+        PolicySignOutcome::Unavailable => {
+            crate::audit::record(
+                crate::audit::AuditRecord::new(crate::audit::AuditKind::PolicyWrite)
+                    .surface(surface)
+                    .outcome("refused")
+                    .detail(&format!(
+                        "no signing key; touched={}",
+                        wire_name_list(&touched)
+                    )),
+            );
+            Err(PolicyWriteError::NoSigningKey)
+        }
     }
 }
 
@@ -577,17 +548,17 @@ fn next_revision(observed: Option<u64>) -> Result<u64, PolicyWriteError> {
 /// The locked half of a grant write plus its audit record: take the runtime
 /// lock, land the baseline through [`write_baseline_locked`], then record
 /// the outcome outside the lock (audit I/O never runs inside a critical
-/// section). `rung` is the presence rung that authorized the write - the
-/// hardware tap, or the app's interactive floor.
+/// section). The hardware tap is the only rung that reaches here, so the
+/// audit record names `touch_id`.
 fn commit_signed_baseline(
     observed: PrePromptObservation,
     doc_bytes: &[u8],
-    sig_b64: Option<String>,
-    key_id: Option<String>,
+    sig_b64: String,
+    key_id: String,
     touched: &[PolicyField],
     surface: crate::audit::Surface,
-    rung: PresencePath,
 ) -> Result<PresencePath, PolicyWriteError> {
+    let rung = PresencePath::TouchId;
     let result = match ipc::with_runtime_lock(|lock| {
         Ok(write_baseline_locked(
             lock, observed, doc_bytes, sig_b64, key_id, touched,
@@ -629,8 +600,8 @@ fn write_baseline_locked(
     lock: &ipc::RuntimeLockToken,
     observed: PrePromptObservation,
     doc_bytes: &[u8],
-    sig_b64: Option<String>,
-    key_id: Option<String>,
+    sig_b64: String,
+    key_id: String,
     touched: &[PolicyField],
 ) -> Result<(), PolicyWriteError> {
     let host_key_epoch = crate::revocation::Revocation::current()
@@ -659,8 +630,8 @@ fn write_baseline_locked(
     let next = PolicyStore {
         version: POLICY_STORE_VERSION,
         baseline_b64: base64_encode(doc_bytes),
-        sig_b64,
-        key_id,
+        sig_b64: Some(sig_b64),
+        key_id: Some(key_id),
         overlay: normalize_overlay(overlay),
     };
     if prev.is_none() {
@@ -805,7 +776,7 @@ fn bump_policy_epoch_locked(lock: &ipc::RuntimeLockToken) {
 
 /// Clear the signed baseline (ADR-0032 decision 3's key disposal): a baseline signed by a deleted enrollment key must
 /// not outlive the key. The superseded record goes onto the history ring first, where the document survives as an
-/// unsigned draft the app re-signs after re-pairing (the overlay travels inside that record because the store type
+/// unsigned draft to re-sign after re-pairing (the overlay travels inside that record because the store type
 /// cannot represent an overlay with no baseline).
 ///
 /// ```text

@@ -1,8 +1,7 @@
 #!/usr/bin/env bun
 // Verify the version is consistent across the crate, the JS packages that surface it, and the
 // release-please bookkeeping. Cargo.toml is the single source of truth (scripts/sync-version.ts
-// propagates it); the bundled host's helper Info.plist is stamped at bundle time
-// (scripts/desktop-bundle.ts), so it cannot go stale and is not checked here.
+// propagates it).
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
