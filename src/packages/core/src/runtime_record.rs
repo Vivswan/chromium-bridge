@@ -37,7 +37,7 @@ use crate::ipc::{self, RuntimeLockToken};
 pub type Rung = fn(Value) -> io::Result<Value>;
 
 /// What a record declares: its file name, its read cap, and its ladder. Everything else comes from
-/// [`RuntimeRecord`], which every `Record` gets and nothing can override.
+/// [`RuntimeRecord`], which every `Record` gets.
 pub trait Record: Serialize + DeserializeOwned + Sized {
     /// File name inside [`ipc::runtime_dir`].
     const FILE: &'static str;
@@ -47,8 +47,9 @@ pub trait Record: Serialize + DeserializeOwned + Sized {
     const MIGRATIONS: &'static [Rung];
 }
 
-/// The loader and writer shared by every [`Record`]. Implemented once, below, for all of them: a record
-/// cannot carry its own version, cap check, or write path.
+/// The loader and writer shared by every [`Record`], implemented once below. A second impl does not
+/// compile; an inherent method on a record would shadow these at its call sites, and the matrix test
+/// refuses one.
 pub trait RuntimeRecord: Record {
     const VERSION: usize = Self::MIGRATIONS.len();
 
@@ -65,7 +66,6 @@ pub trait RuntimeRecord: Record {
         }
     }
 
-    /// The one place record bytes become typed.
     fn decode(bytes: &[u8]) -> io::Result<Self> {
         serde_json::from_slice::<NoDuplicateKeys>(bytes).map_err(|e| invalid(Self::FILE, e))?;
         let envelope: Envelope<Map<String, Value>> =
@@ -120,8 +120,8 @@ pub trait RuntimeRecord: Record {
 
 impl<T: Record> RuntimeRecord for T {}
 
-/// The on-disk shape: the version beside the record's own fields. Serialized borrowing the record,
-/// deserialized into a raw map so the rungs can run before the body is typed.
+/// The on-disk shape. `B` is the borrowed record on write and a raw map on read, so the rungs run
+/// before the body is typed.
 #[derive(Serialize, Deserialize)]
 struct Envelope<B> {
     version: usize,
@@ -129,9 +129,8 @@ struct Envelope<B> {
     body: B,
 }
 
-/// Walks a JSON document and refuses an object with a repeated key at any depth. `serde_json::Value`
-/// keeps the last duplicate, so without this pass `{"killed":true,"killed":false}` would read as not
-/// killed where the typed parser used to refuse it.
+/// Refuses an object with a repeated key at any depth: `serde_json::Value` keeps the last duplicate, so
+/// `{"killed":true,"killed":false}` would otherwise read as not killed.
 struct NoDuplicateKeys;
 
 impl<'de> Deserialize<'de> for NoDuplicateKeys {
@@ -209,9 +208,13 @@ mod tests {
 
     /// The facts the trait cannot force on a record: a `deny_unknown_fields` body, a `PartialEq` over
     /// every persisted field, the cap honoured before parsing, and the 0600 mode the writer promises.
-    fn exercise<T: Record + PartialEq + Debug>(exercised: &mut BTreeSet<&'static str>, sample: T) {
+    fn exercise<T: Record + PartialEq + Debug>(exercised: &mut BTreeSet<String>, sample: T) {
         let file = T::FILE;
-        assert!(exercised.insert(file), "{file}: exercised twice");
+        let type_name = std::any::type_name::<T>().rsplit("::").next().unwrap();
+        assert!(
+            exercised.insert(type_name.into()),
+            "{file}: exercised twice"
+        );
         assert!(T::load().unwrap().is_none(), "{file}: absent reads as None");
 
         ipc::with_runtime_lock(|lock| sample.write(lock)).unwrap();
@@ -295,27 +298,77 @@ mod tests {
         ipc::with_runtime_lock(|lock| T::remove(lock)).unwrap();
     }
 
-    /// How many `impl Record for` the crate's sources carry. The trait cannot enumerate its
-    /// implementors, so this count is what ties the matrix to them: a record that is not exercised
-    /// fails the matrix instead of skipping the facts it pins.
-    fn record_impls_in_source() -> usize {
-        fn walk(dir: &Path, needle: &str, hits: &mut usize) {
+    /// The record types the crate's sources implement `Record` for (any path prefix or generics on the
+    /// impl), and every inherent item in those modules that would shadow a [`RuntimeRecord`] method or
+    /// `VERSION` at a `Type::load()` call site. The trait cannot enumerate its implementors, so this is
+    /// what ties the matrix to them.
+    fn record_impls_in_source() -> (BTreeSet<String>, Vec<String>) {
+        const METHODS: [&str; 6] = ["load", "decode", "encode", "write", "remove", "path"];
+        // Token-level, so `pub fn load<'a>()` and `const r#VERSION` count like the plain spellings.
+        fn shadowing_items(source: &str) -> Vec<String> {
+            let tokens: Vec<&str> = source.split_whitespace().collect();
+            tokens
+                .windows(2)
+                .filter_map(|pair| {
+                    let ident: String = pair[1]
+                        .trim_start_matches("r#")
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect();
+                    match pair[0] {
+                        "fn" if METHODS.contains(&ident.as_str()) => Some(format!("fn {ident}")),
+                        "const" if ident == "VERSION" => Some("const VERSION".to_string()),
+                        _ => None,
+                    }
+                })
+                .collect()
+        }
+        fn walk(dir: &Path, types: &mut BTreeSet<String>, shadows: &mut Vec<String>) {
             for entry in fs::read_dir(dir).unwrap() {
                 let path = entry.unwrap().path();
                 if path.is_dir() {
-                    walk(&path, needle, hits);
-                } else if path.extension().is_some_and(|e| e == "rs") {
-                    *hits += fs::read_to_string(&path).unwrap().matches(needle).count();
+                    walk(&path, types, shadows);
+                    continue;
                 }
+                if path.extension().is_none_or(|e| e != "rs") || path.ends_with("runtime_record.rs")
+                {
+                    continue;
+                }
+                let source = fs::read_to_string(&path).unwrap();
+                let impls: Vec<String> = source
+                    .lines()
+                    .filter_map(|line| {
+                        let tokens: Vec<&str> = line.split_whitespace().collect();
+                        let i = tokens
+                            .iter()
+                            .position(|t| t.rsplit("::").next() == Some("Record"))?;
+                        (tokens.first()?.starts_with("impl") && tokens.get(i + 1) == Some(&"for"))
+                            .then(|| {
+                                tokens
+                                    .get(i + 2)
+                                    .map(|t| t.trim_end_matches('{').to_string())
+                            })
+                            .flatten()
+                    })
+                    .collect();
+                if impls.is_empty() {
+                    continue;
+                }
+                types.extend(impls);
+                shadows.extend(
+                    shadowing_items(&source)
+                        .into_iter()
+                        .map(|item| format!("{}: {item}", path.display())),
+                );
             }
         }
-        let mut hits = 0;
+        let (mut types, mut shadows) = (BTreeSet::new(), Vec::new());
         walk(
             &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
-            concat!("impl Record", " for "),
-            &mut hits,
+            &mut types,
+            &mut shadows,
         );
-        hits
+        (types, shadows)
     }
 
     #[test]
@@ -383,10 +436,14 @@ mod tests {
                 seq: 3,
             },
         );
+        let (implemented, shadows) = record_impls_in_source();
         assert_eq!(
-            record_impls_in_source(),
-            exercised.len(),
-            "a Record impl is missing from this matrix: {exercised:?}"
+            implemented, exercised,
+            "every Record impl is exercised here, and only those"
+        );
+        assert!(
+            shadows.is_empty(),
+            "an inherent item would shadow the shared loader at call sites: {shadows:?}"
         );
     }
 }
