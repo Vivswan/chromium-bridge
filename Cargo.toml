@@ -84,6 +84,23 @@ security-framework-sys = "2"
 # (src/packages/core/src/registration.rs). The vetted wrapper (rust-lang
 # community, windows-sys underneath) instead of hand-rolled Advapi32 FFI.
 winreg = "0.56"
+# Microsoft's binding for the named-pipe bridge transport, the pipe peer's
+# process identity, and the Authenticode signer query
+# (src/packages/core/src/ipc/platform/windows/); already in the tree under
+# tempfile and winreg, so the version follows theirs.
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_Security_Cryptography",
+  "Win32_Security_Cryptography_Catalog",
+  "Win32_Security_Cryptography_Sip",
+  "Win32_Security_WinTrust",
+  "Win32_Storage_FileSystem",
+  "Win32_System_IO",
+  "Win32_System_Pipes",
+  "Win32_System_Threading",
+] }
 # Schema derivation for the wire envelopes (ADR-0028): the emit_envelope_schema
 # example (behind the core's `envelope-schema` feature) feeds the CI
 # double-derivation diff against the extension's Zod validators. OUR gen

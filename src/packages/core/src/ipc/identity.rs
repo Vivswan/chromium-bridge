@@ -6,9 +6,10 @@
 
 use serde::{Deserialize, Serialize};
 
-/// A measured image digest: a 20-byte macOS `cdhash` or a 32-byte Linux
-/// SHA-256 of `/proc/<pid>/exe`, as lowercase hex (40 or 64 characters). No
-/// other width or spelling can equal a measurement.
+/// A measured image digest: a 20-byte macOS `cdhash`, or a 32-byte SHA-256 of
+/// the image file (Linux `/proc/<pid>/exe`, the Windows image path), as
+/// lowercase hex (40 or 64 characters). No other width or spelling can equal a
+/// measurement.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "envelope-schema",
@@ -24,6 +25,36 @@ impl HashDigest {
     /// The digest as its lowercase hex string.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// The SHA-256 of a file's contents, streamed: the image measurement on
+    /// Linux (`/proc/<pid>/exe`) and Windows (the image path).
+    #[cfg(any(target_os = "linux", windows))]
+    pub(crate) fn of_file(path: &std::path::Path) -> std::io::Result<HashDigest> {
+        use std::io::Read;
+
+        use sha2::{Digest, Sha256};
+
+        let mut file = std::fs::File::open(path)?;
+        let mut hasher = Sha256::new();
+        let mut buf = [0u8; 64 * 1024];
+        loop {
+            let n = file.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            // read() never returns more than buf.len(); a broken Read impl that
+            // did would corrupt the identity hash, so refuse it instead.
+            let chunk = buf.get(..n).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "read returned an impossible length",
+                )
+            })?;
+            hasher.update(chunk);
+        }
+        HashDigest::try_from(hasher.finalize().as_slice())
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
 }
 
@@ -79,8 +110,10 @@ impl std::fmt::Display for HashDigest {
     }
 }
 
-/// A macOS signing Team ID. Non-empty: an unsigned or ad-hoc image measures no
-/// team id at all, so an empty anchor could never match.
+/// A publisher identity read off a validated code signature: the macOS signing
+/// Team ID, or on Windows the Authenticode signer's X.500 subject. Non-empty:
+/// an unsigned or ad-hoc image measures no publisher at all, so an empty anchor
+/// could never match.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "envelope-schema",
@@ -130,10 +163,9 @@ impl std::fmt::Display for TeamId {
 }
 
 /// A harness's kernel-attested code identity, the input to the trusted-client
-/// allowlist decision ([`crate::allowlist`]). `team_id` is present only for a
-/// Team-ID-signed image (always `None` on Linux and for ad-hoc / unsigned
-/// builds). Nameable on every platform, including the Windows build where no
-/// attestation exists.
+/// allowlist decision ([`crate::allowlist`]). `team_id` is present only for an
+/// image whose signature names a publisher (always `None` on Linux and for
+/// ad-hoc / unsigned builds).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientIdentity {
     pub hash: HashDigest,

@@ -37,9 +37,9 @@ JavaScript。相应的防护措施:
   直到你以在场证明 (proof of presence) 显式解除。每一个安全
   决策都会写入磁盘上的审计日志。
 
-平台差异, 如实说明: 强桥接保证 (无端口套接字、对端 UID 检查、身份证明) 仅
-存在于 macOS 和 Linux。在 Windows 上, 桥接是一个仅由 HMAC 密钥把守的环回
-TCP 套接字, 服务器启动时会对此发出警告。Windows 支持是尽力而为。详见
+平台差异, 如实说明: 桥接保证 (无端口套接字、同用户检查、身份证明) 在
+macOS、Linux 和 Windows 上都成立, 各平台背后的机制不同。在 Windows 上, 桥接
+是一个仅本用户可打开的命名管道, 两端互相证明对方的镜像。详见
 [SECURITY.md](./.github/SECURITY.md#platform-support)。
 
 完整细节: [SECURITY.md](./.github/SECURITY.md)、
@@ -194,7 +194,7 @@ CLI 只依赖二进制本身, 在桌面机器、无界面机器和 CI 上都一�
 |---|---|
 | macOS | Apple Silicon (arm64) 预编译; Touch ID 门在这里。Intel 需从源码构建。 |
 | Linux | x64 预编译; 任何 Chromium 系浏览器; 用 CLI 管理。 |
-| Windows | x64 预编译 (原生, 无需管理员)。桥接安全性为尽力而为; 见 [SECURITY.md](./.github/SECURITY.md#platform-support)。 |
+| Windows | x64 预编译 (原生, 无需管理员)。桥接是仅本用户可打开的命名管道, 两端互相身份证明; 见 [SECURITY.md](./.github/SECURITY.md#platform-support)。 |
 | 浏览器 | 任何 Chromium 系浏览器, Manifest V3 |
 | MCP 协议 | `2026-07-28` |
 | 内部桥协议 | `1` ([src/packages/core/src/protocol.rs](./src/packages/core/src/protocol.rs) 中的 `BRIDGE_PROTOCOL_VERSION`) |

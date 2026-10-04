@@ -86,4 +86,5 @@ nix.workspace = true
 signal-hook.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
 winreg.workspace = true

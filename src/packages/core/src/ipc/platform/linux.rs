@@ -6,10 +6,8 @@
     reason = "audited FFI quarantine: the SO_PEERCRED getsockopt call, behind a safe wrapper"
 )]
 
-use std::io::{self, Read};
+use std::io;
 use std::path::PathBuf;
-
-use sha2::{Digest, Sha256};
 
 use super::super::identity::{ClientIdentity, HashDigest};
 use super::super::socket::BridgeStream;
@@ -56,31 +54,7 @@ pub(crate) fn pid_client_identity(pid: u32) -> io::Result<ClientIdentity> {
 /// Security framework (see `platform::macos`), which is bound to the running
 /// image and needs no path re-open.
 fn exe_hash_of_pid(pid: u32) -> io::Result<HashDigest> {
-    hash_file(&PathBuf::from(format!("/proc/{pid}/exe")))
-}
-
-/// Stream a file through SHA256.
-fn hash_file(path: &std::path::Path) -> io::Result<HashDigest> {
-    let mut f = std::fs::File::open(path)?;
-    let mut hasher = Sha256::new();
-    let mut buf = [0u8; 64 * 1024];
-    loop {
-        let n = f.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        // read() never returns more than buf.len(); a broken Read impl that
-        // did would corrupt the identity hash, so refuse it instead.
-        let chunk = buf.get(..n).ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "read returned an impossible length",
-            )
-        })?;
-        hasher.update(chunk);
-    }
-    HashDigest::try_from(hasher.finalize().as_slice())
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    HashDigest::of_file(&PathBuf::from(format!("/proc/{pid}/exe")))
 }
 
 /// Peer credentials of a connected Unix-domain socket via `SO_PEERCRED`.

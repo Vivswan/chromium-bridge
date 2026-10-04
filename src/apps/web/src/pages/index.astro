@@ -146,11 +146,12 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
         attested and live. <span class="status-dot pending"></span>Amber means
         waiting on you. Here they only illustrate.</p>
 
-      <p class="trust-caveat">The portless socket, kernel peer check, and
-        attestation hold on macOS and Linux. On Windows the bridge falls back to
-        loopback TCP gated by the HMAC secret alone, and the server says so at
-        startup. Until you enroll a first trusted client, admission runs open
-        and is logged loudly; enrolling is what arms the gate.</p>
+      <p class="trust-caveat">The portless socket, same-user check, and
+        attestation hold on macOS, Linux, and Windows; on Windows the socket is
+        a named pipe only your user can open, and the harness is the process
+        that spawned the server over its own stdin pipe. Until you enroll a
+        first trusted client, admission runs open and is logged loudly;
+        enrolling is what arms the gate.</p>
     </section>
 
     <section class="shots wrap" id="shots">

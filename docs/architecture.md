@@ -17,9 +17,9 @@ MCP client B --stdio--> | chromium-bridge (MCP server instances)           |
                         +------------------------+-------------------------+
                                                  | bridge socket: NDJSON over a
                                                  | 0600 Unix-domain socket in a
-                                                 | 0700 runtime dir (loopback
-                                                 | TCP on Windows); peer-UID +
-                                                 | attestation + HMAC handshake
+                                                 | 0700 runtime dir (a user-only
+                                                 | named pipe on Windows); same-user
+                                                 | check + attestation + HMAC handshake
                                                  v
                         +--------------------------------------------------+
                         | chromium-bridge --native-host  (one per browser, |
@@ -95,7 +95,7 @@ Based on JSON-RPC 2.0 over NDJSON, defined at [modelcontextprotocol.io](https://
 
 ### 3.3 Internal bridge protocol (broker <-> native hosts and relays)
 
-Custom, NDJSON over the bridge socket: a 0600 Unix-domain socket inside the 0700 per-user runtime directory on macOS/Linux, a loopback TCP socket on Windows (see [SECURITY.md](../.github/SECURITY.md#platform-support)).
+Custom, NDJSON over the bridge socket: a 0600 Unix-domain socket inside the 0700 per-user runtime directory on macOS/Linux, a named pipe only the current user can open on Windows (see [SECURITY.md](../.github/SECURITY.md#platform-support)).
 
 Connection setup, in order, each step fail-closed:
 
@@ -309,7 +309,7 @@ The `chrome.debugger` API is SW-only, cannot attach to `chrome://` or Web Store 
 | Dimension | Choice | Rationale |
 |------|------|------|
 | Backend language | Rust, single binary + subcommands | Single-file distribution; the host manifest takes an absolute path; one codebase for server, host, and CLI |
-| IPC | Unix-domain socket + lock file (TCP fallback on Windows) | No listening port; kernel peer credentials enable attestation |
+| IPC | Unix-domain socket + lock file (a user-only named pipe on Windows) | No listening port; the kernel's peer credentials (the pipe peer's pid on Windows) enable attestation |
 | Crypto and parsing | RustCrypto `hmac`/`sha2`, `subtle`, `serde` | Many-eyes libraries over homegrown code, even in the security core; bespoke code only where no library exists (see SECURITY.md and AGENTS.md) |
 | Extension platform | MV3 on WXT, React UI, Vitest | Generated manifest with the pinned key; unified `browser.*`; testable SW |
 | Contracts | The Rust core generates the TS side | One source of truth; CI fails on drift. See section 11 |
@@ -320,7 +320,7 @@ The `chrome.debugger` API is SW-only, cannot attach to `chrome://` or Web Store 
 
 1. **Snapshot accuracy**: the content-script a11y tree is an approximation (shadow DOM, complex ARIA); `page_snapshot_precise` is the authoritative fallback.
 2. **Cross-origin iframes**: the content script cannot read them.
-3. **Windows bridge downgrade**: no Unix socket, no peer-UID check, no attestation; the HMAC secret is the only gate, and harness admission is unenforced. See [SECURITY.md](../.github/SECURITY.md#platform-support).
+3. **Windows image measurement by path**: the pipe peer's image is hashed from its file path, a residual the [threat model](./security/threat-model.md#residual-risks-accepted-tracked) owns; the gates themselves (user-only pipe, mutual attestation, HMAC, harness admission) hold there as on Unix. See [SECURITY.md](../.github/SECURITY.md#platform-support).
 4. **Same-user attacker running our own binary**: kernel attestation distinguishes binaries, not intentions; see the [threat model](./security/threat-model.md) residuals.
 5. **Revocation latency to the extension**: the socket leg is immediate; the extension's reflection of a host-key revoke is bounded to the next service-worker wake.
 

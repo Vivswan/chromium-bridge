@@ -399,24 +399,35 @@ pub fn run_pair_client(client: PairClientArgs) -> i32 {
 /// Turn the CLI's anchor choice into a concrete [`Anchor`], measuring this
 /// invocation's parent when asked (`--this-parent`). Explicit anchors were
 /// validated at the argv boundary and pass straight through.
+///
+/// `--this-parent` is Unix-only. The server keys a Windows harness on the
+/// creator of its stdin pipe, and this command either runs from a console (no
+/// pipe, nothing to measure) or from a pipe (which the presence gate refuses),
+/// so no measurement here could ever match what admission measures.
 fn resolve_anchor(spec: AnchorSpec) -> Result<Anchor, String> {
     match spec {
         AnchorSpec::Hash(hash) => Ok(Anchor::Hash(hash)),
         AnchorSpec::TeamId(team_id) => Ok(Anchor::TeamId(team_id)),
+        #[cfg(unix)]
         AnchorSpec::ThisParent => {
-            #[cfg(any(target_os = "linux", target_os = "macos"))]
-            {
-                let id = ipc::attest_parent()
-                    .map_err(|e| format!("could not attest the parent process: {e}"))?;
-                Ok(Anchor::Hash(id.hash))
-            }
-            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-            {
-                Err("--this-parent is not supported on this platform (no attestation)".into())
-            }
+            let id = ipc::attest_parent()
+                .map_err(|e| format!("could not attest the parent process: {e}"))?;
+            Ok(Anchor::Hash(id.hash))
         }
+        #[cfg(windows)]
+        AnchorSpec::ThisParent => Err(THIS_PARENT_UNAVAILABLE_ON_WINDOWS.to_string()),
     }
 }
+
+/// The refusal names the two anchors that do work and where their values come
+/// from (the server logs a measured, unenrolled harness at startup).
+#[cfg(windows)]
+const THIS_PARENT_UNAVAILABLE_ON_WINDOWS: &str = concat!(
+    "--this-parent is unavailable on Windows: the server identifies a harness by the ",
+    "creator of its stdin pipe, which a console command has none of. Pair with ",
+    "--hash <sha256> or --team-id <publisher subject>; the server logs the hash, and ",
+    "the subject when the image is signed, at startup while unenrolled"
+);
 
 /// `revoke-client`: remove a trusted client. Returns a process exit code.
 pub fn run_revoke_client(name: &str) -> i32 {
@@ -487,6 +498,17 @@ pub fn run_list_clients() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// On Windows `--this-parent` can never pair: a console stdin has no pipe
+    /// creator for the server to key on, and a piped stdin is refused by the
+    /// presence gate. The refusal must name the anchors that do work, so the
+    /// operator is not left with a bare measurement error.
+    #[cfg(windows)]
+    #[test]
+    fn this_parent_is_refused_on_windows_naming_the_anchors_that_work() {
+        let err = resolve_anchor(AnchorSpec::ThisParent).unwrap_err();
+        assert!(err.contains("--hash") && err.contains("--team-id"), "{err}");
+    }
 
     /// A measured identity from literals: a valid lowercase-hex hash and an
     /// optional non-empty team id.

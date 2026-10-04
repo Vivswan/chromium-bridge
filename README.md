@@ -10,7 +10,7 @@ Because it operates the browser you are already signed into, an agent can do wha
 
 That power is also the risk. Read [Security first](#security-first) before you install.
 
-The bar this project holds itself to: a program you installed cannot use your browser without you noticing, held today on macOS and Linux with Windows planned ([the security bar](./docs/security/security-bar.md) states it, and where it stops).
+The bar this project holds itself to: a program you installed cannot use your browser without you noticing, held today on macOS, Linux, and Windows ([the security bar](./docs/security/security-bar.md) states it, and where it stops).
 
 Translations: [Simplified Chinese](./README.zh_CN.md), [Traditional Chinese](./README.zh_TW.md).
 
@@ -26,12 +26,12 @@ chromium-bridge drives a real, authenticated browser. It can read page content, 
 - **Trusted-client allowlist.** MCP clients are admitted against an allowlist keyed on attested code identity, and any side can revoke trust at any time.
 - **A global kill switch.** One action from the CLI or the extension halts everything until you release it with proof of presence. Every security decision lands in an on-disk audit trail.
 
-**Platform honesty.** The strong bridge guarantees exist on macOS and Linux only; Windows support is best-effort ([SECURITY.md](./.github/SECURITY.md#platform-support)).
+**Platform honesty.** The bridge guarantees hold on macOS, Linux, and Windows; the mechanism behind each differs per OS ([SECURITY.md](./.github/SECURITY.md#platform-support)).
 
 | Platform | Bridge transport | What gates a connection |
 |---|---|---|
 | macOS, Linux | private Unix-domain socket, no listening port | peer-UID check, kernel attestation, HMAC challenge |
-| Windows | loopback TCP socket | the HMAC secret only; the server warns about this at startup |
+| Windows | named pipe only your user can open, no listening port | the pipe's descriptor (kernel-enforced), mutual attestation, HMAC challenge |
 
 Full details: [SECURITY.md](./.github/SECURITY.md), [threat model](./docs/security/threat-model.md), [trust boundaries](./docs/security/trust-boundaries.md), [per-tool risk matrix](./docs/security/tool-risk-matrix.md).
 
@@ -182,8 +182,8 @@ MCP client A --stdio--> chromium-bridge (broker: first MCP server instance)
 MCP client B --stdio--> chromium-bridge ----attach----^   |
 (each client attested against the trusted-client         | bridge socket
  allowlist before it is served)                          | (Unix-domain socket,
-                                                          | peer attestation +
-                                                          | HMAC; TCP on Windows)
+                                                          | or a user-only named pipe
+                                                          | on Windows; attestation + HMAC)
                                                           v
                              chromium-bridge --native-host   <-- spawned by
                                        |                         each browser
@@ -208,7 +208,7 @@ Deep dive: [docs/architecture.md](./docs/architecture.md).
 |---|---|
 | macOS | Apple Silicon (arm64) prebuilt; the Touch ID gates live here. Intel builds from source. |
 | Linux | x64 prebuilt; any Chromium-based browser; CLI management surface. |
-| Windows | x64 prebuilt (native, no admin). Bridge security is best-effort; see [SECURITY.md](./.github/SECURITY.md#platform-support). |
+| Windows | x64 prebuilt (native, no admin). The bridge is a user-only named pipe with mutual attestation; see [SECURITY.md](./.github/SECURITY.md#platform-support). |
 | Browser | Any Chromium-based browser, Manifest V3 |
 | MCP protocol | `2026-07-28` |
 | Internal bridge protocol | `1` (`BRIDGE_PROTOCOL_VERSION` in [src/packages/core/src/protocol.rs](./src/packages/core/src/protocol.rs)) |

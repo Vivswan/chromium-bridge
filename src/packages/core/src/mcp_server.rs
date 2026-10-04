@@ -39,8 +39,7 @@ pub fn run() -> i32 {
     // Capture our own executable identity up front, before binding or dialing,
     // so peer attestation compares against the genuine binary rather than one
     // an attacker might swap onto disk later. Refuse to run if we cannot hash
-    // our own image. See ADR-0020.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    // our own image.
     match ipc::ensure_own_identity() {
         Ok(hash) => log_info!(
             "mcp",
@@ -51,24 +50,6 @@ pub fn run() -> i32 {
             log_error!("mcp", "cannot establish own executable identity: {e}");
             return 1;
         }
-    }
-
-    // Windows has none of the peer/attestation mechanisms (all cfg unix/macos),
-    // so say so loudly at every startup rather than let the platform difference
-    // pass silently. Error level, not warn: BB_LOG=error must not silence it.
-    // See SECURITY.md "Platform support".
-    #[cfg(target_os = "windows")]
-    {
-        log_error!(
-            "mcp",
-            "SECURITY: Windows support is BEST-EFFORT. The same-user and \
-             local-process protections enforced on macOS/Linux do NOT hold \
-             here: there is no peer-UID check, no executable attestation, and \
-             no harness attestation, and the bridge listens on loopback TCP, \
-             reachable by ANY process on this machine. Access control reduces \
-             to the confidentiality of the per-run secret in the lock file. \
-             See SECURITY.md (Platform support) for details."
-        );
     }
 
     // Attest our own harness (the process that spawned us over stdio) and
@@ -165,21 +146,13 @@ impl Harness {
 fn admit_own_harness() -> Option<Harness> {
     let name = client_name_from_env();
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let identity = match ipc::attest_parent() {
         Ok(id) => Some(id),
         Err(e) => {
-            log_warn!(
-                "mcp",
-                "could not attest the spawning harness (getppid): {e}"
-            );
+            log_warn!("mcp", "could not attest the harness process: {e}");
             None
         }
     };
-    // Windows has no harness attestation; admission degrades to unenrolled /
-    // secret-only along with the rest of the IPC layer.
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    let identity: Option<ipc::ClientIdentity> = None;
 
     // Read order is load-bearing (ADR-0025): the revocation record FIRST,
     // then the allowlist, so a concurrent revoke can never be observed as a
@@ -229,6 +202,29 @@ fn admit_own_harness() -> Option<Harness> {
                  the browser. Run `chromium-bridge pair-client` to enroll trusted clients and \
                  turn on enforcement. See SECURITY.md."
             );
+            // The measured anchors, so the operator can pair this harness with
+            // `--hash` or `--team-id` where `--this-parent` cannot measure it
+            // (Windows, or any harness that spawns the server over a pipe).
+            // The subject is printed bare, not as a shell argument: an X.500
+            // subject can carry quotes and commas, and quoting differs per shell.
+            if let Some(id) = &identity {
+                let team = id
+                    .team_id
+                    .as_ref()
+                    .map(|t| format!(", team id / publisher subject [{t}]"))
+                    .unwrap_or_default();
+                log_error!(
+                    "mcp",
+                    "this harness measured as hash {}{team}; pair it with `pair-client --hash {}`{}",
+                    id.hash,
+                    id.hash,
+                    if id.team_id.is_some() {
+                        " or `--team-id` with that subject, quoted for your shell"
+                    } else {
+                        ""
+                    }
+                );
+            }
             crate::audit::record(
                 crate::audit::AuditRecord::new(crate::audit::AuditKind::HarnessAdmit)
                     .surface(crate::audit::Surface::Host)

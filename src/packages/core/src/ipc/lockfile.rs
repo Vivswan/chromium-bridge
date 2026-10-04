@@ -17,8 +17,9 @@ use crate::fsguard::{read_capped, write_private_atomic};
 ///
 /// Deliberately NOT `deny_unknown_fields`, unlike the other on-disk records (ADR-0025): an older build still
 /// installed during an upgrade reads the lock a newer one wrote, and a strict parser would take the bridge down.
-/// Safe because the lock file is DISCOVERY, not authorization: every connection still passes the HMAC handshake
-/// (and, on Unix, the peer-UID check; on Linux and macOS, image attestation), so an unknown field admits nobody.
+/// Safe because the lock file is DISCOVERY, not authorization: every connection still passes the same-user gate
+/// (the peer-UID check on Unix, the pipe's descriptor on Windows), image attestation, and the HMAC handshake, so an
+/// unknown field admits nobody.
 ///
 /// ```text
 /// adding a field                         -> only such that old readers stay correct ignoring it
@@ -28,8 +29,8 @@ use crate::fsguard::{read_capped, write_private_atomic};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LockFile {
     /// How the native host reaches the server. On Unix this is the filesystem
-    /// path of the 0600 Unix-domain socket; on Windows it is the loopback
-    /// endpoint `127.0.0.1:<port>`.
+    /// path of the 0600 Unix-domain socket; on Windows it is the pipe's name
+    /// in the local pipe namespace (`\\.\pipe\chromium-bridge-<hash>-<pid>`).
     pub endpoint: String,
     /// Random token the native host must echo back on connect. The lock file
     /// and (on Unix) the socket are 0600, so this guards against another local
@@ -212,8 +213,6 @@ pub fn listen_and_publish() -> io::Result<PublishOutcome> {
             //                                to it would brick startup for as long as that pid lives
             //   unverifiable live server  -> keeps its connections and merely stops being named; the extension
             //                                converges to the new server on reconnect
-            //   Windows                   -> no attestation (SECURITY.md "Platform support"); liveness-only
-            #[cfg(any(target_os = "linux", target_os = "macos"))]
             match super::attest::attest_pid(cur.pid) {
                 Ok(()) => return Ok(PublishOutcome::LostRace(cur)),
                 Err(e) if e.kind() == io::ErrorKind::PermissionDenied => log_warn!(
@@ -229,8 +228,6 @@ pub fn listen_and_publish() -> io::Result<PublishOutcome> {
                     cur.pid
                 ),
             }
-            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-            return Ok(PublishOutcome::LostRace(cur));
         }
     }
     LockFile::remove();

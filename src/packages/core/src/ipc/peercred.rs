@@ -91,7 +91,7 @@ pub fn pid_is_alive(pid: u32) -> bool {
     }
     #[cfg(windows)]
     {
-        super::platform::windows::windows_process::is_alive(pid)
+        super::platform::windows::process::is_alive(pid)
     }
     #[cfg(all(not(unix), not(windows)))]
     {
