@@ -28,7 +28,7 @@ export const COVERED: readonly string[] = [
   "CONTRIBUTING.md",
 ];
 
-export const WAITING: readonly string[] = ["docs/security/threat-model.md"];
+export const WAITING: readonly string[] = [];
 
 /** Line patterns, one per artifact kind. Each is written so this file's own text never matches it (the
  * record prefix goes through a character class, the examples carry no digit), which its test pins. A tag
@@ -179,9 +179,8 @@ function main(rootArg: string | undefined): number {
     );
     return 1;
   }
-  console.log(
-    `check-planning-refs: ${files.length} file(s) clean (${WAITING.length} waiting: ${WAITING.join(", ")})`,
-  );
+  const waiting = WAITING.length > 0 ? ` (${WAITING.length} waiting: ${WAITING.join(", ")})` : "";
+  console.log(`check-planning-refs: ${files.length} file(s) clean${waiting}`);
   return 0;
 }
 
