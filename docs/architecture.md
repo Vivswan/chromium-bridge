@@ -310,7 +310,9 @@ With empty initial host permissions, manifest-declared content scripts never inj
 Panic messages default to stdout, which corrupts NM frames and MCP NDJSON. Mitigation: `panic = "abort"` in the release profile plus a stderr panic hook, as a double safety net.
 
 ### 7.7 page_eval uses the Function constructor, not eval()
-`page_eval` must run code in the page's global scope, but the content script runs in a strict-mode closure where `eval` sees the wrong scope. Mitigation: `new Function('"use strict"; return (async () => { <code> })()')()`, which executes in the global scope and supports `return`/`await`. A reliable execution timeout is impossible in single-threaded JS; the session layer's 120s timeout is the backstop. Results pass through safe serialization (cycles/DOM/exotic types) and masking before leaving the extension.
+`page_eval` must run code in the page's global scope, but the content script runs in a strict-mode closure where `eval` sees the wrong scope. Mitigation: `new Function('"use strict"; return (async () => { <code> })()')()`, which executes in the global scope and supports `return`/`await`. Under CDP mode the same code runs through `Runtime.evaluate` in the page's MAIN world instead.
+
+A reliable execution timeout is impossible in single-threaded JS; the backstop is the tool call's 120 s budget (`CALL_BUDGET` in `src/packages/core/src/tools/mod.rs`). The session has no reply timeout of its own; it only caps the wait for a browser connection at 12 s (`CONNECT_WAIT` in `src/packages/core/src/session.rs`). Results pass through safe serialization (cycles/DOM/exotic types) and masking before leaving the extension.
 
 ### 7.8 chrome.debugger restrictions (page_snapshot_precise, CDP mode)
 The `chrome.debugger` API is SW-only, cannot attach to `chrome://` or Web Store pages, and allows one debugger per tab (DevTools counts). Mitigation: CDP work happens in the SW; a URL-scheme check filters non-debuggable pages; precise-snapshot refs use a `p` prefix to stay clear of content-script refs; detach is on the finally path.
@@ -375,7 +377,7 @@ At the tool-call boundary, Rust's typed error `CallError` maps to the stable `co
 
 ### 11.2 Capability / version handshake
 
-Beyond the authentication of section 3.3, connection setup carries a capability and version dimension: the extension side advertises its supported `BRIDGE_PROTOCOL_VERSION` and available capability set (see `src/packages/core/src/tools/capabilities.rs`). An incompatible version fails fast with `PROTOCOL_MISMATCH` rather than blowing up later on an unknown op, and a tool whose capability is not advertised is rejected up front.
+Beyond the authentication of section 3.3, connection setup carries a capability and version dimension: the extension side advertises its supported `BRIDGE_PROTOCOL_VERSION` and available capability set (see `src/packages/core/src/tools/capabilities.rs`). The intended behaviour, not yet wired (next paragraph): an incompatible version fails fast with `PROTOCOL_MISMATCH` rather than blowing up later on an unknown op, and a tool whose capability is not advertised is rejected up front.
 
 Honest status: the negotiation is defined in the contract modules and not yet wired, deferred until the binary and the extension can be upgraded independently; the first stage, generation-guarded reconnect (section 5.2), has landed. When it lands, the advertised capability set should derive from the effective policy, which host-owned policy makes possible but does not wire.
 

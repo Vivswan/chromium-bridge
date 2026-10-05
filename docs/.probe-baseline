@@ -13,7 +13,6 @@ docs/architecture.md 555b15b6  # path: src/entrypoints/options/
 docs/architecture.md 5a2f8874  # path: src/lib/background/
 docs/architecture.md 3305cc59  # path: src/lib/dom/
 docs/architecture.md c25fc9a0  # path: src/lib/shared/
-docs/architecture.md 95e97577  # paragraph: page_eval must run code in the
 docs/architecture.md 2647e3e4  # list item: Tool catalogue (src/packages/core/src/tools/catalogue.rs): each tool's name,
 docs/architecture.md da60846f  # list item: Enclave signing contract (src/packages/core/src/enclave/: challenge.rs for
 docs/architecture.md 4d57bb96  # path: tests/background/enclave-golden.test.ts
