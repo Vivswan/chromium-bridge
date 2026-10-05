@@ -10,112 +10,99 @@ import {
 } from "@/lib/shared/masking";
 
 const JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghij";
-const HEX32 = "deadbeefdeadbeefdeadbeefdeadbeef"; // 32 hex chars
+const HEX32 = "deadbeefdeadbeefdeadbeefdeadbeef";
+// 40 chars, letters and digits, not hex, no separators.
+const OPAQUE = "aB3dE6fH9jK2mN5pQ8rS1tU4vW7xY0zA3bC6dE9f";
+const LETTERS40 = "abcdefghijklmnopqrstuvwxyzabcdefghijklmn";
 
 describe("maskPatterns", () => {
-  test("redacts JWT / long hex / long digit runs", () => {
-    expect(maskPatterns(JWT)).toBe("••••[jwt]");
-    expect(maskPatterns(HEX32)).toBe("••••[hex]");
-    expect(maskPatterns("123456789012")).toBe("••••[num]");
+  test.each([
+    ["a JWT", JWT, "••••[jwt]"],
+    ["32 hex chars", HEX32, "••••[hex]"],
+    ["a 12-digit run", "123456789012", "••••[num]"],
+    ["a key=value assignment", "token=supersecretvalue", "••••[redacted]"],
+    ["a 40-char opaque token", OPAQUE, "••••[token]"],
+    ["an opaque token inside text", `id ${OPAQUE} end`, "id ••••[token] end"],
+    ["40 letters with no digit", LETTERS40, LETTERS40],
+    ["ordinary text", "hello world", "hello world"],
+  ])("%s", (_case, input, expected) => {
+    expect(maskPatterns(input)).toBe(expected);
   });
-  test("redacts bearer/token key patterns", () => {
-    expect(maskPatterns("token=supersecretvalue")).toBe("••••[redacted]");
-  });
-  test("redacts long opaque base64url-style tokens (letter + digit, >=32)", () => {
-    // 40-char high-entropy token, not pure hex, no separators.
-    const tok = "aB3dE6fH9jK2mN5pQ8rS1tU4vW7xY0zA3bC6dE9f";
-    expect(maskPatterns(tok)).toBe("••••[token]");
-    // Embedded in surrounding text, only the token is masked.
-    expect(maskPatterns(`id ${tok} end`)).toBe("id ••••[token] end");
-  });
-  test("leaves long all-letter words (no digit) alone", () => {
-    const word = "abcdefghijklmnopqrstuvwxyzabcdefghijklmn"; // 40 letters, no digit
-    expect(maskPatterns(word)).toBe(word);
-  });
-  test("token rule stays linear on adversarial input (no ReDoS)", () => {
-    // "a-a-a-..." was quadratic under the old nested-lookahead pattern. It has
-    // a letter but no digit, so it must return unchanged, and must return fast
-    // (bun's test timeout catches a hang).
-    const adversarial = `${"a-".repeat(40000)}a`; // 80001 chars
+
+  test("the token rule stays linear on adversarial input (the nested-lookahead form was quadratic)", () => {
+    // Letters but no digit, so it must come back unchanged, and fast enough that the test timeout does not fire.
+    const adversarial = `${"a-".repeat(40000)}a`;
     expect(maskPatterns(adversarial)).toBe(adversarial);
-  });
-  test("leaves ordinary text alone", () => {
-    expect(maskPatterns("hello world")).toBe("hello world");
   });
 });
 
 describe("maskString", () => {
-  test("passes through short values (<8)", () => {
-    expect(maskString("abc")).toBe("abc");
-  });
-  test("applies the pattern catalogue", () => {
-    expect(maskString(JWT)).toBe("••••[jwt]");
-    expect(maskString(HEX32)).toBe("••••[hex]");
-  });
-  test("full-masks a bare credential-like string", () => {
-    // Matches SENSITIVE_KEY, length >= 8, no whitespace -> fully masked.
-    expect(maskString("session_tokenvalue")).toBe("••••[sensitive]");
-  });
-  test("does NOT full-mask when whitespace is present", () => {
-    const out = maskString("please use token=secret12345 now");
-    expect(out).toContain("••••[redacted]");
-    expect(out).not.toBe("••••[sensitive]");
+  test.each([
+    ["a short value passes through", "abc", "abc"],
+    ["a JWT goes through the catalogue", JWT, "••••[jwt]"],
+    ["hex goes through the catalogue", HEX32, "••••[hex]"],
+    ["a bare credential-like string is fully masked", "session_tokenvalue", "••••[sensitive]"],
+    [
+      "whitespace disables the full mask",
+      "please use token=secret12345 now",
+      "please use ••••[redacted] now",
+    ],
+  ])("%s", (_case, input, expected) => {
+    expect(maskString(input)).toBe(expected);
   });
 });
 
 describe("maskCookieValue (pattern-only, no full-mask)", () => {
-  test("non-strings pass through", () => {
-    expect(maskCookieValue(42)).toBe(42);
-    expect(maskCookieValue(null)).toBe(null);
-  });
-  test("short strings pass through", () => {
-    expect(maskCookieValue("abc")).toBe("abc");
-  });
-  test("applies the catalogue but never full-masks like maskString", () => {
-    expect(maskCookieValue(JWT)).toBe("••••[jwt]");
-    // Same input that maskString fully masks stays pattern-only here.
-    expect(maskCookieValue("session_tokenvalue")).toBe("session_tokenvalue");
-    expect(maskString("session_tokenvalue")).toBe("••••[sensitive]");
-  });
-  test("masks a long opaque session-token cookie via the catalogue", () => {
-    const tok = "aB3dE6fH9jK2mN5pQ8rS1tU4vW7xY0zA3bC6dE9f";
-    expect(maskCookieValue(tok)).toBe("••••[token]");
+  test.each([
+    ["a number passes through", 42, 42],
+    ["null passes through", null, null],
+    ["a short string passes through", "abc", "abc"],
+    ["a JWT goes through the catalogue", JWT, "••••[jwt]"],
+    [
+      "a credential-like string is NOT fully masked (maskString would)",
+      "session_tokenvalue",
+      "session_tokenvalue",
+    ],
+    ["an opaque session token goes through the catalogue", OPAQUE, "••••[token]"],
+  ])("%s", (_case, input, expected) => {
+    expect(maskCookieValue(input)).toBe(expected);
   });
 });
 
 describe("maskNumber", () => {
-  test("masks card-like big integers", () => {
-    expect(maskNumber(123456789012)).toBe("••••[num]");
-  });
-  test("leaves small / non-integer numbers alone", () => {
-    expect(maskNumber(42)).toBe(42);
-    expect(maskNumber(3.14)).toBe(3.14);
+  test.each([
+    ["a card-like integer", 123456789012, "••••[num]"],
+    ["a small integer", 42, 42],
+    ["a non-integer", 3.14, 3.14],
+  ])("%s", (_case, input, expected) => {
+    expect(maskNumber(input)).toBe(expected);
   });
 });
 
 describe("maskKeyName", () => {
-  test("masks sensitive key names, keeps a 2-char tail", () => {
-    expect(maskKeyName("password")).toBe("••••rd");
-  });
-  test("leaves non-sensitive names alone", () => {
-    expect(maskKeyName("username")).toBe("username");
+  test.each([
+    ["a sensitive name keeps a 2-char tail", "password", "••••rd"],
+    ["an ordinary name passes through", "username", "username"],
+  ])("%s", (_case, input, expected) => {
+    expect(maskKeyName(input)).toBe(expected);
   });
 });
 
 describe("maskSensitive (recursive)", () => {
-  test("masks values and sensitive key names in nested objects", () => {
-    const out = maskSensitive({
+  test("masks values and renames sensitive keys through nested objects", () => {
+    expect(
+      maskSensitive({
+        user: "alice",
+        authToken: JWT,
+        nested: { secret: HEX32, count: 3 },
+      }),
+    ).toEqual({
       user: "alice",
-      authToken: JWT,
-      nested: { secret: HEX32, count: 3 },
-    }) as { user: string; nested: { count: number } };
-    expect(out.user).toBe("alice");
-    expect(out.nested.count).toBe(3);
-    // authToken value masked; some keys renamed (contain sensitive words).
-    const flat = JSON.stringify(out);
-    expect(flat).toContain("••••[jwt]");
-    expect(flat).toContain("••••[hex]");
+      "••••en": "••••[jwt]",
+      nested: { "••••et": "••••[hex]", count: 3 },
+    });
   });
+
   test("passes through primitives and arrays", () => {
     expect(maskSensitive(true)).toBe(true);
     expect(maskSensitive([1, 2])).toEqual([1, 2]);
@@ -123,21 +110,13 @@ describe("maskSensitive (recursive)", () => {
 });
 
 describe("maskErrorMessage (outer error egress)", () => {
-  test("masks a secret carried in an Error message", () => {
-    const out = maskErrorMessage(new Error(`token ${JWT}`));
-    expect(out).not.toContain(JWT);
-    expect(out).toContain("\u2022\u2022\u2022\u2022");
-  });
-  test("masks a secret in a plain thrown string", () => {
-    expect(maskErrorMessage(`leak ${HEX32} end`)).not.toContain(HEX32);
-  });
-  test("ordinary error messages pass through readably", () => {
-    expect(maskErrorMessage(new Error("user denied: click submit"))).toBe(
-      "user denied: click submit",
-    );
-  });
-  test("null/undefined fall back to a generic message", () => {
-    expect(maskErrorMessage(undefined)).toBe("error");
-    expect(maskErrorMessage(null)).toBe("error");
+  test.each([
+    ["a secret in an Error message", new Error(`token ${JWT}`), "token ••••[jwt]"],
+    ["a secret in a thrown string", `leak ${HEX32} end`, "leak ••••[hex] end"],
+    ["an ordinary message", new Error("user denied: click submit"), "user denied: click submit"],
+    ["undefined", undefined, "error"],
+    ["null", null, "error"],
+  ])("%s", (_case, input, expected) => {
+    expect(maskErrorMessage(input)).toBe(expected);
   });
 });

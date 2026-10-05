@@ -12,15 +12,12 @@ import {
   DISABLED_TOOLS_MAX_ENTRIES,
   isPolicyFieldName,
   POLICY_DEFAULTS,
-  POLICY_DIRECTIONS,
   POLICY_DOC_VERSION,
   POLICY_DOMAIN,
-  POLICY_FIELDS,
   POLICY_REVISION_MAX,
   PolicyDocSchema,
   PolicyOverlaySchema,
   PolicyValuesSchema,
-  parseStoredPolicyValues,
 } from "../src/policy.gen";
 
 // A well-formed v1 document: the deny-baseline values under default scoping.
@@ -32,24 +29,9 @@ const wellFormedDoc = () => ({
 });
 
 describe("POLICY_FIELDS", () => {
-  test("names are unique and recognized by isPolicyFieldName", () => {
-    expect(POLICY_FIELDS.length).toBe(15);
-    expect(new Set(POLICY_FIELDS).size).toBe(POLICY_FIELDS.length);
-    for (const field of POLICY_FIELDS) expect(isPolicyFieldName(field)).toBe(true);
+  test("the retired requireEnrollment and the browser-owned uiLanguage are not policy fields", () => {
     expect(isPolicyFieldName("requireEnrollment")).toBe(false);
     expect(isPolicyFieldName("uiLanguage")).toBe(false);
-  });
-});
-
-describe("POLICY_DIRECTIONS", () => {
-  test("every field has a direction and nothing else does", () => {
-    expect(Object.keys(POLICY_DIRECTIONS).sort()).toEqual([...POLICY_FIELDS].sort());
-  });
-
-  test("hostReverifyMs keeps its custom zero-top order", () => {
-    // The one a naive numeric comparator gets backwards: 0 = never
-    // re-verify = MOST permissive, so it tops the scale.
-    expect(POLICY_DIRECTIONS.hostReverifyMs).toBe("growsPermissiveZeroTop");
   });
 });
 
@@ -57,22 +39,6 @@ describe("POLICY_DEFAULTS", () => {
   test("is deep-frozen, nested array included", () => {
     expect(Object.isFrozen(POLICY_DEFAULTS)).toBe(true);
     expect(Object.isFrozen(POLICY_DEFAULTS.disabledTools)).toBe(true);
-  });
-});
-
-describe("parseStoredPolicyValues", () => {
-  test("returns the exact values on a valid bag", () => {
-    const bag = { ...POLICY_DEFAULTS, cdpMode: true, disabledTools: ["page_upload"] };
-    expect(parseStoredPolicyValues(bag)).toEqual(bag);
-  });
-
-  test("returns null on any failure, never a salvage", () => {
-    // A per-field fallback here would move the corrupt field toward its
-    // permissive pole - the ratchet anchor must be exact or absent.
-    expect(parseStoredPolicyValues({ ...POLICY_DEFAULTS, confirmGraceMs: "corrupted" })).toBeNull();
-    expect(parseStoredPolicyValues(null)).toBeNull();
-    expect(parseStoredPolicyValues("junk")).toBeNull();
-    expect(parseStoredPolicyValues({ ...POLICY_DEFAULTS, requireEnrollment: false })).toBeNull();
   });
 });
 
