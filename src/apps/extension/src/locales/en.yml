@@ -119,7 +119,7 @@ confirm:
   hardware_note: "No Allow button: approval is this device's authenticator itself, so nothing on screen - and no remote client - can press it for you."
   touchid_wait: "Waiting for this device's authenticator"
   request_id: "request $1"
-  kill_note: "Denies this request and cuts every client off every browser. Release is `chromium-bridge unkill`."
+  kill_note: "Denies this request and cuts every client off every browser. Release is a tap in settings or `chromium-bridge unkill`."
 
 options:
   title: "Chromium Bridge settings"

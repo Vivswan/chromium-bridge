@@ -13,7 +13,8 @@ import type { MessageKey } from "@/lib/i18n";
 //                                      extension; the two ship separately)
 //   native host not connected       -> as it came: the worker's own refusals are phrases already
 
-/** What ceremonyFailure names: Chrome's WebAuthn client failures, as codes. */
+/** The codes ceremonyCode mints for Chrome's WebAuthn client failures; a fourth literal there has no row here
+ * until this union and the table gain it together. */
 type CeremonyCode = "prompt_dismissed" | "credential_exists" | "no_webauthn";
 
 const MALFORMED_ANSWER: MessageKey = "webauthn.reason_malformed_answer";
@@ -89,13 +90,17 @@ export function refusalSentence(t: Translate, reason: string): string {
 
 /** The code for a `navigator.credentials` failure: the names Chrome's WebAuthn client throws for the user
  * dismissing the prompt and for an authenticator that already holds an excluded credential, and a browser
- * with no WebAuthn API at all (the ceremony's static helpers are missing). */
+ * with no WebAuthn API at all (the ceremony's static helpers are missing). Anything else is its message. */
 export function ceremonyFailure(e: unknown): string {
+  return ceremonyCode(e) ?? (e instanceof Error ? e.message : String(e));
+}
+
+function ceremonyCode(e: unknown): CeremonyCode | undefined {
   if (e instanceof DOMException) {
     if (e.name === "NotAllowedError") return "prompt_dismissed";
     if (e.name === "InvalidStateError") return "credential_exists";
-    return e.message;
+    return undefined;
   }
   if (e instanceof ReferenceError || e instanceof TypeError) return "no_webauthn";
-  return e instanceof Error ? e.message : String(e);
+  return undefined;
 }

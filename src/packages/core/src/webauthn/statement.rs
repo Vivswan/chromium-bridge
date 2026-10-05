@@ -63,7 +63,7 @@ impl Nonce {
 pub struct Action(String);
 
 impl Action {
-    /// The two acts the host names on its own; literals inside the bound, so neither can fail `parse`.
+    // The host's own two acts: literals inside the bound, so neither can fail `parse`.
     pub fn enroll() -> Self {
         Action("enroll".to_string())
     }

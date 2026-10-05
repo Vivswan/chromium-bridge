@@ -117,7 +117,7 @@ confirm:
   hardware_note: "沒有允許按鈕: 核准就是本裝置的驗證器本身, 螢幕上的任何東西、任何遠端用戶端都無法替你按下。"
   touchid_wait: "等待本裝置的驗證器"
   request_id: "請求 $1"
-  kill_note: "拒絕此請求, 並切斷所有用戶端與所有瀏覽器的連線。解除操作是 `chromium-bridge unkill`。"
+  kill_note: "拒絕此請求, 並切斷所有用戶端與所有瀏覽器的連線。解除操作: 在設定頁輕觸驗證器, 或執行 `chromium-bridge unkill`。"
 
 options:
   title: "Chromium Bridge 設定"

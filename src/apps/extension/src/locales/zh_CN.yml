@@ -117,7 +117,7 @@ confirm:
   hardware_note: "没有允许按钮: 批准就是本设备的验证器本身, 屏幕上的任何东西、任何远程客户端都无法替你按下。"
   touchid_wait: "等待本设备的验证器"
   request_id: "请求 $1"
-  kill_note: "拒绝此请求, 并切断所有客户端与所有浏览器的连接。解除操作是 `chromium-bridge unkill`。"
+  kill_note: "拒绝此请求, 并切断所有客户端与所有浏览器的连接。解除操作: 在设置页轻触验证器, 或运行 `chromium-bridge unkill`。"
 
 options:
   title: "Chromium Bridge 设置"
