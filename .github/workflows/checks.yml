@@ -280,9 +280,8 @@ jobs:
     with:
       chrome-version: stable
 
-  # The .pkg, .deb and .msi built and installed on their own runners, on every PR: a path-filtered skip
-  # would not satisfy the managed all-green aggregate, which allows a skip of `checks` alone, and a separate
-  # workflow never reached that aggregate at all.
+  # On every PR: the managed all-green aggregate allows a skip of `checks` alone, so a path-filtered skip
+  # here would fail it.
   installers:
     name: Installers
     uses: ./.github/workflows/installers.yml

@@ -69,7 +69,7 @@ Each leg wraps its binary unchanged into the platform's installer. The post-inst
 The `homebrew` job renders `Formula/chromium-bridge.rb` from the two `.tar.gz.sha256` assets (`scripts/release-package.ts brew-formula`) and opens a pull request on `Vivswan/homebrew-tap` with `REPO_PLATFORM_TOKEN`.
 
 - **The tap repository is the owner's to create, and the pull request theirs to merge.** Until it exists the job fails, and `continue-on-error` keeps that from blocking the release, as with the SBOM; until the merge, the tap serves the previous formula.
-- **The formula's version keeps the tag's suffix** (`1.2.3-rc.1`), so a prerelease formula upgrades to the final one.
+- **The tap receives final releases alone.** Homebrew ranks `1.2.3-dev` above `1.2.3`, so a prerelease tag renders no formula and opens no pull request.
 - **The formula's `post_install` is `doctor --fix`.** A failure there leaves the install in place with brew's warning; `brew postinstall chromium-bridge` retries it.
 
 ## SBOM: CycloneDX onto the draft

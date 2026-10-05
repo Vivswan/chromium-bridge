@@ -267,11 +267,13 @@ jobs:
           repository: ${{ env.TAP_REPOSITORY }}
           token: ${{ secrets.REPO_PLATFORM_TOKEN }}
           path: tap
-      - name: Render the formula into the tap checkout
+      - name: Render the formula into the tap checkout (final tags alone)
+        id: formula
         env:
           FORMULA_PATH: tap/Formula/chromium-bridge.rb
         run: bun scripts/release-package.ts brew-formula
       - name: Open the bump pull request on the tap
+        if: steps.formula.outputs.bump == 'true'
         working-directory: tap
         env:
           GH_TOKEN: ${{ secrets.REPO_PLATFORM_TOKEN }}

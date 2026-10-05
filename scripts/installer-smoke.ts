@@ -77,7 +77,6 @@ class Steps extends CommandChecks {
 
 function macos(installer: string, steps: Steps, home: string): void {
   const binary = "/usr/local/bin/chromium-bridge";
-  // Logged before the install is judged, never judged themselves.
   const install = ["sudo", "installer", "-pkg", installer, "-target", "/"];
   const installed = steps.run(...install);
   steps.run("stat", "-f", "%Su", "/dev/console");

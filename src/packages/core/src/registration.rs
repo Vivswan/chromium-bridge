@@ -54,6 +54,11 @@ const POINTER_VALUE_NAME: &str = "update_url";
 pub mod fuzz_api {
     pub const MANIFEST_DESCRIPTION: &str = super::MANIFEST_DESCRIPTION;
     pub const MANIFEST_DESCRIPTION_LEGACY: &str = super::MANIFEST_DESCRIPTION_LEGACY;
+    pub const WEB_STORE_UPDATE_URL: &str = super::WEB_STORE_UPDATE_URL;
+
+    pub fn pointer_json() -> String {
+        super::pointer_json()
+    }
 
     pub fn manifest_json(
         registrar: &super::Registrar,

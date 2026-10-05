@@ -8,7 +8,8 @@
 //   extension-zip        the standalone extension bundle zip and its checksum; output name      (macos leg only)
 //   installer            this leg's .pkg, .deb, or .msi and its checksum; output installer     (binaries job)
 //   installer-from-cargo the same installer for the version Cargo.toml carries, no tag needed  (installers.yml)
-//   brew-formula         the tap formula from the two archive checksums, written to FORMULA_PATH (homebrew job)
+//   brew-formula         the tap formula from the two archive checksums, written to FORMULA_PATH; final tags
+//                        alone, output bump                                                       (homebrew job)
 //   prerelease           a suffixed tag flags the draft release as a prerelease                 (mark-prerelease job)
 
 import { createHash } from "node:crypto";
@@ -237,6 +238,9 @@ export function installerPlan(release: ReleaseTag, platform: string, arch: strin
 
 export const installerOutputs = ["installer", "installersha256file"] as const;
 
+/** `bump` is `true` when a formula was written (a final tag) and `false` for a prerelease, which the tap never sees. */
+export const formulaOutputs = ["bump"] as const;
+
 export function packageInstaller(root: string, env: Env, plan: InstallerPlan, run: RunTool): void {
   for (const [source, destination] of plan.staged) {
     mkdirSync(dirname(join(root, destination)), { recursive: true });
@@ -279,12 +283,12 @@ export function brewFormula(inputs: FormulaInputs): string {
   const base = `https://github.com/${inputs.repository}/releases/download/${inputs.release.tag}`;
   const archive = (platform: string, arch: string) =>
     `${base}/${packagingPlan(inputs.release.tag, platform, arch).archive}`;
-  // The tag's suffix stays in the version, so brew sees a release above the prerelease before it; the
-  // binary prints the core alone, so the formula's test compares against that.
+  // Homebrew ranks an rc below its final version but a dev suffix above it, so the tap only ever sees
+  // final releases and the version is the core.
   return `class ChromiumBridge < Formula
   desc "Authenticated MCP bridge to your real Chromium browsers"
   homepage "https://github.com/${inputs.repository}"
-  version "${inputs.release.tag.slice(1)}"
+  version "${inputs.release.core}"
   license :cannot_represent
 
   on_macos do
@@ -364,6 +368,11 @@ const modes: Record<string, () => void> = {
   },
   "brew-formula"() {
     const release = verifyTag(requiredEnv("RELEASE_TAG"), cargoVersion());
+    if (release.prerelease) {
+      githubOutput("bump", "false");
+      console.log(`${release.tag} is a prerelease; the tap receives final releases alone`);
+      return;
+    }
     const digest = (platform: string, arch: string) =>
       checksumDigest(
         readFileSync(
@@ -380,6 +389,7 @@ const modes: Record<string, () => void> = {
     const path = requiredEnv("FORMULA_PATH");
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, formula);
+    githubOutput("bump", "true");
     console.log(`formula written to ${path}`);
   },
   prerelease() {

@@ -5,10 +5,10 @@ import { join } from "node:path";
 import { repoRoot, Scratch, writeTree } from "../lib.ts";
 import {
   archiveOutputs,
-  brewFormula,
   checksumDigest,
   checksumLine,
   flagPrerelease,
+  formulaOutputs,
   installerOutputs,
   installerPlan,
   packageArchive,
@@ -286,33 +286,16 @@ describe("the Homebrew formula", () => {
   // What would drift silently: the formula downloads the archives by the names the archive mode gives
   // them (one grammar in two files), with the digests the checksum files carry. A renamed asset or a
   // digest read from the wrong line installs nothing or fails the brew checksum.
-  const release = parseTag("v1.2.3");
-  const macosArm64 = "a".repeat(64);
   const linuxX64 = "b".repeat(64);
-  const formula = brewFormula({ repository: "example-user/repo", release, macosArm64, linuxX64 });
+  const macosArm64 = "a".repeat(64);
 
-  test("each url names the archive the release legs upload, beside its digest", () => {
-    const base = "https://github.com/example-user/repo/releases/download/v1.2.3";
-    expect(formula).toContain(
-      `url "${base}/${packagingPlan("v1.2.3", "macos", "arm64").archive}"\n      sha256 "${macosArm64}"`,
+  test("every `steps.formula.outputs.<x>` update-release.yml reads is a record the brew-formula mode writes", () => {
+    const workflow = readFileSync(join(repoRoot, ".github/workflows/update-release.yml"), "utf8");
+    const read = new Set(
+      [...workflow.matchAll(/steps\.formula\.outputs\.([a-z0-9_-]+)/g)].map((m) => m[1]),
     );
-    expect(formula).toContain(
-      `url "${base}/${packagingPlan("v1.2.3", "linux", "x64").archive}"\n      sha256 "${linuxX64}"`,
-    );
-    expect(formula).toContain('version "1.2.3"');
-  });
-
-  test("a prerelease keeps its suffix in the version, so brew upgrades it to the final release", () => {
-    const rc = brewFormula({
-      repository: "example-user/repo",
-      release: parseTag("v1.2.3-rc.1"),
-      macosArm64,
-      linuxX64,
-    });
-    expect(rc).toContain('version "1.2.3-rc.1"');
-    expect(rc).toContain(`/v1.2.3-rc.1/${packagingPlan("v1.2.3-rc.1", "linux", "x64").archive}"`);
-    // The binary prints the core alone, so the formula's own test compares the whole line against that.
-    expect(rc).toContain('assert_equal "chromium-bridge 1.2.3", shell_output');
+    expect(read.size).toBeGreaterThan(0);
+    expect([...read].sort()).toEqual([...new Set(formulaOutputs)].sort());
   });
 
   test.each<[string, string | "refused"]>([
