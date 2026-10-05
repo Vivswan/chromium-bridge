@@ -5,7 +5,6 @@
 // assets/icon/gatedeck.svg and
 // gatedeck-open.svg. Content needs zero JS: the theme flip is a checkbox,
 // the hover morph is CSS.
-import { Image } from "astro:assets";
 import "@fontsource/inter/400.css";
 import "@fontsource/inter/500.css";
 import "@fontsource/inter/600.css";
@@ -14,8 +13,6 @@ import "@fontsource/jetbrains-mono/400.css";
 import "@fontsource/jetbrains-mono/500.css";
 import "@fontsource/jetbrains-mono/700.css";
 import "../styles/landing.css";
-import confirmDark from "../assets/screens/ext-confirm-eval-touchid-dark.png";
-import confirmLight from "../assets/screens/ext-confirm-eval-touchid-light.png";
 // The workspace version, read from the root Cargo.toml at build time so the
 // chip cannot drift from the release-please-managed number.
 import cargoToml from "../../../../../Cargo.toml?raw";
@@ -35,7 +32,7 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
     <title>Chromium Bridge: your real browser, behind a gate you hold</title>
     <meta
       name="description"
-      content="Chromium Bridge lets an MCP client drive the Chromium browser you are already signed into. Dangerous actions stop at confirmation gates no web page can see or press - on by default, relaxed only by your explicit choice - and on an enrolled Mac the riskiest demand a Secure Enclave proof that you are present."
+      content="Chromium Bridge lets an MCP client drive the Chromium browser you are already signed into. Dangerous actions stop at confirmation gates no web page can see or press - on by default, relaxed only by your explicit choice. Restoring capability takes proof of your presence: a tap on your browser's authenticator, or a phrase typed on your terminal."
     />
     <link rel="icon" type="image/svg+xml" href={withBase("gatedeck-app-icon.svg")} />
   </head>
@@ -72,13 +69,13 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
       </svg>
       <h1>Your real browser, behind a gate you hold.</h1>
       <p class="lede">
-        Chromium Bridge lets an MCP client such as Claude Code or Codex drive the
-        Chromium browser you are already signed into: your tabs, your sessions,
-        your cookies. No second browser, no debug port.
+        Chromium Bridge lets an MCP client drive the browser you are already
+        signed into: your tabs, your sessions, your cookies, no second browser,
+        no debug port.
         <strong>Dangerous actions stop at confirmation gates no web page can
-        see or press - on by default, relaxed only by your explicit choice -
-        and on an enrolled Mac the riskiest demand a Secure Enclave proof that
-        you are present.</strong>
+        see or press - on by default, relaxed only by your explicit choice.
+        Restoring capability takes proof of your presence: a tap on your
+        browser's authenticator, or a phrase typed on your terminal.</strong>
       </p>
       <div class="cta-row">
         <a class="btn btn-primary" href="#install">Install on your Mac</a>
@@ -124,7 +121,8 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
             <div class="gate-meta">One Rust binary plays MCP server and
               native-messaging host. Its broker socket is private and portless:
               kernel peer-UID check, mutual attestation, HMAC handshake. Pairing
-              signs with a Secure Enclave key gated on your presence.</div>
+              mints the host key the extension pins, behind a confirmation
+              typed on your terminal.</div>
             <div class="gate-id">7F3A 9C04 D2E8 B166 5F0A A42C 9D13 E770</div>
           </div>
           <div class="pipeline-link">
@@ -158,20 +156,18 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
       <p class="sec-label">The gate</p>
       <h2 class="sec-title">Every confirmation, one window.</h2>
       <p class="sec-sub">The extension draws every confirmation in its own
-        window, off the page. Dark and light are both first-class; flip the
-        chip in the corner to see.</p>
-
-      <figure class="shot">
-        <Image class="shot-dark" src={confirmDark} width={440} height={680} densities={[1, 2]} loading="lazy"
-          alt="The extension's confirmation window for a script request from github.com: the exact code, a plain-language consequence line, a Deny button, and 'Waiting for Touch ID on this Mac' where an Allow button would be" />
-        <Image class="shot-light" src={confirmLight} width={440} height={680} densities={[1, 2]} loading="lazy"
-          alt="The extension's confirmation window in the light scheme, for a script request from github.com: the exact code, a plain-language consequence line, a Deny button, and 'Waiting for Touch ID on this Mac' where an Allow button would be" />
-        <figcaption>A client wants to run a script in your tab. The extension
-          draws this in its own window, off the page. There is no Allow button:
-          on an enrolled Mac with the default settings, approval is a Secure
-          Enclave presence check - your touch or your login password - so
-          nothing on screen, and no remote client, can press it for you.</figcaption>
-      </figure>
+        window, off the page: what the client wants to do, a plain-language
+        consequence line, Deny and Allow. Allow is disarmed for a moment after
+        the window appears, so a click meant for the page cannot land on it.</p>
+      <p class="sec-sub">Acts the extension asks for that restore capability are
+        not a click: the host asks for your presence, and the answer is a
+        WebAuthn tap on this device's authenticator - Touch ID, Windows Hello,
+        or a security key. Releasing the kill switch accepts only a credential
+        enrolled under this browser, while enrolling another credential accepts
+        any credential already enrolled, which is how a second browser joins.</p>
+      <p class="sec-sub">The window may answer only when no enrolled credential
+        could, and the audit trail says which surface did. Script and upload
+        confirmations stay in that window on every call.</p>
     </section>
 
     <section class="guarantees wrap" id="guarantees">
@@ -183,21 +179,20 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
       <div class="g-grid">
         <div class="g-cell">
           <h3>The bridge has no silent enrollment path.</h3>
-          <p>Trusting an MCP client takes proof of presence: a Secure Enclave
-            check - your touch or your login password - on an enrolled Mac, an
-            explicit interactive confirmation where no enrollment key exists.
-            The gate is hard-wired; there is no flag, env var, or grace window
-            that skips it.</p>
+          <p>Trusting an MCP client takes proof of presence: a confirmation
+            typed on an interactive terminal, with a piped stdin refused before
+            any prompt appears. The gate is hard-wired; there is no flag, env
+            var, or grace window that skips it.</p>
           <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/security/rationale.md#enrollment-and-user-presence">security rationale</a>
         </div>
         <div class="g-cell">
-          <h3>On an enrolled Mac, approval is your presence.</h3>
-          <p>With Touch ID enrolled and the default settings, the script and
-            upload confirmation offers Deny and nothing else: the yes is a
-            Secure Enclave user-presence signature - your touch or your login
-            password - that no page, script, or remote client can forge.
-            Without that hardware, the verdict is a click in the extension's
-            own window.</p>
+          <h3>Capability comes back only with your presence.</h3>
+          <p>When the extension asks to release the kill switch or enroll
+            another credential, the host mints and verifies a presence request:
+            a WebAuthn assertion from a credential you already enrolled, which
+            no page, script, or remote client can forge. From the CLI, release
+            takes a phrase typed on a real terminal. Script and upload
+            confirmations stay in the extension's own window on every call.</p>
           <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/security/trust-boundaries.md">trust boundaries</a>
         </div>
         <div class="g-cell">
@@ -271,14 +266,12 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
             <p>In your browser, open
               <span class="mono-inline">chrome://extensions</span>, enable
               Developer mode, and Load unpacked from the archive's
-              <span class="mono-inline">extension/dist</span> folder. On a Mac,
-              run <span class="mono-inline">chromium-bridge pair</span> (a Touch
-              ID prompt) and approve the printed key fingerprint on the
-              extension's options page. Until the fingerprints match, the
-              extension refuses to act. Pairing on macOS today needs a build
-              codesigned with an application identifier: the plain release
-              binary cannot mint the Enclave key. The WebAuthn presence track
-              removes that requirement.</p>
+              <span class="mono-inline">extension/dist</span> folder. Run
+              <span class="mono-inline">chromium-bridge pair</span>: it asks for
+              a confirmation typed on the terminal, mints the host key into
+              your OS credential store, and prints the key's fingerprint.
+              Approve that fingerprint on the extension's options page, which
+              refuses to act until the fingerprints match.</p>
           </div>
         </li>
         <li class="step">
