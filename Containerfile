@@ -100,6 +100,6 @@ ENV CHROME_BIN=/usr/bin/chromium \
 
 # The node_modules and cargo-registry named volumes start empty and hold the Linux install, which the host's
 # macOS or Windows install cannot stand in for, so every service installs and fetches before its command
-# (the gate's readiness checks judge both offline and never fetch).
+# (the gate's bunx and cargo verbs run with --no-install and --frozen and never fetch).
 ENTRYPOINT ["bash", "-euo", "pipefail", "-c", "bun install --frozen-lockfile && cargo fetch --locked && cargo fetch --locked --manifest-path src/packages/core/fuzz/Cargo.toml && exec \"$@\"", "container-entrypoint"]
 CMD ["bash"]

@@ -19,7 +19,6 @@ taskOptions:
 tasks:
   typecheck:
     description: 'Type-check src/packages/shared alone (the repo-wide pass is the root typecheck task)'
-    deps: ['root:check-deps']
     command: 'bun run typecheck'
     inputs:
       - '**/*'
@@ -33,7 +32,6 @@ tasks:
 
   test:
     description: 'Unit-test src/packages/shared: generated catalogue, boundary validators'
-    deps: ['root:check-deps']
     command: 'bun run test'
     inputs:
       - '**/*'
@@ -47,7 +45,6 @@ tasks:
     description: "Biome lint for the shared package"
     # Same invocation shape as the repo-wide gate (`bunx --no-install biome lint .` from
     # the root), scoped to this project so config resolution is identical.
-    deps: ['root:check-deps']
     command: 'bunx --no-install biome lint $projectSource'
     inputs:
       - '**/*'

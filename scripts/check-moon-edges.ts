@@ -14,8 +14,6 @@ export type TaskGraph = Record<
   >
 >;
 
-export const DEPS_CHECK = "root:check-deps";
-export const CRATES_CHECK = "root:check-crates";
 export const GATE = "root:gate";
 
 /** bun subcommands that install or change what is installed, aliases included (`bun i`, `bun a`, `bun rm`). */
@@ -45,19 +43,6 @@ export const TOOLCHAIN_CARGO_VERBS = new Set([
   "tree",
 ]);
 
-/**
- * The bun tasks without the check-deps edge: the scripts whose contract is to run before or without an install
- * (their headers say so), the install itself, and its two checks.
- */
-export const EDGE_EXEMPT = new Set([
-  "root:build-repro",
-  "root:fuzz-smoke",
-  "root:harness-smoke",
-  "root:setup",
-  DEPS_CHECK,
-  CRATES_CHECK,
-]);
-
 // A script task's `command` is its first word (`set` for `set -e`), so the script is cut into simple commands at
 // the shell operators (backslash continuations joined first, comments dropped); a command task is one command.
 // `bun x` is bunx by another spelling, so both rules see one form.
@@ -80,9 +65,6 @@ function simpleCommands(task: TaskGraph[string][string]): string[][] {
     .map(unalias);
 }
 
-const dependsOn = (task: TaskGraph[string][string], target: string): boolean =>
-  (task.deps ?? []).some((dep) => dep.target === target);
-
 function closure(graph: TaskGraph, start: string): { reached: string[]; unknown: string[] } {
   const reached = new Set<string>();
   const unknown = new Set<string>();
@@ -101,17 +83,12 @@ function closure(graph: TaskGraph, start: string): { reached: string[]; unknown:
   return { reached: [...reached], unknown: [...unknown] };
 }
 
-export function auditGraph(graph: TaskGraph, exempt = EDGE_EXEMPT): string[] {
+export function auditGraph(graph: TaskGraph): string[] {
   const findings: string[] = [];
   for (const [project, tasks] of Object.entries(graph)) {
     for (const [id, task] of Object.entries(tasks)) {
       const target = `${project}:${id}`;
-      const commands = simpleCommands(task);
-      const runsBun = commands.some(([word]) => word === "bun" || word === "bunx");
-      if (runsBun && !exempt.has(target) && !dependsOn(task, DEPS_CHECK)) {
-        findings.push(`${target}: runs bun without depending on ${DEPS_CHECK}`);
-      }
-      if (commands.some(([word, flag]) => word === "bunx" && flag !== "--no-install")) {
+      if (simpleCommands(task).some(([word, flag]) => word === "bunx" && flag !== "--no-install")) {
         findings.push(`${target}: bunx without --no-install`);
       }
     }
@@ -139,9 +116,6 @@ export function auditGraph(graph: TaskGraph, exempt = EDGE_EXEMPT): string[] {
       if (!TOOLCHAIN_CARGO_VERBS.has(verb)) {
         findings.push(`${target}: runs cargo ${verb} inside ${GATE} (not a toolchain verb)`);
       }
-      if (!dependsOn(task, CRATES_CHECK)) {
-        findings.push(`${target}: runs cargo inside ${GATE} without depending on ${CRATES_CHECK}`);
-      }
       if (verb !== "fmt" && !rest.includes("--frozen")) {
         findings.push(`${target}: cargo ${verb} inside ${GATE} without --frozen`);
       }
@@ -154,18 +128,10 @@ if (import.meta.main) {
   const query = Bun.spawnSync(["moon", "query", "tasks"], { cwd: repoRoot });
   if (!query.success) die(`moon query tasks failed: ${query.stderr.toString()}`);
   const { tasks } = JSON.parse(query.stdout.toString()) as { tasks?: TaskGraph };
-  // The check tasks and the gate are the control: a graph without them, or with a record that is not a task,
-  // is a misread, not a clean census.
-  if (
-    !tasks ||
-    Array.isArray(tasks) ||
-    !tasks.root?.["check-deps"] ||
-    !tasks.root?.["check-crates"] ||
-    !tasks.root?.gate
-  ) {
-    die(
-      `moon query tasks returned no ${DEPS_CHECK}, ${CRATES_CHECK}, or ${GATE} task; refusing to judge an unreadable graph`,
-    );
+  // The gate is the control: a graph without it, or with a record that is not a task, is a misread, not a
+  // clean census.
+  if (!tasks || Array.isArray(tasks) || !tasks.root?.gate) {
+    die(`moon query tasks returned no ${GATE} task; refusing to judge an unreadable graph`);
   }
   for (const [project, projectTasks] of Object.entries(tasks)) {
     for (const [id, task] of Object.entries(projectTasks)) {
@@ -179,6 +145,6 @@ if (import.meta.main) {
   }
   const total = Object.values(tasks).reduce((n, project) => n + Object.keys(project).length, 0);
   console.log(
-    `check-moon-edges: bun tasks depend on ${DEPS_CHECK}, and ${GATE} runs only the repository's own toolchain (${total} tasks)`,
+    `check-moon-edges: bunx never installs, and ${GATE} runs only the repository's own toolchain (${total} tasks)`,
   );
 }

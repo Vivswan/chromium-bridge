@@ -1,11 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { auditGraph, CRATES_CHECK, DEPS_CHECK, GATE, type TaskGraph } from "../check-moon-edges";
+import { auditGraph, GATE, type TaskGraph } from "../check-moon-edges";
 
-// Drift answer: a task's command and its deps sit on different lines of moon.yml, and moon cannot express "every
-// task that runs bun depends on check-deps" or "the pre-commit gate runs only the repository's own toolchain".
-// The graph is hand-written in the shape `moon query tasks` returns.
-const edge = [{ target: DEPS_CHECK }];
-const crates = [{ target: CRATES_CHECK }];
+// Drift answer: moon cannot express "bunx never installs" or "the pre-commit gate runs only the repository's own
+// toolchain", and a task added without them fails on its first cold run or inside a commit. The graph is
+// hand-written in the shape `moon query tasks` returns.
 const graph: TaskGraph = {
   root: {
     gate: {
@@ -25,8 +23,6 @@ const graph: TaskGraph = {
       ],
     },
     ci: { command: "noop", deps: [{ target: "root:gate" }, { target: "root:check-yaml" }] },
-    "check-deps": { command: "bun", args: ["scripts/check-deps.ts", "bun"], deps: [] },
-    "check-crates": { command: "bun", args: ["scripts/check-deps.ts", "cargo"], deps: [] },
     hygiene: {
       command: "noop",
       deps: [{ target: "root:check-pins" }, { target: "root:check-yaml" }],
@@ -35,13 +31,13 @@ const graph: TaskGraph = {
       command: "set",
       script:
         "set -e\nbunx --no-install tsc -p scripts\nbunx --no-install tsc -p src/packages/shared\n",
-      deps: edge,
+      deps: [],
     },
     "gen-shared": {
       command: "set",
       script:
         "set -e\nbun scripts/gen-ops.ts\nbunx --no-install biome format --write \\\n  src/a.gen.ts \\\n  src/b.gen.ts\n",
-      deps: edge,
+      deps: [],
     },
     "check-pins": {
       command: "bun",
@@ -49,12 +45,12 @@ const graph: TaskGraph = {
       deps: [],
     },
     "check-yaml": { command: "uvx", args: ["yamllint@1.38.0", "-s", "."], deps: [] },
-    machete: { command: "cargo", args: ["machete"], deps: crates },
+    machete: { command: "cargo", args: ["machete"], deps: [] },
     unfetched: { command: "cargo", args: ["doc", "--workspace"], deps: [] },
-    "sneaky-install": { command: "bun", args: ["install", "--frozen-lockfile"], deps: edge },
-    "sneaky-alias": { command: "bun", args: ["i"], deps: edge },
-    "sneaky-x": { command: "bun", args: ["x", "fixture-tool"], deps: edge },
-    "lint-ts": { command: "bunx", args: ["--no-install", "biome", "lint", "."], deps: edge },
+    "sneaky-install": { command: "bun", args: ["install", "--frozen-lockfile"], deps: [] },
+    "sneaky-alias": { command: "bun", args: ["i"], deps: [] },
+    "sneaky-x": { command: "bun", args: ["x", "fixture-tool"], deps: [] },
+    "lint-ts": { command: "bunx", args: ["--no-install", "biome", "lint", "."], deps: [] },
     typos: { command: "typos", deps: [] },
     "build-repro": { command: "bun" },
     setup: {
@@ -77,44 +73,28 @@ const graph: TaskGraph = {
     lint: {
       command: "cargo",
       args: ["clippy", "--frozen", "--all-targets", "--", "-D", "warnings"],
-      deps: crates,
+      deps: [],
     },
-    "fmt-check": { command: "cargo", args: ["fmt", "--check"], deps: crates },
+    "fmt-check": { command: "cargo", args: ["fmt", "--check"], deps: [] },
   },
   web: { build: { command: "bun" } },
 };
 
 describe("auditGraph", () => {
-  test("names every rule a task breaks, sorted: the bun edge and --no-install everywhere, own-toolchain commands with the crates edge and --frozen inside the gate's closure only", () => {
+  test("names every rule a task breaks, sorted: --no-install everywhere, own-toolchain commands with --frozen and no bun install inside the gate's closure only", () => {
     expect(auditGraph(graph)).toEqual(
       [
-        "root:check-pins: runs bun without depending on root:check-deps",
         "root:check-yaml: runs uvx inside root:gate (not bun, bunx, or a cargo toolchain verb)",
         "root:machete: runs cargo machete inside root:gate (not a toolchain verb)",
         "root:machete: cargo machete inside root:gate without --frozen",
         "root:quoted-runner: bunx without --no-install",
-        "root:quoted-runner: runs bun without depending on root:check-deps",
         "root:sneaky-install: bun install inside root:gate (installs)",
         "root:sneaky-alias: bun i inside root:gate (installs)",
         "root:sneaky-x: bunx without --no-install",
         "root:unfetched: cargo doc inside root:gate without --frozen",
-        "root:unfetched: runs cargo inside root:gate without depending on root:check-crates",
         "root:vanished: reachable from root:gate but not in the graph",
-        "web:build: runs bun without depending on root:check-deps",
       ].sort(),
     );
-  });
-
-  test("the exemption set is the only way a bun task passes without the edge", () => {
-    expect(auditGraph(graph, new Set()).filter((f) => f.includes(DEPS_CHECK))).toEqual([
-      "root:build-repro: runs bun without depending on root:check-deps",
-      "root:check-crates: runs bun without depending on root:check-deps",
-      "root:check-deps: runs bun without depending on root:check-deps",
-      "root:check-pins: runs bun without depending on root:check-deps",
-      "root:quoted-runner: runs bun without depending on root:check-deps",
-      "root:setup: runs bun without depending on root:check-deps",
-      "web:build: runs bun without depending on root:check-deps",
-    ]);
   });
 
   test("a graph without the gate reports the gate itself, not a clean census", () => {
