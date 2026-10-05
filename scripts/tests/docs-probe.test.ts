@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Finding, probePage } from "../docs-probe";
-import { Scratch, writeTree } from "../lib";
+import { gitEnv, runGit, Scratch, writeTree } from "../lib";
 
 const script = join(dirname(fileURLToPath(import.meta.url)), "..", "docs-probe.ts");
 const scratch = new Scratch();
@@ -103,6 +103,52 @@ describe("probePage", () => {
     writeTree(root, { "docs/real.md": "# Real\n", "docs/p.md": page });
     expect(probePage(page, "docs/p.md", { root, maxWords: CAP, paths: true })).toEqual([
       ...findings,
+    ]);
+  });
+});
+
+// A built icon or a tool cache exists after a build and not on a fresh clone, so a page naming one
+// got a different verdict in two worktrees of the same commit (one had built the extension, one had
+// not). A path git ignores is not a repository file wherever the probe runs, built or fresh, and a
+// directory token keeps its slash so a `build/` rule still matches it. The scratch repository's git
+// runs with GIT_* scrubbed, so this file can run inside the pre-commit hook.
+describe("a path or link target that git ignores is not part of the repository", () => {
+  const states: ReadonlyArray<readonly [state: string, files: Record<string, string>]> = [
+    ["built: the artifact exists", { "build/out.png": "" }],
+    ["fresh: the artifact was never built", {}],
+  ];
+  test.each(states)("%s", (_state, artifact) => {
+    const root = scratch.dir("docs-probe-ignored");
+    runGit(root, gitEnv(), "init", "-q");
+    writeTree(root, {
+      ".gitignore": "build/\n",
+      "docs/real.md": "# Real\n",
+      "docs/p.md":
+        "See `build/out.png`, `build/`, [out](../build/out.png), [root](../), and `docs/real.md`.\n",
+      ...artifact,
+    });
+    expect(
+      probePage(readFileSync(join(root, "docs/p.md"), "utf8"), "docs/p.md", {
+        root,
+        maxWords: 20,
+        paths: true,
+      }),
+    ).toEqual([
+      {
+        file: "docs/p.md",
+        line: 1,
+        message: "`build/out.png` is not part of the repository (git ignores it)",
+      },
+      {
+        file: "docs/p.md",
+        line: 1,
+        message: "`build/` is not part of the repository (git ignores it)",
+      },
+      {
+        file: "docs/p.md",
+        line: 1,
+        message: "link target ../build/out.png is not part of the repository (git ignores it)",
+      },
     ]);
   });
 });

@@ -12,7 +12,9 @@
 // A path is a backticked token with a slash and an extension (or ./, ../, a
 // trailing slash), or a relative link destination; placeholders (<...>),
 // globs, owner/repo slugs, and bare file names are left alone, since a page
-// may name files the reader will create.
+// may name files the reader will create. A path git ignores (built icons, a
+// tool cache) is not a repository file even when it exists on this machine,
+// so the verdict is the same on a fresh clone and after a build.
 //
 // --baseline <file> holds the findings the pages carried before their rewrite,
 // one `page:line` per line. The gate fails in both directions: a finding not
@@ -22,6 +24,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gitEnv } from "./lib";
 import { linkFile, readPage } from "./markdown-page";
 import { realpath, withinRoot } from "./repo-paths";
 
@@ -248,7 +251,7 @@ const SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 const EXTENSION = /\.[a-z0-9]{1,10}$/i;
 
 export function pathCandidate(token: string): string | null {
-  let path = token
+  const path = token
     .trim()
     .replace(/[.,;:]+$/, "")
     .replace(/:\d+(?:-\d+)?$/, "")
@@ -256,8 +259,8 @@ export function pathCandidate(token: string): string | null {
   if (path === "" || /[<>*?${}|\s~[\]]/.test(path) || SCHEME.test(path) || /^[-/]/.test(path))
     return null;
   if (path.startsWith("./") || path.startsWith("../") || path.endsWith("/")) {
-    path = path.replace(/\/$/, "");
-    return path === "" || path === "." || path === ".." ? null : path;
+    const bare = path.replace(/\/$/, "");
+    return bare === "" || bare === "." || bare === ".." ? null : path;
   }
   return path.includes("/") && EXTENSION.test(path) ? path : null;
 }
@@ -273,6 +276,53 @@ function bases(root: string, pageDir: string, extra: readonly string[]): string[
   return [...out, ...extra];
 }
 
+const toPosix = (path: string): string => path.split(sep).join("/");
+
+/** A file a slash path may name at one base; `query` is how git is asked about it, directory marker kept. */
+interface Candidate {
+  readonly file: string;
+  readonly query: string;
+}
+
+/** The root itself is `.`: an empty relative path plus the marker would be `/`, which git refuses, and one refusal would silence the whole page. */
+function gitQuery(root: string, file: string, directory: boolean): string {
+  const rel = toPosix(relative(root, file));
+  return `${rel === "" ? "." : rel}${directory ? "/" : ""}`;
+}
+
+/** The files a slash path may name: one per base, existing or not. */
+function candidates(root: string, pageDir: string, extra: readonly string[], path: string) {
+  const dirs =
+    path.startsWith("./") || path.startsWith("../") ? [pageDir] : bases(root, pageDir, extra);
+  const files: Candidate[] = dirs.map((base) => {
+    const file = resolve(base, path);
+    return { file, query: gitQuery(root, file, path.endsWith("/")) };
+  });
+  return { dirs, files };
+}
+
+/**
+ * The files under `root` that git ignores, among the candidates, whether or not they exist: a built
+ * icon or a tool cache exists on a machine that built it and not on a fresh clone, so an existence
+ * check alone would change its verdict between the two. Git is asked with the directory marker kept,
+ * since a `build/` rule matches `build/` and not `build`. The hook's GIT_* variables are scrubbed so
+ * the query reads this root, and outside a git repository nothing is ignored.
+ */
+function ignoredBy(root: string, files: readonly Candidate[]): Set<string> {
+  const inside = files.filter(({ file }) => withinRoot(root, file));
+  const queries = [...new Set(inside.map(({ query }) => query))];
+  if (queries.length === 0) return new Set();
+  const run = Bun.spawnSync(["git", "-C", root, "check-ignore", "-z", "--stdin"], {
+    stdin: new TextEncoder().encode(`${queries.join("\0")}\0`),
+    env: gitEnv(),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (run.exitCode !== 0) return new Set();
+  const ignoredQueries = new Set(run.stdout.toString().split("\0").filter(Boolean));
+  return new Set(inside.filter(({ query }) => ignoredQueries.has(query)).map(({ file }) => file));
+}
+
 /**
  * A slash path is checked only when its first segment exists at one of the bases:
  * `agents/openai.yaml` in a page about some other layout names nothing here and is left alone,
@@ -283,17 +333,20 @@ function verdict(
   pageDir: string,
   extra: readonly string[],
   path: string,
-): "ok" | "missing" | "foreign" | "outside" {
-  const dirs =
-    path.startsWith("./") || path.startsWith("../") ? [pageDir] : bases(root, pageDir, extra);
-  const hits = dirs.map((base) => resolve(base, path)).filter((file) => existsSync(file));
-  if (hits.some((file) => withinRoot(root, file))) return "ok";
+  ignored: ReadonlySet<string>,
+): "ok" | "missing" | "ignored" | "foreign" | "outside" {
+  const { dirs, files } = candidates(root, pageDir, extra, path);
+  const hits = files.map(({ file }) => file).filter((file) => existsSync(file));
+  if (hits.some((file) => withinRoot(root, file) && !ignored.has(file))) return "ok";
+  if (files.some(({ file }) => ignored.has(file))) return "ignored";
   if (hits.length > 0) return "outside";
   const first = path.split("/")[0] ?? "";
   const anchored =
     first === "." || first === ".." || dirs.some((base) => existsSync(resolve(base, first)));
   return anchored ? "missing" : "foreign";
 }
+
+const NOT_IN_REPOSITORY = "is not part of the repository (git ignores it)";
 
 export function probePage(text: string, file: string, options: ProbeOptions): Finding[] {
   const findings: Finding[] = [];
@@ -311,19 +364,34 @@ export function probePage(text: string, file: string, options: ProbeOptions): Fi
     }
   }
   if (!options.paths) return findings;
-  for (const { text: code, line } of scan.codespans) {
-    const path = pathCandidate(code);
-    const state = path ? verdict(options.root, pageDir, options.bases ?? [], path) : "foreign";
+  const extra = options.bases ?? [];
+  const paths = scan.codespans.map(({ text: code, line }) => ({ path: pathCandidate(code), line }));
+  const links = scan.links
+    .map(({ href, line }) => ({ target: linkFile(href), line }))
+    .filter(({ target }) => target !== "" && !SCHEME.test(target) && !isAbsolute(target))
+    .map(({ target, line }) => ({ target, line, resolved: resolve(pageDir, target) }));
+  const ignored = ignoredBy(options.root, [
+    ...paths.flatMap(({ path }) =>
+      path === null ? [] : candidates(options.root, pageDir, extra, path).files,
+    ),
+    ...links.map(({ target, resolved }) => ({
+      file: resolved,
+      query: gitQuery(options.root, resolved, target.endsWith("/")),
+    })),
+  ]);
+  for (const { path, line } of paths) {
+    const state = path ? verdict(options.root, pageDir, extra, path, ignored) : "foreign";
     if (state === "missing") findings.push({ file, line, message: `\`${path}\` does not exist` });
+    if (state === "ignored")
+      findings.push({ file, line, message: `\`${path}\` ${NOT_IN_REPOSITORY}` });
     if (state === "outside")
       findings.push({ file, line, message: `\`${path}\` escapes the repository` });
   }
-  for (const { href, line } of scan.links) {
-    const target = linkFile(href);
-    if (target === "" || SCHEME.test(target) || isAbsolute(target)) continue;
-    const resolved = resolve(pageDir, target);
+  for (const { target, line, resolved } of links) {
     if (!withinRoot(options.root, resolved)) {
       findings.push({ file, line, message: `link target ${target} escapes the repository` });
+    } else if (ignored.has(resolved)) {
+      findings.push({ file, line, message: `link target ${target} ${NOT_IN_REPOSITORY}` });
     } else if (!existsSync(resolved)) {
       findings.push({ file, line, message: `link target ${target} does not exist` });
     }
@@ -391,8 +459,6 @@ interface CliOptions {
   /** Root-relative, posix, sorted, globs expanded. */
   readonly pages: readonly string[];
 }
-
-const toPosix = (path: string): string => path.split(sep).join("/");
 
 /** A page argument as the root-relative label the findings and the baseline use. */
 function pageLabel(root: string, page: string): string {

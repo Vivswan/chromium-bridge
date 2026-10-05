@@ -3,6 +3,8 @@
 # gone: the gate fails on a line that no longer fires as much as on a finding not listed here.
 .github/SECURITY.md:232
 .github/SECURITY.md:273
+CONTRIBUTING.md:29
+README.md:60
 docs/architecture.md:89
 docs/architecture.md:90
 docs/architecture.md:162
@@ -23,15 +25,24 @@ docs/architecture.md:378
 docs/architecture.md:384
 docs/architecture.md:386
 docs/chrome-web-store.md:3
+docs/chrome-web-store.md:29
+docs/chrome-web-store.md:47
 docs/compatibility.md:29
+docs/development.md:36
 docs/development.md:61
 docs/development.md:83
 docs/development.md:131
+docs/development.md:181
+docs/development.md:202
+docs/development.md:217
 docs/operations.md:18
 docs/operations.md:37
 docs/operations.md:53
 docs/operations.md:77
+docs/quickstart.md:26
 docs/quickstart.md:28
+docs/quickstart.zh_CN.md:38
+docs/quickstart.zh_TW.md:38
 docs/security/enrollment-manual-test.md:3
 docs/security/incident-response.md:35
 docs/security/threat-model.md:36
