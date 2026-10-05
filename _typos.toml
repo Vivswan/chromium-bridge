@@ -1,5 +1,5 @@
 # typos (https://github.com/crate-ci/typos) - source-code spell checker.
-# Run via `moon run typos`; wired into `moon run ci` and the lefthook pre-commit hook.
+# Run via `moon run typos`; wired into `moon run ci`.
 
 [files]
 # The generated release history is not ours to respell; localized docs will

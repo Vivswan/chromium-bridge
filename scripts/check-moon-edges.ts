@@ -134,7 +134,6 @@ export function auditGraph(graph: TaskGraph): string[] {
       if (verb !== "fmt" && !cargoArgs.includes("--frozen")) {
         findings.push(`${target}: cargo ${verb} inside ${GATE} without --frozen`);
       }
-      // rustup downloads a missing pinned toolchain before cargo reads any flag unless told not to.
       if (task.env?.RUSTUP_AUTO_INSTALL !== "0") {
         findings.push(
           `${target}: cargo ${verb} inside ${GATE} without RUSTUP_AUTO_INSTALL=0 in env`,

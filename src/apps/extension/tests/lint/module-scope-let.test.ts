@@ -46,8 +46,8 @@ test("the plugin flags exactly the module-scope lets of the fixture, with the in
       }),
     );
     const run = spawnSync(
-      "bunx",
-      ["biome", "lint", `--config-path=${dir}`, "--reporter=json", join(dir, "fixture.ts")],
+      "bun",
+      ["run", "biome", "lint", `--config-path=${dir}`, "--reporter=json", join(dir, "fixture.ts")],
       { encoding: "utf8" },
     );
     expect(run.error, "biome did not start").toBeUndefined();
