@@ -27,6 +27,13 @@ import {
   resetKillForTests,
 } from "@/lib/background/kill";
 import { route } from "@/lib/background/messages";
+import {
+  assertPresence,
+  beginKillRelease,
+  handleWebAuthnFrame,
+  resetWebAuthnForTests,
+  collaborator as webauthn,
+} from "@/lib/webauthn/exchange";
 import { attach } from "./fake-connection";
 
 const EXT_ID = "test-ext-id";
@@ -99,6 +106,125 @@ describe("kill mirror updates from host frames only", () => {
     await handleKillFrame({ type: "kill_status_result", ok: false, killed: false });
     expect((await getKillMirror())?.state).toBe("unknown");
     expect((await killGate()).allowed).toBe(false);
+  });
+
+  test("an ok:false result also fails a kill_release waiting for its presence request", async () => {
+    // The handoff is exchange.ts's claimKillRelease; this pins it from the real frame.
+    resetWebAuthnForTests();
+    attach(webauthn);
+    const release = beginKillRelease();
+    await handleKillFrame({
+      type: "kill_status_result",
+      ok: false,
+      error: "trust record unreadable",
+    });
+    await expect(release).resolves.toEqual({ ok: false, error: "trust record unreadable" });
+    expect((await getKillMirror())?.state).toBe("unknown");
+  });
+
+  // The host writes the record, then emits presence_result ok followed by kill_status_result: ok killed:false
+  // when the switch released, ok:false with the error when the write failed. The panel's answer is that frame.
+  test.each([
+    {
+      name: "the record wrote: the answer is ok and the mirror is alive",
+      frame: { type: "kill_status_result" as const, ok: true, killed: false },
+      verdict: { ok: true },
+      mirror: "alive",
+    },
+    {
+      name: "the record did not write: the answer is the host's error and the mirror is unknown",
+      frame: {
+        type: "kill_status_result" as const,
+        ok: false,
+        error: "trust record: permission denied",
+      },
+      verdict: { ok: false, error: "trust record: permission denied" },
+      mirror: "unknown",
+    },
+  ])(
+    "a release answered with presence_result ok settles from the kill_status_result that follows ($name)",
+    async ({ frame, verdict, mirror }) => {
+      resetWebAuthnForTests();
+      attach(webauthn);
+      await fakeBrowser.storage.local.set({ bridgeKillMirror: { state: "killed", at: 5 } });
+      const release = beginKillRelease();
+      const request = {
+        type: "presence_request",
+        challenge: "cHJlc2VuY2U",
+        nonce: "nonce-0002",
+        action: "release the kill switch",
+        allowed_credential_ids: ["Y3JlZC1h"],
+      };
+      handleWebAuthnFrame(request as never);
+      await release;
+      const answered = assertPresence({
+        nonce: "nonce-0002",
+        credential_id: "Y3JlZC1h",
+        authenticator_data: "YXV0aA",
+        client_data_json: "Y2Rq",
+        signature: "c2ln",
+      });
+      handleWebAuthnFrame({ type: "presence_result", ok: true });
+      await handleKillFrame(frame);
+      await expect(answered).resolves.toEqual(verdict);
+      expect((await getKillMirror())?.state).toBe(mirror);
+    },
+  );
+
+  test("a status reply arriving while a kill_release awaits its presence request leaves that exchange waiting", async () => {
+    // The connect-time kill_status query's reply says killed:true; it is not an answer to the release.
+    resetWebAuthnForTests();
+    attach(webauthn);
+    const release = beginKillRelease();
+    await handleKillFrame({ type: "kill_status_result", ok: true, killed: true });
+    const request = {
+      type: "presence_request",
+      challenge: "cHJlc2VuY2U",
+      nonce: "nonce-0002",
+      action: "release the kill switch",
+      allowed_credential_ids: ["Y3JlZC1h"],
+    };
+    handleWebAuthnFrame(request as never);
+    await expect(release).resolves.toEqual({ ok: true, request });
+  });
+
+  test("an older frame still writing the mirror cannot settle a release outcome created after it arrived", async () => {
+    // Frames are claimed at arrival: the release's own kill_status_result, not the stalled earlier one, is its answer.
+    resetWebAuthnForTests();
+    attach(webauthn);
+    await fakeBrowser.storage.local.set({ bridgeKillMirror: { state: "killed", at: 5 } });
+    let resume!: () => void;
+    const stalled = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    const realGet = fakeBrowser.storage.local.get.bind(fakeBrowser.storage.local);
+    vi.spyOn(fakeBrowser.storage.local, "get").mockImplementationOnce(async (keys) => {
+      await stalled;
+      return realGet(keys as never);
+    });
+    const earlier = handleKillFrame({ type: "kill_status_result", ok: true, killed: true });
+    const release = beginKillRelease();
+    handleWebAuthnFrame({
+      type: "presence_request",
+      challenge: "cHJlc2VuY2U",
+      nonce: "nonce-0002",
+      action: "release the kill switch",
+      allowed_credential_ids: ["Y3JlZC1h"],
+    } as never);
+    await release;
+    const answered = assertPresence({
+      nonce: "nonce-0002",
+      credential_id: "Y3JlZC1h",
+      authenticator_data: "YXV0aA",
+      client_data_json: "Y2Rq",
+      signature: "c2ln",
+    });
+    handleWebAuthnFrame({ type: "presence_result", ok: true });
+    const outcome = handleKillFrame({ type: "kill_status_result", ok: true, killed: false });
+    resume();
+    await Promise.all([earlier, outcome]);
+    await expect(answered).resolves.toEqual({ ok: true });
+    expect((await getKillMirror())?.state).toBe("alive");
   });
 
   test("an ok result missing the killed flag is unknown too", async () => {

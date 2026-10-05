@@ -3,15 +3,19 @@
 // The host side is the Rust verifier's own tests; the tag roster itself is held to the generated table by
 // tests/background/port-routing.test.ts and scripts/check-envelope.ts.
 
+import { WEBAUTHN_ENROLLMENT_KEY } from "@chromium-bridge/shared/runtime-msg";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 import {
   assertPresence,
   beginEnrollment,
+  beginKillRelease,
+  claimKillRelease,
   collaborator,
   finishEnrollment,
   handleWebAuthnFrame,
   pendingPresenceRequest,
+  recordedEnrollment,
   resetWebAuthnForTests,
   WEBAUTHN_EXCHANGE_TIMEOUT_MS,
 } from "@/lib/webauthn/exchange";
@@ -58,6 +62,7 @@ beforeEach(() => {
 afterEach(() => {
   resetWebAuthnForTests();
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe("enrollment exchanges", () => {
@@ -99,6 +104,105 @@ describe("enrollment exchanges", () => {
       await expect(p).resolves.toEqual({ ok: false, error: "malformed enroll_result from host" });
     },
   );
+});
+
+describe("the enrollment note for the options page", () => {
+  test("an ok enroll_result notes the credential; the note reads back; a refusal leaves none", async () => {
+    vi.useFakeTimers({ now: 1_700_000_000_000 });
+    const p = finishEnrollment(registration);
+    handleWebAuthnFrame({ type: "enroll_result", ok: true, credential_id: "Y3JlZC1h" });
+    await expect(p).resolves.toEqual({ ok: true, credentialId: "Y3JlZC1h" });
+    await expect(recordedEnrollment()).resolves.toEqual({
+      ok: true,
+      enrollment: { credentialId: "Y3JlZC1h", enrolledAt: 1_700_000_000_000 },
+    });
+    await fakeBrowser.storage.local.remove(WEBAUTHN_ENROLLMENT_KEY);
+    const refused = finishEnrollment(registration);
+    handleWebAuthnFrame({ type: "enroll_result", ok: false, reason: "challenge_mismatch" });
+    await expect(refused).resolves.toEqual({ ok: false, error: "challenge_mismatch" });
+    await expect(recordedEnrollment()).resolves.toEqual({ ok: true, enrollment: null });
+  });
+
+  test("a present note that does not parse is a refusal, never 'not enrolled'", async () => {
+    await fakeBrowser.storage.local.set({ [WEBAUTHN_ENROLLMENT_KEY]: { credentialId: "" } });
+    await expect(recordedEnrollment()).resolves.toEqual({
+      ok: false,
+      error: "the stored enrollment note is malformed",
+    });
+  });
+});
+
+describe("kill release", () => {
+  test("kill_release posts the frame; the pushed presence_request answers it, stays pending for the page, and opens no page", async () => {
+    const open = vi.spyOn(fakeBrowser.runtime, "openOptionsPage").mockResolvedValue(undefined);
+    const release = { ...presenceRequest, action: "release the kill switch" };
+    const p = beginKillRelease();
+    expect(posted).toEqual([{ type: "kill_release" }]);
+    handleWebAuthnFrame(release as never);
+    await expect(p).resolves.toEqual({ ok: true, request: release });
+    expect(pendingPresenceRequest()).toEqual(release);
+    expect(open).not.toHaveBeenCalled();
+    // The page's answer rides the presence path, but its verdict is the release outcome kill.ts hands over.
+    const answered = assertPresence(answer);
+    expect(posted).toEqual([{ type: "kill_release" }, { type: "presence_assert", ...assertion }]);
+    handleWebAuthnFrame({ type: "presence_result", ok: true });
+    claimKillRelease({ ok: true })?.({ ok: true });
+    await expect(answered).resolves.toEqual({ ok: true });
+  });
+
+  // The host writes the record, then emits presence_result ok followed by kill_status_result: ok:false with
+  // the error when the write failed, so the presence verdict alone would call a still-engaged switch released.
+  test("a release answer waits for the kill_status_result after presence_result ok, and a failed write is its refusal", async () => {
+    vi.useFakeTimers();
+    const p = beginKillRelease();
+    handleWebAuthnFrame({ ...presenceRequest, action: "release the kill switch" } as never);
+    await p;
+    const answered = assertPresence(answer);
+    handleWebAuthnFrame({ type: "presence_result", ok: true });
+    let settled = false;
+    void answered.then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(false);
+    claimKillRelease({ ok: false })?.({ ok: false, error: "trust record: permission denied" });
+    await expect(answered).resolves.toEqual({
+      ok: false,
+      error: "trust record: permission denied",
+    });
+  });
+
+  test("a release outcome that never arrives times out to a refusal", async () => {
+    vi.useFakeTimers();
+    const p = beginKillRelease();
+    handleWebAuthnFrame({ ...presenceRequest, action: "release the kill switch" } as never);
+    await p;
+    const answered = assertPresence(answer);
+    handleWebAuthnFrame({ type: "presence_result", ok: true });
+    await vi.advanceTimersByTimeAsync(WEBAUTHN_EXCHANGE_TIMEOUT_MS + 1);
+    await expect(answered).resolves.toEqual({
+      ok: false,
+      error: "no reply from the native host (timed out)",
+    });
+  });
+
+  test("an enrollment approval is settled by its presence_result alone", async () => {
+    // A pushed request (no kill_release asked) has no kill_status_result to wait for.
+    vi.spyOn(fakeBrowser.runtime, "openOptionsPage").mockResolvedValue(undefined);
+    handleWebAuthnFrame(presenceRequest as never);
+    const answered = assertPresence(answer);
+    handleWebAuthnFrame({ type: "presence_result", ok: true });
+    await expect(answered).resolves.toEqual({ ok: true });
+  });
+
+  // The handoff from a real kill_status_result is pinned in tests/background/kill.test.ts.
+  test("a refusal handed over while another exchange is outstanding leaves that exchange alone", async () => {
+    // Only a kill_release can be answered by a kill_status_result; an enroll_begin's reply is still coming.
+    const p = beginEnrollment();
+    expect(claimKillRelease({ ok: false, error: "trust record unreadable" })).toBeNull();
+    handleWebAuthnFrame(enrollOptions as never);
+    await expect(p).resolves.toEqual({ ok: true, options: enrollOptions });
+  });
 });
 
 describe("presence exchange", () => {

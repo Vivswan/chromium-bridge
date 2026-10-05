@@ -1,12 +1,14 @@
 // The service-worker half of the WebAuthn ceremonies: request/reply exchanges over the one Connection, and
 // the host-pushed presence request held for the options page. The WebAuthn calls themselves run in the page
-// (ceremony.ts): a service worker has no `navigator.credentials`. port.ts drives `collaborator`;
+// (lib/shared/webauthn-ceremony.ts): a service worker has no `navigator.credentials`. port.ts drives `collaborator`;
 // messages.ts routes the page's actions here. This module never imports port.ts, so there is no cycle.
 //
 //   enroll_begin      -> enroll_options (the page runs create) or enroll_result { ok: false }; on a machine
 //                        with enrollments the host pushes presence_request and answers presence_required,
 //                        and the enroll_begin AFTER the approved presence_assert gets the options
-//   enroll_finish     -> enroll_result
+//   enroll_finish     -> enroll_result; an ok records the credential for the options page (recordedEnrollment)
+//   kill_release      -> the pushed presence_request is the reply; the answer to that request is settled through
+//                        claimKillRelease (kill.ts's handoff), not by presence_result
 //   presence_request  -> held as the pending request; the page fetches it, runs get, answers
 //   presence_assert   -> presence_result
 //   presence_confirm  -> presence_result (the window's answer, for a browser with no enrolled credential)
@@ -20,12 +22,18 @@ import {
   type EnrollOptionsFrame,
   EnrollOptionsFrameSchema,
   EnrollResultFrameSchema,
+  type KillReleaseWire,
   type PresenceAssertWire,
   type PresenceConfirmWire,
   type PresenceRequestFrame,
   PresenceRequestFrameSchema,
   PresenceResultFrameSchema,
 } from "@chromium-bridge/shared/envelope.gen";
+import {
+  WEBAUTHN_ENROLLMENT_KEY,
+  type WebAuthnEnrollment,
+  WebAuthnEnrollmentSchema,
+} from "@chromium-bridge/shared/runtime-msg";
 import {
   type PresenceAnswer,
   type RegistrationResponse,
@@ -44,21 +52,38 @@ export type Refused = { ok: false; error: string };
 export type EnrollBeginView = { ok: true; options: EnrollOptionsFrame } | Refused;
 export type EnrollFinishView = { ok: true; credentialId: string } | Refused;
 export type PresenceAssertView = { ok: true } | Refused;
+export type KillReleaseView = { ok: true; request: PresenceRequestFrame } | Refused;
+export type EnrollmentNoteView = { ok: true; enrollment: WebAuthnEnrollment | null } | Refused;
 
 type ReplyTag = WebAuthnInboundFrame["type"];
 
-/** One request awaiting a reply wearing one of `replies`. Claimed synchronously before the post, so a reply
- * cannot arrive to an empty slot; a reply wearing another tag is unsolicited and dropped. */
-interface Outstanding {
-  replies: readonly ReplyTag[];
-  timer: ReturnType<typeof setTimeout>;
-  settle: (frame: WebAuthnInboundFrame) => void;
-  fail: (error: string) => void;
+/** The one exchange in flight. A `reply` awaits a frame wearing one of `replies`, claimed synchronously before
+ * the post so a reply cannot arrive to an empty slot (a reply wearing another tag is unsolicited and dropped). A
+ * `release_outcome` awaits kill.ts's handoff (claimKillRelease). */
+type Outstanding =
+  | {
+      kind: "reply";
+      replies: readonly ReplyTag[];
+      timer: ReturnType<typeof setTimeout>;
+      settle: (frame: WebAuthnInboundFrame) => void;
+      fail: (error: string) => void;
+    }
+  | {
+      kind: "release_outcome";
+      timer: ReturnType<typeof setTimeout>;
+      settle: (view: PresenceAssertView) => void;
+    };
+
+/** The host-pushed request awaiting the page's answer; `forRelease` when a kill_release asked for it, so the
+ * answer's verdict is the release outcome rather than the presence verdict. */
+interface PendingRequest {
+  frame: PresenceRequestFrame;
+  forRelease: boolean;
 }
 
 const conn = inLife<Connection | null>(() => null);
 const outstanding = inLife<Outstanding | null>(() => null);
-const pendingRequest = inLife<PresenceRequestFrame | null>(() => null);
+const pendingRequest = inLife<PendingRequest | null>(() => null);
 
 export const collaborator: PortCollaborator = {
   onAttach(c) {
@@ -84,10 +109,10 @@ export function isWebAuthnFrame(msg: unknown): msg is WebAuthnInboundFrame {
 function failOutstanding(error: string): void {
   const current = outstanding.value;
   outstanding.value = null;
-  if (current) {
-    clearTimeout(current.timer);
-    current.fail(error);
-  }
+  if (!current) return;
+  clearTimeout(current.timer);
+  if (current.kind === "reply") current.fail(error);
+  else current.settle({ ok: false, error });
 }
 
 /** Why a frame cannot be posted right now, or null when the slot is free. Single-flight: the host answers
@@ -101,9 +126,14 @@ function slotRefusal(): Refused | null {
 /** Post `frame` and await a reply wearing one of `replies`, interpreted by `onReply`. `onPosted` runs once
  * the frame is on the pipe, so state that must change only for a frame the host can see changes there. */
 function exchange<T>(
-  frame: EnrollBeginWire | EnrollFinishWire | PresenceAssertWire | PresenceConfirmWire,
+  frame:
+    | EnrollBeginWire
+    | EnrollFinishWire
+    | PresenceAssertWire
+    | PresenceConfirmWire
+    | KillReleaseWire,
   replies: readonly ReplyTag[],
-  onReply: (frame: WebAuthnInboundFrame) => T | Refused,
+  onReply: (frame: WebAuthnInboundFrame) => T | Refused | Promise<T | Refused>,
   onPosted: () => void = () => {},
 ): Promise<T | Refused> {
   const live = conn.value;
@@ -116,6 +146,7 @@ function exchange<T>(
       resolve({ ok: false, error: "no reply from the native host (timed out)" });
     }, WEBAUTHN_EXCHANGE_TIMEOUT_MS);
     outstanding.value = {
+      kind: "reply",
       replies,
       timer,
       settle: (reply) => resolve(onReply(reply)),
@@ -152,9 +183,10 @@ export function beginEnrollment(): Promise<EnrollBeginView> {
   );
 }
 
-/** Hand the host the `navigator.credentials.create` response the page produced. */
-export function finishEnrollment(response: RegistrationResponse): Promise<EnrollFinishView> {
-  return exchange(
+/** Hand the host the `navigator.credentials.create` response the page produced. An ok is noted in storage
+ * for the options page; a failed note changes nothing about the enrollment the host already recorded. */
+export async function finishEnrollment(response: RegistrationResponse): Promise<EnrollFinishView> {
+  const view = await exchange(
     { type: "enroll_finish", ...response } satisfies EnrollFinishWire,
     ["enroll_result"],
     (frame): EnrollFinishView => {
@@ -165,12 +197,88 @@ export function finishEnrollment(response: RegistrationResponse): Promise<Enroll
         : { ok: false, error: result.data.reason };
     },
   );
+  if (view.ok) {
+    const note: WebAuthnEnrollment = { credentialId: view.credentialId, enrolledAt: Date.now() };
+    await browser.storage.local.set({ [WEBAUTHN_ENROLLMENT_KEY]: note }).catch((e: unknown) => {
+      console.warn("[bb] could not note the enrolled credential", e);
+    });
+  }
+  return view;
+}
+
+/** The credential this browser last enrolled, as the worker noted it: null when nothing was ever noted here,
+ * a refusal when a note is present but does not parse (so a damaged note never reads as "not enrolled"). The
+ * host's trust record decides what the credential can still do. */
+export async function recordedEnrollment(): Promise<EnrollmentNoteView> {
+  const { [WEBAUTHN_ENROLLMENT_KEY]: value } =
+    await browser.storage.local.get(WEBAUTHN_ENROLLMENT_KEY);
+  if (value === undefined) return { ok: true, enrollment: null };
+  const parsed = WebAuthnEnrollmentSchema.safeParse(value);
+  return parsed.success
+    ? { ok: true, enrollment: parsed.data }
+    : { ok: false, error: "the stored enrollment note is malformed" };
+}
+
+/** Ask the host to release the kill switch. The reply is the presence request the host pushes for it, which
+ * the page answers through assertPresence (or confirmPresence when the request admits no credential). */
+export function beginKillRelease(): Promise<KillReleaseView> {
+  return exchange(
+    { type: "kill_release" } satisfies KillReleaseWire,
+    ["presence_request"],
+    (frame): KillReleaseView => {
+      const parsed = PresenceRequestFrameSchema.safeParse(frame);
+      return parsed.success
+        ? { ok: true, request: parsed.data }
+        : { ok: false, error: "malformed presence_request from host" };
+    },
+  );
+}
+
+/** The handoff from kill.ts, the one statement of it. The host's reply to a kill_release crosses the two
+ * collaborators: a presence_request here; then, when the page's answer passes presence, the host writes the
+ * record and emits presence_result ok followed by the kill_status_result that reports the write there (ok
+ * killed:false, or ok:false with the error). Frame routing keeps claimers disjoint, so kill.ts calls this the
+ * moment a kill_status_result ARRIVES, before its own lane and awaits, and later settles what it claimed: a
+ * handler still writing an earlier frame's mirror must not settle a release that began after that frame. The
+ * slot itself is taken synchronously inside the presence_result's settle (awaitReleaseOutcome), so the frame
+ * that follows cannot find it empty.
+ *
+ *   release outcome awaited (presence passed)      -> claimed; the returned settle delivers the answer's verdict
+ *   kill_release awaiting its request, ok:false     -> the exchange fails now with the host's reason (the record was
+ *                                                     unreadable before any request), nothing to settle later
+ *   anything else (a status reply, a push)          -> nothing; the reply to that exchange is still coming */
+export function claimKillRelease(msg: {
+  ok: boolean;
+  error?: string;
+}): ((view: PresenceAssertView) => void) | null {
+  const current = outstanding.value;
+  if (!current) return null;
+  if (current.kind === "release_outcome") {
+    outstanding.value = null;
+    clearTimeout(current.timer);
+    return current.settle;
+  }
+  if (!msg.ok && current.replies.includes("presence_request")) {
+    failOutstanding(msg.error ?? "the host could not read its kill-switch state");
+  }
+  return null;
+}
+
+/** The release_outcome slot; its timing is claimKillRelease's. */
+function awaitReleaseOutcome(): Promise<PresenceAssertView> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      outstanding.value = null;
+      resolve({ ok: false, error: "no reply from the native host (timed out)" });
+    }, WEBAUTHN_EXCHANGE_TIMEOUT_MS);
+    outstanding.value = { kind: "release_outcome", timer, settle: resolve };
+  });
 }
 
 /** The host-pushed presence request awaiting the user's tap, or null. The page reads it, shows the
  * action, runs `navigator.credentials.get`, and answers through assertPresence. */
 export function pendingPresenceRequest(): PresenceRequestFrame | null {
-  return pendingRequest.value;
+  return pendingRequest.value?.frame ?? null;
 }
 
 /** Hand the host the `navigator.credentials.get` response the page produced for the pending request. The
@@ -193,24 +301,26 @@ export function confirmPresence(nonce: string): Promise<PresenceAssertView> {
 
 /** The one lifecycle of an answer to the pending request, whichever frame carries it: the answer must name the
  * pending request's nonce (an answer to a superseded request answers nothing), and the request is consumed only
- * once the answer is on the pipe. */
+ * once the answer is on the pipe. A release's verdict comes through claimKillRelease, not presence_result. */
 function answerPending(
   nonce: string,
   frame: PresenceAssertWire | PresenceConfirmWire,
 ): Promise<PresenceAssertView> {
-  if (!pendingRequest.value) {
+  const pending = pendingRequest.value;
+  if (!pending) {
     return Promise.resolve({ ok: false, error: "no presence request is pending" });
   }
-  if (pendingRequest.value.nonce !== nonce) {
+  if (pending.frame.nonce !== nonce) {
     return Promise.resolve({ ok: false, error: "the presence request was superseded" });
   }
   return exchange(
     frame,
     ["presence_result"],
-    (reply): PresenceAssertView => {
+    (reply): PresenceAssertView | Promise<PresenceAssertView> => {
       const result = PresenceResultFrameSchema.safeParse(reply);
       if (!result.success) return { ok: false, error: "malformed presence_result from host" };
-      return result.data.ok ? { ok: true } : { ok: false, error: result.data.reason };
+      if (!result.data.ok) return { ok: false, error: result.data.reason };
+      return pending.forRelease ? awaitReleaseOutcome() : { ok: true };
     },
     () => {
       pendingRequest.value = null;
@@ -219,8 +329,8 @@ function answerPending(
 }
 
 /** Route one inbound WebAuthn frame: a presence request is held for the page (a newer one replaces an
- * unanswered older one, since the host has moved on); anything else answers the outstanding exchange or,
- * with none outstanding, is dropped. */
+ * unanswered older one, since the host has moved on) and answers a kill_release that asked for it; anything
+ * else answers the outstanding exchange or, with none outstanding, is dropped. */
 export function handleWebAuthnFrame(msg: WebAuthnInboundFrame): void {
   if (msg.type === "presence_request") {
     const parsed = PresenceRequestFrameSchema.safeParse(msg);
@@ -230,21 +340,27 @@ export function handleWebAuthnFrame(msg: WebAuthnInboundFrame): void {
     }
     if (pendingRequest.value)
       console.warn("[bb] a newer presence request replaces the unanswered one");
-    pendingRequest.value = parsed.data;
-    // The page is where the tap happens, and it shows the action before asking for it.
-    void browser.runtime.openOptionsPage().catch((e: unknown) => {
-      console.warn("[bb] could not open the options page for the presence request", e);
-    });
+    // A kill_release awaiting this request is answered by it; a push nobody asked for opens the page where
+    // the tap happens, which shows the action before asking for it.
+    const forRelease = settleOutstanding(msg);
+    pendingRequest.value = { frame: parsed.data, forRelease };
+    if (!forRelease) {
+      void browser.runtime.openOptionsPage().catch((e: unknown) => {
+        console.warn("[bb] could not open the options page for the presence request", e);
+      });
+    }
     return;
   }
+  if (!settleOutstanding(msg)) console.warn(`[bb] dropping unsolicited ${msg.type}`);
+}
+
+function settleOutstanding(msg: WebAuthnInboundFrame): boolean {
   const current = outstanding.value;
-  if (!current?.replies.includes(msg.type)) {
-    console.warn(`[bb] dropping unsolicited ${msg.type}`);
-    return;
-  }
+  if (current?.kind !== "reply" || !current.replies.includes(msg.type)) return false;
   outstanding.value = null;
   clearTimeout(current.timer);
   current.settle(msg);
+  return true;
 }
 
 /** Tests only: the first life's state again. */

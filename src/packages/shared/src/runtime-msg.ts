@@ -107,6 +107,20 @@ export const PolicyPostureSchema = z.discriminatedUnion("kind", [
 
 export type PolicyPosture = z.infer<typeof PolicyPostureSchema>;
 
+/** The extension's own note of the last credential this browser enrolled (written by the worker when the
+ * host's enroll_result says ok). The host's trust record is the authority; this only lets the options page
+ * show that an enrollment happened, and when. */
+export const WebAuthnEnrollmentSchema = z.strictObject({
+  credentialId: z.string().min(1),
+  enrolledAt: z.number(),
+});
+
+export type WebAuthnEnrollment = z.infer<typeof WebAuthnEnrollmentSchema>;
+
+/** Where the worker keeps that note; storage.local is confined to extension contexts, and the options page
+ * refreshes on this key. */
+export const WEBAUTHN_ENROLLMENT_KEY = "webauthnEnrollment";
+
 interface ContractEntry<K extends string> {
   gate: RuntimeGate;
   req: z.ZodType<{ type: K }>;
@@ -182,13 +196,20 @@ export const RUNTIME_CONTRACT = contract({
     req: z.strictObject({ type: z.literal("get_kill") }),
     res: KillViewSchema,
   },
-  // Engage-only by shape: the host refuses a release from the extension
-  // (release lives in the CLI), so `on` is pinned to true and a release
-  // cannot even be expressed at this boundary.
+  // Engage-only by shape: `on` is pinned to true, so this message cannot express a release. Releasing is
+  // kill_release below, whose answer is the host's presence request, never a state.
   set_kill: {
     gate: "extension-page",
     req: z.strictObject({ type: z.literal("set_kill"), on: z.literal(true) }),
     res: KillViewSchema,
+  },
+  // Release restores capability, so the host answers with a presence request instead of acting: the page
+  // runs the tap for it and answers through webauthn_presence_assert (or webauthn_presence_confirm when the
+  // request admits no credential); the kill_status_result that follows the host's verdict updates the mirror.
+  kill_release: {
+    gate: "extension-page",
+    req: z.strictObject({ type: z.literal("kill_release") }),
+    res: z.object({ ok: z.literal(true), request: PresenceRequestFrameSchema }),
   },
   get_audit: {
     gate: "extension-page",
@@ -273,6 +294,11 @@ export const RUNTIME_CONTRACT = contract({
     gate: "extension-page",
     req: z.strictObject({ type: z.literal("webauthn_presence_pending") }),
     res: z.object({ ok: z.literal(true), request: PresenceRequestFrameSchema.nullable() }),
+  },
+  webauthn_enrollment: {
+    gate: "extension-page",
+    req: z.strictObject({ type: z.literal("webauthn_enrollment") }),
+    res: z.object({ ok: z.literal(true), enrollment: WebAuthnEnrollmentSchema.nullable() }),
   },
   webauthn_presence_assert: {
     gate: "extension-page",

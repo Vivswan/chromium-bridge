@@ -16,7 +16,7 @@ import {
   register,
   requestOptions,
   type WebAuthnClient,
-} from "@/lib/webauthn/ceremony";
+} from "@/lib/shared/webauthn-ceremony";
 
 const RP_ID = "mkjjlmjbcljpcfkfadfmhblmmddkdihf";
 

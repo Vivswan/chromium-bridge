@@ -29,6 +29,7 @@ import type {
 import pLimit from "p-limit";
 import { browser } from "wxt/browser";
 import { inLife } from "../shared/in-life";
+import { claimKillRelease, type PresenceAssertView } from "../webauthn/exchange";
 import { auditEvent } from "./audit-log";
 import { advance, engageOutstanding, resetBrakeForTests, stampArrival } from "./brake";
 import type { Connection, PortCollaborator } from "./connection";
@@ -103,8 +104,8 @@ async function setMirror(state: KillMirror["state"]): Promise<void> {
 // ---- port plumbing (mirrors clients.ts) --------------------------------------
 
 /** Closed over the GENERATED wire types (envelope.gen.ts <- protocol/control.rs), so a typo'd frame type is a compile
- * error rather than a frame the host drops. kill_release is deliberately absent: the host refuses it from the
- * extension; release lives in the CLI. */
+ * error rather than a frame the host drops. kill_release is not here: its reply is a presence request, so the
+ * WebAuthn exchange (../webauthn/exchange.ts) posts it. */
 export type KillControlFrame = KillStatusWire | KillEngageWire;
 
 const ENGAGE = { type: "kill_engage" } satisfies KillControlFrame;
@@ -217,9 +218,9 @@ export function requestKillStatus(): Promise<KillView> {
   return request({ type: "kill_status" }).view;
 }
 
-/** Engage, the ONLY transition the extension can request: the host refuses kill_release from the extension (release
- * is `chromium-bridge unkill` behind its presence gate), and the router accepts set_kill from extension pages only,
- * with `on` pinned to true. The host performs and audits the transition; the mirror adopts its answer. */
+/** Engage. The router accepts set_kill from extension pages only, with `on` pinned to true, so a page can neither
+ * reach this nor express a release here: release is the WebAuthn exchange's kill_release, behind the host's presence
+ * request. The host performs and audits the transition; the mirror adopts its answer. */
 export function engageKill(): Promise<KillView> {
   // Local ring only: the host records the authoritative kill_engage.
   auditEvent("kill_engaged", { outcome: "requested" });
@@ -260,14 +261,20 @@ const frames = inLife(() => pLimit(1));
  * why). */
 export function handleKillFrame(msg: KillStatusResult): Promise<void> {
   const seq = stampArrival();
+  // Claimed at arrival, like the stamp (exchange.ts claimKillRelease says why).
+  const settleRelease = claimKillRelease(msg);
   return frames
-    .value(() => handleOneKillFrame(msg, seq))
+    .value(() => handleOneKillFrame(msg, seq, settleRelease))
     .catch((e) => {
       console.warn("[bb] kill frame handling failed", e);
     });
 }
 
-async function handleOneKillFrame(msg: KillStatusResult, seq: number): Promise<void> {
+async function handleOneKillFrame(
+  msg: KillStatusResult,
+  seq: number,
+  settleRelease: ((view: PresenceAssertView) => void) | null,
+): Promise<void> {
   // Claim the pending request BEFORE any await: the host answers in order on one pipe, so a frame arriving while a
   // request is outstanding is its answer or an equally authoritative push. Claiming late would let the timeout fire
   // mid-await and a NEXT request take the slot, which this frame would then wrongly resolve. A cross-surface push
@@ -300,7 +307,20 @@ async function handleOneKillFrame(msg: KillStatusResult, seq: number): Promise<v
             },
       );
     }
+    settleRelease?.(releaseOutcome(msg, stored));
   }
+}
+
+function releaseOutcome(msg: KillStatusResult, stored: boolean): PresenceAssertView {
+  if (!msg.ok) {
+    return { ok: false, error: msg.error ?? "the host could not read its kill-switch state" };
+  }
+  if (!stored) {
+    return { ok: false, error: "the kill-switch mirror could not be written; state unknown" };
+  }
+  return msg.killed === false
+    ? { ok: true }
+    : { ok: false, error: "the kill switch is still engaged" };
 }
 
 /** Tests only: forget the port, the pending exchange, the frame lane, and the brake. */

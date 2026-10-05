@@ -26,9 +26,11 @@ import { browser } from "wxt/browser";
 import {
   assertPresence,
   beginEnrollment,
+  beginKillRelease,
   confirmPresence,
   finishEnrollment,
   pendingPresenceRequest,
+  recordedEnrollment,
 } from "../webauthn/exchange";
 import {
   addAllow,
@@ -95,9 +97,10 @@ const HANDLERS: { [K in RuntimeMsgType]: Handler<K> } = {
   get_clients: requestClientList,
   revoke_client: (msg) => revokeTrustedClient(msg.name),
   get_kill: requestKillStatus,
-  // The host decides and audits the transition; this only relays a control
-  // frame, and the schema already made release inexpressible.
+  // The host decides and audits the transition; this only relays a control frame. A release is the host's
+  // presence request, answered by the page's tap.
   set_kill: engageKill,
+  kill_release: beginKillRelease,
   get_audit: async () => ({ ok: true, entries: await readRing() }),
   // Re-derives the pending mirror through the one serialized store path: live
   // requests are rewritten, never deleted; with none, the ghost goes and the
@@ -118,6 +121,7 @@ const HANDLERS: { [K in RuntimeMsgType]: Handler<K> } = {
   webauthn_enroll_finish: ({ attestation_object, client_data_json }) =>
     finishEnrollment({ attestation_object, client_data_json }),
   webauthn_presence_pending: () => ({ ok: true, request: pendingPresenceRequest() }),
+  webauthn_enrollment: recordedEnrollment,
   webauthn_presence_assert: ({
     nonce,
     credential_id,

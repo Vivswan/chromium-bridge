@@ -9,7 +9,7 @@ import { useSettings } from "@/hooks/useSettings";
 import type { UiLanguage } from "@/lib/i18n";
 import { send } from "@/lib/messages";
 import { AuditPanel } from "./AuditPanel";
-import { EnrollmentPanel } from "./EnrollmentPanel";
+import { IdentityPanel } from "./IdentityPanel";
 import { KillSwitchPanel } from "./KillSwitchPanel";
 import { PolicyEditor } from "./PolicyEditor";
 import { RegistrationPanel } from "./RegistrationPanel";
@@ -21,10 +21,10 @@ import { TrustedClientsPanel } from "./TrustedClientsPanel";
 //
 // The security policy (the 15 host-owned fields) is host-owned: this page tightens it through the host's
 // unsigned restriction lane and shows what it enforces; loosening needs the signed lane (`chromium-bridge
-// policy set`). Kill RELEASE lives host-side too (the host refuses `kill_release` from the extension);
-// engaging stays one click away.
+// policy set`). Engaging the kill switch stays one click away; releasing it is behind the host's presence
+// request, answered by a tap on this browser's enrolled authenticator.
 //
-// Sections are ordered by decision weight: kill switch, pairing, the host's registrations, then the sites hero
+// Sections are ordered by decision weight: kill switch, identity, the host's registrations, then the sites hero
 // that scopes everything below. Amber and red stay reserved for pending and kill/deny; consequences are neutral ink.
 export function OptionsApp() {
   const { t } = useI18n();
@@ -101,8 +101,8 @@ export function OptionsApp() {
         <KillSwitchPanel />
       </Section>
 
-      <Section title={t("options.section_pairing")} id="pairing">
-        <EnrollmentPanel />
+      <Section title={t("options.section_identity")} id="pairing">
+        <IdentityPanel />
       </Section>
 
       <Section title={t("options.section_registration")} id="registration">
