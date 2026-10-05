@@ -125,7 +125,7 @@ The host-key ceremony gives the extension one host identity to pin:
 - `chromium-bridge revoke` deletes the key and confirms it is gone. The host pushes a revocation to the extension, which fails closed.
 - `chromium-bridge enclave-status [--json]` reports the current state read-only: whether a key is present, which store holds it, and its fingerprint.
 
-User presence for the browser's own acts (releasing the kill switch from the options page, enrolling a second browser) is a WebAuthn tap on the browser's authenticator, enrolled from the extension and verified by the host; the CLI never raises that prompt. The CLI's own grants (`pair`, `pair-client`, `unkill`, `policy set`) are confirmed by the typed phrase on a real terminal.
+User presence for the browser's own acts (releasing the kill switch, enrolling a second browser) is a WebAuthn tap on the browser's authenticator, verified by the host. The options page does not offer the panel that enrolls and answers yet (the exchange is reachable from the background handlers and the browser suite). The CLI never raises that prompt: its own grants (`pair`, `pair-client`, `unkill`, `policy set`) are confirmed by the typed phrase on a real terminal.
 
 ## Trusted clients: pair-client / revoke-client / list-clients
 
