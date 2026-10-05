@@ -155,7 +155,7 @@ fn the_kill_sweep_wakes_every_caller_including_replaced_generations() {
 // ---- registry semantics over real socketpairs (unix only) --------------
 //
 // attach_authenticated skips the handshake, so these tests exercise the
-// registry itself: insert, replace-same-label, coexist-across-labels, and
+// registry itself: insert, supersede-same-label, coexist-across-labels, and
 // the per-entry generation guard on disconnect.
 #[cfg(unix)]
 mod registry {
@@ -246,6 +246,16 @@ mod registry {
         }
     }
 
+    fn expect_eof(reader: &mut std::io::BufReader<UnixStream>) {
+        use std::io::BufRead;
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) => {}
+            Ok(_) => panic!("a frame reached the far end instead of EOF: {line}"),
+            Err(e) => panic!("the far end saw no EOF: {e}"),
+        }
+    }
+
     fn answer(far: &UnixStream, reply: Value) {
         use std::io::Write;
         let mut w = far.try_clone().unwrap();
@@ -321,33 +331,6 @@ mod registry {
     }
 
     #[test]
-    fn a_request_severed_by_its_connection_is_cancelled_through_the_replacement() {
-        // The host restarts mid-request (its port dropped, the service worker reconnected, the new host
-        // attached) and only then does the old connection's reader see EOF. The caller is woken with
-        // Disconnected, and its guard must still cancel the op: the new connection reaches the same service
-        // worker, which holds the id in its in-flight table. A drain that removed the entry would lose the
-        // cancel here.
-        let session = Session::new();
-        let old = attach(&session, "chrome");
-        old.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-        let mut old_host = std::io::BufReader::new(old.try_clone().unwrap());
-        let in_flight = send_tab_list(&session, Duration::from_secs(5));
-        let id = next_frame(&mut old_host)["id"].as_u64().unwrap();
-
-        let new = attach(&session, "chrome");
-        new.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-        let mut new_host = std::io::BufReader::new(new.try_clone().unwrap());
-        // The old host is gone: its reader sees EOF and wakes the caller.
-        drop(old_host);
-        drop(old);
-        assert!(matches!(in_flight.wait(), Err(CallError::Disconnected)));
-        assert_eq!(
-            next_frame(&mut new_host),
-            serde_json::json!({ "type": "cancel", "id": id })
-        );
-    }
-
-    #[test]
     fn an_answered_request_sends_no_cancel() {
         // The pending entry is the one record of in-flight: the reader removed it when it delivered the reply,
         // so the guard's Drop has nothing to cancel. A cancel after a reply would make the extension abort
@@ -368,11 +351,10 @@ mod registry {
     }
 
     #[test]
-    fn a_cancel_after_a_same_label_reconnect_reaches_the_new_connection() {
-        // Same-label reconnect while a request is in flight: Chrome spawned a new host process, but the
-        // service worker running the op (and holding the id in its in-flight table) is the same one, so the
-        // cancel must travel over the connection that holds the label now. The replaced connection gets
-        // nothing: its host is on the way out.
+    fn a_superseded_connection_is_closed_so_its_extension_life_reconnects() {
+        // The service-worker double-start incident: two lives attach under one label within a millisecond and
+        // the newer dies, which left the older host on an open socket nothing routed to and every call
+        // NotConnected.
         let session = Session::new();
         let old = attach(&session, "chrome");
         old.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
@@ -383,12 +365,36 @@ mod registry {
         let new = attach(&session, "chrome");
         new.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         let mut new_host = std::io::BufReader::new(new.try_clone().unwrap());
-        drop(in_flight);
+        expect_eof(&mut old_host);
+        let started = Instant::now();
+        assert!(matches!(in_flight.wait(), Err(CallError::Disconnected)));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
         assert_eq!(
             next_frame(&mut new_host),
             serde_json::json!({ "type": "cancel", "id": id })
         );
-        expect_silence(&mut old_host, Duration::from_millis(300));
+        drop(old_host);
+        drop(old);
+        drop(new_host);
+        drop(new);
+        assert!(wait_until(|| session.labels().is_empty()));
+
+        let third = attach(&session, "chrome");
+        third
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut third_host = std::io::BufReader::new(third.try_clone().unwrap());
+        let in_flight = send_tab_list(&session, Duration::from_secs(5));
+        let req = next_frame(&mut third_host);
+        answer(
+            &third,
+            serde_json::json!({ "id": req["id"], "ok": true, "data": "back" }),
+        );
+        assert_eq!(in_flight.wait().unwrap(), serde_json::json!("back"));
     }
 
     #[test]
@@ -445,44 +451,8 @@ mod registry {
         let req: BridgeReq = serde_json::from_str(&line).unwrap();
         assert_eq!(req.browser.as_deref(), Some("chrome"));
 
-        // The sweep itself drains the caller (its reader thread may
-        // never observe the shutdown on macOS): the caller must see
-        // Disconnected now, not its timeout.
-        assert_eq!(session.shutdown_all_browsers(), 1);
-        assert!(matches!(
-            caller.join().unwrap(),
-            Err(CallError::Disconnected)
-        ));
-    }
-
-    #[test]
-    fn kill_sweep_drains_callers_of_an_already_replaced_connection() {
-        use std::io::BufRead;
-
-        // A call is in flight on generation G when a same-label reconnect
-        // replaces G's slot. G's socket and reader may both still be
-        // alive (the reader holds a cloned fd), so a later kill sweep
-        // must drain G's caller too: an entry left waiting could
-        // otherwise still be answered by the replaced connection AFTER
-        // the kill. The sweep drains every sent generation, not just the
-        // ones still in the registry.
-        let session = Session::new();
-        let old = attach(&session, "chrome");
-        old.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-
-        let s2 = session.clone();
-        let caller = thread::spawn(move || tab_list(&s2, Duration::from_secs(15)));
-        // The request is on the wire of the OLD connection.
-        let mut old_reader = std::io::BufReader::new(old.try_clone().unwrap());
-        let mut line = String::new();
-        old_reader.read_line(&mut line).unwrap();
-
-        // Same-label reconnect: the registry slot now belongs to a newer
-        // generation; the old connection is no longer in the map.
-        let _new = attach(&session, "chrome");
-
-        // The sweep severs the new connection (count 1) AND drains the
-        // old generation's caller into Disconnected.
+        // The sweep itself drains the caller, without waiting on its reader
+        // thread: the caller must see Disconnected now, not its timeout.
         assert_eq!(session.shutdown_all_browsers(), 1);
         assert!(matches!(
             caller.join().unwrap(),
@@ -521,10 +491,8 @@ mod registry {
         let (_, new_gen) = session.route_info(Some("chrome")).unwrap();
         assert!(new_gen > old_gen);
 
-        // The OLD connection's reader now observes its disconnect (its
-        // writer was dropped by the replacement; drop our far end too).
-        // Its generation no longer matches the slot, so it must leave the
-        // new entry alone: chrome stays connected at the new generation.
+        // Drop our far end too, so the old reader exits on every platform; its
+        // cleanup must leave the new entry alone.
         drop(old);
         // No removal event to wait for - poll briefly and require the
         // entry to still be the new one afterwards.
