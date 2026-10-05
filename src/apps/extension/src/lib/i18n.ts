@@ -41,7 +41,7 @@ interface LocaleCache {
   lastAttemptedLocale: UiLocale | null;
 }
 
-// One cell for the whole cache: a page or worker life starts with English active and no bundle loaded.
+// One cell, not eight: the fields share one life and reset together.
 const cache = inLife<LocaleCache>(() => ({
   activeLocale: "en",
   activeMessages: null,

@@ -686,18 +686,13 @@ function refuse(why: string, opts: { audit?: boolean } = {}): void {
   if (opts.audit) auditEvent("policy_refused", { detail: why.slice(0, 512) });
 }
 
-/** A signature failed against the pin: host-substitution evidence, never ordinary skew. The in-life latch is SET and
- * the verified mark dropped SYNCHRONOUSLY, before any await, so a replayed byte-identical genuine frame cannot ride
- * the idempotent-replay path back to a verified mark while the durable persist fails.
- * Residual (docs/security/threat-model.md, "Host-owned policy residual ledger"): the latch is in memory, so a failed
- * persist followed by an SW restart leaves a fresh SW that accepts a replayed genuine frame; closing it needs a
- * durable write-before-proceed, not a wider in-memory latch. The barrier reopens only to a policy the pinned key
- * signed at or above the stored revision. */
+/** A signature failed against the pin: host-substitution evidence, never ordinary skew. compromisedThisLife owns
+ * the latch's ordering; the in-memory residual is recorded in docs/security/threat-model.md, "Host-owned policy
+ * residual ledger". */
 async function markPolicyCompromised(
   attachment: LiveConnection | null,
   reason: string,
 ): Promise<void> {
-  // SYNCHRONOUS, before any await: the whole point of the sticky latch.
   compromisedThisLife.value = true;
   if (attachment) attachment.policy = { kind: "awaiting" };
   console.error("[bb] policy baseline failed signature verification:", reason);

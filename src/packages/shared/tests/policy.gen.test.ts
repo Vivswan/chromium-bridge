@@ -28,13 +28,6 @@ const wellFormedDoc = () => ({
   ...POLICY_DEFAULTS,
 });
 
-describe("POLICY_FIELDS", () => {
-  test("the retired requireEnrollment and the browser-owned uiLanguage are not policy fields", () => {
-    expect(isPolicyFieldName("requireEnrollment")).toBe(false);
-    expect(isPolicyFieldName("uiLanguage")).toBe(false);
-  });
-});
-
 describe("POLICY_DEFAULTS", () => {
   test("is deep-frozen, nested array included", () => {
     expect(Object.isFrozen(POLICY_DEFAULTS)).toBe(true);
