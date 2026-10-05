@@ -280,7 +280,6 @@ kill:
   release_confirm_desc: "The host accepts a confirmation from this page instead. It is a software confirmation, not a hardware tap, and the host audits it as such."
   release_confirm: "Confirm release"
   release_failed: "Release refused: $1"
-  release_approved: "Approved. Waiting for the host to release..."
   state_alive: "Off - the bridge is serving"
   state_alive_stale: "Last known: alive (host unreachable - unverified)"
   state_killed: "Engaged - all bridge activity is refused"

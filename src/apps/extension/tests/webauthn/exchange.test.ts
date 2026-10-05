@@ -10,8 +10,8 @@ import {
   assertPresence,
   beginEnrollment,
   beginKillRelease,
+  claimKillRelease,
   collaborator,
-  failKillRelease,
   finishEnrollment,
   handleWebAuthnFrame,
   pendingPresenceRequest,
@@ -62,6 +62,7 @@ beforeEach(() => {
 afterEach(() => {
   resetWebAuthnForTests();
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe("enrollment exchanges", () => {
@@ -141,18 +142,64 @@ describe("kill release", () => {
     await expect(p).resolves.toEqual({ ok: true, request: release });
     expect(pendingPresenceRequest()).toEqual(release);
     expect(open).not.toHaveBeenCalled();
-    // The page's answer then rides the ordinary presence path.
+    // The page's answer rides the presence path, but its verdict is the release outcome kill.ts hands over.
     const answered = assertPresence(answer);
     expect(posted).toEqual([{ type: "kill_release" }, { type: "presence_assert", ...assertion }]);
+    handleWebAuthnFrame({ type: "presence_result", ok: true });
+    claimKillRelease({ ok: true })?.({ ok: true });
+    await expect(answered).resolves.toEqual({ ok: true });
+  });
+
+  // The host answers presence_result ok and THEN writes the record; a write that fails answers
+  // kill_status_result ok:false, so the verdict alone would call a still-engaged switch released.
+  test("a release answer waits for the kill_status_result after presence_result ok, and a failed write is its refusal", async () => {
+    vi.useFakeTimers();
+    const p = beginKillRelease();
+    handleWebAuthnFrame({ ...presenceRequest, action: "release the kill switch" } as never);
+    await p;
+    const answered = assertPresence(answer);
+    handleWebAuthnFrame({ type: "presence_result", ok: true });
+    let settled = false;
+    void answered.then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(false);
+    claimKillRelease({ ok: false })?.({ ok: false, error: "trust record: permission denied" });
+    await expect(answered).resolves.toEqual({
+      ok: false,
+      error: "trust record: permission denied",
+    });
+  });
+
+  test("a release outcome that never arrives times out to a refusal", async () => {
+    vi.useFakeTimers();
+    const p = beginKillRelease();
+    handleWebAuthnFrame({ ...presenceRequest, action: "release the kill switch" } as never);
+    await p;
+    const answered = assertPresence(answer);
+    handleWebAuthnFrame({ type: "presence_result", ok: true });
+    await vi.advanceTimersByTimeAsync(WEBAUTHN_EXCHANGE_TIMEOUT_MS + 1);
+    await expect(answered).resolves.toEqual({
+      ok: false,
+      error: "no reply from the native host (timed out)",
+    });
+  });
+
+  test("an enrollment approval is settled by its presence_result alone", async () => {
+    // A pushed request (no kill_release asked) has no kill_status_result to wait for.
+    vi.spyOn(fakeBrowser.runtime, "openOptionsPage").mockResolvedValue(undefined);
+    handleWebAuthnFrame(presenceRequest as never);
+    const answered = assertPresence(answer);
     handleWebAuthnFrame({ type: "presence_result", ok: true });
     await expect(answered).resolves.toEqual({ ok: true });
   });
 
-  // The handoff itself, from a real kill_status_result, is pinned in tests/background/kill.test.ts.
+  // The handoff from a real kill_status_result is pinned in tests/background/kill.test.ts.
   test("a refusal handed over while another exchange is outstanding leaves that exchange alone", async () => {
     // Only a kill_release can be answered by a kill_status_result; an enroll_begin's reply is still coming.
     const p = beginEnrollment();
-    failKillRelease("trust record unreadable");
+    expect(claimKillRelease({ ok: false, error: "trust record unreadable" })).toBeNull();
     handleWebAuthnFrame(enrollOptions as never);
     await expect(p).resolves.toEqual({ ok: true, options: enrollOptions });
   });

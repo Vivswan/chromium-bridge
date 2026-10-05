@@ -8,7 +8,7 @@ import { browser } from "wxt/browser";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/hooks/useI18n";
 import { send } from "@/lib/messages";
-import { assert, register } from "@/lib/webauthn/ceremony";
+import { assert, register } from "@/lib/shared/webauthn-ceremony";
 import { ceremonyFailure, refusalSentence } from "./refusals";
 
 // This browser's WebAuthn enrollment: the worker's note of the last credential enrolled here, and the ceremony
@@ -35,7 +35,6 @@ const BUSY: ReadonlySet<Step["kind"]> = new Set(["asking", "creating", "approvin
 
 export function AuthenticatorEnrollment() {
   const { t } = useI18n();
-  // null until the first answer lands; a refusal renders the no-status line.
   const [note, setNote] = useState<RuntimeResponse<"webauthn_enrollment"> | null>(null);
   const [step, setStep] = useState<Step>({ kind: "idle" });
 
@@ -139,7 +138,6 @@ export function AuthenticatorEnrollment() {
       )}
 
       {step.kind === "approval_needed" && (
-        // Amber: waiting on the user, with the approval action right here.
         <div className="mt-3 rounded-lg border border-pending-edge bg-pending-dim px-3.5 py-3">
           <div className="flex items-center gap-2 text-[13px] font-semibold">
             <span className="status-dot pending" />

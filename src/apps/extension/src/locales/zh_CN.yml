@@ -278,7 +278,6 @@ kill:
   release_confirm_desc: "主机改为接受来自本页的确认。这是软件确认, 不是硬件轻触, 主机会如实记入审计。"
   release_confirm: "确认解除"
   release_failed: "解除被拒绝: $1"
-  release_approved: "已批准。正在等待主机解除..."
   state_alive: "未启用: 桥接正在服务"
   state_alive_stale: "最后已知状态: 未启用 (主机不可达, 未经验证)"
   state_killed: "已启用: 所有桥接活动均被拒绝"

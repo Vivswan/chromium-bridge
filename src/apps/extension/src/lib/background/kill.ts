@@ -29,7 +29,7 @@ import type {
 import pLimit from "p-limit";
 import { browser } from "wxt/browser";
 import { inLife } from "../shared/in-life";
-import { failKillRelease } from "../webauthn/exchange";
+import { claimKillRelease, type PresenceAssertView } from "../webauthn/exchange";
 import { auditEvent } from "./audit-log";
 import { advance, engageOutstanding, resetBrakeForTests, stampArrival } from "./brake";
 import type { Connection, PortCollaborator } from "./connection";
@@ -261,14 +261,20 @@ const frames = inLife(() => pLimit(1));
  * why). */
 export function handleKillFrame(msg: KillStatusResult): Promise<void> {
   const seq = stampArrival();
+  // Claimed at arrival, like the stamp (exchange.ts claimKillRelease says why).
+  const settleRelease = claimKillRelease(msg);
   return frames
-    .value(() => handleOneKillFrame(msg, seq))
+    .value(() => handleOneKillFrame(msg, seq, settleRelease))
     .catch((e) => {
       console.warn("[bb] kill frame handling failed", e);
     });
 }
 
-async function handleOneKillFrame(msg: KillStatusResult, seq: number): Promise<void> {
+async function handleOneKillFrame(
+  msg: KillStatusResult,
+  seq: number,
+  settleRelease: ((view: PresenceAssertView) => void) | null,
+): Promise<void> {
   // Claim the pending request BEFORE any await: the host answers in order on one pipe, so a frame arriving while a
   // request is outstanding is its answer or an equally authoritative push. Claiming late would let the timeout fire
   // mid-await and a NEXT request take the slot, which this frame would then wrongly resolve. A cross-surface push
@@ -277,10 +283,7 @@ async function handleOneKillFrame(msg: KillStatusResult, seq: number): Promise<v
   pending.value = null;
   if (current) clearTimeout(current.timer);
 
-  // ok:false = the host cannot read its own state: unknown, which the gate refuses. It is also what a
-  // kill_release gets instead of a presence request when the record is unreadable, and that exchange
-  // must not wait out its deadline for a reason that is already here.
-  if (!msg.ok) failKillRelease(msg.error ?? "the host could not read its kill-switch state");
+  // ok:false = the host cannot read its own state: unknown, which the gate refuses.
   const state: KillMirror["state"] =
     msg.ok && typeof msg.killed === "boolean" ? (msg.killed ? "killed" : "alive") : "unknown";
   let stored = false;
@@ -304,7 +307,20 @@ async function handleOneKillFrame(msg: KillStatusResult, seq: number): Promise<v
             },
       );
     }
+    settleRelease?.(releaseOutcome(msg, stored));
   }
+}
+
+function releaseOutcome(msg: KillStatusResult, stored: boolean): PresenceAssertView {
+  if (!msg.ok) {
+    return { ok: false, error: msg.error ?? "the host could not read its kill-switch state" };
+  }
+  if (!stored) {
+    return { ok: false, error: "the kill-switch mirror could not be written; state unknown" };
+  }
+  return msg.killed === false
+    ? { ok: true }
+    : { ok: false, error: "the kill switch is still engaged" };
 }
 
 /** Tests only: forget the port, the pending exchange, the frame lane, and the brake. */

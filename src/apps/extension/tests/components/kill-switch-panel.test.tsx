@@ -1,15 +1,15 @@
 // The kill panel's release over the SW contract and a stood-in WebAuthn client: while killed the panel offers
 // Release, which asks the host and signs the pushed request with this browser's authenticator; a request that
 // admits no credential is offered as the software confirmation it is, answered with the request's nonce; the
-// presence verdict is shown as an approval and only the mirror leaving "killed" is the release; and every
-// refusal renders as the sentence keyed to it.
+// panel never claims a release itself (the answer's verdict and the mirror do); and every refusal renders as
+// the sentence keyed to it.
 
 import type { PresenceRequestFrame } from "@chromium-bridge/shared/envelope.gen";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
-import { requestOptions } from "@/lib/webauthn/ceremony";
+import { requestOptions } from "@/lib/shared/webauthn-ceremony";
 import { assertedCredential, type FakeWebAuthn, installFakeWebAuthn } from "./fake-webauthn";
 
 const EXT_ID = "test-ext-id";
@@ -42,7 +42,6 @@ const EN = Object.fromEntries(
     kill_release_confirm_desc: "software confirmation",
     kill_release_confirm: "Confirm release",
     kill_release_failed: "Release refused: $1",
-    kill_release_approved: "approved, waiting",
     kill_state_alive: "alive",
     kill_state_killed: "killed",
     kill_updated: "updated $1",
@@ -106,14 +105,18 @@ const ASSERT = {
 };
 
 describe("KillSwitchPanel release", () => {
-  test("killed: Release asks the host, signs its request with this browser's authenticator, and only the mirror says released", async () => {
+  test("killed: Release asks the host, signs its request with this browser's authenticator, and the mirror shows the result", async () => {
     await mount();
     expect(screen.queryByRole("button", { name: "Engage kill switch" })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Release kill switch" }));
-    await screen.findByText("approved, waiting");
-    // The approval is not the release: the panel still shows the engaged state until the host's frame moves the mirror.
+    await waitFor(() =>
+      expect(sent).toEqual([{ type: "get_kill" }, { type: "kill_release" }, ASSERT]),
+    );
+    // The panel claims nothing itself: the engaged state stays until the host's frame moves the mirror.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Release kill switch" })).toBeEnabled(),
+    );
     expect(screen.getByText("killed")).toBeInTheDocument();
-    expect(sent).toEqual([{ type: "get_kill" }, { type: "kill_release" }, ASSERT]);
     expect(webauthn.calls).toEqual({ create: [], get: [requestOptions(REQUEST, EXT_ID)] });
     // The host's kill_status_result moved the mirror (kill.ts); the panel re-reads and the step text goes.
     replies.get_kill = () => ({ ok: true, sent: true, state: "alive", at: 1_700_000_001_000 });
@@ -121,8 +124,6 @@ describe("KillSwitchPanel release", () => {
       bridgeKillMirror: { state: "alive", at: 1_700_000_001_000 },
     });
     await screen.findByText("alive");
-    // The step text clears from an effect on the state change, one render after the alive line.
-    await waitFor(() => expect(screen.queryByText("approved, waiting")).toBeNull());
     expect(screen.queryByRole("button", { name: "Release kill switch" })).toBeNull();
     expect(screen.getByRole("button", { name: "Engage kill switch" })).toBeEnabled();
   });
@@ -138,12 +139,13 @@ describe("KillSwitchPanel release", () => {
     expect(screen.getByText("software confirmation")).toBeInTheDocument();
     expect(screen.getByText(REQUEST.action)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Confirm release" }));
-    await screen.findByText("approved, waiting");
-    expect(sent).toEqual([
-      { type: "get_kill" },
-      { type: "kill_release" },
-      { type: "webauthn_presence_confirm", nonce: REQUEST.nonce },
-    ]);
+    await waitFor(() =>
+      expect(sent).toEqual([
+        { type: "get_kill" },
+        { type: "kill_release" },
+        { type: "webauthn_presence_confirm", nonce: REQUEST.nonce },
+      ]),
+    );
     expect(webauthn.calls.get).toEqual([]);
   });
 

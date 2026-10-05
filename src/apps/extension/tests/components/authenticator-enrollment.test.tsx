@@ -13,7 +13,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
-import { creationOptions, requestOptions } from "@/lib/webauthn/ceremony";
+import { creationOptions, requestOptions } from "@/lib/shared/webauthn-ceremony";
 import {
   assertedCredential,
   createdCredential,

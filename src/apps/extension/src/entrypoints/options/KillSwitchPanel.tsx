@@ -5,7 +5,7 @@ import { browser } from "wxt/browser";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/hooks/useI18n";
 import { send } from "@/lib/messages";
-import { assert } from "@/lib/webauthn/ceremony";
+import { assert } from "@/lib/shared/webauthn-ceremony";
 import { ceremonyFailure, refusalSentence } from "./refusals";
 
 // The kill-switch panel: one prominent switch that halts all bridge activity everywhere, and its release behind
@@ -17,15 +17,14 @@ import { ceremonyFailure, refusalSentence } from "./refusals";
 //   engage   one click, no gate: the brake must be one action from every surface
 //   release  kill_release -> the host's presence request -> this browser's authenticator signs it (or, when the
 //            request admits no credential, the user confirms here and the host decides whether that may count)
-//            -> presence_result ok is the approval; the release itself is the kill_status_result that follows,
-//            which moves the mirror (an unwritable record answers unreadable there, so only the mirror says released)
+//            -> the answer's verdict is the release outcome (lib/webauthn/exchange.ts claimKillRelease), so an
+//            unwritable record is a refusal here and the mirror shows the rest
 type Release =
   | { kind: "idle" }
   | { kind: "asking" }
   | { kind: "tapping" }
   | { kind: "confirm_window"; request: PresenceRequestFrame }
   | { kind: "confirming" }
-  | { kind: "approved" }
   | { kind: "refused"; reason: string };
 
 const RELEASE_BUSY: ReadonlySet<Release["kind"]> = new Set(["asking", "tapping", "confirming"]);
@@ -55,11 +54,6 @@ export function KillSwitchPanel() {
 
   const killed = view?.state === "killed";
 
-  // The mirror leaving "killed" is the release (or, unreadable, its failure); the step text has nothing left to say then.
-  useEffect(() => {
-    if (!killed) setRelease({ kind: "idle" });
-  }, [killed]);
-
   const engage = async () => {
     // Engaging is deliberately zero-friction: the brake must be one action from every surface.
     setBusy(true);
@@ -71,7 +65,7 @@ export function KillSwitchPanel() {
   };
 
   const settleRelease = (verdict: { ok: true } | { ok: false; error: string }) => {
-    setRelease(verdict.ok ? { kind: "approved" } : { kind: "refused", reason: verdict.error });
+    setRelease(verdict.ok ? { kind: "idle" } : { kind: "refused", reason: verdict.error });
   };
 
   const tap = async (request: PresenceRequestFrame) => {
@@ -198,7 +192,6 @@ export function KillSwitchPanel() {
       </div>
 
       {release.kind === "confirm_window" && (
-        // Amber: waiting on the user. Labelled a software confirmation, never presented as a hardware tap.
         <div className="mt-3 rounded-lg border border-pending-edge bg-pending-dim px-3.5 py-3">
           <div className="flex items-center gap-2 text-[13px] font-semibold">
             <span className="status-dot pending" />
@@ -216,12 +209,11 @@ export function KillSwitchPanel() {
           </div>
         </div>
       )}
-      {(releaseBusy || release.kind === "approved") && (
+      {releaseBusy && (
         <div role="status" className="mt-2 text-xs text-text-3">
           {release.kind === "asking" && t("kill.release_asking")}
           {release.kind === "tapping" && t("kill.release_tap")}
           {release.kind === "confirming" && t("kill.release_confirming")}
-          {release.kind === "approved" && t("kill.release_approved")}
         </div>
       )}
       <div

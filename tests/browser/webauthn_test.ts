@@ -1,7 +1,7 @@
 /**
  * WebAuthn in an ISOLATED Chrome for Testing: the facts about the browser's WebAuthn client that the host's
  * verifier (src/packages/core/src/webauthn) assumes and no unit test can see. A CDP virtual authenticator
- * stands in for Touch ID; the options page is the RP page, exactly where lib/webauthn/ceremony.ts runs.
+ * stands in for Touch ID; the options page is the RP page, exactly where lib/shared/webauthn-ceremony.ts runs.
  *
  *   1  chrome-extension:// is a WebAuthn RP     -> create succeeds with rpId = the extension id
  *   2  clientDataJSON as the host parses it     -> type, the challenge echoed base64url unpadded, origin

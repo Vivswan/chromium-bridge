@@ -278,7 +278,6 @@ kill:
   release_confirm_desc: "主機改為接受來自本頁的確認。這是軟體確認, 不是硬體輕觸, 主機會如實記入稽核。"
   release_confirm: "確認解除"
   release_failed: "解除被拒絕: $1"
-  release_approved: "已核准。正在等待主機解除..."
   state_alive: "未啟用: 橋接正在服務"
   state_alive_stale: "最後已知狀態: 未啟用 (主機無法連線, 未經驗證)"
   state_killed: "已啟用: 所有橋接活動均被拒絕"
