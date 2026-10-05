@@ -287,7 +287,7 @@ tasks:
     # throwaway runtime dir) through the real extension, so it needs the Rust build the browser CI job does not
     # have, which is why it is not in run_all.ts.
     description: 'The WebAuthn exchange end to end against the real host in the isolated Chrome (needs CHROME_BIN; builds the extension and the release binary first)'
-    deps: ['~:install-deps', '~:build-release']
+    deps: ['~:build-release']
     script: |
       set -e
       bun run --cwd src/apps/extension build
