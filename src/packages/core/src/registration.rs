@@ -605,66 +605,75 @@ impl Registrar {
         }
 
         let mut lines = Vec::new();
-        let launch_path = match &target.registration {
-            Registration::ManifestDir(_) => {
-                // Unix: wrapper first, then the manifest that points at it.
-                let label = target.label();
-                let wrapper = self.wrapper_path(label);
-                write_atomic(&wrapper, self.wrapper_script(label).as_bytes(), true)
-                    .map_err(|e| format!("could not write {}: {e}", wrapper.display()))?;
-                lines.push(format!(
-                    "  launches {}{}",
-                    wrapper.display(),
-                    label.map(|k| format!(" (label: {k})")).unwrap_or_default()
-                ));
-                wrapper
-            }
-            Registration::Registry { hive, key, .. } => {
-                // Windows: manifest in our own store dir, registry key points
-                // at it, binary launched directly (origin argv selects mode).
+        // What was done before a later step failed still reaches the report: the displaced launch path of
+        // an overwritten foreign manifest must not be hidden by a pointer write that failed after it.
+        let written: Result<(), String> = (|| {
+            let launch_path = match &target.registration {
+                Registration::ManifestDir(_) => {
+                    // Unix: wrapper first, then the manifest that points at it.
+                    let label = target.label();
+                    let wrapper = self.wrapper_path(label);
+                    write_atomic(&wrapper, self.wrapper_script(label).as_bytes(), true)
+                        .map_err(|e| format!("could not write {}: {e}", wrapper.display()))?;
+                    lines.push(format!(
+                        "  launches {}{}",
+                        wrapper.display(),
+                        label.map(|k| format!(" (label: {k})")).unwrap_or_default()
+                    ));
+                    wrapper
+                }
+                Registration::Registry { .. } => {
+                    // Windows: manifest in our own store dir, registry key points
+                    // at it, binary launched directly (origin argv selects mode).
+                    self.host_exe.clone()
+                }
+            };
+
+            write_atomic(
+                &manifest_path,
+                self.manifest_json(&launch_path)?.as_bytes(),
+                false,
+            )
+            .map_err(|e| format!("could not write {}: {e}", manifest_path.display()))?;
+            lines.insert(
+                0,
+                format!(
+                    "{}: manifest written to {}",
+                    target.name,
+                    manifest_path.display()
+                ),
+            );
+            lines.extend(replaced);
+
+            if let Registration::Registry { hive, key, .. } = &target.registration {
+                if let Some(line) = foreign_key {
+                    // Replaced whole, in the write phase: a key that kept the values that made it foreign
+                    // would be refused by `uninstall`.
+                    delete_registry_key(*hive, key)?;
+                    lines.push(line);
+                }
+                set_registry_value(*hive, key, "", &manifest_path.to_string_lossy())?;
                 lines.push(format!("  registry key {hive}\\{key}"));
-                self.host_exe.clone()
             }
-        };
-
-        write_atomic(
-            &manifest_path,
-            self.manifest_json(&launch_path)?.as_bytes(),
-            false,
-        )
-        .map_err(|e| format!("could not write {}: {e}", manifest_path.display()))?;
-        lines.insert(
-            0,
-            format!(
-                "{}: manifest written to {}",
-                target.name,
-                manifest_path.display()
-            ),
-        );
-        lines.extend(replaced);
-
-        if let Registration::Registry { hive, key, .. } = &target.registration {
-            if let Some(line) = foreign_key {
-                // Replaced whole, in the write phase: a key that kept the values that made it foreign
-                // would be refused by `uninstall`.
-                delete_registry_key(*hive, key)?;
-                lines.push(line);
-            }
-            set_registry_value(*hive, key, "", &manifest_path.to_string_lossy())?;
-        }
-        if let Some(pointer) = &target.pointer {
-            match pointer {
-                ExtensionPointer::File(path) => {
-                    write_atomic(path, pointer_json().as_bytes(), false)
-                        .map_err(|e| format!("could not write {}: {e}", path.display()))?;
+            if let Some(pointer) = &target.pointer {
+                match pointer {
+                    ExtensionPointer::File(path) => {
+                        write_atomic(path, pointer_json().as_bytes(), false)
+                            .map_err(|e| format!("could not write {}: {e}", path.display()))?;
+                    }
+                    ExtensionPointer::Registry { hive, key } => {
+                        set_registry_value(*hive, key, POINTER_VALUE_NAME, WEB_STORE_UPDATE_URL)?;
+                    }
                 }
-                ExtensionPointer::Registry { hive, key } => {
-                    set_registry_value(*hive, key, POINTER_VALUE_NAME, WEB_STORE_UPDATE_URL)?;
-                }
+                lines.push(format!("  extension pointer {}", pointer.location()));
             }
-            lines.push(format!("  extension pointer {}", pointer.location()));
+            Ok(())
+        })();
+        match written {
+            Ok(()) => Ok(lines),
+            Err(e) if lines.is_empty() => Err(e),
+            Err(e) => Err(format!("{e}; already done: {}", lines.join("; "))),
         }
-        Ok(lines)
     }
 
     /// The wrapper dir, with the scope's mode: private (0700) for an account's own, since only its browser

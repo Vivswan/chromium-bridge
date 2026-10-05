@@ -792,6 +792,36 @@ fn lookup_hit_follows_chromiums_existence_probe() {
     assert!(lookup_hit(&reg), "a directory");
 }
 
+/// What `--fix` already did before a later step failed is still reported, the displaced launch path of
+/// an overwritten foreign manifest above all: the owner's rule says that path is logged, and a pointer
+/// write failing after the manifest went in must not hide it.
+#[cfg(unix)]
+#[test]
+fn a_failure_after_the_overwrite_still_reports_what_was_displaced() {
+    use std::os::unix::fs::PermissionsExt;
+    if nix::unistd::geteuid().is_root() {
+        return;
+    }
+    let tree = TempTree::new("late-failure");
+    let reg = registrar(&tree);
+    let target = macos_target(&tree);
+    let manifest_path = target.registration.manifest_path();
+    fs::create_dir_all(manifest_path.parent().unwrap()).unwrap();
+    fs::write(
+        &manifest_path,
+        r#"{"name":"com.other.host","description":"someone else","path":"/x","type":"stdio"}"#,
+    )
+    .unwrap();
+    let pointer_dir = pointer_path(&target).parent().unwrap().to_path_buf();
+    fs::create_dir_all(&pointer_dir).unwrap();
+    fs::set_permissions(&pointer_dir, fs::Permissions::from_mode(0o555)).unwrap();
+    let err = reg.register(&target).unwrap_err();
+    fs::set_permissions(&pointer_dir, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(err.contains("could not write"), "{err}");
+    assert!(err.contains("it launched /x"), "{err}");
+    assert_eq!(assess(&target.registration), RegState::Ok);
+}
+
 /// A machine-wide registration launches as other accounts, so the binary must be readable and executable
 /// by them along its whole path: one under a 0700 home reads healthy to `doctor` and fails at launch.
 #[cfg(unix)]
