@@ -57,7 +57,7 @@ pub fn peer_uid(stream: &BridgeStream) -> io::Result<u32> {
 /// stable for the connection even if that process later exits. Resolving the
 /// pid to an executable afterwards, however, is a separate step that can race
 /// with pid reuse if the peer exits mid-connection (e.g. after passing the
-/// descriptor to another process). ADR-0020 records that residual.
+/// descriptor to another process). `docs/security/trust-boundaries.md` carries that residual.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn peer_pid(stream: &BridgeStream) -> io::Result<u32> {
     use std::os::unix::io::AsRawFd;

@@ -15,8 +15,8 @@ use crate::fsguard::{read_capped, write_private_atomic};
 
 /// Per-process runtime info the MCP server publishes for the native host.
 ///
-/// Deliberately NOT `deny_unknown_fields`, unlike the other on-disk records (ADR-0025): an older build still
-/// installed during an upgrade reads the lock a newer one wrote, and a strict parser would take the bridge down.
+/// Deliberately NOT `deny_unknown_fields`, unlike the other on-disk records: an older build still installed
+/// during an upgrade reads the lock a newer one wrote, and a strict parser would take the bridge down.
 /// Safe because the lock file is DISCOVERY, not authorization: every connection still passes the same-user gate
 /// (the peer-UID check on Unix, the pipe's descriptor on Windows), image attestation, and the HMAC handshake, so an
 /// unknown field admits nobody.

@@ -7,8 +7,6 @@
 //   COVERED    -> git-tracked files under these pathspecs are scanned; every match fails the gate
 //                 (a bare `*.rs` reaches every depth: git's `*` crosses `/`)
 //   FIXTURES   -> the gate's own test, which plants every tag shape on purpose; never scanned
-//   WAITING    -> files another in-flight branch still owns, excluded whole: a tag added inside one is not
-//                 caught until the file leaves this list, so an entry leaves with its tags
 //   not listed -> not scanned yet; widen COVERED when a tree is clean
 //
 // Usage: bun scripts/check-planning-refs.ts [repo-root]   (the root defaults to this checkout)
@@ -36,19 +34,6 @@ export const COVERED: readonly string[] = [
 ];
 
 export const FIXTURES: readonly string[] = ["scripts/tests/check-planning-refs.test.ts"];
-
-export const WAITING: readonly string[] = [
-  "src/packages/core/src/enclave/challenge.rs",
-  "src/packages/core/src/enclave/cli.rs",
-  "src/packages/core/src/enclave/key.rs",
-  "src/packages/core/src/enclave/macos.rs",
-  "src/packages/core/src/enclave/mod.rs",
-  "src/packages/core/src/ipc/lockfile.rs",
-  "src/packages/core/src/ipc/peercred.rs",
-  "src/packages/core/src/native_host.rs",
-  "src/packages/core/src/presence/macos.rs",
-  "src/packages/core/src/presence/mod.rs",
-];
 
 /** Line patterns, one per artifact kind. Each is written so this file's own text never matches it (the
  * record prefix goes through a character class, the examples carry no digit), which its test pins. A tag
@@ -180,7 +165,7 @@ export function gitEnv(): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_")));
 }
 
-/** The git-tracked files under COVERED minus FIXTURES and WAITING, repo-relative, sorted. git does the
+/** The git-tracked files under COVERED minus FIXTURES, repo-relative, sorted. git does the
  * glob matching, so an ignored build output or an untracked scratch file is never scanned. */
 export function coveredFiles(root: string, env: NodeJS.ProcessEnv = process.env): string[] {
   const out = execFileSync("git", ["-C", root, "ls-files", "-z", "--", ...COVERED], {
@@ -188,7 +173,7 @@ export function coveredFiles(root: string, env: NodeJS.ProcessEnv = process.env)
     env,
     maxBuffer: 64 * 1024 * 1024,
   });
-  const excluded = new Set([...FIXTURES, ...WAITING]);
+  const excluded = new Set(FIXTURES);
   return out
     .split("\0")
     .filter((p) => p.length > 0 && !excluded.has(p))
@@ -266,8 +251,7 @@ function main(rootArg: string | undefined): number {
     );
     return 1;
   }
-  const waiting = WAITING.length > 0 ? ` (${WAITING.length} waiting: ${WAITING.join(", ")})` : "";
-  console.log(`check-planning-refs: ${files.length} file(s) clean${waiting}`);
+  console.log(`check-planning-refs: ${files.length} file(s) clean`);
   return 0;
 }
 
