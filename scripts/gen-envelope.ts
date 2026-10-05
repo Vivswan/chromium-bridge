@@ -798,6 +798,29 @@ export const WRITER_FRAMES: Record<Group, Readonly<Record<string, string>>> = {
   },
 };
 
+/** The server->extension frames beside the request (the Rust `BridgeSignal` enum), each read STRICT like the
+ * envelopes: the writer is the MCP server, and an envelope field it adds is a protocol change an older
+ * extension refuses rather than misreads. One reader per variant, planned here like the control frames (G7). */
+export const SIGNAL_FRAMES: Readonly<Record<string, { wire: string; enforced: string }>> = {
+  cancel: { wire: "BridgeCancelWireSchema", enforced: "BridgeCancelSchema" },
+};
+
+/** G7 for the signal enum: every variant planned, every planned tag a variant. */
+export function assertSignalPlan(variants: Map<string, unknown>): void {
+  for (const tag of variants.keys()) {
+    if (!Object.hasOwn(SIGNAL_FRAMES, tag)) {
+      throw new Error(`gen-envelope: the Rust signal enum has an unplanned frame ${tag} (G7)`);
+    }
+  }
+  for (const tag of Object.keys(SIGNAL_FRAMES)) {
+    if (!variants.has(tag)) {
+      throw new Error(
+        `gen-envelope: ${tag} is planned as a signal reader but the Rust signal enum has no such frame (G7)`,
+      );
+    }
+  }
+}
+
 /** G7: every Rust variant planned exactly once, every planned tag a Rust variant, every bare tag fieldless. */
 export function assertFramePlan(group: Group, variants: Map<string, unknown>): void {
   const planned = new Map<string, string>();
@@ -908,6 +931,7 @@ async function main(): Promise<void> {
   const fromRust = JSON.parse(emitted.stdout.toString()) as {
     request: unknown;
     response: unknown;
+    signal: unknown;
     enclave: unknown;
     admin: unknown;
     policy: unknown;
@@ -921,6 +945,8 @@ async function main(): Promise<void> {
     webauthn: splitTaggedUnionSchema(fromRust.webauthn),
   };
   for (const group of GROUPS) assertFramePlan(group, variants[group]);
+  const signals = splitTaggedUnionSchema(fromRust.signal);
+  assertSignalPlan(signals);
 
   function preparedFrame(group: Group, tag: string): unknown {
     return prepare(variants[group].get(tag), `$.${group}.${tag}`);
@@ -968,6 +994,23 @@ async function main(): Promise<void> {
     "export type BridgeResp = z.infer<typeof BridgeRespSchema>;",
     "",
   );
+
+  pieces.push(
+    "// The server->extension signal frames (BridgeSignal), one strict reader per variant: the faithful base,",
+    "// then the enforced validator the extension runs.",
+  );
+  for (const [tag, names] of Object.entries(SIGNAL_FRAMES)) {
+    kindsWithEntries.delete(tag);
+    const base = prepare(signals.get(tag), `$.signal.${tag}`);
+    pieces.push(
+      `export const ${names.wire} = ${convert(base, names.wire)};`,
+      "",
+      `export const ${names.enforced} = ${convert(enforced(tag, base, false), names.enforced)};`,
+      "",
+      `export type ${typeOf(names.enforced)} = z.infer<typeof ${names.enforced}>;`,
+      "",
+    );
+  }
 
   // One trusted-client entry (allowlist::ClientEntry), extracted from client_list_result's `clients` items and
   // emitted as its own export (base and enforced); the embedding schemas reference it by name (the override
@@ -1093,12 +1136,12 @@ async function main(): Promise<void> {
 // DO NOT EDIT. Edit the Rust types or
 // src/packages/shared/src/envelope-asymmetries.ts, then run \`moon run gen\`.
 //
-// Per envelope and per host->extension control frame: the FAITHFUL base (*WireSchema: strict objects,
-// required fields required, no defaults; rules G1-G7 in scripts/gen-envelope.ts) and the ENFORCED validator
-// the extension runs, which is the base plus exactly the asymmetry table (direction and reason per entry in
-// envelope-asymmetries.ts; proved per entry by scripts/check-envelope.ts, \`moon run check-envelope\`). The
-// extension->host writer schemas exist for their inferred types only (constructor-site \`satisfies\`); the
-// enforcing reader for those frames is the Rust serde parser.
+// Per envelope, per server->extension signal frame, and per host->extension control frame: the FAITHFUL base
+// (*WireSchema: strict objects, required fields required, no defaults; rules G1-G7 in scripts/gen-envelope.ts)
+// and the ENFORCED validator the extension runs, which is the base plus exactly the asymmetry table
+// (direction and reason per entry in envelope-asymmetries.ts; proved per entry by scripts/check-envelope.ts,
+// \`moon run check-envelope\`). The extension->host writer schemas exist for their inferred types only
+// (constructor-site \`satisfies\`); the enforcing reader for those frames is the Rust serde parser.
 
 import { z } from "zod";
 ${importLines.join("\n")}

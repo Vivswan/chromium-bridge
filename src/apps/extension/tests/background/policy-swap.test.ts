@@ -46,6 +46,7 @@ import type { ResolvedTab } from "@/lib/background/tabs";
 import { tabClose } from "@/lib/background/tabs";
 import { pageUpload } from "@/lib/background/upload";
 import type { ClickProbe } from "@/lib/dom/page-api";
+import { allowGate } from "./allow-gate";
 
 // The page-backend seam, mocked to observe WHICH mode dispatch selected
 // (the cdpMode site) without dragging real backends in.
@@ -169,16 +170,22 @@ beforeEach(() => {
 describe("dispatch reads disabledTools from the snapshot", () => {
   test("deny: a policy-disabled tool is refused", async () => {
     await armCutover({ disabledTools: ["tab_list"] });
-    await expect(dispatch({ id: 1, op: "tab_list", args: {} } as BridgeReq)).rejects.toThrow(
-      "tool disabled in settings: tab_list",
-    );
+    await expect(
+      dispatch({ id: 1, op: "tab_list", args: {} } as BridgeReq, allowGate),
+    ).resolves.toEqual({
+      outcome: "error",
+      error: new Error("tool disabled in settings: tab_list"),
+    });
   });
 
   test("grant: a policy-enabled tool runs", async () => {
     await armCutover({ disabledTools: [] });
     await expect(
-      dispatch({ id: 1, op: "tab_list", args: {} } as BridgeReq),
-    ).resolves.toBeInstanceOf(Array);
+      dispatch({ id: 1, op: "tab_list", args: {} } as BridgeReq, allowGate),
+    ).resolves.toEqual({
+      outcome: "ok",
+      data: expect.any(Array),
+    });
   });
 });
 
@@ -186,14 +193,14 @@ describe("dispatch reads cdpMode from the snapshot", () => {
   test("grant: policy cdpMode=true selects the CDP backend", async () => {
     await makeTab();
     await armCutover({ cdpMode: true });
-    await dispatch({ id: 1, op: "page_snapshot", args: {} } as BridgeReq);
+    await dispatch({ id: 1, op: "page_snapshot", args: {} } as BridgeReq, allowGate);
     expect(backendSeam.cdpCalls).toEqual([true]);
   });
 
   test("deny: policy cdpMode=false selects the content-script backend", async () => {
     await makeTab();
     await armCutover({ cdpMode: false });
-    await dispatch({ id: 1, op: "page_snapshot", args: {} } as BridgeReq);
+    await dispatch({ id: 1, op: "page_snapshot", args: {} } as BridgeReq, allowGate);
     expect(backendSeam.cdpCalls).toEqual([false]);
   });
 });
@@ -705,8 +712,13 @@ describe("a blocked posture is not consumable as values and the barrier refuses 
     // them must be refused by the snapshot read itself, never run under the
     // deny-baseline defaults (whose empty disabledTools is permissive).
     await fakeBrowser.storage.local.set({ bridgePolicyCutover: true }); // blocked
-    await expect(dispatch({ id: 1, op: "tab_list", args: {} } as BridgeReq)).rejects.toThrow(
-      "no in-scope verified policy baseline",
-    );
+    await expect(
+      dispatch({ id: 1, op: "tab_list", args: {} } as BridgeReq, allowGate),
+    ).resolves.toEqual({
+      outcome: "error",
+      error: expect.objectContaining({
+        message: expect.stringContaining("no in-scope verified policy baseline"),
+      }),
+    });
   });
 });

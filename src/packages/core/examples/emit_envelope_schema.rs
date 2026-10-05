@@ -1,6 +1,6 @@
 //! Emit the JSON Schemas schemars derives from the Rust bridge-envelope wire
-//! types, as one JSON object `{ "request": ..., "response": ..., "enclave":
-//! ..., "admin": ..., "policy": ..., "webauthn": ... }` on stdout.
+//! types, as one JSON object `{ "request": ..., "response": ..., "signal": ...,
+//! "enclave": ..., "admin": ..., "policy": ..., "webauthn": ... }` on stdout.
 //!
 //! The Rust types in `protocol.rs` and `protocol/control.rs` are the canonical
 //! envelope contract. The request is emitted with its subschemas inlined (no
@@ -26,7 +26,7 @@
 use chromium_bridge_core::protocol::control::{
     AdminControl, EnclaveControl, PolicyControl, WebAuthnControl,
 };
-use chromium_bridge_core::protocol::{BridgeReq, BridgeResp};
+use chromium_bridge_core::protocol::{BridgeReq, BridgeResp, BridgeSignal};
 
 fn inlined_schema_for<T: schemars::JsonSchema>() -> schemars::Schema {
     let mut settings = schemars::generate::SchemaSettings::default();
@@ -38,6 +38,9 @@ fn main() -> Result<(), serde_json::Error> {
     let out = serde_json::json!({
         "request": inlined_schema_for::<BridgeReq>(),
         "response": schemars::schema_for!(BridgeResp),
+        // Server->extension frames beside the request (`cancel`), relayed by the host; the generator
+        // emits one strict reader per variant, like the envelopes.
+        "signal": schemars::schema_for!(BridgeSignal),
         // The host-handled control frames, emitted as whole internally-tagged
         // enums; scripts/gen-envelope.ts splits them per `type` tag.
         "enclave": schemars::schema_for!(EnclaveControl),

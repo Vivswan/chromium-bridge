@@ -16,7 +16,13 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertIsolatedBrowserOrSkip, isolatedBrowserOrNull } from "./browser-safety";
 
-const SUITES = ["dom_test", "ext_test", "security_browser_test", "webauthn_test"] as const;
+/** The suites this platform runs. Every suite ends in finishSuite, which writes the RAN marker the canary below
+ * requires, so a suite that would SKIP on a platform is left out there instead of run: cancel_test registers a
+ * profile-scoped host manifest, and Windows has none (host registration is a shared HKCU value). */
+export function suitesFor(platform: NodeJS.Platform): readonly string[] {
+  const all = ["dom_test", "ext_test", "security_browser_test", "webauthn_test", "cancel_test"];
+  return platform === "win32" ? all.filter((suite) => suite !== "cancel_test") : all;
+}
 
 /** The caller-named canary dir, if any. An empty value is the shell's way of unsetting a variable
  * (`BB_BROWSER_CANARY_DIR= bun ...`), so it means "none", never a dir named "". A relative path is made
@@ -41,6 +47,7 @@ function main(): never {
   const here = dirname(fileURLToPath(import.meta.url));
   const repo = join(here, "../..");
   const callerDir = callerCanaryDir(process.env);
+  const suites = suitesFor(process.platform);
 
   const run = (cmd: string[], env: Record<string, string>): boolean => {
     const proc = Bun.spawnSync(cmd, {
@@ -67,12 +74,12 @@ function main(): never {
   // Only this run's markers are cleared in a caller-owned dir (compose.yaml reads them afterwards): a
   // marker from an earlier run must not vouch for this one.
   const canaryDir = callerDir ?? mkdtempSync(join(tmpdir(), "browser-canary-"));
-  for (const suite of SUITES) rmSync(join(canaryDir, suite), { force: true });
+  for (const suite of suites) rmSync(join(canaryDir, suite), { force: true });
 
   console.log("");
   console.log("(3/3) suites");
   let failed = false;
-  for (const suite of SUITES) {
+  for (const suite of suites) {
     if (
       !run(["bun", join(here, `${suite}.ts`)], {
         CHROME_BIN: chromeBin,
@@ -86,7 +93,7 @@ function main(): never {
 
   console.log("");
   console.log("canary (every suite really ran)");
-  for (const suite of SUITES) {
+  for (const suite of suites) {
     const marker = join(canaryDir, suite);
     if (!existsSync(marker)) {
       console.error(

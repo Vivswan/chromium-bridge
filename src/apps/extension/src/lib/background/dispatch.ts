@@ -3,8 +3,15 @@
 // through the selected page backend. The two rosters are typed against the
 // generated OpName union and, together with the server-answered ops, must
 // partition the catalogue exactly (enforced by the roster drift test).
+//
+// This module also owns the request's life: every request is registered the moment port.ts hands it over,
+// before the enrollment gate, and stays in flight until its outcome. A `cancel` signal from the server (the
+// host relays it; port.ts routes it to `collaborator`) aborts that id: a pipeline not yet started never starts,
+// one under way stops at its next stage boundary, and either way the outcome is `cancelled`, which port.ts
+// posts nothing for.
 
 import type { BridgeReq } from "@chromium-bridge/shared/envelope";
+import { BridgeCancelSchema } from "@chromium-bridge/shared/envelope.gen";
 import { isOpName, type OpName } from "@chromium-bridge/shared/ops.gen";
 import type { PolicyValues } from "@chromium-bridge/shared/policy.gen";
 import { unreachable } from "@chromium-bridge/shared/util";
@@ -13,11 +20,14 @@ import { isPageOp } from "../shared/page-ops";
 import { ensureAllowed } from "./allowlist-store";
 import { bindOrigin, preflightPageOp } from "./confirm/gate";
 import { currentPanicEpoch } from "./confirm/service";
+import type { PortCollaborator } from "./connection";
 import { consoleGet } from "./console";
 import { cookieGet } from "./cookies";
 import { handleDialog } from "./dialog";
 import { getEffectivePolicy } from "./effective-policy";
 import { maskOpResult } from "./egress";
+import type { Gate } from "./enrollment";
+import { inLife } from "./in-life";
 import { selectBackend } from "./page-backend";
 import { decide } from "./policy";
 import { snapshotPrecise } from "./precise";
@@ -63,6 +73,40 @@ type SwReq = Extract<BridgeReq, { op: SwOp }>;
 function isSwReq(req: BridgeReq): req is SwReq {
   return SW_OP_SET.has(req.op);
 }
+
+/** How one request ended. port.ts posts the first two as the response and nothing for `cancelled`: the server
+ * stopped waiting for that id, so a reply would reach a caller that no longer exists. */
+export type Dispatched =
+  | { outcome: "ok"; data: unknown }
+  | { outcome: "error"; error: unknown }
+  | { outcome: "cancelled" };
+
+/** The admission gate's shape (enrollment.enrollmentGate): `onAllowed` runs inside its serialized critical
+ * section exactly when the verdict is allowed. */
+export type AdmissionGate = (onAllowed: () => void) => Promise<Gate>;
+
+// The requests this service-worker life holds, by id, from the frame's arrival to the outcome. The server's
+// ids are unique per server process, but a server restart starts over at 1 while an op from the old connection
+// may still be running, so an entry is only ever removed by the controller that owns it.
+const inFlight = inLife(() => new Map<BridgeReq["id"], AbortController>());
+
+/** Claims the server's `cancel` signal frames. A malformed one is claimed and dropped (never answered: a cancel
+ * has no reply), an unknown id is ignored (answered already, or never seen). */
+export const collaborator: PortCollaborator = {
+  onAttach() {},
+  onDetach() {},
+  onFrame(frame) {
+    if (typeof frame !== "object" || frame === null) return false;
+    if ((frame as { type?: unknown }).type !== "cancel") return false;
+    const parsed = BridgeCancelSchema.safeParse(frame);
+    if (!parsed.success) {
+      console.warn("[bb] dropping malformed cancel:", parsed.error.issues[0]?.message);
+      return true;
+    }
+    inFlight.value.get(parsed.data.id)?.abort();
+    return true;
+  },
+};
 
 /**
  * The disable gate. Unknown or empty ops pass through untouched: parseBridgeReq refuses them at the port
@@ -112,7 +156,54 @@ function originOf(url: string | undefined): string {
   }
 }
 
-export async function dispatch(req: BridgeReq): Promise<unknown> {
+/** Run one request from its frame's arrival to its outcome. Registered for cancel first, then the pipeline
+ * starts inside the gate's critical section (a revoke landing between "allowed" and the first op is
+ * impossible) and only if no cancel landed while the request waited. A refused or failing gate is an error
+ * outcome; the pipeline is checked for a cancel at each stage boundary, and a stage already running (a
+ * confirmation prompt, a debugger call) finishes on its own with its result discarded here. */
+export function dispatch(req: BridgeReq, gate: AdmissionGate): Promise<Dispatched> {
+  const controller = new AbortController();
+  inFlight.value.set(req.id, controller);
+  const { signal } = controller;
+  const unlessCancelled = (done: Dispatched): Dispatched =>
+    signal.aborted ? { outcome: "cancelled" } : done;
+  return new Promise<Dispatched>((resolve) => {
+    const refused = (err: unknown) =>
+      resolve(
+        unlessCancelled({
+          outcome: "error",
+          error: new Error(`enrollment gate error: ${String(err)}`),
+        }),
+      );
+    // Gate errors are ambiguity, and ambiguity refuses; a gate that throws before returning its promise is
+    // the same ambiguity, so the never-rejects contract holds for it too.
+    let verdict: Promise<Gate>;
+    try {
+      verdict = gate(() => {
+        if (signal.aborted) {
+          resolve({ outcome: "cancelled" });
+          return;
+        }
+        run(req, signal).then(
+          (data) => resolve(unlessCancelled({ outcome: "ok", data })),
+          (error) => resolve(unlessCancelled({ outcome: "error", error })),
+        );
+      });
+    } catch (err) {
+      refused(err);
+      return;
+    }
+    verdict.then((gateVerdict) => {
+      if (!gateVerdict.allowed) {
+        resolve(unlessCancelled({ outcome: "error", error: new Error(gateVerdict.reason) }));
+      }
+    }, refused);
+  }).finally(() => {
+    if (inFlight.value.get(req.id) === controller) inFlight.value.delete(req.id);
+  });
+}
+
+async function run(req: BridgeReq, signal: AbortSignal): Promise<unknown> {
   // Captured synchronously, before this request's first await: every confirmation this decision raises
   // carries it, so a deny-kill that lands AND lifts anywhere across the decision (inside the policy read, the
   // tab resolve, or the allowlist check) still denies the confirmation on the epoch mismatch.
@@ -124,6 +215,7 @@ export async function dispatch(req: BridgeReq): Promise<unknown> {
   // tens of seconds - cannot alter the decision it started under. An
   // accepted push applies from the next request on.
   const effective = await getEffectivePolicy();
+  signal.throwIfAborted();
   if (effective.state === "blocked") {
     // The enrollment gate's barrier check and this snapshot are SEPARATE awaits, so a compromise latching
     // between them must refuse HERE rather than let the request run under the deny-baseline defaults (whose
@@ -145,14 +237,20 @@ export async function dispatch(req: BridgeReq): Promise<unknown> {
     //   (content script or CDP per cdpMode) -> egress masking.
     // Policy never lives in a backend, so it cannot drift between them.
     const tab = await activeTab();
+    // Before the allowlist: a non-allowlisted origin raises a 60 s approval prompt the server has stopped
+    // waiting for.
+    signal.throwIfAborted();
     await ensureAllowed(tab.url);
+    signal.throwIfAborted();
     const backend = selectBackend(policy.cdpMode === true);
     const preflight = await preflightPageOp(req.op, req.args, tab, backend, policy, panicEpoch);
+    signal.throwIfAborted();
     // A confirmation can hold the pipeline open for tens of seconds, during
     // which the tab may navigate ANYWHERE. Re-fetch the SAME tab (by id, so
     // an active-tab switch cannot substitute a different one) and fail
     // closed if its origin is no longer what was checked and confirmed.
     const current = await recheckTab(tab);
+    signal.throwIfAborted();
     // Bind the act to the approved origin. backend.run only accepts a bound
     // guard (expectOrigin is required on PageOpGuard, and bindOrigin is its
     // only producer), and the backends enforce it INSIDE the page, atomically

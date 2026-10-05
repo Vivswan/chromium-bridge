@@ -135,7 +135,7 @@ The binary is a thin argv dispatch (`src/apps/host/src/main.rs`) over the `chrom
 | `protocol/control.rs` | The host-handled control frames (enclave, admin, kill switch, audit, policy, language) and `classify_nm_frame`, the router that answers them locally and forwards everything else |
 | `ipc/` | The bridge socket: platform socket + lockfile + peer credentials + attestation + HMAC handshake, split per concern with platform impls |
 | `broker.rs` | Broker ownership, relay attach/detach ref-counting, DoS caps, the kill-switch watcher |
-| `session.rs` | Connection registry keyed by browser label; request/response pairing by id; per-connection generation guard; 120s timeout |
+| `session.rs` | Connection registry keyed by browser label; request/response pairing by id; per-connection generation guard; an in-flight guard that cancels an abandoned request at the tool call's deadline |
 | `mcp_server.rs` | Default mode: harness admission, JSON-RPC loop, dispatch into the shared session |
 | `native_host.rs` | `--native-host` mode: NM frames <-> socket NDJSON, control-plane frame handling, graceful exit on EOF |
 | `tools/` | The tool catalogue (26 tools; the cross-process contract source): one `catalogue!` row per tool emits the `BridgeCommand` enum, the `ToolId` index, and the `Tool` record (metadata, grants, dispatch, typed args schema); capabilities are read off the records |

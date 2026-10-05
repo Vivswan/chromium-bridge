@@ -424,6 +424,28 @@ impl BridgeResp {
     }
 }
 
+/// Server->extension frames about a request already on the wire, relayed by the native host untouched like the
+/// request itself. Internally tagged on `type`, so a frame is told from a [`BridgeReq`] (which carries `op`) by
+/// shape; the extension reads each variant with a generated strict validator (`moon run gen`).
+///
+/// ```text
+/// cancel { id }  -> the server stopped waiting for `id`: the extension aborts the op and answers nothing. The
+///                   only writer is the session's in-flight guard, whose Drop sends exactly one per abandoned
+///                   request (`session.rs`); an id the extension does not hold is ignored (answered, or never seen)
+/// not a host control tag  -> the host's socket->stdout pump forwards it instead of dropping it as an injection;
+///                            a browser that bounces one back reaches the session's strict response parse, which
+///                            refuses it and severs that connection
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum BridgeSignal {
+    Cancel {
+        /// The [`BridgeReq::id`] being abandoned.
+        id: u64,
+    },
+}
+
 /// A [`BridgeResp`] parsed into the two states a response can be in: success with data, or failure with an error.
 /// The flat `{ ok, data?, error? }` triple stays the pinned wire contract (the Zod validators and
 /// the envelope schema are derived from [`BridgeResp`]) but can spell contradictions, and the attested-but-untrusted extension

@@ -43,7 +43,7 @@ src/packages/core/fuzz/  cargo-fuzz workspace: wire parsers + semantic validator
                          (nightly + libFuzzer; see the Fuzzing section below)
 src/packages/shared/     contract types / validators / i18n (bun workspace member)
 tests/protocol/          e2e.py, adversarial.py, chaos.py - drive the real release binary
-tests/browser/           dom_test.ts, ext_test.ts, security_browser_test.ts,
+tests/browser/           dom_test.ts, ext_test.ts, security_browser_test.ts, webauthn_test.ts, cancel_test.ts,
                          integration_e2e.ts, run_all.ts (bun workspace member; isolated Chrome only)
 tests/fixtures/          HTML/CSS pages and the probe extension the browser suites load
 scripts/                 bun workspace member: gen-ops.ts, check-version.ts, check-extension-id.ts,

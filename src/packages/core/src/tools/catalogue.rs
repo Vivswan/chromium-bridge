@@ -116,8 +116,8 @@ pub enum ResultKind {
 /// be stated without the other.
 #[derive(Debug, Clone, Copy)]
 pub enum Dispatch {
-    /// Answered by the MCP server itself from the session state.
-    ServerLocal(fn(&Session) -> Result<Value, CallError>),
+    /// Answered by the MCP server itself from the session state, within the call's deadline.
+    ServerLocal(fn(&Session, std::time::Instant) -> Result<Value, CallError>),
     /// Routed over the bridge to the extension of the addressed browser.
     Bridge {
         scope: Scope,

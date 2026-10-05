@@ -15,6 +15,7 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { Connection } from "@/lib/background/connection";
+import type { Dispatched } from "@/lib/background/dispatch";
 
 // The collaborator modules are mocked so the link lifecycle runs in isolation
 // (dynamic import below, so these consts exist before the factories run).
@@ -45,7 +46,10 @@ const auditLog = { collaborator: mockCollaborator() };
 const presence = { collaborator: mockCollaborator() };
 const policySync = { collaborator: mockCollaborator() };
 const webauthn = { collaborator: mockCollaborator() };
-const dispatch = vi.fn((_req: unknown) => Promise.resolve({}));
+const dispatch = vi.fn(
+  (_req: unknown, _gate: unknown): Promise<Dispatched> =>
+    Promise.resolve({ outcome: "ok", data: {} }),
+);
 const runtime = {
   connectNative: vi.fn<() => FakePort>(),
   lastError: undefined as { message?: string } | undefined,
@@ -58,7 +62,7 @@ vi.mock("@/lib/background/audit-log", () => auditLog);
 vi.mock("@/lib/background/confirm/presence", () => presence);
 vi.mock("@/lib/background/policy-sync", () => policySync);
 vi.mock("@/lib/webauthn/exchange", () => webauthn);
-vi.mock("@/lib/background/dispatch", () => ({ dispatch }));
+vi.mock("@/lib/background/dispatch", () => ({ dispatch, collaborator: mockCollaborator() }));
 vi.mock("wxt/browser", () => ({ browser: { runtime } }));
 
 interface FakePort {
@@ -253,7 +257,10 @@ describe("native link lifecycle", () => {
     // response goes out on the still-connected link.
     port.emitMessage({ id: 1, op: "tab_list", args: {} });
     expect(dispatch).toHaveBeenCalledTimes(1);
-    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ id: 1, op: "tab_list" }));
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 1, op: "tab_list" }),
+      enrollment.enrollmentGate,
+    );
     await vi.advanceTimersByTimeAsync(0);
     expect(port.postMessage).toHaveBeenCalledWith(expect.objectContaining({ id: 1, ok: true }));
   });
@@ -274,6 +281,15 @@ describe("native link lifecycle", () => {
     expect(port.postMessage).not.toHaveBeenCalled();
   });
 
+  test("a cancelled outcome posts nothing: the server stopped waiting for that id", async () => {
+    dispatch.mockImplementationOnce(() => Promise.resolve({ outcome: "cancelled" }));
+    const port = connect();
+    port.emitMessage({ id: 3, op: "tab_list", args: {} });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(port.postMessage).not.toHaveBeenCalled();
+  });
+
   test("a bridge response rides the connection its request arrived on, never a successor's", async () => {
     // Chrome spawns a fresh host process per port: the host that asked is
     // gone with its connection, and the successor never issued the id, so a
@@ -282,7 +298,7 @@ describe("native link lifecycle", () => {
     dispatch.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
-          finish = () => resolve({});
+          finish = () => resolve({ outcome: "ok", data: {} });
         }),
     );
     const portA = connect();
