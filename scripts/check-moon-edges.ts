@@ -49,17 +49,11 @@ export const TOOLCHAIN_CARGO_VERBS = new Set([
   "tree",
 ]);
 
-// bun's global options may or may not take a value (`--config` accepts an omitted one), so no table of them
-// is trusted: the subcommand is the first word that is not an option, and the installer rule reads every word.
-const bunSubcommand = (words: string[]): number => {
-  const sub = words.findIndex((word, i) => i > 0 && !word.startsWith("-"));
-  return sub === -1 ? words.length : sub;
-};
-
+// bun's global options may or may not take a value (`--config` accepts an omitted one), so no table of them is
+// trusted: like the installer rule, the alias rule reads every word, and `x` anywhere in a bun command is bunx.
 const unalias = (words: string[]): string[] => {
-  if (words[0] !== "bun") return words;
-  const sub = bunSubcommand(words);
-  return words[sub] === "x" ? ["bunx", ...words.slice(sub + 1)] : words;
+  const x = words[0] === "bun" ? words.indexOf("x") : -1;
+  return x === -1 ? words : ["bunx", ...words.slice(x + 1)];
 };
 
 function simpleCommands(task: TaskGraph[string][string]): string[][] {
