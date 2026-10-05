@@ -32,6 +32,24 @@ describe("probePage", () => {
         [{ file: "docs/p.md", line: 2, message: over("list item", 7) }],
       ],
       [
+        "a loose list item is one item, its paragraphs counted together",
+        "- one two three\n\n  four five six\n",
+        [{ file: "docs/p.md", line: 1, message: over("list item", 6) }],
+      ],
+      [
+        "a loose item under a heading is located by its first paragraph, not by a needle spanning two",
+        "# Heading\n\n- Start\n\n  one two three four five\n",
+        [{ file: "docs/p.md", line: 3, message: over("list item", 6) }],
+      ],
+      [
+        "a loose item around a nested list counts its own paragraphs, and the nested item keeps its own line",
+        "- parent starts\n\n  - child alpha beta gamma delta epsilon\n\n  parent ends\n  next line\n  another line\n  last line\n",
+        [
+          { file: "docs/p.md", line: 1, message: over("list item", 10) },
+          { file: "docs/p.md", line: 3, message: over("list item", 6) },
+        ],
+      ],
+      [
         "prose inside the region the map renderer writes counts nothing",
         [
           "# T",

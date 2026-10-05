@@ -663,6 +663,7 @@ tasks:
 
   check-docs-probe:
     description: 'Every paragraph and list item of the living docs under the 70-word cap and every path they name real; pre-rewrite findings are allowed by docs/.probe-baseline, which fails when a line goes stale'
+    deps: ['~:install-deps']
     script: |
       set -e
       bun scripts/docs-probe.ts --baseline docs/.probe-baseline README.md CONTRIBUTING.md 'docs/**/*.md' .github/SECURITY.md
@@ -670,21 +671,26 @@ tasks:
 
   check-architecture:
     description: 'The TS import graph equals architecture.yml in both directions, the module map rendered into docs/architecture.md is current, and every diagram box and demonstration link on that page names real code'
+    deps: ['~:install-deps']
     script: |
       set -e
       bun scripts/arch-lint.ts
       bun scripts/render-architecture-map.ts --page docs/architecture.md --check
       bun scripts/check-architecture-page.ts --page docs/architecture.md --repo-url https://github.com/Vivswan/chromium-bridge/blob/main/ --expect-diagrams 0
       bun test scripts/tests/arch-lint.test.ts scripts/tests/render-architecture-map.test.ts scripts/tests/check-architecture-page.test.ts
+    options:
+      mutex: 'generated-contract'
 
   gen-architecture-map:
     description: 'Rewrite the generated module-map region of docs/architecture.md from architecture.yml (check-architecture verifies it)'
+    deps: ['~:install-deps']
     command: 'bun scripts/render-architecture-map.ts --page docs/architecture.md'
     options:
       runInCI: false
 
   check-docs-locales:
     description: 'docs/zh-cn and docs/zh-tw, once present, mirror the English docs tree file-for-file with their README; absent locales pass'
+    deps: ['~:install-deps']
     script: |
       set -e
       bun scripts/check-docs-locales.ts

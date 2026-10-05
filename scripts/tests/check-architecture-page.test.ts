@@ -36,6 +36,16 @@ describe("diagramProblems", () => {
       ['"src/gone.ts run()": src/gone.ts does not exist'],
     ],
     [
+      "a fence quoted in a block quote ends with the quote, so the diagram after it is still checked",
+      `> \`\`\`text\n> quoted, never closed\n\n## C\n\n${diagram("src/gone.ts run()")}\n\n${DEMO}\n`,
+      ['"src/gone.ts run()": src/gone.ts does not exist'],
+    ],
+    [
+      "a quote marker indented one space continues the quote, so the fenced text stays text",
+      `> \`\`\`text\n > example\n> \`\`\`mermaid\n> flowchart LR a["src/gone.ts"]\n> \`\`\`\n`,
+      [],
+    ],
+    [
       "a box with a numeric id naming a missing file",
       `## C\n\n\`\`\`mermaid\nflowchart TD\n  123["src/gone.ts"]\n\`\`\`\n\n${DEMO}\n`,
       ['"src/gone.ts": src/gone.ts does not exist'],

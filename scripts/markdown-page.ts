@@ -22,9 +22,11 @@ export interface Page {
   text: ReadonlyArray<string | undefined>;
 }
 
-// A fence may sit inside block quotes (`> `), then up to three spaces of indent, as Markdown allows;
-// four spaces make indented code, which is quoted text. The closer carries the same quote prefix.
-const FENCE_OPEN = /^((?:>[ ]?)*)( {0,3})(`{3,}|~{3,})(.*)$/;
+// A fence may sit inside block quotes (each marker up to three spaces in, then `>` and an optional
+// space), then up to three spaces of indent, as Markdown allows; four spaces make indented code, which
+// is quoted text. The closer carries the same quote depth.
+const QUOTE_MARKER = " {0,3}>[ ]?";
+const FENCE_OPEN = new RegExp(`^((?:${QUOTE_MARKER})*)( {0,3})(\`{3,}|~{3,})(.*)$`);
 const MERMAID_INFO = /^\s*mermaid\s*$/;
 // A comment block opens on a line starting with <!-- that does not also close it, and runs through
 // the first line holding -->.
@@ -63,21 +65,29 @@ export function readPage(markdown: string): Page {
     if (open === null) continue;
     // Block-quote depth is what carries over line to line; the space after each `>` is optional on every line.
     const depth = (open[1] ?? "").split(">").length - 1;
-    const quotePrefix = new RegExp(`^(?:>[ ]?){${depth}}`);
+    const quotePrefix = new RegExp(`^(?:${QUOTE_MARKER}){${depth}}`);
     const indent = open[2] ?? "";
     const ticks = open[3] ?? "```";
     // A closer repeats the opener's marker character at least as many times, at the same quote depth and at most three spaces in.
     const close = new RegExp(
-      `^(?:>[ ]?){${depth}} {0,3}${ticks[0] === "~" ? "~" : "`"}{${ticks.length},}[ \\t]*$`,
+      `^(?:${QUOTE_MARKER}){${depth}} {0,3}${ticks[0] === "~" ? "~" : "`"}{${ticks.length},}[ \\t]*$`,
     );
     const body: string[] = [];
     let cursor = index + 1;
-    while (cursor < lines.length && !close.test(lines[cursor] ?? "")) {
+    // Inside a block quote the fence ends with the quote: Markdown closes the container, and the fence
+    // with it, at the first line without the quote marker, closer or not.
+    const quoted = (text: string): boolean => depth === 0 || quotePrefix.test(text);
+    while (
+      cursor < lines.length &&
+      quoted(lines[cursor] ?? "") &&
+      !close.test(lines[cursor] ?? "")
+    ) {
       const text = (lines[cursor] ?? "").replace(quotePrefix, "");
       body.push(text.startsWith(indent) ? text.slice(indent.length) : text);
       cursor += 1;
     }
-    const end = Math.min(cursor, lines.length - 1);
+    const closedByMarker = cursor < lines.length && close.test(lines[cursor] ?? "");
+    const end = closedByMarker ? cursor : cursor - 1;
     for (let i = index; i <= end; i++) hidden[i] = true;
     fences.push({
       line: index,
@@ -85,7 +95,7 @@ export function readPage(markdown: string): Page {
       mermaid: MERMAID_INFO.test(open[4] ?? ""),
       body: body.join("\n"),
     });
-    index = cursor;
+    index = end;
   }
   return { lines, fences, text: lines.map((line, i) => (hidden[i] ? undefined : line)) };
 }

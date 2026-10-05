@@ -100,9 +100,8 @@ describe("checkLocales", () => {
   });
 });
 
-// The shell contract the check-docs-locales task relies on: exit 0 while no locale exists (today's
-// tree), exit 1 naming each gap once a partial mirror appears, and exit 2 for a root with no docs/
-// or an empty one, either of which would otherwise read as a tree with nothing to mirror.
+// The shell contract the check-docs-locales task relies on. A root with a missing or empty docs/
+// would otherwise read as a tree with nothing to mirror.
 test("the CLI exits 0 with no locale tree, 1 on a partial mirror, and 2 on a missing or empty docs/", () => {
   const root = scratch.dir("docs-locales-cli");
   writeTree(root, ENGLISH);

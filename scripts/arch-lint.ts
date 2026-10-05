@@ -222,7 +222,10 @@ function isFile(path: string): boolean {
   return existsSync(path) && statSync(path).isFile();
 }
 
-/** The file at `target` as a bundler resolves it: as written, with a source extension, or as an index file; nothing found throws with `importLabel`. */
+/**
+ * The file at `target` as a bundler resolves it: as written, with a source extension, or as an
+ * index file; nothing found throws with `importLabel`.
+ */
 function resolveTarget(target: string, importLabel: string): string {
   if (isFile(target)) return target;
   const stem = target.replace(/\.(?:[mc]?[jt]sx?)$/, "");

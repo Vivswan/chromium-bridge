@@ -120,7 +120,8 @@ if (import.meta.main) {
       console.log(`render-architecture-map: ${pageLabel} region ${options.region} is current`);
     } else if (options.check) {
       console.error(
-        `render-architecture-map: ${pageLabel} region ${options.region} differs from ${configLabel}; run \`moon run gen-architecture-map\` to rewrite it`,
+        `render-architecture-map: ${pageLabel} region ${options.region} differs from ${configLabel};` +
+          " run `moon run gen-architecture-map` to rewrite it",
       );
       process.exit(1);
     } else {

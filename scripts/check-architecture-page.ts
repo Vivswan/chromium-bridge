@@ -45,7 +45,8 @@ export function exportedNames(file: string): ReadonlySet<string> {
   return names;
 }
 
-// A node definition wherever it sits: an id (letters, digits, `_`, `-`), an opening shape run (`[`, `((`, `{{`, `[/`, `[\`, `>` ...), and what follows it.
+// A node definition wherever it sits: an id (letters, digits, `_`, `-`), an opening shape run
+// (`[`, `((`, `{{`, `[/`, `[\`, `>` ...), and what follows it.
 const NODE_DEFINITION = /(?<![\w"-])([\w][\w-]*)([[({>]+[/\\]?)(?![-|])/g;
 const QUOTED_LABEL = /^"([^"]*)"[/\\]?[\])}]+/;
 // Edge-label text is not a node: `-->|run()|`, `-- run() -->`, `== run() ==>`, `-. run() .->`.
@@ -429,7 +430,8 @@ if (import.meta.main) {
     const counts = conceptCounts(markdown);
     if (options.expectDiagrams !== undefined && counts.diagrams !== options.expectDiagrams) {
       problems.push(
-        `expected ${options.expectDiagrams} concept diagrams, found ${counts.diagrams}; change --expect-diagrams only when a diagram was added or removed on purpose`,
+        `expected ${options.expectDiagrams} concept diagrams, found ${counts.diagrams};` +
+          " change --expect-diagrams only when a diagram was added or removed on purpose",
       );
     }
     if (counts.demonstrations !== counts.diagrams) {

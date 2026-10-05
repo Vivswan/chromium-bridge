@@ -1,25 +1,13 @@
 #!/usr/bin/env bun
-// The page probe: the two readings a docs reviewer otherwise takes by eye, made exact.
-//   a paragraph or list item over the word cap (default 70)  -> finding, exit 1
-//   a repository path the prose names that does not exist    -> finding, exit 1
-// Block structure comes from Bun's Markdown renderer, so what counts as prose
-// is what Markdown renders as a paragraph or a tight list item: headings,
-// code (fenced or indented), tables, raw HTML, and images contribute nothing.
-// Front matter is blanked before rendering; a BEGIN/END GENERATED region
-// (render-architecture-map.ts writes one) is dropped where the renderer sees
-// its markers as HTML blocks, so a marker quoted inside a fence is code and
-// changes nothing.
-// A path is a backticked token with a slash and an extension (or ./, ../, a
-// trailing slash), or a relative link destination; placeholders (<...>),
-// globs, owner/repo slugs, and bare file names are left alone, since a page
-// may name files the reader will create. A path git ignores (built icons, a
-// tool cache) is not a repository file even when it exists on this machine,
-// so the verdict is the same on a fresh clone and after a build.
-//
-// --baseline <file> holds the findings the pages carried before their rewrite,
-// one `page:line` per line. The gate fails in both directions: a finding not
-// in the baseline, and a baseline line that no longer fires (stale allowance).
-// The rewrite empties the file; an empty baseline is the probe plain.
+// The page probe behind `moon run check-docs-probe`. Block structure comes from Bun's Markdown
+// renderer, so prose is what Markdown renders as a paragraph or a list item, a loose item's
+// paragraphs counting as the item; headings, code, tables, raw HTML, and images contribute nothing.
+// Front matter is blanked before rendering so line numbers still match the file, and a BEGIN/END
+// GENERATED region (render-architecture-map.ts writes one) is dropped where the renderer sees its
+// markers as HTML blocks, so a marker quoted inside a fence is code and changes nothing.
+// A path is a backticked token with a slash and an extension (or ./, ../, a trailing slash), or a
+// relative link destination; placeholders (<...>), globs, owner/repo slugs, and bare file names are
+// left alone, since a page may name files the reader will create.
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
@@ -213,19 +201,32 @@ export function scanPage(text: string): Scan {
     }
     return cursor;
   };
-  const visit = (block: string) => {
+  const reads = (markers: string): string =>
+    markers
+      .replace(LINK_MARK, "")
+      .replace(CODESPAN_MARK, "$1")
+      .replace(HTML_MARK, (_mark, raw: string) => inlineHtml(raw));
+  // `folded` marks a paragraph that is a list item's direct child: a loose item renders its text as
+  // paragraph blocks and nothing of its own, so the item counts them and the paragraph pushes no unit
+  // of its own. Each block is still visited in source order, so the line cursor moves as the page reads.
+  const visit = (block: string, folded = false) => {
     const prose = block[1] !== "N";
     const kind = block[1] === "L" ? "item" : "paragraph";
     const inner = block.slice(2, -1);
     const own = ownText(inner);
-    const plain = own
-      .replace(LINK_MARK, "")
-      .replace(CODESPAN_MARK, "$1")
-      .replace(HTML_MARK, (_mark, raw: string) => inlineHtml(raw));
-    const firstLine = plain.split("\n").find((l) => l.trim() !== "") ?? "";
+    const plain = reads(own);
+    const nested = nestedBlocks(inner);
+    const parts =
+      kind === "item"
+        ? [plain, ...nested.filter((b) => b[1] === "P").map((b) => reads(ownText(b.slice(2, -1))))]
+        : [plain];
+    const unitText = parts.join(" ").trim();
+    // Located by the first paragraph alone: a needle spanning two paragraphs matches no source line.
+    const lead = parts.find((part) => part.trim() !== "") ?? "";
+    const firstLine = lead.split("\n").find((l) => l.trim() !== "") ?? "";
     const line = locate(firstLine);
-    if (prose && plain.trim() !== "") {
-      scan.units.push({ kind, line: line + 1, text: unescapeEntities(plain) });
+    if (prose && !folded && unitText !== "") {
+      scan.units.push({ kind, line: line + 1, text: unescapeEntities(unitText) });
     }
     for (const m of own.matchAll(CODESPAN_MARK)) {
       const code = unescapeEntities(m[1] ?? "");
@@ -237,7 +238,7 @@ export function scanPage(text: string): Scan {
     }
     // The next unit starts after this one, so a repeated opening line finds its own line, not this one again.
     if (plain.trim() !== "") cursor = line + plain.trim().split("\n").length;
-    for (const nested of nestedBlocks(inner)) visit(nested);
+    for (const child of nested) visit(child, kind === "item" && child[1] === "P");
   };
   for (const block of nestedBlocks(prose)) visit(block);
   return scan;
@@ -440,7 +441,8 @@ export function judge(findings: readonly Finding[], baseline: ReadonlySet<string
 
 const USAGE = [
   // The file names itself, so a vendored copy under another name prints a command that exists there.
-  `usage: ${basename(fileURLToPath(import.meta.url))} [--root <dir>] [--base <dir>]... [--max-words <n>] [--shape-only] [--baseline <file>] <page.md | glob>...`,
+  `usage: ${basename(fileURLToPath(import.meta.url))} [--root <dir>] [--base <dir>]...` +
+    " [--max-words <n>] [--shape-only] [--baseline <file>] <page.md | glob>...",
   "  --root        the repository root paths resolve against (default: cwd)",
   "  --base        a directory under the root that paths also resolve against (repeatable)",
   "  --max-words   the cap on a paragraph or list item (default: 70)",

@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
-// Translated docs live in directories mirroring the English tree, the layout the docs site module
-// turns into locales with a language switcher once the rewrite lands. A page in one language and
-// not another is a dead switcher entry, so a present locale is judged file-for-file against docs/:
+// Translated docs live in directories mirroring the English tree, which the docs site turns into
+// locales with a language switcher. A page in one language and not another is a dead switcher
+// entry, so a present locale is judged file-for-file against docs/:
 //   locale absent (no docs/<locale>/, no README.<locale>.md)  -> nothing to judge, pass
 //   locale present                                            -> README.<locale>.md exists, and the
 //                                                                .md set under docs/<locale>/ equals
@@ -83,7 +83,8 @@ export function problemsOf(reports: readonly LocaleReport[]): string[] {
 const USAGE = [
   "usage: check-docs-locales.ts [--root <dir>]",
   "  --root  the repository root (default: cwd)",
-  "exit 0: every present locale mirrors docs/ file-for-file (or no locale exists yet); 1: problems, each printed; 2: usage or no docs/ under the root",
+  "exit 0: every present locale mirrors docs/ file-for-file (or no locale exists yet);" +
+    " 1: problems, each printed; 2: usage or no docs/ under the root",
 ].join("\n");
 
 function parseArgs(argv: readonly string[]): { root: string } {

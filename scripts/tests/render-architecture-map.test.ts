@@ -75,7 +75,8 @@ test("the CLI's --check fails on drift, a render writes the map, and --check the
     status: 1,
     stdout: "",
     stderr:
-      "render-architecture-map: docs/page.md region architecture-map differs from architecture.yml; run `moon run gen-architecture-map` to rewrite it\n",
+      "render-architecture-map: docs/page.md region architecture-map differs from architecture.yml;" +
+      " run `moon run gen-architecture-map` to rewrite it\n",
   });
   expect(readFileSync(join(root, "docs/page.md"), "utf8")).toBe(PAGE);
 
