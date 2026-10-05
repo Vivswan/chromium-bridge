@@ -20,19 +20,28 @@ export interface Failure {
   readonly posted: boolean;
 }
 
-/** How one request reads its outcome. `refused` defaults to the runtime contract's refusal. `replies` names the
- * tags that answer this request when the exchange's reply type has several; absent, any reply answers. */
-export interface Reading<TReply extends { type: string }, TView> {
-  readonly replies?: readonly TReply["type"][];
-  read(reply: TReply): TView | Promise<TView>;
-  refused?(failure: Failure): TView | Promise<TView>;
+/** How one request reads its outcome. `refused` defaults to the runtime contract's refusal. The readers are
+ * properties, not methods, so a reader narrower than its reading does not typecheck. */
+export interface AnyReading<TReply, TView> {
+  readonly replies?: undefined;
+  readonly read: (reply: TReply) => TView | Promise<TView>;
+  readonly refused?: (failure: Failure) => TView | Promise<TView>;
 }
+export interface NamedReading<TReply extends { type: string }, TView, R extends TReply["type"]> {
+  readonly replies: readonly R[];
+  readonly read: (reply: TReply & { type: R }) => TView | Promise<TView>;
+  readonly refused?: (failure: Failure) => TView | Promise<TView>;
+}
+export type Reading<TReply extends { type: string }, TView, R extends TReply["type"]> =
+  | AnyReading<TReply, TView>
+  | NamedReading<TReply, TView, R>;
 
 /** A request closed by claim(): the slot is free, this waiter is still owed its outcome. Both settle once the
- * waiter's view has been read, so a caller serializing frames can hold its lane until then (kill.ts does). */
+ * waiter's view has been read, so a caller serializing frames can hold its lane until then (kill.ts does).
+ * Properties, not methods, so a tagged claim cannot be widened to one over every reply. */
 export interface Claimed<TReply> {
-  settle(reply: TReply): Promise<void>;
-  fail(error: string): Promise<void>;
+  readonly settle: (reply: TReply) => Promise<void>;
+  readonly fail: (error: string) => Promise<void>;
 }
 
 export interface Exchange<TReply extends { type: string }> {
@@ -45,18 +54,27 @@ export interface Exchange<TReply extends { type: string }> {
   /** `posted` is known in the same synchronous turn: kill.ts anchors the brake on it before the view settles. */
   request<TView>(
     frame: object,
-    how: Reading<TReply, TView>,
+    how: AnyReading<TReply, TView>,
+  ): { posted: boolean; view: Promise<TView | Refusal> };
+  request<TView, R extends TReply["type"]>(
+    frame: object,
+    how: NamedReading<TReply, TView, R>,
   ): { posted: boolean; view: Promise<TView | Refusal> };
   /** Open the slot for a reply with no frame of this exchange's to post: the reply another collaborator hands
    * over (webauthn's release outcome, delivered through claim() by kill.ts). */
-  hold<TView>(how: Reading<TReply, TView>): Promise<TView | Refusal>;
+  hold<TView>(how: AnyReading<TReply, TView>): Promise<TView | Refusal>;
+  hold<TView, R extends TReply["type"]>(
+    how: NamedReading<TReply, TView, R>,
+  ): Promise<TView | Refusal>;
   /** False when nothing is open, or the open request did not ask for this tag: the frame is unsolicited. */
   answer(reply: TReply): boolean;
-  /** Close the open request now, settle it later. With `tag`, only a request that asked for that tag. */
-  claim(tag?: TReply["type"]): Claimed<TReply> | null;
+  /** Close the open request now, settle it later. Untagged, only a request that reads any reply; with `tag`,
+   * only one that asked for it, and the settle takes that tag alone: what a claimer settles is always within
+   * the reader's type. */
+  claim(): Claimed<TReply> | null;
+  claim<R extends TReply["type"]>(tag: R): Claimed<TReply & { type: R }> | null;
 }
 
-/** `settle` and `fail` resolve the waiter and return once its view has been read, whichever way that went. */
 type Open<TReply> = {
   readonly state: "open";
   readonly conn: Connection;
@@ -79,24 +97,34 @@ export function exchange<TReply extends { type: string }>(
 ): Exchange<TReply> {
   const link = inLife<Link<TReply>>(() => ({ state: "detached" }));
 
-  function close(tag?: string): Open<TReply> | null {
+  function take(): Open<TReply> | null {
     const current = link.value;
     if (current.state !== "open") return null;
-    if (tag !== undefined && current.replies !== null && !current.replies.has(tag)) return null;
     clearTimeout(current.timer);
     link.value = { state: "attached", conn: current.conn };
     return current;
   }
 
+  /** The one admission to a narrowed reader: a request that named its replies is closed only by a tag among
+   * them, and the claimed settle below holds that tag. The cast at the settle site states this. */
+  function close(tag?: string): Open<TReply> | null {
+    const current = link.value;
+    if (current.state !== "open") return null;
+    const admitted = current.replies === null || (tag !== undefined && current.replies.has(tag));
+    return admitted ? take() : null;
+  }
+
   function detach(): void {
-    const open = close();
+    const open = take();
     link.value = { state: "detached" };
     void open?.fail(DETACHED);
   }
 
   /** Take the slot, or refuse without taking it; `conn` is the connection the slot was opened on, null when
    * refused. */
-  function open<TView>(how: Reading<TReply, TView>): {
+  function open<TView, R extends TReply["type"]>(
+    how: Reading<TReply, TView, R>,
+  ): {
     view: Promise<TView | Refusal>;
     conn: Connection | null;
   } {
@@ -122,14 +150,14 @@ export function exchange<TReply extends { type: string }>(
       };
       const timer = setTimeout(() => {
         const error = "no reply from the native host (timed out)";
-        void close()?.fail({ why: "timed-out", error, posted: true });
+        void take()?.fail({ why: "timed-out", error, posted: true });
       }, timeoutMs);
       link.value = {
         state: "open",
         conn: current.conn,
         replies: how.replies ? new Set<string>(how.replies) : null,
         timer,
-        settle: (reply) => deliver(how.read(reply)),
+        settle: (reply) => deliver(how.read(reply as TReply & { type: R })),
         fail: (failure) => deliver(refused(failure)),
       };
     });
@@ -144,29 +172,37 @@ export function exchange<TReply extends { type: string }>(
     detach,
     isOpen: () => link.value.state === "open",
     post: (frame) => link.value.state !== "detached" && link.value.conn.post(frame),
-    request<TView>(frame: object, how: Reading<TReply, TView>) {
+    request<TView, R extends TReply["type"]>(frame: object, how: Reading<TReply, TView, R>) {
       const { view, conn } = open(how);
       if (!conn) return { posted: false, view };
       const posted = conn.post(frame);
       if (!posted) {
         const error = "failed to send the request to the native host";
-        void close()?.fail({ why: "post-failed", error, posted: false });
+        void take()?.fail({ why: "post-failed", error, posted: false });
       }
       return { posted, view };
     },
-    hold: (how) => open(how).view,
+    hold<TView, R extends TReply["type"]>(how: Reading<TReply, TView, R>) {
+      return open(how).view;
+    },
     answer(reply) {
       const open = close(reply.type);
       if (!open) return false;
       void open.settle(reply);
       return true;
     },
-    claim(tag) {
+    claim(tag?: TReply["type"]) {
       const open = close(tag);
       if (!open) return null;
       return {
-        settle: open.settle,
-        fail: (error) => open.fail({ why: "failed", error, posted: true }),
+        settle: (reply: TReply) => {
+          // A union-typed `tag` widens R past the one tag admitted, which only the value can hold.
+          if (tag !== undefined && reply.type !== tag) {
+            throw new Error(`a ${reply.type} reply cannot settle a request claimed for ${tag}`);
+          }
+          return open.settle(reply);
+        },
+        fail: (error: string) => open.fail({ why: "failed", error, posted: true }),
       };
     },
   };

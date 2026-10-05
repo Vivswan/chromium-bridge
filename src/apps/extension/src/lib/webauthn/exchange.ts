@@ -237,13 +237,7 @@ function answerPending(
       if (!result.success) return { ok: false, error: "malformed presence_result from host" };
       if (!result.data.ok) return { ok: false, error: result.data.reason };
       if (!pending.forRelease) return { ok: true };
-      return ceremony.hold({
-        replies: ["release_outcome"],
-        read: (outcome): PresenceAssertView =>
-          outcome.type === "release_outcome"
-            ? outcome.view
-            : { ok: false, error: "malformed release outcome" },
-      });
+      return ceremony.hold({ replies: ["release_outcome"], read: (outcome) => outcome.view });
     },
   });
   if (posted) pendingRequest.value = null;

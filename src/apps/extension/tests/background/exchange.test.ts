@@ -6,7 +6,12 @@
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { Connection } from "@/lib/background/connection";
-import { exchange, type Failure, HOST_REPLY_TIMEOUT_MS } from "@/lib/background/exchange";
+import {
+  type Claimed,
+  exchange,
+  type Failure,
+  HOST_REPLY_TIMEOUT_MS,
+} from "@/lib/background/exchange";
 
 type Reply = { type: "a_result" | "b_result"; n: number };
 
@@ -193,6 +198,8 @@ describe("hold: a reply owed by another collaborator", () => {
     expect(x.isOpen()).toBe(true);
     expect(x.request({ type: "a" }, { read: () => null }).posted).toBe(false);
     expect(x.claim("a_result")).toBeNull();
+    expect(x.claim()).toBeNull();
+    expect(x.isOpen()).toBe(true);
     x.claim("b_result")?.settle({ type: "b_result", n: 3 });
     await expect(held).resolves.toBe("held:3");
     const unanswered = x.hold({ read: () => "never" });
@@ -202,6 +209,27 @@ describe("hold: a reply owed by another collaborator", () => {
       error: "no reply from the native host (timed out)",
     });
   });
+});
+
+test("a reader narrowed to its replies cannot be handed another tag: the types refuse, so a stale @ts-expect-error fails the typecheck", () => {
+  // Detached, so neither line reaches a reader; the pins are the compile errors.
+  const x = exchange<Reply>("busy");
+  // @ts-expect-error - a reader narrowed to one tag must name that tag in `replies`
+  void x.request({ type: "a" }, { read: (r: Reply & { type: "a_result" }) => r.n }).view;
+  // @ts-expect-error - a tagged claim settles with a reply wearing that tag only
+  void x.claim("b_result")?.settle({ type: "a_result", n: 0 });
+  // @ts-expect-error - a tagged claim cannot be widened to one over every reply
+  const widened: Claimed<Reply> | null = x.claim("b_result");
+  void widened;
+  expect(x.isOpen()).toBe(false);
+});
+
+test("a tag the types cannot pin (a union-typed claim) is held by the value: a foreign reply throws at the claimed settle", () => {
+  const x = exchange<Reply>("busy");
+  x.attach(connection().conn);
+  void x.hold({ replies: ["a_result"], read: (r) => r.n });
+  const claimed = x.claim("a_result" as Reply["type"]);
+  expect(() => claimed?.settle({ type: "b_result", n: 1 })).toThrow(/claimed for a_result/);
 });
 
 describe("detach, then attach", () => {
