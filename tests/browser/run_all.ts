@@ -18,7 +18,10 @@ import { assertIsolatedBrowserOrSkip, isolatedBrowserOrNull } from "./browser-sa
 
 /** The suites this platform runs. Every suite ends in finishSuite, which writes the RAN marker the canary below
  * requires, so a suite that would SKIP on a platform is left out there instead of run: cancel_test registers a
- * profile-scoped host manifest, and Windows has none (host registration is a shared HKCU value). */
+ * profile-scoped host manifest, and Windows has none (host registration is a shared HKCU value).
+ *
+ * presence_exchange_test is left out everywhere: it drives the real release host, which the browser CI job
+ * (.github/workflows/browser.yml) does not build, so it runs apart as `moon run test-presence-exchange`. */
 export function suitesFor(platform: NodeJS.Platform): readonly string[] {
   const all = ["dom_test", "ext_test", "security_browser_test", "webauthn_test", "cancel_test"];
   return platform === "win32" ? all.filter((suite) => suite !== "cancel_test") : all;

@@ -7,13 +7,15 @@ The test suites span two languages: `protocol/` (python) and the TypeScript suit
 | **Protocol** | `protocol/e2e.py`, `protocol/adversarial.py`, `protocol/chaos.py` (shared `protocol/harness.py`) | `uv run` + stdlib `unittest` | Drives the real release binary as a subprocess and speaks the wire protocols (Native-Messaging framing, MCP JSON-RPC, the bridge socket) *from the outside*. A second, independent implementation of the protocols - in a different language with no deps - is what makes it good at catching framing/encoding bugs the Rust code and its own types would miss. |
 | **DOM** | `browser/dom_test.ts` | `bun` + Chrome (CDP) | Injects the built `build/extension/chrome-mv3` content script into a real headless Chrome page and exercises every content-script op (snapshot, click, fill, eval, storage, toast). Needs a real browser DOM; TypeScript shares the extension's toolchain. |
 | **Smoke** | `browser/ext_test.ts` | `bun` + puppeteer-core | Launches Chrome with `build/extension/chrome-mv3` loaded and checks the MV3 service worker boots with its APIs. |
+| **Security** | `browser/security_browser_test.ts` | `bun` + puppeteer-core | The browser-side half of the security model against the loaded extension, with no host connected: the pinned manifest key loads at the ID the host's `allowed_origins` names, trusted-context storage is blocked from a content script after `setAccessLevel`, the off-DOM confirmation page refuses other senders and is not web-accessible, and the options page renders in every locale. |
 | **WebAuthn** | `browser/webauthn_test.ts` | `bun` + puppeteer-core (CDP virtual authenticator) | Runs `navigator.credentials.create` / `.get` in the options page against a virtual platform authenticator and pins the facts the host's verifier assumes about Chrome's WebAuthn client (the RP ID is the `chrome-extension://` origin, attestation `none`, ES256, the authenticatorData layout). |
 | **Cancel** | `browser/cancel_test.ts` (stand-in host `browser/fake_host.ts`) | `bun` + puppeteer-core | Registers a stand-in native host in the throwaway profile and proves, through Chrome's real native messaging, that the server's `cancel` frame is consumed by the extension and never answered while the request after it is. |
+| **Presence exchange** | `browser/presence_exchange_test.ts` | `bun` + puppeteer-core (`moon run test-presence-exchange`) | The WebAuthn exchange end to end: two isolated Chromes against the real release host in control-plane mode. It needs the Rust release build, so it runs apart from `run_all.ts` (`suitesFor` there says why). |
 | **Integration** (opt-in) | `browser/integration_e2e.ts` | `bun` + puppeteer-core | The real chain with nothing mocked - MCP client -> real MCP server -> native host -> real extension -> its enrollment gate -> back. Closes the seam `e2e.py` mocks. |
 | **SDK interop** | `interop/sdk-client.test.ts` | `bun test` (`moon run test-interop`) | Drives the release binary with the OFFICIAL TypeScript MCP client SDK v2, pinned to the modern era (no legacy fallback): proves a real third-party 2026-07-28 client negotiates, lists, and calls against the served protocol. No browser: the empty-bridge `tools/call` asserts the typed in-result error. |
 | **Harness smoke** | `harness/run.ts` | `bun` + harness CLIs (`moon run harness-smoke`) | Real agent-harness CLIs (Claude Code, Codex) connect to the stdio MCP server via ISOLATED config dirs, with every frame captured; prints the opening-method canary that decides when legacy-era support can be deleted. The `*-live-fakellm` entries drive a FULL model-driven tool call through each CLI against a local fake LLM backend (`harness/fake-llm.ts`) - zero credentials, zero model spend. Nightly workflow: the `harness-smoke` job in `nightly.yml`. |
 
-The two browser suites are TypeScript under bun, matching the extension. The protocol suites stay Python on purpose: a rewrite in TS would remove the independent-implementation value and add nothing. How they run:
+The browser suites are TypeScript under bun, matching the extension. The protocol suites stay Python on purpose: a rewrite in TS would remove the independent-implementation value and add nothing. How they run:
 
 - **Stdlib `unittest`, discovered.** Each suite is a module of `TestCase` classes run with `python -m unittest discover`, so a new test cannot be left out of a hand-kept list. `protocol/harness.py` holds the shared isolation, spawners, wire helpers, and whole-reply expectations.
 - **Under [`uv`](https://docs.astral.sh/uv/)**, which provisions the interpreter pinned in the repo-root `.python-version`, the same locally and in CI (an unpinned PATH `python3` once let a 3.12/3.14 `subprocess` difference slip through).
@@ -42,8 +44,8 @@ export CHROME_BIN="/Applications/Google Chrome for Testing.app/Contents/MacOS/Go
 ## Running
 
 ```sh
-# The three browser suites (builds the extension first; skips without an
-# isolated CHROME_BIN). CI's browser.yml and the container run this runner.
+# The browser suites run_all.ts lists (builds the extension first; skips without
+# an isolated CHROME_BIN). CI's browser.yml and the container run this runner.
 bun browser/run_all.ts
 CHROME_BIN="/path/to/chrome" bun browser/run_all.ts   # override Chrome location
 
