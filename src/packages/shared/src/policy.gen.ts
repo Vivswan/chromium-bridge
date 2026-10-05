@@ -9,8 +9,8 @@
 
 import { z } from "zod";
 
-// The enrollment key signs UTF8(POLICY_DOMAIN) || 0x00 || doc_bytes. A third domain, distinct from the enclave
-// challenge and presence domains, so a policy signature can never be replayed as either proof, nor they as a policy.
+// The host key signs UTF8(POLICY_DOMAIN) || 0x00 || doc_bytes. Distinct from the host-key challenge domain, so a
+// policy signature can never be replayed as a challenge proof, nor a proof as a policy.
 export const POLICY_DOMAIN = "chromium-bridge-policy-v1";
 
 // PolicyDocSchema pins this as a literal: a newer document is rejected rather than misinterpreted.

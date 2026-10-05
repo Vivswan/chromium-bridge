@@ -1,5 +1,5 @@
-//! The one trust record, `trust.json`: the kill latch, the trusted-client allowlist, and the change counter
-//! every enforcement point re-reads before it decides. A decision is a pure function of one snapshot
+//! The one trust record, `trust.json`: the kill latch, the trusted-client allowlist, the WebAuthn enrollments,
+//! and the change counter every enforcement point re-reads before it decides. A decision is a pure function of one snapshot
 //! ([`TrustState`]), so no reader orders two files or caches a counter against a stale list.
 //!
 //! ```text
@@ -7,6 +7,8 @@
 //!                                 same-user residual (threat-model.md names it)
 //! clients: null                -> never paired: every harness admitted, logged at ERROR by the admitting surface
 //! clients: []                  -> every client revoked: nobody admitted
+//! enrollments: []              -> no browser enrolled an authenticator: the first enrollment is trust on first use,
+//!                                 and the extension's software confirmation is the only presence path
 //! killed                       -> the authority for the kill state; enforcement lives in kill.rs
 //! epoch                        -> moves on every mutation; watchers compare it for inequality, never order, so a
 //!                                 rolled-back file still reads as a change
@@ -30,6 +32,7 @@ use crate::allowlist::{Anchor, ClientEntry};
 use crate::audit::{self, AuditKind, AuditRecord};
 use crate::ipc::{ClientIdentity, RuntimeLockToken};
 use crate::runtime_record::{Ladder, Record, RuntimeRecord};
+use crate::webauthn::{CredentialId, Enrollment};
 
 /// How often the long-lived watchers (the broker's idle-connection sweep, the native host's push watch)
 /// re-read the record. One value, so propagation latency cannot drift apart across enforcement points.
@@ -54,6 +57,8 @@ pub struct Trust {
     lang_epoch: u64,
     #[serde(deserialize_with = "Clients::deserialize")]
     clients: Clients,
+    /// The credentials each browser enrolled; `webauthn::store` writes them, `presence::request` reads them.
+    enrollments: Vec<Enrollment>,
 }
 
 /// The trusted-client allowlist's two postures, named so every match site says which one it handles. On
@@ -126,6 +131,40 @@ impl Trust {
         self.killed = killed;
     }
 
+    pub fn enrollments(&self) -> &[Enrollment] {
+        &self.enrollments
+    }
+
+    /// Add `enrollment`, replacing an earlier one of the same credential id so a re-registration of one
+    /// authenticator does not accumulate stale counters.
+    pub(crate) fn enroll(&mut self, enrollment: Enrollment) {
+        self.enrollments
+            .retain(|e| e.credential.id != enrollment.credential.id);
+        self.enrollments.push(enrollment);
+    }
+
+    /// Whether the sign counter an accepted assertion carried may land: the credential must be enrolled and
+    /// `sign_count` must move its stored counter forward. A counter another host already moved past is stale.
+    /// The writer decides under the lock, against the record as it stands then.
+    pub(crate) fn counter_advance(&self, id: &CredentialId, sign_count: u32) -> CounterAdvance {
+        let Some(e) = self.enrollments.iter().find(|e| &e.credential.id == id) else {
+            return CounterAdvance::NotEnrolled;
+        };
+        let stored = e.credential.sign_count;
+        if crate::webauthn::counter_advances(stored, sign_count) {
+            CounterAdvance::Advanced
+        } else {
+            CounterAdvance::Stale { stored }
+        }
+    }
+
+    /// Land the counter [`counter_advance`](Self::counter_advance) accepted.
+    pub(crate) fn set_sign_count(&mut self, id: &CredentialId, sign_count: u32) {
+        if let Some(e) = self.enrollments.iter_mut().find(|e| &e.credential.id == id) {
+            e.credential.sign_count = sign_count;
+        }
+    }
+
     /// Add `entry`, replacing a same-named one so a re-pair does not accumulate stale anchors.
     pub(crate) fn pair(&mut self, entry: ClientEntry) {
         let mut clients = match std::mem::take(&mut self.clients) {
@@ -167,6 +206,14 @@ impl Trust {
     }
 }
 
+/// The verdict of [`Trust::counter_advance`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CounterAdvance {
+    Advanced,
+    Stale { stored: u32 },
+    NotEnrolled,
+}
+
 /// What a mutation changed. Every scope the native host's watch pushes on stamps a marker; the clients list
 /// needs none, since the broker re-decides from the list itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,6 +228,8 @@ pub enum Scope {
     Policy,
     /// The shared `uiLanguage` preference changed.
     Lang,
+    /// A credential was enrolled or its sign counter advanced; the enrollments are re-read per act, so no marker.
+    Enrollments,
 }
 
 impl Trust {
@@ -192,7 +241,7 @@ impl Trust {
             .checked_add(1)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "trust epoch overflow"))?;
         match scope {
-            Scope::Clients => {}
+            Scope::Clients | Scope::Enrollments => {}
             Scope::Kill => self.kill_epoch = self.epoch,
             Scope::HostKey => self.host_key_epoch = self.epoch,
             Scope::Policy => self.policy_epoch = self.epoch,
@@ -417,7 +466,7 @@ mod tests {
         let decode = |clients: &str| {
             Trust::decode(
                 format!(
-                    r#"{{"version":{},"epoch":1,"killed":false,"kill_epoch":0,"host_key_epoch":0,"policy_epoch":0,"lang_epoch":0{clients}}}"#,
+                    r#"{{"version":{},"epoch":1,"killed":false,"kill_epoch":0,"host_key_epoch":0,"policy_epoch":0,"lang_epoch":0,"enrollments":[]{clients}}}"#,
                     Trust::VERSION
                 )
                 .as_bytes(),
@@ -521,13 +570,14 @@ mod tests {
             Just(Scope::HostKey),
             Just(Scope::Policy),
             Just(Scope::Lang),
+            Just(Scope::Enrollments),
         ]
     }
 
     proptest! {
         /// Any sequence of bumps is strictly monotonic in the epoch, every marker equals the epoch of the latest
-        /// bump of its own scope (never ahead of the counter), a Clients bump moves no marker, and a bump touches
-        /// nothing else. The native host's watch keys its pushes on these facts, which no call site states.
+        /// bump of its own scope (never ahead of the counter), a Clients or Enrollments bump moves no marker, and
+        /// a bump touches nothing else. The native host's watch keys its pushes on these facts, which no call site states.
         #[test]
         fn bumps_are_strictly_monotonic_and_markers_track_their_scope(
             scopes in prop::collection::vec(arb_scope(), 1..64)
@@ -544,7 +594,7 @@ mod tests {
                     Scope::HostKey => want_host = trust.epoch,
                     Scope::Policy => want_policy = trust.epoch,
                     Scope::Lang => want_lang = trust.epoch,
-                    Scope::Clients => {}
+                    Scope::Clients | Scope::Enrollments => {}
                 }
                 prop_assert_eq!(
                     (trust.kill_epoch, trust.host_key_epoch, trust.policy_epoch, trust.lang_epoch),

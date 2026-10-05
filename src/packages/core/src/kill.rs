@@ -11,13 +11,13 @@
 //! tool dispatch (`crate::mcp::handler`)       -> `check` first; refused with `BRIDGE_KILLED`, and the harness
 //!                                                connection stays up so the refusal is delivered
 //! the broker's browser leg (`crate::broker`)  -> live connections severed within one watcher tick; attaches refused
-//! the native host (`crate::native_host`)      -> control-plane only: kill/status frames work, release is refused
+//! the native host (`crate::native_host`)      -> control-plane only: kill/status frames work, release needs presence
 //! the extension                               -> mirrors the state in extension-context-only storage; the host is authoritative
 //! ```
 //!
 //! Nothing clears the latch on its own: no timeout, restart, or reconnect. Only [`release`], reached from
-//! `chromium-bridge unkill` only (the extension's release surface is retired), and it demands a
-//! [`crate::presence::PresenceAttestation`], so the user-presence ladder must have run ([`crate::presence`]).
+//! `chromium-bridge unkill` and from the extension's `kill_release` behind a WebAuthn presence exchange, and it
+//! demands a [`crate::presence::PresenceAttestation`], so presence must have been attested ([`crate::presence`]).
 //! Every attempt is audited: an attestation's grant or refusal with its auth path, a presence-gate refusal
 //! with its error ([`audit_refused_release`]). A corrupt record refuses BOTH directions
 //! ([`crate::trust::Trust::mutate_locked`]): an unkill from an unknown state would be a fail-open.
@@ -72,8 +72,8 @@ pub fn engage(surface: Surface) -> io::Result<u64> {
 
 /// Release the kill switch. Same write shape as [`engage`]; refuses on an unreadable record (an unkill from an
 /// unknown state would fail open). The attestation parameter makes the user-presence gate structural: only
-/// [`presence::require_presence`] produces one, so no caller can release without the ladder having run, and the
-/// audit record names the rung that authorized it.
+/// [`crate::presence`] produces one, so no caller can release without presence attested, and the audit record
+/// names the path that authorized it.
 ///
 /// ```text
 /// latch cleared                   -> audited `ok`
@@ -81,7 +81,7 @@ pub fn engage(surface: Surface) -> io::Result<u64> {
 /// ```
 pub fn release(surface: Surface, auth: PresenceAttestation) -> io::Result<u64> {
     let result = set_killed(false);
-    let auth_name = auth.path().wire_name();
+    let auth_name = auth.path().audit_label();
     match &result {
         Ok(_) => audit::record(
             AuditRecord::new(AuditKind::KillRelease)
@@ -105,7 +105,7 @@ fn set_killed(killed: bool) -> io::Result<u64> {
 }
 
 /// Record a release that was REFUSED at the presence gate, so an attempted
-/// silent unkill (a piped stdin, a declined prompt, a failed hardware check)
+/// silent unkill (a piped stdin, a declined prompt, a refused assertion)
 /// is visible in the trail.
 pub(crate) fn audit_refused_release(surface: Surface, err: &presence::PresenceError) {
     audit::record(
@@ -141,18 +141,14 @@ pub fn run_kill() -> i32 {
     }
 }
 
-/// `chromium-bridge unkill`: release the switch, behind the user-presence
-/// gate: a Secure Enclave Touch ID tap on an enrolled Mac,
-/// otherwise the CLI floor - an explicit typed confirmation on a real
-/// terminal. A piped stdin, a declined prompt, or a failed hardware check
-/// leaves the switch exactly as engaged as it was, audited as a refused
-/// release. Returns a process exit code.
+/// `chromium-bridge unkill`: release the switch behind the CLI's presence path, an explicit typed confirmation
+/// on a real terminal. A piped stdin or a declined prompt leaves the switch exactly as engaged as it was,
+/// audited as a refused release. Returns a process exit code.
 pub fn run_unkill() -> i32 {
-    // The terminal witness comes first, by construction: require_presence
-    // demands it, so a piped stdin is refused before the presence request -
-    // and any hardware prompt - is reachable.
+    // The terminal witness comes first, by construction: tty_confirm demands it, so a piped stdin is refused
+    // before any prompt is reachable.
     let auth = match presence::TerminalStdin::require().and_then(|terminal| {
-        presence::require_presence(
+        presence::tty_confirm(
             "Releasing the kill switch lets MCP clients drive your browser again.",
             terminal,
         )

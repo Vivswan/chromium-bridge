@@ -372,19 +372,6 @@ fn wire_types_reject_unknown_fields() {
             json!({ "type": "enclave_revoked", "extra": 1 }),
             json!({ "type": "enclave_revoked" }),
         ),
-        (
-            json!({ "type": "presence_challenge", "nonce": "n", "extra": 1 }),
-            json!({ "type": "presence_challenge", "nonce": "n", "context": "c" }),
-        ),
-        (
-            json!({ "type": "presence_proof", "sig": "s", "key_id": "k", "pubkey": "p",
-                    "extra": 1 }),
-            json!({ "type": "presence_proof", "sig": "s", "key_id": "k", "pubkey": "p" }),
-        ),
-        (
-            json!({ "type": "presence_error", "reason": "r", "extra": 1 }),
-            json!({ "type": "presence_error", "reason": "r" }),
-        ),
     ] {
         assert!(
             serde_json::from_value::<EnclaveControl>(bad.clone()).is_err(),

@@ -1,28 +1,16 @@
-//! Challenge message construction: the exact byte strings the enrollment and
-//! presence signatures cover, shared as a contract with the extension's
-//! WebCrypto verifier.
+//! Challenge message construction: the exact byte strings the host-key challenge and policy signatures
+//! cover, shared as a contract with the extension's WebCrypto verifier.
 
 use super::EnclaveError;
 
-/// Domain-separation prefix for ENROLLMENT challenge signatures (the pair /
-/// verify ceremony, ADR-0021). Binds every such signature to the enrollment
-/// protocol, so a proof can never be replayed as a signature over some other
-/// meaning of the same bytes.
+/// Domain-separation prefix for host-key CHALLENGE signatures (the pair / verify ceremony). Binds every such
+/// signature to the ceremony, so a proof can never be replayed as a signature over some other meaning of the
+/// same bytes.
 pub const CHALLENGE_DOMAIN: &str = "chromium-bridge-enclave-v1";
 
-/// Domain-separation prefix for PER-ACTION user-presence signatures
-/// (ADR-0031): the Touch ID approval of one `page_eval` / `page_upload`
-/// confirmation. A distinct domain from [`CHALLENGE_DOMAIN`] on purpose, so
-/// the two statement types - "I am the enrolled host" and "the user approved
-/// this one action" - can never be replayed as one another, even if the
-/// extension's nonce handling ever regressed.
-pub const PRESENCE_DOMAIN: &str = "chromium-bridge-presence-v1";
-
-/// Domain-separation prefix for POLICY document signatures (ADR-0032): the
-/// enrollment key's signature over the host-owned policy baseline. A third
-/// domain, distinct from both others on purpose, so a policy signature can
-/// never be replayed as an enrollment or per-action presence proof, nor
-/// either of those as a policy.
+/// Domain-separation prefix for POLICY document signatures: the host key's signature over the host-owned
+/// policy baseline. Distinct from [`CHALLENGE_DOMAIN`] on purpose, so a policy signature can never be replayed
+/// as a challenge proof, nor a proof as a policy.
 pub const POLICY_DOMAIN: &str = "chromium-bridge-policy-v1";
 
 /// Bounds on attacker-supplied challenge fields (the extension relays them
@@ -30,7 +18,7 @@ pub const POLICY_DOMAIN: &str = "chromium-bridge-policy-v1";
 pub const MAX_NONCE_LEN: usize = 256;
 pub const MAX_CONTEXT_LEN: usize = 4096;
 
-/// Build the exact byte string an ENROLLMENT challenge signature covers:
+/// Build the exact byte string a host-key CHALLENGE signature covers:
 ///
 /// ```text
 /// UTF8(CHALLENGE_DOMAIN) || 0x00 || UTF8(nonce) || 0x00 || UTF8(context or "")
@@ -44,22 +32,15 @@ pub fn challenge_message(nonce: &str, context: Option<&str>) -> Result<Vec<u8>, 
     domain_message(CHALLENGE_DOMAIN, nonce, context)
 }
 
-/// Build the exact byte string a PER-ACTION presence signature covers: the
-/// same NUL-separated shape as [`challenge_message`], under
-/// [`PRESENCE_DOMAIN`].
-pub fn presence_message(nonce: &str, context: Option<&str>) -> Result<Vec<u8>, EnclaveError> {
-    domain_message(PRESENCE_DOMAIN, nonce, context)
-}
-
-/// Build the exact byte string a POLICY signature covers (ADR-0032):
+/// Build the exact byte string a POLICY signature covers:
 ///
 /// ```text
 /// UTF8(POLICY_DOMAIN) || 0x00 || doc_bytes
 /// ```
 ///
 /// The document is signed exactly as stored, no canonicalization, and MAY contain NULs. Cross-domain injectivity
-/// still holds because all three domain constants are NUL-free and pairwise distinct, so the bytes before the first
-/// NUL name the domain unambiguously (pinned by `the_three_domains_can_never_collide` below).
+/// still holds because both domain constants are NUL-free and distinct, so the bytes before the first NUL name
+/// the domain unambiguously (pinned by `the_two_domains_can_never_collide` below).
 pub fn policy_message(doc_bytes: &[u8]) -> Vec<u8> {
     let mut msg = Vec::with_capacity(
         POLICY_DOMAIN
@@ -149,11 +130,6 @@ mod tests {
         // At the bounds is fine.
         assert!(challenge_message(&"x".repeat(MAX_NONCE_LEN), None).is_ok());
         assert!(challenge_message("ok", Some(&"x".repeat(MAX_CONTEXT_LEN))).is_ok());
-        // The presence builder shares the exact validation matrix.
-        assert!(presence_message("", None).is_err());
-        assert!(presence_message("a\0b", None).is_err());
-        assert!(presence_message("ok", Some(&"x".repeat(MAX_CONTEXT_LEN + 1))).is_err());
-        assert!(presence_message("ok", Some(&"x".repeat(MAX_CONTEXT_LEN))).is_ok());
     }
 
     #[test]
@@ -176,33 +152,23 @@ mod tests {
     }
 
     #[test]
-    fn the_three_domains_can_never_collide() {
-        // The domain constants are pairwise distinct, NUL-free, and none is
-        // a prefix of another, so the bytes before the first NUL identify
-        // the domain of any message unambiguously.
-        let domains = [CHALLENGE_DOMAIN, PRESENCE_DOMAIN, POLICY_DOMAIN];
-        for (i, a) in domains.iter().enumerate() {
-            assert!(!a.contains('\0'), "{a} must be NUL-free");
-            for b in domains.iter().skip(i.saturating_add(1)) {
-                assert_ne!(a, b);
-                assert!(!a.starts_with(b) && !b.starts_with(a), "{a} vs {b}");
-            }
+    fn the_two_domains_can_never_collide() {
+        // The domain constants are distinct, NUL-free, and neither is a prefix of the other, so the bytes
+        // before the first NUL identify the domain of any message unambiguously.
+        for domain in [CHALLENGE_DOMAIN, POLICY_DOMAIN] {
+            assert!(!domain.contains('\0'), "{domain} must be NUL-free");
         }
+        assert_ne!(CHALLENGE_DOMAIN, POLICY_DOMAIN);
+        assert!(!CHALLENGE_DOMAIN.starts_with(POLICY_DOMAIN));
+        assert!(!POLICY_DOMAIN.starts_with(CHALLENGE_DOMAIN));
 
-        // Same payload under all three domains: pairwise-distinct messages,
-        // so a signature over one statement type can never verify as another.
-        let enroll = challenge_message("nonce", Some("ctx")).unwrap();
-        let presence = presence_message("nonce", Some("ctx")).unwrap();
-        // The tricky case: a policy document whose bytes embed a NUL exactly
-        // where the challenge shape puts its separator. Everything after the
-        // domain matches the challenge/presence messages byte for byte, so
-        // only the domain prefix keeps them apart.
+        // The tricky case: a policy document whose bytes embed a NUL exactly where the challenge shape puts
+        // its separator. Everything after the domain matches the challenge message byte for byte, so only
+        // the domain prefix keeps them apart.
+        let challenge = challenge_message("nonce", Some("ctx")).unwrap();
         let policy = policy_message(b"nonce\0ctx");
-        assert_ne!(enroll, presence);
-        assert_ne!(enroll, policy);
-        assert_ne!(presence, policy);
-        assert!(enroll.starts_with(CHALLENGE_DOMAIN.as_bytes()));
-        assert!(presence.starts_with(PRESENCE_DOMAIN.as_bytes()));
+        assert_ne!(challenge, policy);
+        assert!(challenge.starts_with(CHALLENGE_DOMAIN.as_bytes()));
         assert!(policy.starts_with(POLICY_DOMAIN.as_bytes()));
     }
 }

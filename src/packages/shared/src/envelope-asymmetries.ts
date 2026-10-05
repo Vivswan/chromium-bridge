@@ -197,11 +197,6 @@ export const ASYMMETRIES: Readonly<Record<string, Readonly<Record<string, Asymme
     "$.properties.key_id": PROOF_MATERIAL,
     "$.properties.pubkey": PROOF_MATERIAL,
   },
-  presence_proof: {
-    "$.properties.sig": PROOF_MATERIAL,
-    "$.properties.key_id": PROOF_MATERIAL,
-    "$.properties.pubkey": PROOF_MATERIAL,
-  },
   client_list_result: {
     "$.properties.clients.items.properties.name": {
       direction: "widen",

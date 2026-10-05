@@ -1,6 +1,5 @@
-//! Host-handled control frames on the native-messaging channel: enclave enrollment and presence,
-//! client-allowlist admin, kill switch and audit, policy and shared language, WebAuthn enrollment and
-//! presence. [`classify_nm_frame`] routes each inbound frame; [`FrameDisposition`] states what reaches the
+//! Host-handled control frames on the native-messaging channel: the host-key ceremony, client-allowlist
+//! admin, kill switch and audit, policy and shared language, WebAuthn enrollment and presence. [`classify_nm_frame`] routes each inbound frame; [`FrameDisposition`] states what reaches the
 //! MCP server.
 
 use std::fmt;
@@ -9,34 +8,31 @@ use serde::de::value::StrDeserializer;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Enrollment and per-action presence frames, answered by the native host itself: the stdin->socket pump
-/// signs a challenge with the Secure Enclave key (raising the user-presence prompt) and never forwards these
-/// frames to the MCP server. The host keeps no replay state and signs any valid challenge, so freshness is
-/// the extension's job: a fresh single-use CSPRNG nonce per challenge, a proof accepted only for the
-/// outstanding nonce and verified against its PINNED key, never the `pubkey` field (trustworthy only during
-/// the user-verified enrollment ceremony).
+/// Host-key ceremony frames, answered by the native host itself: the stdin->socket pump signs a challenge
+/// with the host key and never forwards these frames to the MCP server. The host keeps no replay state and
+/// signs any valid challenge, so freshness is the extension's job: a fresh single-use CSPRNG nonce per
+/// challenge, a proof accepted only for the outstanding nonce and verified against its PINNED key, never the
+/// `pubkey` field (trustworthy only during the user-verified pairing, when the user compares fingerprints).
 ///
 /// ```text
 /// nonce            -> non-empty, NUL-free, at most 256 BYTES (MAX_NONCE_LEN)
 /// context          -> optional, NUL-free, at most 4096 BYTES (MAX_CONTEXT_LEN); absent and "" sign identically
 /// sig              -> base64 of the raw 64-byte IEEE P1363 r||s ECDSA P-256/SHA-256 signature over
-///                     UTF8(domain) || 0x00 || UTF8(nonce) || 0x00 || UTF8(context or "")
-/// domain           -> chromium-bridge-enclave-v1 (enrollment) or chromium-bridge-presence-v1 (presence),
-///                     so neither statement type can ever be replayed as the other
+///                     UTF8(chromium-bridge-enclave-v1) || 0x00 || UTF8(nonce) || 0x00 || UTF8(context or "")
 /// key_id / pubkey  -> lowercase-hex SHA-256 of the 65-byte X9.63 public key / base64 of those bytes
-/// error reason     -> REASON_CODES; presence adds bridge_killed and busy (the host refuses, without prompting,
-///                     while the kill switch is engaged or unreadable, or another presence round is in flight)
-/// enclave_revoke   -> deletes the enrollment key, then best-effort clears the recorded policy baseline and bumps the
+/// error reason     -> REASON_CODES
+/// enclave_revoke   -> deletes the host key, then best-effort clears the recorded policy baseline and bumps the
 ///                     revocation epoch; not presence-gated (it only reduces capability). Answered
 ///                     enclave_revoked once the key is gone (even when none existed, and even when the baseline clear
 ///                     or epoch bump failed: those are only logged); enclave_error carries the key deletion's
-///                     reason code (keychain_error, also for an unavailable runtime lock; unsupported_platform off macOS)
+///                     reason code (keychain_error, also for an unavailable runtime lock)
 /// enclave_revoked  -> also PUSHED unprompted when the host sees the key revoked out-of-band (chromium-bridge
 ///                     revoke, pair --reset), so a pinned extension flips to its fail-closed compromised state
 ///                     without waiting for a reverify; without a pin it is a no-op
 /// ```
 ///
-/// Every error is a denial: the extension fails the confirmation closed, never falls back to a softer surface.
+/// Every error is a denial: the extension fails closed, never falls back to a softer surface. User presence is
+/// not this family's business: it is the WebAuthn exchange ([`WebAuthnControl`]).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -56,25 +52,8 @@ pub enum EnclaveControl {
     },
     /// Extension -> host: delete the enrollment key.
     EnclaveRevoke {},
-    /// Host -> extension: the enrollment key is gone (ack or proactive push).
+    /// Host -> extension: the host key is gone (ack or proactive push).
     EnclaveRevoked {},
-    /// Extension -> host: ask for one per-action user-presence approval.
-    PresenceChallenge {
-        nonce: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        context: Option<String>,
-    },
-    /// Host -> extension: the signed presence approval.
-    PresenceProof {
-        sig: String,
-        key_id: String,
-        pubkey: String,
-    },
-    /// Host -> extension: the presence round failed; the confirmation is
-    /// denied.
-    PresenceError {
-        reason: String,
-    },
 }
 
 /// Host-admin frames, answered by the native host itself exactly like [`EnclaveControl`]: never forwarded
@@ -466,6 +445,9 @@ pub enum WebAuthnControl {
         client_data_json: String,
         signature: String,
     },
+    /// Extension -> host: the confirmation window answered the outstanding request, named by its nonce. The
+    /// software confirmation: the host accepts it only when no enrolled credential could have answered.
+    PresenceConfirm { nonce: String },
     /// Host -> extension: the presence verdict. `reason` travels exactly when not `ok`
     /// ([`PresenceOutcome::into_frame`]).
     PresenceResult {
@@ -536,9 +518,6 @@ pub enum HostControlTag {
     EnclaveError,
     EnclaveRevoke,
     EnclaveRevoked,
-    PresenceChallenge,
-    PresenceProof,
-    PresenceError,
     ClientList,
     ClientListResult,
     ClientRevoke,
@@ -564,6 +543,7 @@ pub enum HostControlTag {
     EnrollResult,
     PresenceRequest,
     PresenceAssert,
+    PresenceConfirm,
     PresenceResult,
 }
 
@@ -582,7 +562,6 @@ impl HostControlTag {
         match self {
             HostControlTag::EnclaveChallenge
             | HostControlTag::EnclaveRevoke
-            | HostControlTag::PresenceChallenge
             | HostControlTag::ClientList
             | HostControlTag::ClientRevoke
             | HostControlTag::KillStatus
@@ -597,12 +576,11 @@ impl HostControlTag {
             | HostControlTag::LangSet
             | HostControlTag::EnrollBegin
             | HostControlTag::EnrollFinish
-            | HostControlTag::PresenceAssert => Direction::BrowserToHost,
+            | HostControlTag::PresenceAssert
+            | HostControlTag::PresenceConfirm => Direction::BrowserToHost,
             HostControlTag::EnclaveProof
             | HostControlTag::EnclaveError
             | HostControlTag::EnclaveRevoked
-            | HostControlTag::PresenceProof
-            | HostControlTag::PresenceError
             | HostControlTag::ClientListResult
             | HostControlTag::ClientRevokeResult
             | HostControlTag::KillStatusResult
@@ -625,12 +603,6 @@ impl HostControlTag {
         match self {
             HostControlTag::EnclaveChallenge => MalformedReply::Send(Box::new(
                 EnclaveControl::EnclaveError {
-                    reason: "invalid_challenge".into(),
-                }
-                .into(),
-            )),
-            HostControlTag::PresenceChallenge => MalformedReply::Send(Box::new(
-                EnclaveControl::PresenceError {
                     reason: "invalid_challenge".into(),
                 }
                 .into(),
@@ -700,6 +672,13 @@ impl HostControlTag {
                 .into_frame()
                 .into(),
             )),
+            HostControlTag::PresenceConfirm => MalformedReply::Send(Box::new(
+                PresenceOutcome::Refused {
+                    reason: "malformed presence_confirm frame".into(),
+                }
+                .into_frame()
+                .into(),
+            )),
             // No error-reply contract: the genuine extension sends the exact empty revoke shape, and an audit
             // event is fire-and-forget. Dropping fails closed without inventing a misleading reason code.
             HostControlTag::EnclaveRevoke | HostControlTag::AuditEvent => MalformedReply::Drop,
@@ -707,8 +686,6 @@ impl HostControlTag {
             HostControlTag::EnclaveProof
             | HostControlTag::EnclaveError
             | HostControlTag::EnclaveRevoked
-            | HostControlTag::PresenceProof
-            | HostControlTag::PresenceError
             | HostControlTag::ClientListResult
             | HostControlTag::ClientRevokeResult
             | HostControlTag::KillStatusResult
@@ -814,21 +791,14 @@ impl<'de> Deserialize<'de> for ExtensionAuditKind {
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HostRequest {
-    /// Sign the enrollment challenge. Signing blocks the pump until the user answers the presence prompt,
-    /// accepted because a challenge only arrives during the user-present enrollment ceremony.
+    /// Sign the host-key challenge with the host key; answered at once, no prompt.
     EnclaveChallenge {
         nonce: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         context: Option<String>,
     },
-    /// Delete the enrollment key; not presence-gated (it only reduces capability).
+    /// Delete the host key; not presence-gated (it only reduces capability).
     EnclaveRevoke {},
-    /// Sign one per-action presence statement, on its own thread so a tap never head-of-line blocks the pump.
-    PresenceChallenge {
-        nonce: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        context: Option<String>,
-    },
     ClientList {},
     ClientRevoke {
         name: String,
@@ -876,6 +846,9 @@ pub enum HostRequest {
         authenticator_data: String,
         client_data_json: String,
         signature: String,
+    },
+    PresenceConfirm {
+        nonce: String,
     },
 }
 

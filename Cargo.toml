@@ -15,7 +15,7 @@ license-file = "LICENSE.md"
 publish = false
 
 [workspace.dependencies]
-# base64 for the enclave proof frames and the signed policy baseline
+# base64 for the host identity proof frames and the signed policy baseline
 # (src/packages/core/src/enclave). Without the default `simd-unsafe`
 # feature: the scalar engine is all 65-byte keys and signatures need.
 base64 = { version = "0.23", default-features = false, features = ["std"] }
@@ -23,9 +23,10 @@ base64 = { version = "0.23", default-features = false, features = ["std"] }
 # the typed Command tree. Derive only: no color, suggestions, or help wrapping,
 # so the shipped binary carries the parser and nothing cosmetic.
 clap = { version = "4.6", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
-# OS CSPRNG for the per-run secret and the handshake nonces. `std` for the
-# conversion into io::Error.
-getrandom = { version = "0.4", features = ["std"] }
+# OS CSPRNG for the per-run secret, the handshake nonces, and (as the rand_core
+# source `sys_rng` exposes) p256's own scalar sampling for the host key. `std`
+# for the conversion into io::Error.
+getrandom = { version = "0.4", features = ["std", "sys_rng"] }
 # Hex for MACs, nonces, and image/key fingerprints.
 hex = "0.4"
 hmac = "0.13"
@@ -60,12 +61,10 @@ futures = "0.3"
 # (no `fork`/`timeout`/`regex-syntax` features) so it spawns no processes and
 # its dependency tree stays within the licenses allowed by `deny.toml`.
 proptest = { version = "1", default-features = false, features = ["std"] }
-# P-256 ECDSA for the WebAuthn assertion verifier (src/packages/core/src/webauthn).
-# The shipped host only VERIFIES: it holds no private key, so the signing half the
-# `ecdsa` feature also compiles (ecdsa 0.17 gates VerifyingKey and SigningKey on the
-# same feature) has nothing to sign with. Tests and the emit_enclave_contract example
-# sign with it (RFC 6979 deterministic, so the checked-in fixture regenerates
-# byte-identical).
+# P-256 ECDSA: the WebAuthn assertion verifier (src/packages/core/src/webauthn) and
+# the host identity key's signer (src/packages/core/src/enclave). RFC 6979
+# deterministic signing, so the emit_enclave_contract fixture regenerates
+# byte-identical.
 p256 = { version = "0.14", default-features = false, features = ["ecdsa", "std"] }
 # COSE key parsing for WebAuthn registration (the credential public key inside
 # attestedCredentialData): coset gives the typed EC2 labels, ciborium the CBOR
@@ -77,12 +76,16 @@ ciborium = "0.2"
 # a dev-dependency never enters the shipped graph.
 syn = { version = "3", features = ["full"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }
-# Secure Enclave enrollment key (src/packages/core/src/enclave.rs). The vetted
-# wrapper crate is used instead of hand-rolled Security.framework FFI;
-# OSX_10_15 is required for the data-protection keychain, the only keychain
-# that can hold Secure Enclave keys. The -sys crate is a direct dependency
-# only for the SecAccessControl flag constants the wrapper does not re-export,
-# and core-foundation only for reading key attributes (token-id validation).
+# The host identity key's home (src/packages/core/src/enclave): one API over the
+# OS credential stores. No default features; each target enables its own store
+# in the core's manifest. The Linux store is the pure-Rust zbus Secret Service
+# client over the tokio runtime already in the graph, so nothing links libdbus
+# or OpenSSL.
+keyring = { version = "3.6", default-features = false }
+# Peer attestation on macOS (src/packages/core/src/ipc/platform/macos.rs): the
+# vetted Security.framework wrapper, the -sys crate for the constants the
+# wrapper does not re-export, and core-foundation for reading the attested
+# code's attributes, instead of hand-rolled FFI.
 core-foundation = "0.10"
 security-framework = { version = "3", features = ["OSX_10_15"] }
 security-framework-sys = "2"
@@ -144,9 +147,9 @@ chromium-bridge-core = { path = "src/packages/core", version = "0" }
 # build with `#![cfg_attr(test, expect(...))]`.
 [workspace.lints.rust]
 # Unsafe is quarantined: denied everywhere, re-admitted at the top of an
-# audited FFI module (ipc/platform/*, ipc/peercred.rs, enclave/macos.rs,
-# sys.rs) with `#![expect(unsafe_code, reason = "...")]`, and reached from
-# safe code only through that module's safe API.
+# audited FFI module (ipc/platform/*, ipc/peercred.rs, sys.rs) with
+# `#![expect(unsafe_code, reason = "...")]`, and reached from safe code only
+# through that module's safe API.
 unsafe_code = "deny"
 # An unsafe fn body is not an unsafe scope: each unsafe operation in it sits
 # in its own block, with its own SAFETY comment.

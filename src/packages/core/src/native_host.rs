@@ -4,15 +4,16 @@
 //!
 //! ```text
 //! stdin  -> socket   native-messaging frames forwarded as NDJSON lines, except the host-handled control frames
-//!                    (enrollment ceremony, revocation and client admin, kill switch, presence, policy and
-//!                    language), which are answered HERE and never reach the server
+//!                    (host-key ceremony, revocation and client admin, kill switch, WebAuthn enrollment and
+//!                    presence, policy and language), which are answered HERE and never reach the server
 //! socket -> stdout   NDJSON lines framed for Chrome, except a control frame from the server, which is an
 //!                    injection and is dropped
 //! ```
 //!
-//! The `enclave_revoked` push (ADR-0025) is host-originated on purpose: the socket->stdout pump drops any
-//! server-injected control frame, so only this process can put that frame in front of the extension. It fires
-//! at startup when the key is already gone and live when the host-key epoch moves.
+//! The `enclave_revoked` push is host-originated on purpose: the socket->stdout pump drops any server-injected
+//! control frame, so only this process can put that frame in front of the extension. It fires at startup when
+//! the key is already gone and live when the host-key epoch moves. The WebAuthn exchange (`presence.rs`) is the
+//! same way: only this process can push a `presence_request`.
 
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,26 +22,23 @@ use std::thread;
 use std::time::Duration;
 
 use crate::enclave::EnrollmentKey;
-use crate::ipc;
+use crate::ipc::{self, BrowserLabel};
 use crate::protocol::control::{
-    classify_nm_frame, host_control_type, AdminControl, EnclaveControl, EnrollOutcome,
-    FrameDisposition, HostRequest, KillStatus, MalformedReply, PolicyControl, PolicyStatus,
-    PresenceOutcome, RegistrationReport, RegistrationRow, RestrictOutcome,
+    classify_nm_frame, host_control_type, AdminControl, EnclaveControl, FrameDisposition,
+    HostRequest, KillStatus, MalformedReply, PolicyControl, PolicyStatus, RegistrationReport,
+    RegistrationRow, RestrictOutcome,
 };
 use crate::protocol::{bridge_read, bridge_write, nm_read_frame, nm_write_frame};
 use crate::runtime_record::RuntimeRecord as _;
 use crate::trust::{Clients, TrustState, POLL_INTERVAL};
+use crate::webauthn::{Assertion, Registration};
 use serde::Serialize;
 use serde_json::Value;
 
-/// Serialize a host-handled control frame (enclave or admin) and write it to
-/// Chrome via the shared stdout writer. `nm_write_frame` flushes per frame, so
+/// Serialize a host-handled control frame and write it to Chrome via the shared stdout writer. `nm_write_frame` flushes per frame, so
 /// taking the lock per frame keeps replies atomic with respect to the
 /// socket->stdout pump.
-fn write_control_reply<T: Serialize>(
-    out: &Mutex<BufWriter<io::Stdout>>,
-    reply: &T,
-) -> io::Result<()> {
+fn write_control_reply<W: Write, T: Serialize>(out: &Mutex<W>, reply: &T) -> io::Result<()> {
     let value = serde_json::to_value(reply)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("encode reply: {e}")))?;
     let mut out = out
@@ -49,26 +47,37 @@ fn write_control_reply<T: Serialize>(
     nm_write_frame(&mut *out, &value)
 }
 
-// ---- ADR-0025: revocation handlers and the host-originated push -------------
+mod presence;
 
-/// Handle an `enclave_revoke` frame from the extension: route through the
-/// shared enrollment-disposal seam (ADR-0032 decision 3) so the SAME critical
-/// section that deletes the key also clears the signed policy baseline and
-/// bumps the host-key epoch - the extension-originated path is the one most
-/// likely to leave a surviving baseline (the "artifact of a dead key" trap),
-/// so it must not hand-roll the deletion. Replies `enclave_revoked` when the
-/// requested end state holds (the key is gone -- including when none existed),
-/// or a typed `enclave_error`.
+use presence::Exchange;
+
+// ---- revocation handlers and the host-originated push ------------------------
+
+/// Handle an `enclave_revoke` frame from the extension through the shared disposal seam, so the SAME critical
+/// section that deletes the key also clears the signed policy baseline and bumps the host-key epoch; the
+/// extension-originated path is the one most likely to leave a baseline signed by a dead key behind, so it
+/// must not hand-roll the deletion. Replies `enclave_revoked` when the key is gone (including when none
+/// existed), or a typed `enclave_error`.
 fn revoke_host_key() -> EnclaveControl {
     match crate::enclave::dispose_enrollment_and_policy_baseline() {
-        Ok(existed) => {
-            log_info!(
-                "native-host",
-                "extension revoked the enrollment key (existed: {existed})"
-            );
-            // Log-after-decide (ADR-0030): the disposal is complete.
-            crate::enclave::audit_host_key_revoke(crate::audit::Surface::Extension);
-            EnclaveControl::EnclaveRevoked {}
+        Ok(revoked) => {
+            crate::enclave::audit_host_key_revoke(crate::audit::Surface::Extension, &revoked);
+            if revoked.key_in_use_is_gone() {
+                log_info!(
+                    "native-host",
+                    "extension revoked the host key (existed: {})",
+                    revoked.existed()
+                );
+                return EnclaveControl::EnclaveRevoked {};
+            }
+            // No file key, and the store did not answer: the end state the frame promises is not confirmed.
+            let crate::enclave::StoreOutcome::Unanswered(e) = revoked.store else {
+                return EnclaveControl::EnclaveRevoked {};
+            };
+            log_warn!("native-host", "extension-requested revoke unconfirmed: {e}");
+            EnclaveControl::EnclaveError {
+                reason: crate::enclave::reason_code(&e).to_string(),
+            }
         }
         Err(e) => {
             log_warn!("native-host", "extension-requested revoke failed: {e}");
@@ -215,7 +224,7 @@ fn policy_restrict_replies(overlay: crate::policy::PolicyOverlay) -> Vec<PolicyC
     }
 }
 
-// ---- ADR-0030: kill-switch control frames and the audit-event sink ----------
+// ---- kill-switch control frames and the audit-event sink ----------------------
 
 /// The current kill state as a `kill_status_result` frame, via the typed
 /// [`KillStatus`]: unreadable state carries no `killed` claim at all - the
@@ -232,12 +241,10 @@ fn kill_status_reply() -> AdminControl {
     status.into_frame()
 }
 
-/// Handle `kill_engage` from the extension (ADR-0030). The core API performs
-/// the latch flip + epoch bump in one critical section and audits it with
-/// `surface: extension`. The reply reports the resulting state, which the
-/// extension's SW-only mirror adopts. Engage only reduces capability (the
-/// brake stays one action away on every surface, ADR-0032 decision 1), so it
-/// needs no presence gate.
+/// Handle `kill_engage` from the extension. The core API performs the latch flip + epoch bump in one critical
+/// section and audits it with `surface: extension`. The reply reports the resulting state, which the
+/// extension's SW-only mirror adopts. Engage only reduces capability (the brake stays one action away on every
+/// surface), so it needs no presence gate.
 fn handle_kill_engage() -> AdminControl {
     let status = match crate::kill::engage(crate::audit::Surface::Extension) {
         Ok(epoch) => {
@@ -257,39 +264,10 @@ fn handle_kill_engage() -> AdminControl {
     status.into_frame()
 }
 
-/// Handle `kill_release` from the extension: REFUSE it, audited (ADR-0032
-/// decision 6). Release wholesale-restores capability and now moves to the
-/// strongest gate - `chromium-bridge unkill`, behind the ADR-0031 presence
-/// ladder - so the extension no longer holds a release
-/// surface at all (its UI drops the control, keeping engage). This host answers
-/// the retired frame with a refusal rather than silently dropping it, so a
-/// stale extension's pending request resolves and the trail records the
-/// attempt. The refusal is not a state read, so it carries no `killed` claim.
-fn handle_kill_release_refused() -> AdminControl {
-    // Log-after-decide (ADR-0030): the refusal is the decision.
-    crate::audit::record(
-        crate::audit::AuditRecord::new(crate::audit::AuditKind::KillRelease)
-            .surface(crate::audit::Surface::Extension)
-            .outcome("refused")
-            .detail("extension kill_release retired (ADR-0032 decision 6); release is CLI only"),
-    );
-    log_warn!(
-        "native-host",
-        "refusing extension-originated kill_release: retired (ADR-0032 decision 6); \
-         release via `chromium-bridge unkill`"
-    );
-    KillStatus::Unreadable {
-        error: "kill_release from the extension is retired (ADR-0032); release via \
-                `chromium-bridge unkill`"
-            .into(),
-    }
-    .into_frame()
-}
+// ---- host-owned policy and shared-language control frames ---------------------
 
-// ---- ADR-0032: host-owned policy and shared-language control frames ----------
-
-/// The current policy state as a `policy_current` frame (ADR-0032 decision 4). The baseline travels as the stored
-/// bytes, never re-serialized or canonicalized: the extension verifies the exact bytes against its own pin (decision 3).
+/// The current policy state as a `policy_current` frame. The baseline travels as the stored bytes, never
+/// re-serialized or canonicalized: the extension verifies the exact bytes against its own pin.
 ///
 /// ```text
 /// store content damaged (effective() fails) -> ok: false, the same deny-all reading the dispatch gate takes of that state
@@ -317,11 +295,9 @@ fn policy_current_reply() -> PolicyControl {
     status.into_frame()
 }
 
-/// The current shared language as a `lang_current` frame (ADR-0032 decision
-/// 7), or `None` when the store is unreadable (fail closed: skip the reply /
-/// push and log, rather than answer with a guessed value that could reset a
-/// receiver's sequence). An absent store reads as the default, which is a
-/// normal answer, not an error.
+/// The current shared language as a `lang_current` frame, or `None` when the store is unreadable (fail closed:
+/// skip the reply / push and log, rather than answer with a guessed value that could reset a receiver's
+/// sequence). An absent store reads as the default, which is a normal answer, not an error.
 fn lang_current_frame() -> Option<PolicyControl> {
     match crate::lang::load_current() {
         Ok((value, seq)) => Some(PolicyControl::LangCurrent { value, seq }),
@@ -335,11 +311,9 @@ fn lang_current_frame() -> Option<PolicyControl> {
     }
 }
 
-/// Handle a `lang_set` (ADR-0032 decision 7): an out-of-enum value is refused
-/// and the previous value stands (reply the UNCHANGED `lang_current`); a valid
-/// value is applied, bumping the sequence only if it changed, and the
-/// resulting `lang_current` is the reply. `None` only when the store is
-/// unreadable (see [`lang_current_frame`]).
+/// Handle a `lang_set`: an out-of-enum value is refused and the previous value stands (reply the UNCHANGED
+/// `lang_current`); a valid value is applied, bumping the sequence only if it changed, and the resulting
+/// `lang_current` is the reply. `None` only when the store is unreadable (see [`lang_current_frame`]).
 fn handle_lang_set(value: String) -> Option<PolicyControl> {
     if !crate::lang::is_valid_lang(&value) {
         log_warn!(
@@ -360,19 +334,17 @@ fn handle_lang_set(value: String) -> Option<PolicyControl> {
     }
 }
 
-/// Push the current `policy_current` to the extension (ADR-0032 decision 4).
-/// Best-effort: a failed write only delays the state to the extension's own
-/// `policy_get`.
-fn push_policy_current(out: &Mutex<BufWriter<io::Stdout>>) {
+/// Push the current `policy_current` to the extension. Best-effort: a failed write only delays the state to the
+/// extension's own `policy_get`.
+fn push_policy_current<W: Write>(out: &Mutex<W>) {
     if let Err(e) = write_control_reply(out, &policy_current_reply()) {
         log_warn!("native-host", "could not push policy_current: {e}");
     }
 }
 
-/// Push the current `lang_current` to the extension (ADR-0032 decision 7).
-/// Best-effort, and skipped entirely when the store is unreadable (already
-/// logged).
-fn push_lang_current(out: &Mutex<BufWriter<io::Stdout>>) {
+/// Push the current `lang_current` to the extension. Best-effort, and skipped entirely when the store is
+/// unreadable (already logged).
+fn push_lang_current<W: Write>(out: &Mutex<W>) {
     if let Some(frame) = lang_current_frame() {
         if let Err(e) = write_control_reply(out, &frame) {
             log_warn!("native-host", "could not push lang_current: {e}");
@@ -380,35 +352,31 @@ fn push_lang_current(out: &Mutex<BufWriter<io::Stdout>>) {
     }
 }
 
-/// Whether the enrollment key is verifiably ABSENT from the keychain. This is
-/// keychain truth, not file truth: the push below must never fire because a
-/// same-user process scribbled on the (writable) revocation file while the
-/// key still exists. `Ok(None)` is the only absent answer; an error (including
-/// non-macOS `Unsupported` and a suspect `KeyInvalid` state) is not treated as
-/// gone.
+/// Whether the host key is verifiably ABSENT: the push below must never fire because a same-user process
+/// scribbled on the (writable) trust record while the key still exists. `Ok(None)` is the only absent answer;
+/// an error (a suspect `KeyInvalid` state, an unreachable store) is not treated as gone.
 fn enrollment_key_is_gone() -> bool {
     matches!(EnrollmentKey::lookup(), Ok(None))
 }
 
-/// Push the host-originated `enclave_revoked` frame (ADR-0025): the extension
-/// flips its pinned state to compromised without waiting for an opt-in
-/// reverify. Harmless toward an unpinned extension (it ignores the frame).
-fn push_revoked(out: &Mutex<BufWriter<io::Stdout>>) {
+/// Push the host-originated `enclave_revoked` frame: the extension flips its pinned state to compromised
+/// without waiting for an opt-in reverify. Harmless toward an unpinned extension (it ignores the frame).
+fn push_revoked<W: Write>(out: &Mutex<W>) {
     log_info!(
         "native-host",
-        "enrollment key is revoked; notifying the extension (enclave_revoked)"
+        "host key is revoked; notifying the extension (enclave_revoked)"
     );
     if let Err(e) = write_control_reply(out, &EnclaveControl::EnclaveRevoked {}) {
         log_warn!("native-host", "could not push enclave_revoked: {e}");
     }
 }
 
-/// Push the kill state unsolicited (ADR-0030): on every observed transition, and at startup only when the news is bad
+/// Push the kill state unsolicited: on every observed transition, and at startup only when the news is bad
 /// (killed or unreadable). A healthy startup stays quiet because the extension queries `kill_status` on every connect
 /// anyway (that query is what clears a stale killed mirror after a CLI unkill); the policy and language pushes DO fire
 /// at every connect, since the extension never speaks first on those frames and its dispatch barrier waits for the
-/// policy push (ADR-0032 decision 4).
-fn push_kill_status(out: &Mutex<BufWriter<io::Stdout>>) {
+/// policy push.
+fn push_kill_status<W: Write>(out: &Mutex<W>) {
     if let Err(e) = write_control_reply(out, &kill_status_reply()) {
         log_warn!("native-host", "could not push kill_status_result: {e}");
     }
@@ -498,10 +466,10 @@ fn spawn_trust_watch(
 ///                                   unreadable record is deleting it, which reads as the released bootstrap)
 /// kill marker moved, not killed  -> the release handoff, after the push so the mirror is not left engaged
 /// ```
-fn watch_tick(
+fn watch_tick<W: Write>(
     last: Option<Watched>,
     read: io::Result<TrustState>,
-    out: &Mutex<BufWriter<io::Stdout>>,
+    out: &Mutex<W>,
     unkill_observed: Option<&AtomicBool>,
 ) -> Option<Watched> {
     let trust = match read {
@@ -557,124 +525,13 @@ fn watch_tick(
     Some(cur)
 }
 
-// ---- ADR-0031: per-action user-presence signing ------------------------------
-
-/// Whether a presence-signing round is already in flight. One at a time by
-/// design: the extension's confirmation service serializes its prompts, so a
-/// second concurrent `presence_challenge` is a misbehaving (or malicious)
-/// sender, and it is refused with `busy` rather than queued - stacking
-/// hardware prompts is a tap-phishing primitive, not a feature.
-static PRESENCE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
-
-/// RAII occupancy of the single presence-signing slot. The ONLY constructor is
-/// [`try_acquire`](Self::try_acquire) (the flag's compare-exchange), and the
-/// flag is cleared in `Drop`, so "guard exists" and "flag set" are one state:
-/// a guard for a slot that was never won, or a path that clears the flag
-/// without dropping the guard, is unrepresentable. Even if the worker thread
-/// unwound (the no-panic-core lints forbid that in this crate, but a
-/// dependency could still panic), the slot is released so the host never
-/// wedges into a permanent `busy`.
-struct PresenceSlotGuard {
-    /// Constructor gate: keeps `PresenceSlotGuard { .. }` unbuildable outside
-    /// [`try_acquire`](Self::try_acquire).
-    _priv: (),
-}
-
-impl PresenceSlotGuard {
-    /// Win the single in-flight slot, or `None` while another round holds it.
-    fn try_acquire() -> Option<Self> {
-        PRESENCE_IN_FLIGHT
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .ok()
-            .map(|_| PresenceSlotGuard { _priv: () })
-    }
-}
-
-impl Drop for PresenceSlotGuard {
-    fn drop(&mut self) {
-        PRESENCE_IN_FLIGHT.store(false, Ordering::Release);
-    }
-}
-
-/// Handle a `presence_challenge` (ADR-0031): sign the per-action presence statement with the Enclave key,
-/// raising the Touch ID prompt. Unlike the enrollment challenge the signing runs on its OWN thread: presence
-/// rounds happen in steady state, and holding the stdin->socket pump for a tap would head-of-line block every
-/// other in-flight op. `Err` means the immediate promptless reply could not be written; worker-thread write
-/// failures are only logged, and the pump notices stdout going away on its next frame.
-///
-/// ```text
-/// kill switch engaged or unreadable  -> `bridge_killed`: no op can proceed anyway, and a killed bridge that
-///                                       still raises Touch ID sheets would train the user to tap unexplained prompts
-/// another round in flight            -> `busy` (see PRESENCE_IN_FLIGHT)
-/// ```
-fn handle_presence_challenge(
-    nonce: String,
-    context: Option<String>,
-    out: &Arc<Mutex<BufWriter<io::Stdout>>>,
+fn write_replies<W: Write>(
+    out: &Mutex<W>,
+    replies: Vec<crate::protocol::control::HostReply>,
 ) -> io::Result<()> {
-    let refuse = |out: &Mutex<BufWriter<io::Stdout>>, reason: &str| {
-        write_control_reply(
-            out,
-            &EnclaveControl::PresenceError {
-                reason: reason.into(),
-            },
-        )
-    };
-    if !matches!(crate::kill::is_killed(), Ok(false)) {
-        log_warn!(
-            "native-host",
-            "refusing presence_challenge while the kill switch is engaged or unreadable"
-        );
-        return refuse(out, "bridge_killed");
-    }
-    let Some(slot) = PresenceSlotGuard::try_acquire() else {
-        log_warn!(
-            "native-host",
-            "refusing presence_challenge while another round is in flight"
-        );
-        return refuse(out, "busy");
-    };
-    let worker_out = Arc::clone(out);
-    let spawned = thread::Builder::new()
-        .name("presence-sign".into())
-        .spawn(move || {
-            // Held for the whole round; Drop clears PRESENCE_IN_FLIGHT even on
-            // an unexpected unwind, so a wedged `busy` is structurally
-            // impossible.
-            let _slot = slot;
-            let reply = crate::enclave::respond_to_presence_challenge(&nonce, context.as_deref());
-            // Log-after-decide (ADR-0030): the sign already happened (or
-            // refused); record which, host-side, so a hardware approval is
-            // never conflated with a window confirmation in the trail.
-            let outcome = match &reply {
-                EnclaveControl::PresenceProof { .. } => "ok",
-                EnclaveControl::EnclaveChallenge { .. }
-                | EnclaveControl::EnclaveProof { .. }
-                | EnclaveControl::EnclaveError { .. }
-                | EnclaveControl::EnclaveRevoke { .. }
-                | EnclaveControl::EnclaveRevoked { .. }
-                | EnclaveControl::PresenceChallenge { .. }
-                | EnclaveControl::PresenceError { .. } => "refused",
-            };
-            let mut rec = crate::audit::AuditRecord::new(crate::audit::AuditKind::PresenceSign)
-                .surface(crate::audit::Surface::Host)
-                .outcome(outcome);
-            if let Some(ctx) = context.as_deref() {
-                rec = rec.detail(ctx);
-            }
-            crate::audit::record(rec);
-            if let Err(e) = write_control_reply(&worker_out, &reply) {
-                log_warn!("native-host", "could not write the presence reply: {e}");
-            }
-        });
-    if spawned.is_err() {
-        // No thread, no prompt: refuse, fail closed. The guard moved into the
-        // never-run closure, which `spawn` dropped on failure -- releasing
-        // the slot through the same Drop path as every other exit.
-        log_warn!("native-host", "could not spawn the presence-sign thread");
-        return refuse(out, "signing_failed");
-    }
-    Ok(())
+    replies
+        .iter()
+        .try_for_each(|reply| write_control_reply(out, reply))
 }
 
 /// What one inbound native-messaging frame turned into.
@@ -689,14 +546,15 @@ enum Inbound {
 /// Handle one frame from Chrome against the host-handled control surface. Shared by the normal
 /// stdin->socket pump and the control-plane-only loop, so the two modes cannot drift in what they answer.
 /// An `Err` means a control REPLY could not be written (stdout gone), which ends the calling loop.
-fn handle_control_frame(
+fn handle_control_frame<W: Write>(
     frame: Value,
-    out: &Arc<Mutex<BufWriter<io::Stdout>>>,
+    out: &Mutex<W>,
+    exchange: &mut Exchange,
 ) -> io::Result<Inbound> {
     match classify_nm_frame(&frame) {
         FrameDisposition::Forward => Ok(Inbound::Forward(frame)),
         FrameDisposition::Handle(request) => {
-            handle_request(request, out)?;
+            handle_request(request, out, exchange)?;
             Ok(Inbound::Handled)
         }
         FrameDisposition::Malformed { tag, error } => {
@@ -716,40 +574,47 @@ fn handle_control_frame(
 }
 
 /// Answer one parsed request. Exhaustive on purpose: a [`HostRequest`] variant without an arm here does
-/// not compile, so no inbound frame type can ship unhandled.
-fn handle_request(request: HostRequest, out: &Arc<Mutex<BufWriter<io::Stdout>>>) -> io::Result<()> {
+/// not compile, so no inbound frame type can ship unhandled. The WebAuthn arms hand the exchange its frame
+/// and write every reply it returns, in order; the exchange is owned by the one thread that dispatches
+/// frames in either mode.
+fn handle_request<W: Write>(
+    request: HostRequest,
+    out: &Mutex<W>,
+    exchange: &mut Exchange,
+) -> io::Result<()> {
     match request {
         HostRequest::EnclaveChallenge { nonce, context } => {
-            log_info!("native-host", "answering enclave challenge locally");
+            log_info!("native-host", "answering host-key challenge locally");
             let reply = crate::enclave::respond_to_challenge(&nonce, context.as_deref());
             write_control_reply(out, &reply)
         }
-        HostRequest::PresenceChallenge { nonce, context } => {
-            log_info!("native-host", "answering presence challenge locally");
-            handle_presence_challenge(nonce, context, out)
+        HostRequest::EnrollBegin {} => write_replies(out, exchange.enroll_begin()),
+        HostRequest::EnrollFinish {
+            attestation_object,
+            client_data_json,
+        } => {
+            let registration = Registration::from_base64url(&attestation_object, &client_data_json);
+            write_replies(out, exchange.enroll_finish(registration))
         }
-        // The WebAuthn ceremonies have no enrollment store yet, so the host refuses them with a typed
-        // result instead of leaving the extension's exchange to time out.
-        HostRequest::EnrollBegin {} | HostRequest::EnrollFinish { .. } => write_control_reply(
-            out,
-            &EnrollOutcome::Refused {
-                reason: "enrollment_unavailable".into(),
-            }
-            .into_frame(),
-        ),
-        HostRequest::PresenceAssert { .. } => write_control_reply(
-            out,
-            &PresenceOutcome::Refused {
-                reason: "no_request_outstanding".into(),
-            }
-            .into_frame(),
-        ),
+        HostRequest::PresenceAssert {
+            credential_id,
+            authenticator_data,
+            client_data_json,
+            signature,
+        } => {
+            let assertion =
+                Assertion::from_base64url(&authenticator_data, &client_data_json, &signature);
+            write_replies(out, exchange.presence_assert(&credential_id, assertion))
+        }
+        HostRequest::PresenceConfirm { nonce } => {
+            write_replies(out, exchange.presence_confirm(&nonce))
+        }
         HostRequest::EnclaveRevoke {} => write_control_reply(out, &revoke_host_key()),
         HostRequest::ClientList {} => write_control_reply(out, &admin_client_list()),
         HostRequest::ClientRevoke { name } => write_control_reply(out, &admin_client_revoke(&name)),
         HostRequest::KillStatus {} => write_control_reply(out, &kill_status_reply()),
         HostRequest::KillEngage {} => write_control_reply(out, &handle_kill_engage()),
-        HostRequest::KillRelease {} => write_control_reply(out, &handle_kill_release_refused()),
+        HostRequest::KillRelease {} => write_replies(out, exchange.kill_release()),
         HostRequest::RegistrationStatus {} => {
             write_control_reply(out, &registration_status_reply())
         }
@@ -789,7 +654,7 @@ fn handle_request(request: HostRequest, out: &Arc<Mutex<BufWriter<io::Stdout>>>)
     }
 }
 
-// ---- control-plane-only mode (ADR-0030) --------------------------------------
+// ---- control-plane-only mode ---------------------------------------------------
 
 /// One event on the control-plane loop's inbound channel.
 enum PlaneEvent {
@@ -934,18 +799,18 @@ where
     }
 }
 
-/// Control-plane-only mode (ADR-0030): the bridge is killed or its state is unreadable, so nothing may flow between
+/// Control-plane-only mode: the bridge is killed or its state is unreadable, so nothing may flow between
 /// browser and broker, yet this host must stay up because the extension's SW-only kill mirror is fed by its pushes.
 /// stdin is read on its own thread feeding a channel so the loop can interleave frames with the unkill flag
 /// (see [`drain_then_decide`]).
 /// ```text
-/// control frame (kill_engage, kill_status, kill_release)  -> answered; kill_release is the audited refusal
+/// control frame (kill_engage, kill_status, kill_release)  -> answered; kill_release opens the presence exchange
 /// bridge frame                                             -> dropped and logged; no socket is dialed
-/// release (CLI unkill) seen by the revocation watch        -> queued frames drained, then exit if the kill is still
+/// release (CLI unkill, or the exchange) seen by the watch  -> queued frames drained, then exit if the kill is still
 ///                                                            released (the extension reconnects into a bridge host);
 ///                                                            a queued kill_engage or unreadable kill state stays here
 /// ```
-fn run_control_plane() -> i32 {
+fn run_control_plane(mut exchange: Exchange) -> i32 {
     let stdout_writer = Arc::new(Mutex::new(BufWriter::new(io::stdout())));
     // The watch raises this flag on an observed release; leaving this mode
     // is the LOOP's decision, after the drain (see drain_then_decide).
@@ -975,7 +840,7 @@ fn run_control_plane() -> i32 {
         }
     });
     let mut handle = |frame: Value| -> io::Result<()> {
-        match handle_control_frame(frame, &stdout_writer)? {
+        match handle_control_frame(frame, &stdout_writer, &mut exchange)? {
             Inbound::Handled => {}
             Inbound::Forward(_) => {
                 // Fail closed: no bridge traffic while killed. The extension's
@@ -1006,7 +871,7 @@ fn run_control_plane() -> i32 {
 /// per-browser wrapper by the registration engine, validated at the argv
 /// boundary). It rides in the signed handshake response so the MCP server
 /// can key its connection registry by browser.
-pub fn run(label: Option<ipc::BrowserLabel>) -> i32 {
+pub fn run(label: Option<BrowserLabel>) -> i32 {
     // Capture our own executable identity before dialing, so attesting the
     // server compares against the genuine binary and we fail fast if we cannot
     // hash our own image.
@@ -1018,11 +883,13 @@ pub fn run(label: Option<ipc::BrowserLabel>) -> i32 {
         return 1;
     }
 
-    // ADR-0030: while the kill switch is engaged -- or its state cannot be
-    // read -- this host bridges NOTHING. It does not even dial the broker
-    // (which refuses browser attaches while killed); it drops into the
-    // control-plane-only mode instead, which keeps the extension's unkill
-    // surface reachable and its kill mirror fed.
+    // The exchange binds every WebAuthn statement to the browser this host fronts, the same label the
+    // handshake signs; an unlabelled wrapper is the default browser here as there.
+    let mut exchange = Exchange::new(label.clone().unwrap_or_else(BrowserLabel::default_label));
+
+    // While the kill switch is engaged, or its state cannot be read, this host bridges NOTHING. It does not
+    // even dial the broker (which refuses browser attaches while killed); it drops into the control-plane-only
+    // mode instead, which keeps the extension's release surface reachable and its kill mirror fed.
     match crate::kill::is_killed() {
         Ok(false) => {}
         Ok(true) => {
@@ -1030,14 +897,14 @@ pub fn run(label: Option<ipc::BrowserLabel>) -> i32 {
                 "native-host",
                 "kill switch is engaged; serving the control plane only (no bridge traffic)"
             );
-            return run_control_plane();
+            return run_control_plane(exchange);
         }
         Err(e) => {
             log_error!(
                 "native-host",
                 "kill state unreadable ({e}); failing closed to the control plane only"
             );
-            return run_control_plane();
+            return run_control_plane(exchange);
         }
     }
 
@@ -1133,10 +1000,9 @@ pub fn run(label: Option<ipc::BrowserLabel>) -> i32 {
     // mutex around one buffered writer keeps frames whole; every write flushes.
     let stdout_writer = Arc::new(Mutex::new(BufWriter::new(io::stdout())));
 
-    // Notify the extension when the enrollment key has been
-    // revoked out-of-band, and keep its kill mirror fed (at startup and on
-    // every observed transition). No unkill flag: in bridge mode an engaged
-    // kill ends this process via the broker severing the socket.
+    // Notify the extension when the host key has been revoked out-of-band, and keep its kill mirror fed (at
+    // startup and on every observed transition). No unkill flag: in bridge mode an engaged kill ends this
+    // process via the broker severing the socket.
     spawn_trust_watch(Arc::clone(&stdout_writer), None);
 
     // Thread A: stdin -> socket
@@ -1160,10 +1026,9 @@ pub fn run(label: Option<ipc::BrowserLabel>) -> i32 {
                     break;
                 }
             };
-            // Host-handled control frames (ADR-0021/0025/0030) are addressed
-            // to THIS process and must never reach the socket; everything
-            // else forwards.
-            match handle_control_frame(frame, &ctrl_out) {
+            // Host-handled control frames are addressed to THIS process and must never reach the socket;
+            // everything else forwards.
+            match handle_control_frame(frame, &ctrl_out, &mut exchange) {
                 Ok(Inbound::Handled) => continue,
                 Ok(Inbound::Forward(frame)) => {
                     if let Err(e) = bridge_write(&mut sock, &frame) {
@@ -1191,7 +1056,7 @@ pub fn run(label: Option<ipc::BrowserLabel>) -> i32 {
     // The handshake is already complete, so every line here is a real frame
     // bound for Chrome.
     let out_handle = thread::spawn(move || {
-        // Forwarded frames share stdout with Thread A's enclave control replies,
+        // Forwarded frames share stdout with Thread A's control replies,
         // so the pump locks the buffered writer per frame (never across the
         // blocking socket read) - otherwise a challenge reply could not be
         // written while this thread waits on the socket, hanging the ceremony.

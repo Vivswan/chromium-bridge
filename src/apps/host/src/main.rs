@@ -18,11 +18,10 @@ fn main() {
     let code = match command {
         Command::NativeHost { label } => native_host::run(label),
         Command::Doctor(doctor) => doctor::run(doctor),
-        Command::Pair { reset } => enclave::run_pair(reset),
+        Command::Pair { reset, file_store } => enclave::run_pair(reset, file_store),
         Command::Revoke => enclave::run_revoke(),
         Command::EnclaveStatus { json: false } => enclave::run_status(),
         Command::EnclaveStatus { json: true } => enclave::run_status_json(),
-        Command::PresenceSelftest => enclave::run_presence_selftest(),
         Command::PairClient(client) => allowlist::run_pair_client(client),
         Command::RevokeClient { name } => allowlist::run_revoke_client(&name),
         Command::ListClients => allowlist::run_list_clients(),

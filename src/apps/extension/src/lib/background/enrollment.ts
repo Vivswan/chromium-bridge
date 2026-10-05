@@ -4,15 +4,14 @@
 // service-worker restart in memory.
 //
 //   unpaired     no pin; traffic refused. Each connect issues a pairing challenge unless paused: one enclave_error
-//                round trip on an unenrolled machine, the single ceremony Touch ID prompt once a key is minted
+//                round trip on an unenrolled machine, a signed proof once a key is minted
 //   pending      a pairing proof verified; the fingerprint awaits approval in the options page. Still refused
-//   pinned       traffic flows. Reconnects are NOT re-challenged (every host signature is a presence prompt and
-//                MV3 respawns the host every few minutes); "Verify now" and the opt-in hostReverifyMs re-verify
+//   pinned       traffic flows. Reconnects are NOT re-challenged (MV3 respawns the host every few minutes, and the
+//                pin is what authenticates it); "Verify now" and the opt-in hostReverifyMs re-verify
 //   compromised  a pinned-key verification failed; refused until the user revokes and re-pairs
 //
-// Enrollment is required wherever the platform can enroll (there is no opt-out setting; a stored requireEnrollment
-// is never consulted). Where the browser's own probe says no Secure Enclave, the gate does not block and no
-// challenge is issued.
+// Enrollment is required on every platform (there is no opt-out setting; a stored requireEnrollment is never
+// consulted): the host key lives in the OS credential store or a file wherever the host runs.
 
 import {
   type EnclaveInboundFrame,
@@ -96,7 +95,7 @@ interface Outstanding {
 
 const outstanding = inLife<Outstanding | null>(() => null);
 
-// Generous because answering a challenge blocks on the macOS presence prompt.
+// Generous: the host answers at once, but a service-worker wake and a cold host start sit in front of it.
 const CHALLENGE_TIMEOUT_MS = 120_000;
 
 function clearOutstanding(): void {
@@ -135,23 +134,6 @@ async function issueChallenge(
   }
   console.log(`[bb] enclave ${mode} challenge issued`);
   return { ok: true };
-}
-
-// ---- platform capability ------------------------------------------------------
-
-/** Decided by the browser's own probe, never the host's unsupported_platform claim: the host is the party being
- * authenticated, and a substituted host on macOS could otherwise dodge enrollment by claiming "unsupported".
- * Off macOS enrollment is unavailable rather than unsatisfied (the bridge runs on the base transport
- * authentication); a Mac without a Secure Enclave stays blocked (REASON_HELP.unsupported_platform), and a failed
- * probe fails closed as capable. Shared with confirm/presence.ts. */
-export async function platformCanEnroll(): Promise<boolean> {
-  try {
-    const info = await browser.runtime.getPlatformInfo();
-    return info.os === "mac";
-  } catch (e) {
-    console.warn("[bb] getPlatformInfo failed; enforcing enrollment", e);
-    return true;
-  }
 }
 
 // ---- the fail-closed gate ----------------------------------------------------
@@ -207,8 +189,7 @@ async function readGateState(): Promise<Gate> {
   // set) the barrier is inert and the deny baseline governs.
   const policy = await policyDispatchGate();
   if (!policy.allowed) return policy;
-  // Enrollment is unconditionally required where the platform can enroll
-  // (requireEnrollment is no longer a setting; a stored value - however it got
+  // Enrollment is unconditionally required (requireEnrollment is no longer a setting; a stored value - however it got
   // there - is never consulted, so a planted `false` cannot open this gate).
   const compromised = await pinStore.getCompromised();
   if (compromised) {
@@ -220,7 +201,6 @@ async function readGateState(): Promise<Gate> {
         "(`chromium-bridge pair`).",
     };
   }
-  if (!(await platformCanEnroll())) return { allowed: true };
   if (await pinStore.getPin()) return { allowed: true };
   if (await pinStore.getPending()) {
     return {
@@ -243,8 +223,8 @@ async function readGateState(): Promise<Gate> {
 /** Called by port.ts after each successful connectNative(). Once pinned this
  * refreshes the badge and, only when the opt-in hostReverifyMs interval has
  * lapsed, issues a re-verify challenge; the default steady state is never
- * challenged (a challenge is a Touch ID prompt, and MV3 reconnects every few
- * minutes). While unpaired it drives the ceremony forward. */
+ * challenged (MV3 reconnects every few minutes, and the pin authenticates the
+ * host). While unpaired it drives the ceremony forward. */
 export function onPortConnected(): Promise<void> {
   return transitions.value(async () => {
     // Do not read or act on trust state until it is confined to the extension (trusted-storage.ts): the same
@@ -256,7 +236,6 @@ export function onPortConnected(): Promise<void> {
     // Independent of the gate/ceremony state below.
     await maybeSendPendingHostRevoke();
     await updateBadge();
-    if (!(await platformCanEnroll())) return; // no Enclave here; no ceremony
     if (await pinStore.getCompromised()) return;
     const pin = await pinStore.getPin();
     if (pin) {
@@ -293,7 +272,7 @@ async function maybeSendPendingHostRevoke(): Promise<void> {
  * not gating - like a manual verify, an unanswered or declined prompt leaves
  * the pinned state and the gate unchanged, and only a cryptographic mismatch
  * (or a host that can no longer prove the key) fails closed. Each re-verify
- * raises a Touch ID prompt, which is why it is opt-in. */
+ * is a host round trip on a reconnect, which is why it is opt-in. */
 async function maybePeriodicReverify(pin: EnclavePin): Promise<void> {
   // A host-owned policy field, read once: its own decision moment.
   const effective = await getEffectivePolicy();
@@ -323,14 +302,12 @@ async function maybePeriodicReverify(pin: EnclavePin): Promise<void> {
 type CeremonyMode = "pair" | "verify";
 
 /** "compromise" answering a VERIFY challenge is evidence of host substitution, not a transient failure: a key is
- * pinned but the answering host cannot prove it (a revoked or replaced key, or a downgrade claim of no Enclave on
- * a machine that demonstrably enrolled one), so it latches the compromised mark. "transient" only surfaces as
+ * pinned but the answering host cannot prove it (a revoked or replaced key), so it latches the compromised mark. "transient" only surfaces as
  * lastError.
  *
  * Residual, named: a newer host adding a compromise-worthy code reaches the unknown-reason path below, which
  * does not latch. Host and extension ship in one archive, so the skew window is one un-updated install. */
 const REASON_CLASS: Record<EnclaveReasonCode, "compromise" | "transient"> = {
-  unsupported_platform: "compromise",
   not_enrolled: "compromise",
   invalid_challenge: "transient",
   key_invalid: "compromise",
@@ -342,22 +319,16 @@ const REASON_HELP: Record<EnclaveReasonCode, (mode: CeremonyMode) => string> = {
   not_enrolled: () =>
     "not_enrolled: no enrollment key exists on this machine. " +
     "Run `chromium-bridge pair` in a terminal, then return here.",
-  unsupported_platform: () =>
-    "unsupported_platform: the host reports no Secure Enclave, but this browser is " +
-    "running on macOS. If this Mac genuinely lacks one (pre-T2 Intel), pairing is " +
-    "impossible and the bridge stays blocked - enrollment is required on macOS " +
-    "and this configuration is unsupported. Otherwise treat the host " +
-    "binary as suspect (outdated or substituted) and leave the bridge blocked.",
   invalid_challenge: () =>
     "invalid_challenge: the host rejected our challenge frame (version mismatch?).",
   key_invalid: () =>
-    "key_invalid: the key under the enrollment label is not a single Secure Enclave key. " +
+    "key_invalid: the stored host key is not a usable P-256 key. " +
     "Run `chromium-bridge pair --reset` to delete it and mint a fresh one.",
-  keychain_error: () => "keychain_error: the host could not reach the keychain. Try again.",
+  keychain_error: () => "keychain_error: the host could not reach its credential store. Try again.",
   signing_failed: (mode) =>
-    "signing_failed: no signature was produced (presence prompt declined or failed). " +
-    `The ${mode} attempt did not complete; try again. If this repeats without any ` +
-    "Touch ID prompt appearing, treat it as host substitution and re-pair.",
+    "signing_failed: the host produced no signature. " +
+    `The ${mode} attempt did not complete; try again. If it repeats, treat it as host ` +
+    "substitution and re-pair.",
 };
 
 /** Help text for a reason outside the generated union (or a frame that
@@ -505,9 +476,6 @@ async function handleError(frame: EnclaveInboundFrame): Promise<void> {
 
 export function startPairing(): Promise<RuntimeResponse<"enroll_pair">> {
   return transitions.value(async () => {
-    if (!(await platformCanEnroll())) {
-      return { ok: false, error: "Secure Enclave pairing is unavailable on this platform" };
-    }
     if (await pinStore.getPin()) {
       return { ok: false, error: "a key is already pinned; revoke it first to re-pair" };
     }
@@ -526,9 +494,6 @@ export function startPairing(): Promise<RuntimeResponse<"enroll_pair">> {
 
 export function verifyPinnedNow(): Promise<RuntimeResponse<"enroll_verify">> {
   return transitions.value(async () => {
-    if (!(await platformCanEnroll())) {
-      return { ok: false, error: "Secure Enclave pairing is unavailable on this platform" };
-    }
     if (!(await pinStore.getPin())) return { ok: false, error: "no pinned key to verify" };
     if (await pinStore.getCompromised()) {
       return { ok: false, error: "enrollment already failed closed; revoke and re-pair" };
@@ -587,11 +552,11 @@ export function rejectPending(): Promise<RuntimeResponse<"enroll_reject">> {
 }
 
 /** Forget the pin and all ceremony records, and ask the host to delete its
- * enclave key too (unpairing from either side leaves NO usable credential
+ * host key too (unpairing from either side leaves NO usable credential
  * behind). The deletion request is durable: if the port is down it is stored
  * and resent on every connect until the host acknowledges. Pairing does not
- * auto-restart afterwards (paused), so revoking never triggers a surprise Touch
- * ID prompt; the user starts the next ceremony from the options page. */
+ * auto-restart afterwards (paused), so revoking never triggers a surprise
+ * ceremony; the user starts the next one from the options page. */
 export function revokePin(): Promise<RuntimeResponse<"enroll_revoke">> {
   return transitions.value(async () => {
     clearOutstanding();
@@ -609,13 +574,8 @@ export function revokePin(): Promise<RuntimeResponse<"enroll_revoke">> {
     await onPinRevoked(revokedKeyId);
     await pinStore.clearAll();
     await pinStore.setPaused(true);
-    // Only where an enclave key can exist: on other platforms there is no
-    // host key to delete, and queueing the request would just resend a
-    // frame the host answers with unsupported_platform forever.
-    if (await platformCanEnroll()) {
-      await pinStore.setHostRevokePending(true);
-      await maybeSendPendingHostRevoke();
-    }
+    await pinStore.setHostRevokePending(true);
+    await maybeSendPendingHostRevoke();
     await updateBadge();
     console.log("[bb] enrollment pin revoked; host key deletion requested");
     auditEvent("enroll_revoked", {});
@@ -626,14 +586,12 @@ export function revokePin(): Promise<RuntimeResponse<"enroll_revoke">> {
 // ---- status for the popup/options UI ----------------------------------------------
 
 export async function getEnrollmentStatus(): Promise<EnrollmentStatus> {
-  const platformSupported = await platformCanEnroll();
   const compromised = await pinStore.getCompromised();
   const pin = await pinStore.getPin();
   const pending = await pinStore.getPending();
   const lastError = await pinStore.getLastError();
   const base = {
     ok: true as const,
-    platformSupported,
     lastError: lastError ?? undefined,
     paused: await pinStore.getPaused(),
     hostRevokePending: (await pinStore.getHostRevokePending()) || undefined,
@@ -666,12 +624,12 @@ export async function getEnrollmentStatus(): Promise<EnrollmentStatus> {
     return {
       ...base,
       state: "pending",
-      blocked: platformSupported,
+      blocked: true,
       keyId: pending.keyId,
       fingerprint: fingerprintDisplay(pending.keyId),
     };
   }
-  return { ...base, state: "unpaired", blocked: platformSupported };
+  return { ...base, state: "unpaired", blocked: true };
 }
 
 // ---- badge ----------------------------------------------------------------------

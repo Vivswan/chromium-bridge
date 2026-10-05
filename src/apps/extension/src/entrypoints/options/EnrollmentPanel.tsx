@@ -55,17 +55,6 @@ export function EnrollmentPanel() {
     return <div className="py-2 text-xs font-semibold text-danger">{t("enroll.no_status")}</div>;
   }
 
-  // Platform without a Secure Enclave: show the N/A note, but still surface a
-  // compromised state (which blocks regardless of platform) with its revoke.
-  if (!st.platformSupported && st.state !== "compromised") {
-    return (
-      <div className="py-1">
-        <div className="text-[13px] font-medium">{t("enroll.na_title")}</div>
-        <p className="consequence mt-1">{t("enroll.na_desc")}</p>
-      </div>
-    );
-  }
-
   return (
     <div className="py-1">
       {st.state === "pinned" && (

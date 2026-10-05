@@ -26,6 +26,7 @@ import { browser } from "wxt/browser";
 import {
   assertPresence,
   beginEnrollment,
+  confirmPresence,
   finishEnrollment,
   pendingPresenceRequest,
 } from "../webauthn/exchange";
@@ -124,6 +125,7 @@ const HANDLERS: { [K in RuntimeMsgType]: Handler<K> } = {
     client_data_json,
     signature,
   }) => assertPresence({ nonce, credential_id, authenticator_data, client_data_json, signature }),
+  webauthn_presence_confirm: ({ nonce }) => confirmPresence(nonce),
   get_registration: requestRegistrationStatus,
   repair_registration: repairRegistration,
   get_policy: async () => ({ ok: true, posture: await getPolicyPosture() }),

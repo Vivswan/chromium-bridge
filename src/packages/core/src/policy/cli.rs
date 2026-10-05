@@ -3,7 +3,7 @@
 //! through `serde_json::Value` (sorted keys, a frozen wire contract) with `deny_unknown_fields`.
 //!
 //! ```text
-//! set       -> the signed GRANT lane (set_signed), refused up front where no enclave key exists
+//! set       -> the signed GRANT lane (set_signed), refused and audited where no host key exists
 //! restrict  -> the free lane (restrict)
 //! rollback  -> neither a new lane nor a replay: re-derives a past revision's EFFECTIVE policy and re-applies it as a
 //!              FRESH write (free when it only tightens, one signed tap when it relaxes anything), so the lower revision
@@ -15,11 +15,12 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     field_differs, fold, restrict, restricts_or_equal, set_signed, FieldKind, PolicyDoc,
-    PolicyField, PolicyHistory, PolicyOverlay, PolicyStore, PolicyValues,
+    PolicyField, PolicyHistory, PolicyOverlay, PolicyStore, PolicyValues, PolicyWriteError,
 };
-use crate::audit::Surface;
+use crate::audit::{AuditKind, AuditRecord, Surface};
 use crate::cli::PolicyCommand;
-use crate::enclave::{base64_decode, EnclaveError, EnrollmentKey};
+use crate::enclave::base64_decode;
+use crate::presence::{self, TerminalStdin};
 use crate::runtime_record::RuntimeRecord as _;
 
 // ---- The reports (typed, versioned) ------------------------------------------
@@ -325,58 +326,27 @@ fn render_history(r: &PolicyHistoryReport) -> String {
 
 // ---- The signature-only grant gate -------------------------------------------
 
-/// The enrollment-key lookup reduced to the states the grant gate branches
-/// on, so [`grant_key_gate`] is pure and unit-testable without the keychain.
-enum GrantKey {
-    /// A usable enrollment key exists: the signature path is available.
-    Present,
-    /// No key on this machine (macOS, unenrolled): refuse (pair first).
-    Absent,
-    /// No Secure Enclave at all (non-macOS): refuse (no grant surface here).
-    Unsupported,
-    /// A key exists but is unusable (planted/malformed/keychain error):
-    /// refuse rather than raise a prompt against a suspect key.
-    Unusable(String),
+/// The CLI's presence prompt for a grant: the typed phrase on the terminal the witness proved. The witness is
+/// taken by the lane before `set_signed` runs, so a piped stdin is refused before the host key is looked up
+/// (a credential store may raise its unlock dialog on the lookup); `set_signed` runs the prompt after
+/// validation, so a malformed request never reaches it.
+fn cli_attest(
+    reason: &'static str,
+    terminal: TerminalStdin,
+) -> impl FnOnce() -> Result<presence::PresenceAttestation, presence::PresenceError> {
+    move || presence::tty_confirm(reason, terminal)
 }
 
-/// Decide whether the CLI's signature-only grant path may proceed, BEFORE any
-/// prompt could appear. Pure: the up-front refusal
-/// gives a clear message; the seam's own `SignatureOnly` `NoSigningKey` is the
-/// belt-and-suspenders behind it. This is the deliberate exception to
-/// the presence ladder - the CLI grant path has NO interactive floor, so where
-/// no key exists it refuses outright rather than writing an unsigned baseline.
-fn grant_key_gate(key: GrantKey) -> Result<(), String> {
-    match key {
-        GrantKey::Present => Ok(()),
-        GrantKey::Absent => Err(
-            "no enrollment key on this machine; policy grants are signature-only \
-             and refuse without one. Enroll first with \
-             `chromium-bridge pair`."
-                .to_string(),
-        ),
-        GrantKey::Unsupported => Err(
-            "this platform has no Secure Enclave, so a policy grant cannot be signed and the \
-             CLI refuses; the current policy is left unchanged."
-                .to_string(),
-        ),
-        GrantKey::Unusable(e) => Err(format!(
-            "the enrollment key is unusable ({e}); refusing to sign a policy grant. \
-             Run `chromium-bridge pair --reset` to replace it."
-        )),
-    }
-}
-
-/// The keychain lookup behind [`grant_key_gate`]. Never reached by unit tests
-/// (they drive `grant_key_gate` directly), so no test touches the real
-/// keychain; on non-macOS this is always `Unsupported`.
-fn require_grant_key() -> Result<(), String> {
-    let key = match EnrollmentKey::lookup() {
-        Ok(Some(_)) => GrantKey::Present,
-        Ok(None) => GrantKey::Absent,
-        Err(EnclaveError::Unsupported) => GrantKey::Unsupported,
-        Err(e) => GrantKey::Unusable(e.to_string()),
-    };
-    grant_key_gate(key)
+/// The grant lane's trail for a witness refused before `set_signed` ran: the record a refusal inside it
+/// writes, so every refused grant leaves one. Returns the refusal as the lane reports it.
+fn refused_grant(touched: &[PolicyField], e: &presence::PresenceError) -> String {
+    crate::audit::record(
+        AuditRecord::new(AuditKind::PolicyWrite)
+            .surface(Surface::Cli)
+            .outcome("refused")
+            .detail(&format!("presence: {e}; touched={}", wire_names(touched))),
+    );
+    PolicyWriteError::Refused(e.to_string()).to_string()
 }
 
 // ---- Rollback planning (pure) -----------------------------------------------
@@ -474,9 +444,11 @@ pub fn run_policy(command: PolicyCommand) -> i32 {
     match command {
         PolicyCommand::Show { json } => run_show(json),
         PolicyCommand::History { json } => run_history(json),
-        PolicyCommand::Set { overlay, json } => run_set(overlay, json),
+        PolicyCommand::Set { overlay, json } => run_set(overlay, json, TerminalStdin::require()),
         PolicyCommand::Restrict { overlay } => run_restrict(overlay),
-        PolicyCommand::Rollback { revision, json } => run_rollback(revision, json),
+        PolicyCommand::Rollback { revision, json } => {
+            run_rollback(revision, json, TerminalStdin::require())
+        }
     }
 }
 
@@ -558,14 +530,19 @@ fn run_history(json: bool) -> i32 {
     }
 }
 
-/// `policy set <field flags> [--json]`: the GRANT lane. The keyless refusal
-/// runs UP FRONT, before any prompt could appear and before a
-/// floor is ever constructed. Untouched fields carry the current BASELINE
-/// values, so the edits fold over the baseline, never the
-/// effective policy. Under `--json`, success prints the post-write status
-/// report and any refusal the versioned error object.
-fn run_set(overlay: PolicyOverlay, json: bool) -> i32 {
-    match do_set(overlay) {
+/// `policy set <field flags> [--json]`: the GRANT lane; the terminal witness comes first, then `set_signed`
+/// refuses a keyless machine before any prompt and audits the refusal. Untouched fields carry the current
+/// BASELINE values, so the edits fold over the baseline, never the effective policy. Under `--json`, success
+/// prints the post-write status report and any refusal the versioned error object.
+///
+/// `terminal` is the witness, or the precondition failure that kept the dispatcher from constructing one (a
+/// piped stdin arrives as the `Err`), taken before anything else runs.
+fn run_set(
+    overlay: PolicyOverlay,
+    json: bool,
+    terminal: Result<TerminalStdin, presence::PresenceError>,
+) -> i32 {
+    match do_set(overlay, terminal) {
         Ok(rung) => {
             if json {
                 emit_status_json("policy set")
@@ -582,16 +559,19 @@ fn run_set(overlay: PolicyOverlay, json: bool) -> i32 {
 }
 
 /// The set lane's work, output-free so the prose and `--json` renderings
-/// share one path: gate, fold over the baseline, sign. The touched set is the
+/// share one path: witness, fold over the baseline, sign. The touched set is the
 /// fields the overlay names, in catalogue order (order carries no meaning in
 /// the signed document).
-fn do_set(overlay: PolicyOverlay) -> Result<crate::presence::PresencePath, String> {
-    require_grant_key()?;
+fn do_set(
+    overlay: PolicyOverlay,
+    terminal: Result<TerminalStdin, presence::PresenceError>,
+) -> Result<crate::presence::PresencePath, String> {
     let touched: Vec<PolicyField> = PolicyField::ALL
         .iter()
         .copied()
         .filter(|field| overlay.has(*field))
         .collect();
+    let terminal = terminal.map_err(|e| refused_grant(&touched, &e))?;
     let base = match PolicyStore::load() {
         Ok(Some(store)) => store
             .baseline_doc()
@@ -601,7 +581,16 @@ fn do_set(overlay: PolicyOverlay) -> Result<crate::presence::PresencePath, Strin
         Err(e) => return Err(format!("the policy store is unreadable ({e}); refusing")),
     };
     let values = fold(&base, &overlay);
-    set_signed(values, touched, Surface::Cli).map_err(|e| e.to_string())
+    set_signed(
+        values,
+        touched,
+        Surface::Cli,
+        cli_attest(
+            "This policy grant relaxes what the extension lets the bridge do.",
+            terminal,
+        ),
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// `policy restrict <field flags>`: the FREE lane. Never prompts; the seam's
@@ -626,8 +615,13 @@ fn run_restrict(overlay: PolicyOverlay) -> i32 {
 /// extension's ratchet. Under `--json` the planning prose is suppressed
 /// (stdout is the report, nothing else): success - a no-op included -
 /// prints the post-write status report, any refusal the versioned error
-/// object.
-fn run_rollback(revision: u64, json: bool) -> i32 {
+/// object. `terminal` is the witness (or the precondition failure that stands for it), taken by the
+/// dispatcher and consumed only by a relaxing plan.
+fn run_rollback(
+    revision: u64,
+    json: bool,
+    terminal: Result<TerminalStdin, presence::PresenceError>,
+) -> i32 {
     let inputs = match rollback_inputs(revision) {
         Ok(inputs) => inputs,
         Err(error) => return refuse_write("policy rollback", json, error),
@@ -669,18 +663,26 @@ fn run_rollback(revision: u64, json: bool) -> i32 {
             touched,
             fields,
         } => {
+            let terminal = match terminal {
+                Ok(terminal) => terminal,
+                Err(e) => {
+                    return refuse_write("policy rollback", json, refused_grant(&touched, &e))
+                }
+            };
             if !json {
                 println!(
                     "rolling back to revision {revision}: this relaxes the effective policy \
                      ({}), so it mints a fresh signed revision (never a replay of the old \
-                     artifact) and requires one Touch ID tap.",
+                     artifact) and requires your confirmation.",
                     wire_names(&fields)
                 );
             }
-            if let Err(msg) = require_grant_key() {
-                return refuse_write("policy rollback", json, msg);
-            }
-            match set_signed(values, touched, Surface::Cli) {
+            match set_signed(
+                values,
+                touched,
+                Surface::Cli,
+                cli_attest("This rollback relaxes the effective policy.", terminal),
+            ) {
                 Ok(rung) => {
                     if json {
                         emit_status_json("policy rollback")

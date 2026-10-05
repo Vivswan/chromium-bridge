@@ -1,6 +1,30 @@
 use super::*;
 use crate::enclave::base64_encode;
 use crate::policy::Ms;
+use crate::test_support::scratch_runtime_dir;
+
+/// The grant lane's order: the terminal witness, then the host key. With the witness refused (a piped stdin)
+/// a keyless machine is refused as not interactive, never as keyless, so a background invocation cannot make
+/// the credential-store lookup raise its unlock dialog for a grant that is refused anyway.
+#[test]
+fn a_piped_stdin_is_refused_before_the_host_key_is_looked_up() {
+    let _dir = scratch_runtime_dir();
+    let overlay = PolicyOverlay {
+        page_eval_enabled: Some(true),
+        ..PolicyOverlay::default()
+    };
+    let err = do_set(overlay, Err(crate::presence::PresenceError::NotInteractive)).unwrap_err();
+    assert!(
+        err.contains("stdin is not a terminal"),
+        "refused by the witness, not the key: {err}"
+    );
+    assert!(PolicyStore::load().unwrap().is_none());
+    let trail = std::fs::read_to_string(crate::audit::audit_path().unwrap()).unwrap_or_default();
+    assert!(
+        trail.contains("\"outcome\":\"refused\"") && trail.contains("touched=pageEvalEnabled"),
+        "the refused grant leaves its record: {trail}"
+    );
+}
 
 /// A `PolicyStore` seeded in memory (no disk): a baseline document over
 /// `values` at `revision`, optionally signed, with `overlay`.
@@ -148,22 +172,6 @@ fn history_report_maps_entries_and_tolerates_a_damaged_one() {
     assert_eq!(r.entries[1].revision, None);
     assert!(!r.entries[1].signed);
     assert_eq!(r.entries[1].superseded_unix, 222);
-}
-
-#[test]
-fn grant_gate_refuses_every_keyless_state_with_a_clear_message() {
-    // The security-critical key-state mapping, driven purely (never the
-    // real keychain): only a present key proceeds.
-    assert!(grant_key_gate(GrantKey::Present).is_ok());
-    assert!(grant_key_gate(GrantKey::Absent)
-        .unwrap_err()
-        .contains("signature-only"));
-    assert!(grant_key_gate(GrantKey::Unsupported)
-        .unwrap_err()
-        .contains("no Secure Enclave"));
-    assert!(grant_key_gate(GrantKey::Unusable("planted".into()))
-        .unwrap_err()
-        .contains("unusable"));
 }
 
 #[test]

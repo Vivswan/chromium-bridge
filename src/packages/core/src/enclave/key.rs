@@ -1,128 +1,215 @@
-//! The cross-platform enrollment key handle and the native-host challenge
-//! responder.
+//! The host key handle and the native-host challenge responder.
 
+use p256::ecdsa::signature::Signer as _;
+use p256::ecdsa::{Signature, SigningKey};
+
+use crate::ipc::RuntimeLockToken;
+use crate::presence::PresenceAttestation;
 use crate::protocol::control::EnclaveControl;
+use crate::runtime_record::RuntimeRecord as _;
 
 use super::base64_encode;
-use super::challenge::{challenge_message, policy_message, presence_message};
+use super::challenge::{challenge_message, policy_message};
 use super::pubkey::EnclavePublicKey;
-use super::{reason_code, EnclaveError};
+use super::record::{HostKeyFile, KeyStore, Scalar};
+use super::store;
+use super::{reason_code, EnclaveError, SIG_LEN};
 
-/// Handle to the (Enclave-resident) enrollment key. On macOS it wraps a
-/// `SecKey`; on other platforms it cannot be constructed and every entry
-/// point fails closed with [`EnclaveError::Unsupported`].
+/// The host identity key, from the file when one exists and from the credential store otherwise: the file's
+/// presence IS the `--file-store` choice, so a file machine never needs the store to answer. A handle exists
+/// only for a key this host may sign with: the golden-fixture scalar is refused at construction, so no code
+/// path can sign with it by forgetting to export the public half first.
 pub struct EnrollmentKey {
-    #[cfg(target_os = "macos")]
-    key: security_framework::key::SecKey,
+    signing: SigningKey,
+    public: EnclavePublicKey,
+    store: KeyStore,
+}
+
+impl std::fmt::Debug for EnrollmentKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("EnrollmentKey(..)")
+    }
 }
 
 impl EnrollmentKey {
-    /// Look up the enrollment key minted by a previous `pair`.
+    /// `Ok(None)` is the unenrolled machine: no file and no store entry. On a store machine a store that does
+    /// not answer is an error, and `pair` treats anything but a clean absence as suspect.
     pub fn lookup() -> Result<Option<Self>, EnclaveError> {
-        #[cfg(target_os = "macos")]
-        {
-            Ok(super::macos::lookup()?.map(|key| Self { key }))
+        if let Some(file) = HostKeyFile::load().map_err(record_error)? {
+            return Self::from_scalar(&file.scalar, KeyStore::File).map(Some);
         }
-        #[cfg(not(target_os = "macos"))]
-        {
-            Err(EnclaveError::Unsupported)
-        }
-    }
-
-    /// Mint a fresh enrollment key in the Secure Enclave.
-    pub fn mint() -> Result<Self, EnclaveError> {
-        #[cfg(target_os = "macos")]
-        {
-            Ok(Self {
-                key: super::macos::generate()?,
-            })
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            Err(EnclaveError::Unsupported)
+        match store::get()? {
+            Some(secret) => {
+                Self::from_scalar(&Scalar::from_bytes(&secret)?, KeyStore::CredentialStore)
+                    .map(Some)
+            }
+            None => Ok(None),
         }
     }
 
-    /// Delete the enrollment key wherever it is stored. Returns whether one
-    /// existed.
-    pub fn revoke() -> Result<bool, EnclaveError> {
-        #[cfg(target_os = "macos")]
-        {
-            super::macos::delete()
+    /// Mint a fresh key into `store` under the caller's lock. Minting is a capability grant (the extension
+    /// will pin what the key signs), so it consumes a [`PresenceAttestation`] like every other grant. The
+    /// absence of a key is decided here under the lock, so two `pair` runs cannot both mint and the second
+    /// silently replace the key an extension already pinned; `pair --reset` disposes first. The same lock
+    /// hold clears a leftover signed policy baseline (a disposal's best-effort clear can fail), since a
+    /// baseline signed by a dead key pushed as current is exactly the pin mismatch a genuine host must never
+    /// produce, and clearing it before the absence check could remove a concurrent pairing's live policy.
+    /// Each store is one write, so nothing is left half-done to roll back.
+    ///
+    /// ```text
+    /// a file exists                         -> refused, whichever store was asked for
+    /// a store entry exists                  -> refused, whichever store was asked for
+    /// the store does not answer, File asked -> minted into the file (that is what `--file-store` is for; a
+    ///                                          store entry this cannot see would be superseded by the file,
+    ///                                          which lookup reads first, and a pin on it fails closed)
+    /// the store does not answer, store asked -> the store's error
+    /// ```
+    pub fn mint(
+        lock: &RuntimeLockToken,
+        store: KeyStore,
+        auth: PresenceAttestation,
+    ) -> Result<Self, EnclaveError> {
+        let exists =
+            EnclaveError::KeyInvalid("a host key already exists; `pair --reset` replaces it");
+        if HostKeyFile::load().map_err(record_error)?.is_some() {
+            return Err(exists);
         }
-        #[cfg(not(target_os = "macos"))]
-        {
-            Err(EnclaveError::Unsupported)
+        match (store, store::get()) {
+            (_, Ok(Some(_))) => return Err(exists),
+            (_, Ok(None)) => {}
+            (KeyStore::CredentialStore, Err(e)) => return Err(e),
+            (KeyStore::File, Err(e)) => log_warn!(
+                "enclave",
+                "the credential store did not answer ({e}); minting into the file as asked"
+            ),
         }
+        drop(auth);
+        if let Err(e) = crate::policy::clear_baseline_locked(lock) {
+            log_warn!(
+                "enclave",
+                "a leftover policy baseline could not be cleared ({e}); until a new policy write \
+                 supersedes it, a paired extension will refuse it as unverifiable"
+            );
+        }
+        let scalar = Scalar::random()?;
+        let key = Self::from_scalar(&scalar, store)?;
+        match store {
+            KeyStore::CredentialStore => store::set(&scalar.secret_key().to_bytes())?,
+            KeyStore::File => HostKeyFile { scalar }.write(lock).map_err(record_error)?,
+        }
+        Ok(key)
     }
 
-    /// Export the public half. Every consumer goes through here (the `pair`
-    /// and `status` CLIs and both challenge responders), including the
-    /// golden-fixture deny-list as defense in depth - on macOS `lookup()`
-    /// already refuses non-Secure-Enclave keys, and against a substituted
-    /// host the extension's deny-list is the one that holds (see
-    /// [`super::ensure_not_fixture_key`]).
-    pub fn public_key(&self) -> Result<EnclavePublicKey, EnclaveError> {
-        #[cfg(target_os = "macos")]
-        {
-            let public = super::macos::public_key(&self.key)?;
-            super::ensure_not_fixture_key(&public)?;
-            Ok(public)
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            Err(EnclaveError::Unsupported)
-        }
+    /// Delete the key under the caller's lock, from both places, and report what each place confirmed. The
+    /// file goes first and unconditionally (one that cannot be read is removed too: `pair --reset` names this
+    /// path as the recovery from a damaged record, and revocation only removes capability); the store entry
+    /// is confirmed gone by read-back. A store that does not answer is reported, not hidden, and the caller
+    /// decides: a `--file-store` machine must stay able to revoke and re-pair, while a store machine must not
+    /// claim its key gone. Only the file removal itself can fail this call.
+    pub fn revoke(lock: &RuntimeLockToken) -> Result<Revoked, EnclaveError> {
+        let file = match HostKeyFile::load() {
+            Ok(Some(_)) => true,
+            Ok(None) => false,
+            Err(e) => {
+                log_warn!(
+                    "enclave",
+                    "the host key record is unreadable ({e}); removing it"
+                );
+                true
+            }
+        };
+        HostKeyFile::remove(lock).map_err(record_error)?;
+        let store = match store::get().and_then(|held| {
+            store::delete()?;
+            Ok(held.is_some())
+        }) {
+            Ok(existed) => StoreOutcome::Cleared { existed },
+            Err(e) => StoreOutcome::Unanswered(e),
+        };
+        Ok(Revoked { file, store })
     }
 
-    /// Sign an enrollment challenge (raises the presence prompt) and return
-    /// the raw 64-byte P1363 signature.
+    fn from_scalar(scalar: &Scalar, store: KeyStore) -> Result<Self, EnclaveError> {
+        let signing = SigningKey::from(scalar.secret_key());
+        let point = signing.verifying_key().to_sec1_point(false);
+        let public = EnclavePublicKey::from_x963(point.as_bytes().to_vec())?;
+        super::ensure_not_fixture_key(&public)?;
+        Ok(EnrollmentKey {
+            signing,
+            public,
+            store,
+        })
+    }
+
+    pub fn public_key(&self) -> &EnclavePublicKey {
+        &self.public
+    }
+
+    pub fn store(&self) -> KeyStore {
+        self.store
+    }
+
+    /// Sign an enrollment challenge; raw `r || s`.
     pub fn sign_challenge(
         &self,
         nonce: &str,
         context: Option<&str>,
-    ) -> Result<[u8; 64], EnclaveError> {
-        self.sign_message(challenge_message(nonce, context)?)
+    ) -> Result<[u8; SIG_LEN], EnclaveError> {
+        self.sign_message(&challenge_message(nonce, context)?)
     }
 
-    /// Sign a per-action presence challenge (ADR-0031) under the presence
-    /// domain (raises the presence prompt - the Touch ID tap IS the
-    /// approval) and return the raw 64-byte P1363 signature.
-    pub fn sign_presence(
-        &self,
-        nonce: &str,
-        context: Option<&str>,
-    ) -> Result<[u8; 64], EnclaveError> {
-        self.sign_message(presence_message(nonce, context)?)
+    /// Sign a policy document under the policy domain; the exact stored bytes, no canonicalization.
+    pub fn sign_policy(&self, doc_bytes: &[u8]) -> Result<[u8; SIG_LEN], EnclaveError> {
+        self.sign_message(&policy_message(doc_bytes))
     }
 
-    /// Sign a policy document (ADR-0032) under the policy domain (raises the
-    /// presence prompt - the Touch ID tap IS the grant approval) and return
-    /// the raw 64-byte P1363 signature. The exact stored bytes are signed;
-    /// there is no canonicalization step.
-    pub fn sign_policy(&self, doc_bytes: &[u8]) -> Result<[u8; 64], EnclaveError> {
-        self.sign_message(policy_message(doc_bytes))
-    }
-
-    fn sign_message(&self, message: Vec<u8>) -> Result<[u8; 64], EnclaveError> {
-        #[cfg(target_os = "macos")]
-        {
-            super::macos::sign(&self.key, &message)
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = message;
-            Err(EnclaveError::Unsupported)
-        }
+    fn sign_message(&self, message: &[u8]) -> Result<[u8; SIG_LEN], EnclaveError> {
+        let signature: Signature = self
+            .signing
+            .try_sign(message)
+            .map_err(|e| EnclaveError::Signing(e.to_string()))?;
+        Ok(signature.to_bytes().into())
     }
 }
 
-/// Answer an `enclave_challenge` control frame: look the key up, sign the
-/// challenge (presence prompt), and build the proof - or a typed error frame.
-/// Never panics and never leaks key material; detailed failure context goes to
-/// stderr, the extension only sees the stable reason code.
+/// What [`EnrollmentKey::revoke`] did to each place.
+#[derive(Debug)]
+pub struct Revoked {
+    /// Whether a file key was in use (and is now removed).
+    pub file: bool,
+    pub store: StoreOutcome,
+}
+
+#[derive(Debug)]
+pub enum StoreOutcome {
+    /// The store answered and holds no entry now; `existed` says whether it held one before.
+    Cleared { existed: bool },
+    /// The store did not answer, so an entry it may hold could not be removed or ruled out.
+    Unanswered(EnclaveError),
+}
+
+impl Revoked {
+    /// Whether a key this machine was using is confirmed gone: the file key, or a store entry the store
+    /// confirmed cleared. A store that did not answer confirms nothing on a store machine.
+    pub fn key_in_use_is_gone(&self) -> bool {
+        self.file || matches!(self.store, StoreOutcome::Cleared { .. })
+    }
+
+    /// Whether anything existed to revoke, as far as the places that answered say.
+    pub fn existed(&self) -> bool {
+        self.file || matches!(self.store, StoreOutcome::Cleared { existed: true })
+    }
+}
+
+fn record_error(e: std::io::Error) -> EnclaveError {
+    EnclaveError::Keychain(format!("host key record: {e}"))
+}
+
+/// Answer an `enclave_challenge` control frame: look the key up, sign the challenge, and build the proof,
+/// or a typed error frame. Never leaks key material; detailed failure context goes to stderr, the extension
+/// only sees the stable reason code.
 pub fn respond_to_challenge(nonce: &str, context: Option<&str>) -> EnclaveControl {
-    match challenge_proof(nonce, context, Purpose::Enrollment) {
+    match challenge_proof(nonce, context) {
         Ok(frame) => frame,
         Err(e) => {
             log_warn!("enclave", "challenge failed: {e}");
@@ -133,118 +220,155 @@ pub fn respond_to_challenge(nonce: &str, context: Option<&str>) -> EnclaveContro
     }
 }
 
-/// Answer a `presence_challenge` control frame (ADR-0031): sign the
-/// per-action presence statement under the presence domain, raising the
-/// user-presence prompt - the Touch ID tap is the approval the extension
-/// verifies against its pinned key. Same fail-closed shape as
-/// [`respond_to_challenge`], with the presence frame types.
-pub fn respond_to_presence_challenge(nonce: &str, context: Option<&str>) -> EnclaveControl {
-    match challenge_proof(nonce, context, Purpose::Presence) {
-        Ok(frame) => frame,
-        Err(e) => {
-            log_warn!("enclave", "presence challenge failed: {e}");
-            EnclaveControl::PresenceError {
-                reason: reason_code(&e).to_string(),
-            }
-        }
-    }
-}
-
-/// Which statement type a proof is for; picks the signature domain and the
-/// reply frame shape.
-#[derive(Clone, Copy)]
-enum Purpose {
-    Enrollment,
-    Presence,
-}
-
-fn challenge_proof(
-    nonce: &str,
-    context: Option<&str>,
-    purpose: Purpose,
-) -> Result<EnclaveControl, EnclaveError> {
-    // Validate the challenge before touching the keychain, so malformed input
-    // cannot trigger a presence prompt. Both domains share one validation
-    // matrix; building the message is the validation.
-    match purpose {
-        Purpose::Enrollment => challenge_message(nonce, context)?,
-        Purpose::Presence => presence_message(nonce, context)?,
-    };
+fn challenge_proof(nonce: &str, context: Option<&str>) -> Result<EnclaveControl, EnclaveError> {
+    // Building the message is the validation; it runs before the store is touched so a malformed frame
+    // costs no store round trip.
+    challenge_message(nonce, context)?;
     let key = EnrollmentKey::lookup()?.ok_or(EnclaveError::NotEnrolled)?;
-    let public = key.public_key()?;
-    let (sig, frame): (_, fn(String, String, String) -> EnclaveControl) = match purpose {
-        Purpose::Enrollment => (
-            key.sign_challenge(nonce, context)?,
-            |sig, key_id, pubkey| EnclaveControl::EnclaveProof {
-                sig,
-                key_id,
-                pubkey,
-            },
-        ),
-        Purpose::Presence => (key.sign_presence(nonce, context)?, |sig, key_id, pubkey| {
-            EnclaveControl::PresenceProof {
-                sig,
-                key_id,
-                pubkey,
-            }
-        }),
-    };
-    Ok(frame(
-        base64_encode(&sig),
-        public.fingerprint_hex(),
-        public.to_base64(),
-    ))
+    let sig = key.sign_challenge(nonce, context)?;
+    Ok(EnclaveControl::EnclaveProof {
+        sig: base64_encode(&sig),
+        key_id: key.public_key().fingerprint_hex(),
+        pubkey: key.public_key().to_base64(),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::scratch_runtime_dir;
+    use p256::ecdsa::signature::Verifier as _;
+    use p256::ecdsa::VerifyingKey;
 
-    #[cfg(not(target_os = "macos"))]
-    #[test]
-    fn non_macos_fails_closed_with_unsupported() {
-        assert!(matches!(
-            EnrollmentKey::lookup(),
-            Err(EnclaveError::Unsupported)
-        ));
-        assert!(matches!(
-            EnrollmentKey::mint(),
-            Err(EnclaveError::Unsupported)
-        ));
-        assert!(matches!(
-            EnrollmentKey::revoke(),
-            Err(EnclaveError::Unsupported)
-        ));
-        // And the challenge paths report the stable reason code, each in its
-        // own frame family.
-        let reply = respond_to_challenge("nonce", None);
-        let EnclaveControl::EnclaveError { reason } = reply else {
-            panic!("expected enclave_error, got {reply:?}");
-        };
-        assert_eq!(reason, "unsupported_platform");
-        let reply = respond_to_presence_challenge("nonce", None);
-        let EnclaveControl::PresenceError { reason } = reply else {
-            panic!("expected presence_error, got {reply:?}");
-        };
-        assert_eq!(reason, "unsupported_platform");
+    fn mint(store: KeyStore) -> Result<EnrollmentKey, EnclaveError> {
+        let auth = PresenceAttestation::assume_for_tests(crate::presence::PresencePath::Tty);
+        crate::ipc::with_runtime_lock(|lock| Ok(EnrollmentKey::mint(lock, store, auth))).unwrap()
     }
 
+    /// Whether the revoke found a key. A test build's store always answers empty, so the verdict's store side
+    /// is pinned here once for every caller.
+    fn revoke() -> Result<bool, EnclaveError> {
+        let revoked =
+            crate::ipc::with_runtime_lock(|lock| Ok(EnrollmentKey::revoke(lock))).unwrap()?;
+        let store_cleared_empty = matches!(revoked.store, StoreOutcome::Cleared { existed: false });
+        if !store_cleared_empty {
+            return Err(EnclaveError::Keychain(format!(
+                "a test build's store must answer empty: {revoked:?}"
+            )));
+        }
+        Ok(revoked.existed())
+    }
+
+    /// What comes back from a lookup signs under the key the mint printed, the signature covers only its own
+    /// challenge, and a second mint over an existing key is refused rather than replacing the pinned key.
     #[test]
-    fn malformed_challenge_yields_invalid_challenge_before_any_keychain_io() {
-        // NUL in the nonce: rejected by validation, so the reply is
-        // invalid_challenge on every platform (no keychain lookup happens).
-        let reply = respond_to_challenge("a\0b", None);
-        let EnclaveControl::EnclaveError { reason } = reply else {
-            panic!("expected enclave_error, got {reply:?}");
+    fn a_minted_file_key_is_found_again_signs_its_own_challenge_and_is_not_replaced() {
+        let _dir = scratch_runtime_dir();
+        assert!(EnrollmentKey::lookup().unwrap().is_none());
+
+        let minted = mint(KeyStore::File).unwrap();
+        assert_eq!(minted.store(), KeyStore::File);
+        let found = EnrollmentKey::lookup().unwrap().expect("a record exists");
+        assert_eq!(found.public_key(), minted.public_key());
+        assert_eq!(
+            reason_code(&mint(KeyStore::File).unwrap_err()),
+            "key_invalid",
+            "a second pair without --reset must not replace the key"
+        );
+        assert_eq!(
+            EnrollmentKey::lookup().unwrap().unwrap().public_key(),
+            minted.public_key()
+        );
+
+        let message = challenge_message("nonce", Some("ctx")).unwrap();
+        let raw = found.sign_challenge("nonce", Some("ctx")).unwrap();
+        let verifier = VerifyingKey::from_sec1_bytes(found.public_key().as_bytes()).unwrap();
+        let signature = Signature::from_slice(&raw).unwrap();
+        assert!(verifier.verify(&message, &signature).is_ok());
+        assert!(
+            verifier
+                .verify(
+                    &challenge_message("other", Some("ctx")).unwrap(),
+                    &signature
+                )
+                .is_err(),
+            "a signature over one challenge must not cover another"
+        );
+
+        assert!(revoke().unwrap());
+        assert!(EnrollmentKey::lookup().unwrap().is_none());
+        assert!(!revoke().unwrap(), "a second revoke finds nothing");
+    }
+
+    /// A test build reaches no credential store: a mint into it fails with the stable code and leaves nothing
+    /// behind (the file store stays open), and an unenrolled machine reads as such.
+    #[test]
+    fn an_unreachable_credential_store_refuses_the_mint_and_leaves_nothing() {
+        let _dir = scratch_runtime_dir();
+        let err = mint(KeyStore::CredentialStore).unwrap_err();
+        assert_eq!(reason_code(&err), "keychain_error", "{err}");
+        assert!(EnrollmentKey::lookup().unwrap().is_none());
+        assert!(HostKeyFile::load().unwrap().is_none());
+        assert!(!revoke().unwrap());
+    }
+
+    /// `pair --reset` is the advertised recovery from a damaged record, so revoke must remove a record it
+    /// cannot read and the next lookup must read as unenrolled.
+    #[test]
+    fn revoke_removes_a_record_it_cannot_read() {
+        let _dir = scratch_runtime_dir();
+        std::fs::write(
+            HostKeyFile::path().unwrap(),
+            format!(r#"{{"version":{},"scalar":"AA=="}}"#, HostKeyFile::VERSION),
+        )
+        .unwrap();
+        assert_eq!(
+            reason_code(&EnrollmentKey::lookup().unwrap_err()),
+            "keychain_error"
+        );
+        assert!(revoke().unwrap());
+        assert!(EnrollmentKey::lookup().unwrap().is_none());
+    }
+
+    /// The NUL-in-nonce refusal happens before any store access (the challenge is parsed first), and an
+    /// unenrolled machine answers not_enrolled.
+    #[test]
+    fn malformed_challenge_and_unenrolled_machine_answer_their_codes() {
+        let _dir = scratch_runtime_dir();
+        let EnclaveControl::EnclaveError { reason } = respond_to_challenge("a\0b", None) else {
+            panic!("expected enclave_error");
         };
         assert_eq!(reason, "invalid_challenge");
-        // The presence responder validates identically, in its own frame
-        // family - and on macOS this must refuse BEFORE the keychain, or the
-        // test itself would raise a presence prompt.
-        let reply = respond_to_presence_challenge("a\0b", None);
-        let EnclaveControl::PresenceError { reason } = reply else {
-            panic!("expected presence_error, got {reply:?}");
+        let EnclaveControl::EnclaveError { reason } = respond_to_challenge("nonce", None) else {
+            panic!("expected enclave_error");
         };
-        assert_eq!(reason, "invalid_challenge");
+        assert_eq!(reason, "not_enrolled");
+    }
+
+    /// A planted file record carrying the public fixture scalar never becomes a handle at all (so nothing can
+    /// sign with it), and a planted zero or short scalar is refused at the record parse.
+    #[test]
+    fn planted_fixture_and_invalid_scalars_are_refused() {
+        let _dir = scratch_runtime_dir();
+        crate::ipc::with_runtime_lock(|lock| {
+            HostKeyFile {
+                scalar: Scalar::from_bytes(&super::super::FIXTURE_KEY_BYTES).unwrap(),
+            }
+            .write(lock)
+        })
+        .unwrap();
+        assert_eq!(
+            reason_code(&EnrollmentKey::lookup().unwrap_err()),
+            "key_invalid"
+        );
+        let EnclaveControl::EnclaveError { reason } = respond_to_challenge("nonce", None) else {
+            panic!("expected enclave_error");
+        };
+        assert_eq!(reason, "key_invalid");
+
+        for (case, bytes) in [("zero", vec![0u8; 32]), ("31 bytes", vec![1u8; 31])] {
+            let err = Scalar::from_bytes(&bytes).unwrap_err();
+            assert_eq!(reason_code(&err), "key_invalid", "{case}");
+        }
     }
 }

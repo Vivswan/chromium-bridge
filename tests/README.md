@@ -9,7 +9,7 @@ The test suites span two languages: `protocol/` (python) and the TypeScript suit
 | **Smoke** | `browser/ext_test.ts` | `bun` + puppeteer-core | Launches Chrome with `build/extension/chrome-mv3` loaded and checks the MV3 service worker boots with its APIs. |
 | **WebAuthn** | `browser/webauthn_test.ts` | `bun` + puppeteer-core (CDP virtual authenticator) | Runs `navigator.credentials.create` / `.get` in the options page against a virtual platform authenticator and pins the facts the host's verifier assumes about Chrome's WebAuthn client (the RP ID is the `chrome-extension://` origin, attestation `none`, ES256, the authenticatorData layout). |
 | **Cancel** | `browser/cancel_test.ts` (stand-in host `browser/fake_host.ts`) | `bun` + puppeteer-core | Registers a stand-in native host in the throwaway profile and proves, through Chrome's real native messaging, that the server's `cancel` frame is consumed by the extension and never answered while the request after it is. |
-| **Integration** (opt-in) | `browser/integration_e2e.ts` | `bun` or Node 22.12+ + puppeteer-core | The full real chain with nothing mocked - MCP client → real MCP server → native host → real extension → `chrome.tabs` → back. Closes the seam `e2e.py` mocks. |
+| **Integration** (opt-in) | `browser/integration_e2e.ts` | `bun` + puppeteer-core | The real chain with nothing mocked - MCP client -> real MCP server -> native host -> real extension -> its enrollment gate -> back. Closes the seam `e2e.py` mocks. |
 | **SDK interop** | `interop/sdk-client.test.ts` | `bun test` (`moon run test-interop`) | Drives the release binary with the OFFICIAL TypeScript MCP client SDK v2, pinned to the modern era (no legacy fallback): proves a real third-party 2026-07-28 client negotiates, lists, and calls against the served protocol. No browser: the empty-bridge `tools/call` asserts the typed in-result error. |
 | **Harness smoke** | `harness/run.ts` | `bun` + harness CLIs (`moon run harness-smoke`) | Real agent-harness CLIs (Claude Code, Codex) connect to the stdio MCP server via ISOLATED config dirs, with every frame captured; prints the opening-method canary that decides when legacy-era support can be deleted. The `*-live-fakellm` entries drive a FULL model-driven tool call through each CLI against a local fake LLM backend (`harness/fake-llm.ts`) - zero credentials, zero model spend. Nightly workflow: the `harness-smoke` job in `nightly.yml`. |
 
@@ -72,20 +72,19 @@ moon run typecheck     # tsc --noEmit (CI gates this)
 
 ## Real integration test (opt-in)
 
-`integration_e2e.ts` closes the one seam the others can't: the **real** MCP server ↔ **real** extension round-trip over native messaging. It spawns the release binary as the MCP server, launches Chrome (puppeteer) with a unique copy of the extension, registers a native-messaging host manifest, and drives a `tab_list` call all the way to `chrome.tabs.query` and back.
+`integration_e2e.ts` closes the one seam the others can't: the **real** MCP server <-> **real** extension chain over native messaging. It spawns the release binary as the MCP server, launches Chrome (puppeteer) with a unique copy of the extension, registers a native-messaging host manifest, and drives a `tab_list` call to the extension's enrollment gate and back.
 
 On macOS the manifest goes inside the throwaway `--user-data-dir` profile, which Chrome for Testing and Chromium resolve for user-level host manifests (the fixed `~/Library/.../Google/Chrome/NativeMessagingHosts` directory is not read under a custom profile dir), so a real installation's registration is never touched.
 
-On Windows the registration is an HKCU registry value shared by every Chrome instance of the account; the test backs it up and restores it.
+On Windows the registration is an HKCU registry value shared by every Chrome instance of the account, so the test runs only where none exists (a real install's Chrome must never be pointed at the test host) and removes the one it wrote.
 
 ```sh
 BB_REAL_E2E=1 bun browser/integration_e2e.ts     # macOS/Linux shell
-$env:BB_REAL_E2E='1'; node browser/integration_e2e.ts  # Windows PowerShell, Node 22.12+
+$env:BB_REAL_E2E='1'; bun browser/integration_e2e.ts   # Windows PowerShell
 ```
 
-- **Opt-in** (skips unless `BB_REAL_E2E=1`), **Windows-only** since the `requireEnrollment` opt-out was retired, and pops a non-headless window. Not in the default suite or CI. Use Chrome for Testing or Chromium: official Google Chrome 137+ ignores `--load-extension`.
-- **macOS is skipped by the preflight, deliberately**: enrollment is mandatory (the `requireEnrollment` opt-out the test wrote is gone), so on a Mac the enrollment gate is unconditional and satisfying it takes a genuine pairing ceremony (interactive Touch ID) a throwaway profile cannot perform - the bridge would refuse `tab_list` at the gate.
-- That is fail-closed behavior, not a break: browser suites on a Mac that need bridge ops past the gate now require genuine pairing. On Windows the browser's platform probe reports no Secure Enclave, enrollment is unavailable rather than unsatisfied, and the round-trip still runs.
-- On Windows it proves the round-trip (native host connects, `tab_list` returns real structured `chrome.tabs` data). One **extra** assertion - that the reply came from *our* throwaway profile - only holds when the launch is isolated. Set `CHROME_BIN` to the Chrome for Testing/Chromium executable.
+- **Opt-in** (skips unless `BB_REAL_E2E=1`), macOS and Windows, and pops a non-headless window. Not in the default suite or CI. Use Chrome for Testing or Chromium: official Google Chrome 137+ ignores `--load-extension`.
+- **Isolated runtime dir, proved by the binary**: the MCP server and the host wrapper run with a throwaway `XDG_RUNTIME_DIR`/`HOME` (`LOCALAPPDATA` on Windows), and the suite asks `chromium-bridge doctor --paths` where the lock resolves under that environment; a lock outside the throwaway dir refuses the run, so the user's live broker, lock and socket are never touched.
+- **What it proves**: the chain reaches the extension's enrollment gate. Enrollment is required on every platform and a throwaway profile holds no pinned host key, so `tab_list` comes back refused with the enrollment reason; a served reply would mean the gate is gone and fails the test.
 
 (Historical note: the smoke test's comment claimed Chrome *forbids* `nativeMessaging` under automated launches - that was a misdiagnosis of a puppeteer `worker.evaluate` quirk. This test demonstrates it works.)

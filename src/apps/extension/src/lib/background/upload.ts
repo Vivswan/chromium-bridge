@@ -8,9 +8,6 @@
 //   2. EVERY call shows a confirmation on the extension-owned surface
 //      displaying the exact file path before anything is attached.
 //      There is no grace window - every upload reconfirms, like page_eval.
-//      On a capable, enrolled device with the touchIdConfirm policy on, this
-//      same confirmation routes through the host's Secure Enclave user-presence
-//      gate (Touch ID).
 //
 // The path is shown UNMASKED in the confirmation on purpose: the user must see
 // exactly which local file would leave their disk.
@@ -21,7 +18,6 @@ import { browser } from "wxt/browser";
 import { ensureAllowed } from "./allowlist-store";
 import { withCdpAttach } from "./cdp/attach";
 import { dbgSend, isDebuggable } from "./cdp/session";
-import { presenceRoutingEnabled } from "./confirm/presence";
 import { confirmWithUser } from "./confirm/service";
 import { activeTab } from "./tabs";
 
@@ -79,11 +75,8 @@ export async function pageUpload(
     tabTitle: tab.title || "",
     detail: `${path}\n(input: ${selector})`,
     timeoutMs: policy.clickToastTimeoutMs,
-    // The hardware-routing verdict is part of THIS decision's snapshot:
-    // computed here and carried in the request, so a policy push landing while
-    // the confirmation waits in the queue cannot re-route it at presentation
-    // time.
-    presenceRouting: await presenceRoutingEnabled(policy),
+    // From this decision's policy snapshot (ConfirmRequestBase.presenceRouting).
+    presenceRouting: policy.touchIdConfirm,
     panicEpoch,
   });
   if (!approved) {

@@ -75,13 +75,15 @@ pub enum AuditKind {
     KillEngage,
     /// The global kill switch was released.
     KillRelease,
-    /// Host: one per-action user-presence signing round - the
-    /// Secure Enclave signature behind a `page_eval`/`page_upload`
-    /// confirmation. `ok` means the user tapped and the proof was returned;
-    /// `refused` covers everything else (cancelled prompt, keychain refusal,
-    /// kill switch, busy). Host-recorded only: the extension cannot forge it
-    /// through the `audit_event` frame.
-    PresenceSign,
+    /// Host: one answer to a host-minted presence request - the extension's WebAuthn assertion or its
+    /// window's confirmation. `ok` names the act and the auth path (`auth=webauthn:<fingerprint>` or
+    /// `auth=confirm_window`); `refused` names the act and the refusal. Host-recorded only: the extension
+    /// cannot forge it through the `audit_event` frame.
+    PresenceAssert,
+    /// Host: one WebAuthn enrollment write (`enroll_finish`). `ok` names the browser label, the credential
+    /// fingerprint, and whether first use or an approved assertion authorized it; `refused` names the
+    /// verifier's or the store's reason. Host-recorded only.
+    Enroll,
     /// Host: one policy write through `policy::set_signed` / `policy::restrict`:
     /// `ok` names the presence rung that authorized a grant
     /// (`auth=none` for a free restriction) and the touched fields; `refused`
@@ -793,7 +795,8 @@ mod tests {
             "kill_release",
             "revoke_client",
             "tool_call",
-            "presence_sign",
+            "presence_assert",
+            "enroll",
             "policy_write",
         ] {
             assert_eq!(extension_kind(host_only), None, "{host_only}");

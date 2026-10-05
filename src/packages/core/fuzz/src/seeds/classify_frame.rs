@@ -6,8 +6,9 @@ use chromium_bridge_core::audit::{extension_kind_wire_names, AuditKind};
 use chromium_bridge_core::enclave::{base64_encode, REASON_CODES, SIG_LEN};
 use chromium_bridge_core::policy::PolicyDoc;
 use chromium_bridge_core::protocol::control::{
-    classify_nm_frame, AdminControl, EnclaveControl, ExtensionAuditKind, FrameDisposition,
-    HostRequest, KillStatus, PolicyControl, PolicyStatus,
+    classify_nm_frame, AdminControl, EnclaveControl, EnrollOutcome, ExtensionAuditKind,
+    FrameDisposition, HostRequest, KillStatus, PolicyControl, PolicyStatus, PresenceOutcome,
+    WebAuthnControl,
 };
 use chromium_bridge_core::protocol::BridgeReq;
 use serde_json::{json, Value};
@@ -31,10 +32,9 @@ fn tag_of(frame: &Value) -> &str {
         .expect("a control frame carries a string type tag")
 }
 
-fn presence_challenge() -> Value {
-    json_of!(HostRequest::PresenceChallenge {
+fn presence_confirm() -> Value {
+    json_of!(HostRequest::PresenceConfirm {
         nonce: "example-nonce".into(),
-        context: None,
     })
 }
 
@@ -46,7 +46,7 @@ pub(super) fn directory() -> Directory {
     let requests = [
         challenge.clone(),
         json_of!(HostRequest::EnclaveRevoke {}),
-        presence_challenge(),
+        presence_confirm(),
         json_of!(HostRequest::ClientList {}),
         json_of!(HostRequest::ClientRevoke {
             name: "example-client".into()
@@ -117,14 +117,24 @@ pub(super) fn directory() -> Directory {
             reason: REASON_CODES[0].into()
         }),
         json_of!(EnclaveControl::EnclaveRevoked {}),
-        json_of!(EnclaveControl::PresenceProof {
-            sig: base64_encode(&[0u8; SIG_LEN]),
-            key_id: "example-key".into(),
-            pubkey: base64_encode(&[0x04u8; 65]),
+        json_of!(WebAuthnControl::EnrollOptions {
+            challenge: "example-challenge".into(),
+            nonce: "example-nonce".into(),
+            user_id: "example-user".into(),
+            user_name: "example-browser".into(),
+            exclude_credential_ids: Vec::new(),
         }),
-        json_of!(EnclaveControl::PresenceError {
-            reason: REASON_CODES[0].into()
+        json_of!(EnrollOutcome::Refused {
+            reason: "example".into()
+        }
+        .into_frame()),
+        json_of!(WebAuthnControl::PresenceRequest {
+            challenge: "example-challenge".into(),
+            nonce: "example-nonce".into(),
+            action: "release the kill switch".into(),
+            allowed_credential_ids: Vec::new(),
         }),
+        json_of!(PresenceOutcome::Approved.into_frame()),
         json_of!(AdminControl::ClientListResult {
             ok: true,
             enrolled: false,
@@ -168,8 +178,8 @@ pub(super) fn directory() -> Directory {
             classifies_cleanly,
         ),
         Seed::refused(
-            "malformed_presence_challenge_missing_nonce",
-            compact(&without(&presence_challenge(), "nonce")),
+            "malformed_presence_confirm_missing_nonce",
+            compact(&without(&presence_confirm(), "nonce")),
             classifies_cleanly,
         ),
         Seed::refused(

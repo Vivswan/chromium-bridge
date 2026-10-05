@@ -1,4 +1,4 @@
-//! Ladder for `config.json` ([`crate::enclave::HostConfig`]).
+//! Ladder for `host_key.json` ([`crate::enclave::HostKeyFile`]).
 
 use crate::runtime_record::Ladder;
 

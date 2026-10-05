@@ -105,7 +105,6 @@ The full task menu, by area:
 | Protocol suites | `test-e2e`, `test-adversarial`, `test-chaos`, `check-uv` |
 | Interop suites | `test-interop` (official MCP SDK v2 client against the release binary), `harness-smoke` (real harness CLIs, isolated config dirs; the legacy-era opening-method canary) |
 | Browser suites | `test-browser`, `test-integration` (isolated Chrome only; never in `ci`) |
-| Touch ID runbooks | `touchid-proof`, `touchid-gates` (USER-RUN: raise real Touch ID prompts) |
 | Versioning | `check-version`, `check-extension-id`, `check-refresh-lockfiles` |
 | Repo hygiene | `check-cjk`, `check-typography`, `check-fuzz-smoke`, `check-toolchain`, `check-pins`, `check-planning-refs`, `check-hasher`, `check-ignored`, `check-yaml`, `check-actions`, `check-docs-literals`, `check-docs-policy`, `check-ci-scripts` |
 
@@ -231,16 +230,15 @@ The isolation guard's container exception is stated once, in the Safety section 
 
 ## Fuzzing
 
-`src/packages/core/fuzz/` is its own cargo workspace (cargo-fuzz + libFuzzer, nightly rust) with twelve targets. Where a correctness property exists, a target asserts it instead of only checking for panics.
+`src/packages/core/fuzz/` is its own cargo workspace (cargo-fuzz + libFuzzer, nightly rust) with eleven targets. Where a correctness property exists, a target asserts it instead of only checking for panics.
 
 | Targets | What they fuzz | Oracle beyond no-panic |
 |---------|----------------|------------------------|
 | `nm_frame`, `mcp_jsonrpc`, `handshake`, `attach` | the wire-frame decoders | decode -> encode -> decode is identity |
 | `bridge_envelope` | the internal bridge envelope reader, as a raw value and as both typed frames | none (reject-or-decode, three times) |
 | `handshake_verify` | the MAC verifier and the server accept path | a correctly computed MAC verifies |
-| `enclave_challenge` | the challenge-message builders | enrollment and presence messages stay domain-separated |
+| `enclave_challenge` | the host-key challenge-message builder | exactly the documented field matrix is accepted, and an accepted message splits back into its fields |
 | `classify_frame` | the control-frame router | a frame's `type` is exactly the tag it was read as |
-| `enclave_der` | the strict-DER signature parser | none (reject-or-decode) |
 | `registration_manifest` | the ours/foreign manifest and extension-pointer decisions | anything not provably ours is `Foreign` |
 | `policy_doc` | the policy store parse surface | serde round trip, the comparison lattice partitions every pair |
 | `webauthn_authdata` | the WebAuthn authenticatorData layout parser, with the attestation object and the assertion verifier fed the same bytes | a credential key parsed from attested data round-trips through its storage spelling |
@@ -258,7 +256,7 @@ Three directories with different lifecycles, plus the failure reports:
 - An adversarial seed is a one-step mutation of a happy-path one (an unknown field, a bound plus one, a version above the ladder, a repeated key, truncated base64), labelled with the reader that must refuse it.
 - The structured targets (`handshake_verify`, `enclave_challenge`) take `Arbitrary`-derived input whose encoding is unstable across `arbitrary` versions, so they get no seeds; their regressions get unit tests instead.
 - `fuzz/corpus/<target>/`: gitignored, fuzzer-generated. Nightly CI restores and saves it through `actions/cache`, so exploration accumulates across runs instead of restarting from zero every night.
-- `fuzz/dictionaries/`: token dictionaries handed to libFuzzer. `json_protocol.dict` (every key and string value of the JSON seeds) is generated alongside the seeds and gitignored; `der.dict` for `enclave_der` is hand-written DER grammar atoms and tracked.
+- `fuzz/dictionaries/`: the token dictionary handed to libFuzzer. `json_protocol.dict` (every key and string value of the JSON seeds) is generated alongside the seeds and gitignored.
 - `fuzz/failures/<target>/`: gitignored, cleared and rewritten by each `fuzz-smoke.ts` run. One directory per crashed target holding a `report.md` (replay command, seed, a base64 embed of small inputs, the pinning instruction) plus a copy of the crash input, following the fleet's failure-report contract (the fleet repository's docs/fuzzer.md). The nightly job's issue-filing action consumes these.
 
 Run it locally:

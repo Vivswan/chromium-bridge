@@ -101,11 +101,10 @@ export function parseOptions(argv: string[]): Options {
 }
 
 // Dictionaries steer mutation toward the target's input grammar. A byte dictionary is meaningless against
-// Arbitrary-derived input, and a wrong dictionary only weakens mutation, never correctness, so JSON is the
-// default for any target absent from these two lists (every other target consumes JSON protocol frames).
+// Arbitrary-derived input; every other target gets the JSON dictionary, which only steers mutation, so the
+// one binary-layout target (webauthn_authdata) loses nothing but a hint from it.
 const noDictionary = new Set(["handshake_verify", "enclave_challenge"]);
-const dictionaryOverrides = new Map([["enclave_der", "fuzz/dictionaries/der.dict"]]);
-const defaultDictionary = "fuzz/dictionaries/json_protocol.dict";
+const jsonDictionary = "fuzz/dictionaries/json_protocol.dict";
 
 // The structured targets take Arbitrary-derived input whose byte encoding is
 // unstable across `arbitrary` versions, so a pinned seed file can silently
@@ -115,8 +114,7 @@ const structuredTargets = noDictionary;
 
 /** The dictionary a target's run passes libFuzzer, repo-relative to the core package; none for structured targets. */
 function dictionaryFor(target: string): string | undefined {
-  if (noDictionary.has(target)) return undefined;
-  return dictionaryOverrides.get(target) ?? defaultDictionary;
+  return noDictionary.has(target) ? undefined : jsonDictionary;
 }
 
 /**

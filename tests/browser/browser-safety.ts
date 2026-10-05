@@ -17,7 +17,8 @@
 
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const ISOLATED_VERSION = /Chrome for Testing|HeadlessShell/;
 
@@ -34,10 +35,8 @@ const CONTAINER_VERSION = /^Chromium\b/;
  * build output) applies to every suite at once instead of whichever files
  * happened to keep their copy current. */
 export function extensionDir(): string {
-  return (
-    process.env.BB_EXT_DIR ||
-    join(resolve(import.meta.dir, "../.."), "build", "extension", "chrome-mv3")
-  );
+  const here = dirname(fileURLToPath(import.meta.url));
+  return process.env.BB_EXT_DIR || join(resolve(here, "../.."), "build", "extension", "chrome-mv3");
 }
 
 /** The isolation verdict for one binary, by its own --version. */
@@ -54,6 +53,83 @@ export function isolatedBrowser(
   if (ISOLATED_VERSION.test(version)) return bin;
   const inContainer = containerMarkers.some((marker) => existsSync(marker));
   return inContainer && CONTAINER_VERSION.test(version) ? bin : null;
+}
+
+/** The environment a real-host suite runs the binary under: a throwaway runtime dir, config dir and HOME
+ * under `work` (LOCALAPPDATA is what the binary reads on Windows), created here, plus the log settings the
+ * suites parse (an inherited BB_LOG=warn would hide the Info-level session lines). */
+export function throwawayHostEnv(work: string): Record<string, string> {
+  const dirs = {
+    XDG_RUNTIME_DIR: join(work, "runtime"),
+    XDG_CONFIG_HOME: join(work, "config"),
+    HOME: join(work, "home"),
+    LOCALAPPDATA: join(work, "localappdata"),
+  };
+  for (const dir of Object.values(dirs)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+  return { ...process.env, ...dirs, BB_LOG: "info", BB_LOG_FORMAT: "text" } as Record<
+    string,
+    string
+  >;
+}
+
+/** Write the native-messaging host wrapper for `bin` into `dir` and return its path. Chrome passes a host no
+ * arguments and its own environment, so the wrapper sets the throwaway dirs from `env` itself: whichever
+ * Chrome spawns it runs the binary there. A shell script on Unix, a .cmd on Windows (Chrome runs both). */
+export function writeHostWrapper(
+  dir: string,
+  bin: string,
+  args: readonly string[],
+  env: Record<string, string>,
+): string {
+  const names = [
+    "XDG_RUNTIME_DIR",
+    "XDG_CONFIG_HOME",
+    "HOME",
+    "LOCALAPPDATA",
+    "BB_LOG",
+    "BB_LOG_FORMAT",
+  ];
+  if (process.platform === "win32") {
+    const wrapper = join(dir, "run-host.cmd");
+    const sets = names.map((name) => `set "${name}=${env[name]}"`).join("\r\n");
+    writeFileSync(wrapper, `@echo off\r\n${sets}\r\n"${bin}" ${args.join(" ")}\r\n`);
+    return wrapper;
+  }
+  const wrapper = join(dir, "run-host.sh");
+  const exports = names.map((name) => `export ${name}="${env[name]}"`).join("\n");
+  writeFileSync(wrapper, `#!/bin/sh\n${exports}\nexec "${bin}" ${args.join(" ")}\n`, {
+    mode: 0o755,
+  });
+  return wrapper;
+}
+
+/** Whether `lockPath`, the lock the binary says it resolves under a suite's environment, sits inside the
+ * suite's throwaway `work` dir. A real-host suite refuses to run otherwise: outside that dir the binary
+ * would run in the user's live runtime dir, where the host unlinks the existing socket before binding. */
+export function runtimeDirIsolated(lockPath: string, work: string): boolean {
+  const rel = relative(resolve(work), resolve(lockPath));
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
+
+/** The lock `bin` resolves under `env`, read off `doctor --paths` (which touches nothing) and required to sit
+ * inside the suite's throwaway `work` dir. Throws the reason a real-host suite refuses to run on: a probe
+ * naming anything but exactly one run.lock, or a lock outside `work`, the user's live runtime dir. Every
+ * suite that runs the real binary calls this before the binary's first write. */
+export function assertHostIsolated(bin: string, env: Record<string, string>, work: string): string {
+  const report = execFileSync(bin, ["doctor", "--paths"], {
+    env,
+    encoding: "utf8",
+    timeout: 15000,
+  });
+  const lines = report.split("\n").filter((line) => line.startsWith("lock file:"));
+  const lock = lines.length === 1 ? (lines[0] ?? "").slice("lock file:".length).trim() : "";
+  if (lines.length !== 1 || basename(lock) !== "run.lock") {
+    throw new Error(`doctor --paths did not name exactly one run.lock:\n${report}`);
+  }
+  if (!runtimeDirIsolated(lock, work)) {
+    throw new Error(`the binary resolves its lock to ${lock}, outside ${work}`);
+  }
+  return lock;
 }
 
 /** Returns the isolated browser path, or null if CHROME_BIN is unset or does

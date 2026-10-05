@@ -231,7 +231,7 @@ mod tests {
 
     use super::*;
     use crate::allowlist::{Anchor, ClientEntry, ClientName};
-    use crate::enclave::{base64_encode, HostConfig};
+    use crate::enclave::{base64_encode, HostKeyFile, Scalar};
     use crate::ipc::HashDigest;
     use crate::lang::LangStore;
     use crate::policy::{PolicyHistory, PolicyHistoryEntry, PolicyOverlay, PolicyStore};
@@ -601,9 +601,8 @@ mod tests {
         );
         exercise(
             &mut exercised,
-            HostConfig {
-                enrolled: true,
-                granularity: "session".into(),
+            HostKeyFile {
+                scalar: Scalar::from_bytes(&[0x42; 32]).unwrap(),
             },
         );
         exercise(

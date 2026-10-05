@@ -119,9 +119,9 @@ pub struct ClientEntry {
 }
 
 /// Add or replace a client in one atomic write of the trust record. Module-private on purpose: the ONLY entry point is
-/// [`pair_client_with_presence`], which runs the presence ladder and audits every outcome, so no allowlist
+/// [`pair_client_with_presence`], which runs the presence prompt and audits every outcome, so no allowlist
 /// mutation can skip the trail and no path can enroll without a [`PresenceAttestation`], which only
-/// [`presence::require_presence`] mints (pairing GRANTS capability).
+/// [`crate::presence`] mints (pairing GRANTS capability).
 fn pair(name: &ClientName, anchor: Anchor, auth: PresenceAttestation) -> io::Result<()> {
     // The attestation is structural evidence, consumed here; the audit record that names its path is written
     // by the caller, log-after-decide.
@@ -213,7 +213,7 @@ pub fn pair_client_with_presence(
         "Pair '{name}' as a trusted client of chromium-bridge? A trusted \
          client can drive your browser through this bridge."
     );
-    let auth = match terminal.and_then(|terminal| presence::require_presence(&reason, terminal)) {
+    let auth = match terminal.and_then(|terminal| presence::tty_confirm(&reason, terminal)) {
         Ok(auth) => auth,
         Err(e) => {
             // Log-after-decide: the refusal has already happened; make the
@@ -228,7 +228,7 @@ pub fn pair_client_with_presence(
             return Err(PairClientError::Presence(e));
         }
     };
-    let auth_path = auth.path();
+    let auth_path = auth.path().clone();
     let shown = anchor.to_string();
     match pair(name, anchor, auth) {
         Ok(()) => {
@@ -260,9 +260,8 @@ pub fn pair_client_with_presence(
 // ---- CLI handlers ----------------------------------------------------------
 
 /// `pair-client`: add or replace a trusted client in the allowlist, behind
-/// the user-presence gate (Touch ID where the machine has it; the typed
-/// terminal confirmation otherwise). Prints a confirmation and the resolved
-/// anchor. Returns a process exit code.
+/// the CLI's presence path (the typed terminal confirmation). Prints a
+/// confirmation and the resolved anchor. Returns a process exit code.
 pub fn run_pair_client(client: PairClientArgs) -> i32 {
     let anchor = match resolve_anchor(client.anchor) {
         Ok(a) => a,

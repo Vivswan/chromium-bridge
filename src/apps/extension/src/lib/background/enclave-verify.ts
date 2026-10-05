@@ -1,4 +1,4 @@
-// WebCrypto verification for the Secure Enclave enrollment ceremony. Pure
+// WebCrypto verification for the host-key ceremony. Pure
 // module: no chrome.* usage, so bun unit-tests it with self-checking offline
 // vectors, and the generated golden vectors (enclave-fixture.gen.ts) replay
 // Rust-signed proofs through it.
@@ -22,7 +22,6 @@ import {
   ENCLAVE_FIXTURE_KEY_ID,
   MAX_CONTEXT_BYTES,
   MAX_NONCE_BYTES,
-  PRESENCE_DOMAIN,
   PUBKEY_LEN,
   SIG_LEN,
 } from "@chromium-bridge/shared/enclave.gen";
@@ -64,20 +63,11 @@ export function base64Encode(bytes: Uint8Array): string {
   return btoa(bin);
 }
 
-/** Build the exact byte string an ENROLLMENT proof signs. Throws when
+/** Build the exact byte string a host-key challenge proof signs. Throws when
  * nonce/context violate the host's bounds (empty, NUL bytes, oversize): a
  * challenge we would not have issued must never verify. */
 export function buildChallengeMessage(nonce: string, context?: string): Uint8Array {
-  return buildDomainMessage(CHALLENGE_DOMAIN, nonce, context);
-}
-
-/** Build the exact byte string a PER-ACTION presence approval signs: the same
- * NUL-separated shape, under PRESENCE_DOMAIN. */
-export function buildPresenceMessage(nonce: string, context?: string): Uint8Array {
-  return buildDomainMessage(PRESENCE_DOMAIN, nonce, context);
-}
-
-function buildDomainMessage(domain: string, nonce: string, context?: string): Uint8Array {
+  const domain = CHALLENGE_DOMAIN;
   const nonceB = utf8.encode(nonce);
   if (nonceB.length === 0) throw new Error("nonce must be non-empty");
   if (nonceB.length > MAX_NONCE_BYTES) throw new Error("nonce too long");
@@ -251,51 +241,13 @@ export async function verifyProofAgainstPin(
   pinnedPubkeyB64: string,
   pinnedKeyId: string,
 ): Promise<PinVerifyResult> {
-  return verifyDomainProofAgainstPin(
-    buildChallengeMessage,
-    proof,
-    nonce,
-    context,
-    pinnedPubkeyB64,
-    pinnedKeyId,
-  );
-}
-
-/** Per-action presence verification: identical pin-only rules, over the
- * PRESENCE domain. A presence approval that fails this check is a denial AND
- * host-substitution evidence (the caller marks compromised). */
-export async function verifyPresenceProofAgainstPin(
-  proof: ProofFields,
-  nonce: string,
-  context: string | undefined,
-  pinnedPubkeyB64: string,
-  pinnedKeyId: string,
-): Promise<PinVerifyResult> {
-  return verifyDomainProofAgainstPin(
-    buildPresenceMessage,
-    proof,
-    nonce,
-    context,
-    pinnedPubkeyB64,
-    pinnedKeyId,
-  );
-}
-
-async function verifyDomainProofAgainstPin(
-  buildMessage: (nonce: string, context?: string) => Uint8Array,
-  proof: ProofFields,
-  nonce: string,
-  context: string | undefined,
-  pinnedPubkeyB64: string,
-  pinnedKeyId: string,
-): Promise<PinVerifyResult> {
   let pinned: Uint8Array;
   let sig: Uint8Array;
   let message: Uint8Array;
   try {
     pinned = parsePubkey(pinnedPubkeyB64);
     sig = parseSig(proof.sig);
-    message = buildMessage(nonce, context);
+    message = buildChallengeMessage(nonce, context);
   } catch (e) {
     return { ok: false, reason: e instanceof Error ? e.message : String(e) };
   }

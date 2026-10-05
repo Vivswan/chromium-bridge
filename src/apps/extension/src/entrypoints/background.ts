@@ -2,11 +2,7 @@ import { browser } from "wxt/browser";
 import { defineBackground } from "wxt/utils/define-background";
 import { syncPendingMirror } from "@/lib/background/allowlist-store";
 import { installCdpLifecycleListeners } from "@/lib/background/cdp/registry";
-import { EnclavePresenceProvider } from "@/lib/background/confirm/presence";
-import {
-  installConfirmationProvider,
-  installPresenceProvider,
-} from "@/lib/background/confirm/service";
+import { installConfirmationProvider } from "@/lib/background/confirm/service";
 import { ExtensionWindowProvider } from "@/lib/background/confirm/surface";
 import { verifyExtensionId } from "@/lib/background/id-check";
 import { registerRuntimeMessageRouter } from "@/lib/background/messages";
@@ -55,14 +51,8 @@ export default defineBackground(() => {
 
   // The off-DOM confirmation surface. Without a provider the confirmation
   // service denies everything, so install it before any bridge traffic can
-  // arrive. The Enclave user-presence provider rides on top of it for the
-  // "eval"/"upload" kinds: whether a given confirmation routes to it is
-  // decided by the caller at decision time (ConfirmRequest's presenceRouting,
-  // from the per-request policy snapshot); the window displays what is being
-  // approved, the Touch ID tap (a verified host signature) approves.
-  const windowProvider = new ExtensionWindowProvider();
-  installConfirmationProvider(windowProvider);
-  installPresenceProvider(new EnclavePresenceProvider(windowProvider));
+  // arrive. No presence provider is installed, so every kind confirms here.
+  installConfirmationProvider(new ExtensionWindowProvider());
 
   // On an UNPINNED extension nothing can verify a signature, so an unsigned
   // policy push that would relax the enforced effective policy is applied

@@ -1,14 +1,13 @@
 // GENERATED from the Rust core (src/packages/core/src/enclave/challenge.rs,
-// pubkey.rs, der.rs, and mod.rs REASON_CODES) by scripts/gen-ops.ts - DO NOT
-// EDIT. Edit the enclave module, then run `moon run gen`.
+// pubkey.rs, and mod.rs REASON_CODES) by scripts/gen-ops.ts - DO NOT EDIT.
+// Edit the enclave module, then run `moon run gen`.
 //
-// The enclave signing contract, TS side: the constants the WebCrypto verifier (background/enclave-verify.ts) and the
+// The host-key signing contract, TS side: the constants the WebCrypto verifier (background/enclave-verify.ts) and the
 // enrollment state machine (background/enrollment.ts) enforce. The signed-message ALGORITHM is pinned separately by
 // the golden vectors in enclave-fixture.gen.ts.
 
-// Enrollment challenges and per-action presence sign under distinct domains, so neither can be replayed as the other.
+// The host-key challenge domain; the policy signature has its own (policy.gen.ts), so neither replays as the other.
 export const CHALLENGE_DOMAIN = "chromium-bridge-enclave-v1";
-export const PRESENCE_DOMAIN = "chromium-bridge-presence-v1";
 
 // Host-enforced bounds on challenge fields, in UTF-8 bytes; the verifier rejects anything outside them before the crypto.
 export const MAX_NONCE_BYTES = 256;
@@ -22,7 +21,6 @@ export const SIG_LEN = 64;
 // The enrollment state machine's compromise latch fires on a subset, so an unrecognized code must degrade to a
 // refusal, never match.
 export const ENCLAVE_REASON_CODES = [
-  "unsupported_platform",
   "not_enrolled",
   "invalid_challenge",
   "key_invalid",

@@ -15,17 +15,16 @@
 | `chromium-bridge doctor --paths` | read-only diagnostics | Prints the runtime dir and lock path this environment resolves to, creating neither. |
 | `chromium-bridge doctor --fix` | repair / install | Registers (or re-registers) this binary as the native-messaging host. The only mutating form of doctor. |
 | `chromium-bridge uninstall` | removal | Removes exactly the registrations this project wrote, nothing else. |
-| `chromium-bridge pair [--reset]` | enrollment | Mints the Secure Enclave enrollment key (macOS); every use of the key demands Touch ID. |
-| `chromium-bridge revoke` | enrollment | Deletes the enrollment key; a pinning extension then fails closed. |
-| `chromium-bridge enclave-status [--json]` | read-only | Prints the enrollment state and key fingerprint. |
-| `chromium-bridge presence-selftest` | diagnostic | Raises one user-presence prompt and reports the result, without a browser. |
+| `chromium-bridge pair [--reset] [--file-store]` | enrollment | Mints the host key the extension pins, behind a confirmation typed on the terminal; the key lives in the OS credential store, or in a 0600 file with `--file-store`. |
+| `chromium-bridge revoke` | enrollment | Deletes the host key; a pinning extension then fails closed. |
+| `chromium-bridge enclave-status [--json]` | read-only | Prints the host key state, where it lives, and its fingerprint. |
 | `chromium-bridge pair-client --name <label> (--this-parent \| --hash <hex> \| --signer <id>)` | trusted clients | Adds an MCP-client harness to the trusted-client allowlist; presence-gated. |
 | `chromium-bridge revoke-client --name <label>` | trusted clients | Removes a client; a live broker drops it immediately. |
 | `chromium-bridge list-clients` | read-only | Prints the trusted-client allowlist. |
 | `chromium-bridge kill` | kill switch | Engages the global kill switch: halts ALL bridge activity until an explicit release. |
-| `chromium-bridge unkill` | kill switch | Releases the kill switch, after proof of user presence (Touch ID on an enrolled Mac; otherwise an interactive terminal confirmation that refuses a piped stdin). |
+| `chromium-bridge unkill` | kill switch | Releases the kill switch, after proof of user presence: a confirmation typed on an interactive terminal (a piped stdin is refused). |
 | `chromium-bridge policy show [--json]` | read-only | Prints the host-owned policy state and the effective policy. |
-| `chromium-bridge policy set <field flags> [--json]` | policy (grant lane) | Mints a fresh SIGNED policy baseline: one Touch ID tap. Signature-only; refuses up front where no enrollment key exists. |
+| `chromium-bridge policy set <field flags> [--json]` | policy (grant lane) | Mints a fresh SIGNED policy baseline behind the typed terminal confirmation. Signature-only; refuses up front where no host key exists. |
 | `chromium-bridge policy restrict <field flags>` | policy (free lane) | Applies an unsigned restriction overlay; no prompt, because it can only remove capability. |
 | `chromium-bridge policy history [--json]` | read-only | Prints the superseded-revision ring. |
 | `chromium-bridge policy rollback --revision <n> [--json]` | policy | Re-derives a past revision's effective policy as a FRESH write, never a replay. |
@@ -118,14 +117,17 @@ Platform notes:
 
 ## Enrollment: pair / revoke / enclave-status
 
-The enrollment ceremony binds the host to this machine's Secure Enclave and to you:
+The host-key ceremony gives the extension one host identity to pin:
 
-- `chromium-bridge pair` mints a P-256 key inside the Secure Enclave whose every use requires user presence (Touch ID or the login password), then performs a presence-gated self-test signature and prints the key's SHA-256 fingerprint. Compare that fingerprint with the one the extension shows on its enrollment screen; a mismatch means something sits between them.
-- `chromium-bridge pair --reset` replaces the key with a fresh one (presence-gated again); the extension must re-pin.
-- `chromium-bridge revoke` deletes the key. The host confirms the deletion and pushes a revocation to the extension, which fails closed.
-- `chromium-bridge enclave-status [--json]` reports the current state read-only.
+- `chromium-bridge pair` asks for a confirmation typed on the terminal (a piped stdin is refused before any prompt), mints a P-256 host key, keeps it in the OS credential store (the Keychain, the Credential Manager, or the Secret Service), and prints the key's SHA-256 fingerprint. Compare that fingerprint with the one the extension shows on its enrollment screen; a mismatch means something sits between them.
+- `chromium-bridge pair --file-store` keeps the key in a 0600 file in the runtime directory instead, for a machine with no usable credential store. The choice is explicit: a store failure is reported, never silently redirected to the file.
+- `chromium-bridge pair --reset` asks for the confirmation first, then removes the previous key (from whichever store holds it) and mints a fresh one; the extension must re-pin. When the credential store does not answer, a `--file-store` reset proceeds with a warning that an entry the store may hold stays behind; run `revoke` again once the store answers.
+- `chromium-bridge revoke` deletes the key and confirms it is gone. The host pushes a revocation to the extension, which fails closed.
+- `chromium-bridge enclave-status [--json]` reports the current state read-only: whether a key is present, which store holds it, and its fingerprint.
 
-Enrollment is what upgrades the highest-risk confirmations (`page_eval`, `page_upload`, kill-switch release, client pairing) from an on-screen dialog to a hardware Touch ID tap. `chromium-bridge presence-selftest` raises exactly one such prompt so you can see it work without a browser.
+User presence for the browser's own acts (releasing the kill switch, enrolling a second browser) is a WebAuthn tap on the browser's authenticator, verified by the host. The options page does not offer the panel that enrolls and answers yet (the exchange is reachable from the background handlers and the browser suite).
+
+The CLI never raises that prompt: its own grants (`pair`, `pair-client`, `unkill`, `policy set`) are confirmed by the typed phrase on a real terminal.
 
 ## Trusted clients: pair-client / revoke-client / list-clients
 
@@ -142,7 +144,7 @@ chromium-bridge revoke-client --name codex
 - `--this-parent` measures the process that spawned this CLI invocation (run it from inside the client you want to trust). Unix only: on Windows the server keys a harness on the creator of its stdin pipe, which a console command has none of, so pair with `--hash` or `--signer` using the values the server logs at startup while unenrolled.
 - Authorization keys on the attested anchor, never the `--name` label, which labels logs and revocation. What each platform measures is on the [trust boundaries page](security/trust-boundaries.md#boundary-1-mcp-client---rust-mcp-server--stdio-json-rpc-20).
 - Hash anchors change when the client updates; re-run `pair-client` with the same name to replace the entry (the re-pair path).
-- Adding a client is a capability grant, so it is presence-gated: Touch ID on an enrolled Mac, an interactive terminal confirmation otherwise. Revoking is friction-free by design; a live broker drops the revoked client and refuses its re-attach.
+- Adding a client is a capability grant, so it is presence-gated: a confirmation typed on an interactive terminal, with a piped stdin refused. Revoking is friction-free by design; a live broker drops the revoked client and refuses its re-attach.
 
 Once the allowlist exists, anything unmatched fails closed, including an identity that cannot be measured and an unreadable allowlist. The Windows measurement is in [SECURITY.md](../.github/SECURITY.md#platform-support).
 
@@ -153,16 +155,16 @@ Once the allowlist exists, anything unmatched fails closed, including an identit
 - Live browser connections are severed within about a second, and new ones are refused. In-flight tool calls fail fast with `CONNECTION_LOST`.
 - Every subsequent tool call, from every attached client, is refused with the stable `BRIDGE_KILLED` error code. Clients stay connected so they can show you the refusal instead of dying silently.
 - The state is persisted (in `trust.json`, next to the lock file) and survives restarts, reconnects, and reboots.
-- The extension's options page shows the state; engaging the switch works from any surface, but releasing it does not (a web page cannot see or touch any of it).
+- The extension's options page shows the state; engaging the switch works from any surface. Releasing it from the extension is answered by the host with a presence request (the WebAuthn tap, or the window on a browser with no enrolled credential); the options page does not offer that control yet, so today release is the CLI's (a web page cannot see or touch any of it).
 
-Nothing releases the switch on its own. Release is a CLI act, `chromium-bridge unkill` from a terminal, and it demands proof of user presence. The extension's release toggle was retired; a release request from the extension is refused and audited.
+Nothing releases the switch on its own. Release demands proof of user presence on either surface:
 
-| Machine | The proof `unkill` demands |
+| Surface | The proof a release demands |
 | --- | --- |
-| an enrolled Mac | a Secure Enclave Touch ID tap |
-| no Enclave key | an explicit confirmation typed on a real terminal; a piped stdin is refused outright, so no script or background program can quietly reopen the bridge through the CLI |
+| `chromium-bridge unkill` on the CLI | an explicit confirmation typed on a real terminal; a piped stdin is refused outright, so no script or background program can quietly reopen the bridge through the CLI |
+| the extension | a WebAuthn assertion from a credential enrolled under that browser; the browser's confirmation window only when the browser has no enrolled credential |
 
-Every release attempt is audited with the auth path that decided it (`auth=touch_id`, `auth=cli_confirm`), whether it was granted, refused at the presence gate, or refused by an unwritable record after presence passed.
+Every release attempt is audited: a granted release with the auth path that decided it (`auth=tty`, `auth=webauthn:<fingerprint>`, `auth=confirm_window`), a refusal at the presence gate with the presence error, and a refusal by an unwritable record after presence passed with both.
 
 If either command reports that the trust record is unreadable, see [the recovery steps](./troubleshooting.md#doctor-says-the-kill-state-or-the-trust-record-is-unreadable); until then, everything keeps failing closed.
 
@@ -174,7 +176,7 @@ If either command reports that the trust record is unreadable, see [the recovery
 
 ```text
 chromium-bridge policy show [--json]              # read-only: store state + effective policy
-chromium-bridge policy set <field flags> [--json] # GRANT lane: sign a fresh baseline (Touch ID)
+chromium-bridge policy set <field flags> [--json] # GRANT lane: sign a fresh baseline (terminal confirmation)
 chromium-bridge policy restrict <field flags>     # FREE lane: unsigned restriction overlay
 chromium-bridge policy history [--json]           # read-only: superseded revisions
 chromium-bridge policy rollback --revision <n> [--json]
@@ -194,19 +196,19 @@ chromium-bridge policy rollback --revision <n> [--json]
 
 **The two lanes are deliberately asymmetric.**
 
-- **`policy set` is the grant lane:** it folds the edits over the current baseline (untouched fields carry baseline values, never effective ones), embeds the touched-field set in the document, and signs the exact document bytes with the Secure Enclave enrollment key. The Touch ID tap IS the signature.
-- **No enrollment key, no grant:** on non-macOS or an unenrolled Mac the CLI refuses UP FRONT, before any prompt could appear. The CLI's grant path exists only as that signature and never constructs an interactive floor, because a floor-gated CLI grant would quietly create a baseline-writing path on every platform the CLI ships to.
+- **`policy set` is the grant lane:** it folds the edits over the current baseline (untouched fields carry baseline values, never effective ones), embeds the touched-field set in the document, and signs the exact document bytes with the host key once the typed terminal confirmation passes.
+- **No host key, no grant:** on a machine that has not run `pair` the CLI refuses UP FRONT, before any prompt could appear, so no baseline can exist that the extension's pin could not verify.
 - **`policy restrict` is the free lane:** no prompt, no signature, and the seam's direction check refuses any edit that would relax the effective policy, so a scripted or forged restriction is at worst a denial of service against your own bridge.
 
 **Rollback never replays.** `policy rollback --revision <n>` re-derives that revision's effective policy, diffs it against the current one, and applies the difference as a FRESH write.
 
 - **A rollback that only tightens** rides the free restrict lane with no prompt.
-- **One that relaxes anything** is one fresh Touch ID tap, exactly like any other grant.
+- **One that relaxes anything** is one fresh terminal confirmation and signature, exactly like any other grant.
 - **The old signed artifact is never written back:** a lower revision must keep failing the extension's ratchet, which is the anti-replay property, not a limitation.
 
 **`--json` contracts.** `show`, `history`, `set`, and `rollback` accept `--json`, which swaps the prose for a versioned report on stdout (and, for the write lanes, a versioned error object on refusal). Check the `v` field first and refuse a newer value before reading anything else (fail closed).
 
-Every policy transition is audited with the surface and, for grants, the presence rung that authorized the signature (`auth=touch_id`).
+Every policy transition is audited with the surface and, for grants, the presence path that authorized the signature (`auth=tty`).
 
 ## Logging and audit (BB_LOG / BB_LOG_FORMAT)
 
@@ -217,7 +219,7 @@ Diagnostics in both modes go to **stderr** (stdout carries protocol frames). Two
 | `BB_LOG` | `error` \| `warn` \| `info` (default) \| `debug` | Log threshold. `info` and above print audit lines; set `warn`/`error` to silence auditing. |
 | `BB_LOG_FORMAT` | `text` (default) \| `json` | Format of audit lines. `json` emits one JSON object per line, convenient for machine collection. |
 
-**Audit events (stderr)**: every security decision emits one audit line: tool calls (with `req`, `tool`, `outcome`, and on error the stable `code` from [`ERROR_SPECS`](../src/packages/core/src/error.rs), plus `dur_ms`), harness admissions and refusals, client pairing and revocation, host-key revocations, kill-switch transitions, and the extension's confirmation and enrollment decisions (forwarded over the port).
+**Audit events (stderr)**: every security decision emits one audit line: tool calls (with `req`, `tool`, `outcome`, and on error the stable `code` from [`ERROR_SPECS`](../src/packages/core/src/error.rs), plus `dur_ms`), harness admissions and refusals, client pairing and revocation, host-key revocations, kill-switch transitions, WebAuthn enrollments and presence verdicts, policy writes, and the extension's confirmation and enrollment decisions (forwarded over the port).
 
 The same events are appended as strict JSON records to a durable, size-capped `audit.log` (0600, in the runtime directory next to the lock file), which survives the short-lived processes that write it. Each record names its event in `event_kind`; the JSON stderr form wraps the record in a `"kind":"audit"` envelope, so a collector keys on `kind` and reads the event from `event_kind`.
 

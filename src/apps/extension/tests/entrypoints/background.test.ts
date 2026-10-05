@@ -14,7 +14,6 @@ const verifyId = vi.fn();
 const registerRouter = vi.fn();
 const installCdp = vi.fn();
 const installConfirm = vi.fn();
-const installPresence = vi.fn();
 // The startup order is load-bearing: the pending-approval sweep must COMPLETE
 // before the eager connect, or its badge clear could land after enrollment's
 // PAIR/! write (triggered by the connect) and hide it. Record completion vs
@@ -36,13 +35,8 @@ vi.mock("@/lib/background/cdp/registry", () => ({ installCdpLifecycleListeners: 
 vi.mock("@/lib/background/allowlist-store", () => ({ syncPendingMirror: sweepPending }));
 vi.mock("@/lib/background/confirm/service", () => ({
   installConfirmationProvider: installConfirm,
-  installPresenceProvider: installPresence,
 }));
 vi.mock("@/lib/background/confirm/surface", () => ({ ExtensionWindowProvider: class {} }));
-vi.mock("@/lib/background/confirm/presence", () => ({
-  EnclavePresenceProvider: class {},
-  presenceRoutingEnabled: vi.fn(() => Promise.resolve(false)),
-}));
 vi.mock("@/lib/background/port", () => ({ connectNative: connect }));
 
 // defineBackground returns its callback as `.main`; capture it.
@@ -72,9 +66,6 @@ describe("background entrypoint", () => {
     // would then refuse).
     expect(sweepPending).toHaveBeenCalledTimes(1);
     expect(installConfirm).toHaveBeenCalledTimes(1);
-    // The Enclave user-presence provider must be wired at startup too, or
-    // eval/upload confirmations silently stay window-only.
-    expect(installPresence).toHaveBeenCalledTimes(1);
     expect(verifyId).toHaveBeenCalledTimes(1);
     // The connect happens only after the sweep COMPLETED (not merely began):
     // a sweep badge-clear landing after the connect-triggered enrollment

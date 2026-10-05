@@ -737,8 +737,6 @@ export const READER_FRAMES: Record<
   enclave: {
     enclave_proof: { wire: "EnclaveProofWireSchema", enforced: "EnclaveProofFrameSchema" },
     enclave_error: { wire: "EnclaveErrorWireSchema", enforced: "EnclaveErrorFrameSchema" },
-    presence_proof: { wire: "PresenceProofWireSchema", enforced: "PresenceProofFrameSchema" },
-    presence_error: { wire: "PresenceErrorWireSchema", enforced: "PresenceErrorFrameSchema" },
   },
   admin: {
     client_list_result: { wire: "ClientListResultWireSchema", enforced: "ClientListResultSchema" },
@@ -784,7 +782,6 @@ export const WRITER_FRAMES: Record<Group, Readonly<Record<string, string>>> = {
   enclave: {
     enclave_challenge: "EnclaveChallengeWireSchema",
     enclave_revoke: "EnclaveRevokeWireSchema",
-    presence_challenge: "PresenceChallengeWireSchema",
   },
   admin: {
     client_list: "ClientListWireSchema",
@@ -806,6 +803,7 @@ export const WRITER_FRAMES: Record<Group, Readonly<Record<string, string>>> = {
     enroll_begin: "EnrollBeginWireSchema",
     enroll_finish: "EnrollFinishWireSchema",
     presence_assert: "PresenceAssertWireSchema",
+    presence_confirm: "PresenceConfirmWireSchema",
   },
 };
 

@@ -163,36 +163,6 @@ export const EnclaveErrorFrameSchema = z
 
 export type EnclaveErrorFrame = z.infer<typeof EnclaveErrorFrameSchema>;
 
-export const PresenceProofWireSchema = z
-  .object({
-    "key_id": z.string(),
-    "pubkey": z.string(),
-    "sig": z.string(),
-    "type": z.literal("presence_proof"),
-  })
-  .strict();
-
-export const PresenceProofFrameSchema = z
-  .object({
-    "key_id": z.string().min(1),
-    "pubkey": z.string().min(1),
-    "sig": z.string().min(1),
-    "type": z.literal("presence_proof"),
-  })
-  .catchall(z.unknown());
-
-export type PresenceProofFrame = z.infer<typeof PresenceProofFrameSchema>;
-
-export const PresenceErrorWireSchema = z
-  .object({ "reason": z.string(), "type": z.literal("presence_error") })
-  .strict();
-
-export const PresenceErrorFrameSchema = z
-  .object({ "reason": z.string(), "type": z.literal("presence_error") })
-  .catchall(z.unknown());
-
-export type PresenceErrorFrame = z.infer<typeof PresenceErrorFrameSchema>;
-
 export const ClientListResultWireSchema = z
   .object({
     "clients": z.array(ClientEntryWireSchema),
@@ -489,7 +459,7 @@ export type PresenceResultFrame = z.infer<typeof PresenceResultFrameSchema>;
 // Which control-frame tags have a generated reader above, and which are bare classification tags.
 // scripts/check-envelope.ts holds the extension's inbound classifiers to these.
 export const GENERATED_WIRE_FRAMES = {
-  enclave: ["enclave_proof", "enclave_error", "presence_proof", "presence_error"],
+  enclave: ["enclave_proof", "enclave_error"],
   admin: [
     "client_list_result",
     "client_revoke_result",
@@ -523,16 +493,6 @@ export type EnclaveChallengeWire = z.infer<typeof EnclaveChallengeWireSchema>;
 export const EnclaveRevokeWireSchema = z.object({ "type": z.literal("enclave_revoke") }).strict();
 
 export type EnclaveRevokeWire = z.infer<typeof EnclaveRevokeWireSchema>;
-
-export const PresenceChallengeWireSchema = z
-  .object({
-    "context": z.union([z.string(), z.null()]).optional(),
-    "nonce": z.string(),
-    "type": z.literal("presence_challenge"),
-  })
-  .strict();
-
-export type PresenceChallengeWire = z.infer<typeof PresenceChallengeWireSchema>;
 
 export const ClientListWireSchema = z.object({ "type": z.literal("client_list") }).strict();
 
@@ -649,9 +609,15 @@ export const PresenceAssertWireSchema = z
 
 export type PresenceAssertWire = z.infer<typeof PresenceAssertWireSchema>;
 
+export const PresenceConfirmWireSchema = z
+  .object({ "nonce": z.string(), "type": z.literal("presence_confirm") })
+  .strict();
+
+export type PresenceConfirmWire = z.infer<typeof PresenceConfirmWireSchema>;
+
 // Which extension->host frames have a generated writer schema above.
 export const GENERATED_WRITER_FRAMES = {
-  enclave: ["enclave_challenge", "enclave_revoke", "presence_challenge"],
+  enclave: ["enclave_challenge", "enclave_revoke"],
   admin: [
     "client_list",
     "client_revoke",
@@ -663,5 +629,5 @@ export const GENERATED_WRITER_FRAMES = {
     "registration_repair",
   ],
   policy: ["policy_get", "policy_restrict", "lang_set", "lang_get"],
-  webauthn: ["enroll_begin", "enroll_finish", "presence_assert"],
+  webauthn: ["enroll_begin", "enroll_finish", "presence_assert", "presence_confirm"],
 } as const;

@@ -2,8 +2,11 @@ use std::fs;
 
 use super::*;
 use crate::audit::Surface;
+use crate::enclave::{policy_message, EnrollmentKey, KeyStore};
 use crate::policy::Ms;
-use crate::presence::policy_test_hook::{self, Mock};
+use crate::presence::{PresenceAttestation, PresenceError, PresencePath};
+use p256::ecdsa::signature::Verifier as _;
+use p256::ecdsa::{Signature, VerifyingKey};
 
 use crate::test_support::scratch_runtime_dir;
 
@@ -23,12 +26,35 @@ fn seed_store(revision: u64, values: &PolicyValues, overlay: Option<PolicyOverla
     store
 }
 
-fn signed_mock() -> Mock {
-    Mock::Return(PolicySignOutcome::Signed {
-        sig: [7; 64],
-        key_id: "kid-1".into(),
-        pubkey_b64: "pk".into(),
-    })
+/// The host key the grant lane signs with, minted into the scratch runtime dir's file record (a test build
+/// reaches no credential store).
+fn enroll_host_key() -> EnrollmentKey {
+    let auth = PresenceAttestation::assume_for_tests(PresencePath::Tty);
+    ipc::with_runtime_lock(|lock| Ok(EnrollmentKey::mint(lock, KeyStore::File, auth)))
+        .unwrap()
+        .unwrap()
+}
+
+fn attest() -> Result<PresenceAttestation, PresenceError> {
+    Ok(PresenceAttestation::assume_for_tests(PresencePath::Tty))
+}
+
+/// The presence prompt a promptless refusal must never reach.
+macro_rules! never_attest {
+    () => {
+        || -> Result<PresenceAttestation, PresenceError> {
+            panic!("presence must not be requested by this test")
+        }
+    };
+}
+
+/// Whether `store`'s signature verifies under `key` over the policy-domain message of its stored bytes.
+fn signature_verifies(key: &EnrollmentKey, store: &PolicyStore) -> bool {
+    let verifier = VerifyingKey::from_sec1_bytes(key.public_key().as_bytes()).unwrap();
+    let sig =
+        Signature::from_slice(&base64_decode(store.sig_b64.as_deref().unwrap()).unwrap()).unwrap();
+    let message = policy_message(&base64_decode(&store.baseline_b64).unwrap());
+    verifier.verify(&message, &sig).is_ok()
 }
 
 /// The audit trail written into the scratch runtime dir, as one string.
@@ -129,8 +155,7 @@ fn a_non_base64_baseline_fails_baseline_doc_not_load() {
 #[test]
 fn set_signed_writes_the_exact_signed_bytes_and_bumps_revisions() {
     let _dir = scratch_runtime_dir();
-    let _reset = policy_test_hook::ResetOnDrop;
-    policy_test_hook::set(signed_mock());
+    let key = enroll_host_key();
 
     let values = PolicyValues {
         page_eval_enabled: true,
@@ -140,31 +165,35 @@ fn set_signed_writes_the_exact_signed_bytes_and_bumps_revisions() {
         values.clone(),
         vec![PolicyField::PageEvalEnabled],
         Surface::Core,
+        attest,
     )
     .unwrap();
-    assert_eq!(rung, PresencePath::TouchId);
+    assert_eq!(rung, PresencePath::Tty);
 
     let first = PolicyStore::load().unwrap().unwrap();
     let doc = first.baseline_doc().unwrap();
     assert_eq!(doc.revision, 1);
     assert_eq!(doc.touched, vec![PolicyField::PageEvalEnabled]);
     assert_eq!(doc.values(), values);
-    assert_eq!(
-        first.sig_b64.as_deref(),
-        Some(base64_encode(&[7; 64]).as_str())
+    assert!(
+        signature_verifies(&key, &first),
+        "the host key signed the stored bytes"
     );
-    assert_eq!(first.key_id.as_deref(), Some("kid-1"));
+    assert_eq!(
+        first.key_id.as_deref(),
+        Some(key.public_key().fingerprint_hex().as_str())
+    );
     assert!(first.overlay.is_none());
     // No previous store existed, so nothing was pushed.
     assert!(PolicyHistory::load().unwrap().is_none());
 
     // The second write supersedes the first: revision 2, and the ring
     // holds the exact previous record.
-    policy_test_hook::set(signed_mock());
     set_signed(
         PolicyValues::default(),
         vec![PolicyField::PageEvalEnabled],
         Surface::Core,
+        attest,
     )
     .unwrap();
     let second = PolicyStore::load().unwrap().unwrap();
@@ -180,14 +209,14 @@ fn set_signed_writes_the_exact_signed_bytes_and_bumps_revisions() {
     // The trail names the rung and the touched fields.
     let trail = audit_text();
     assert!(trail.contains("policy_write"), "{trail}");
-    assert!(trail.contains("auth=touch_id"), "{trail}");
+    assert!(trail.contains("auth=tty"), "{trail}");
     assert!(trail.contains("touched=pageEvalEnabled"), "{trail}");
 }
 
 #[test]
 fn set_signed_clears_touched_overlay_entries_and_keeps_the_rest() {
     let _dir = scratch_runtime_dir();
-    let _reset = policy_test_hook::ResetOnDrop;
+    enroll_host_key();
     let overlay = PolicyOverlay {
         confirm_grace_ms: Some(Ms::from(1_000u32)),
         disabled_tools: Some(vec!["page_eval".into()]),
@@ -195,7 +224,6 @@ fn set_signed_clears_touched_overlay_entries_and_keeps_the_rest() {
     };
     seed_store(1, &PolicyValues::default(), Some(overlay));
 
-    policy_test_hook::set(signed_mock());
     set_signed(
         PolicyValues {
             confirm_grace_ms: Ms::from(1_000u32),
@@ -203,6 +231,7 @@ fn set_signed_clears_touched_overlay_entries_and_keeps_the_rest() {
         },
         vec![PolicyField::ConfirmGraceMs],
         Surface::Core,
+        attest,
     )
     .unwrap();
 
@@ -221,7 +250,7 @@ fn set_signed_clears_touched_overlay_entries_and_keeps_the_rest() {
 #[test]
 fn folding_the_effective_values_leaves_effective_unchanged() {
     let _dir = scratch_runtime_dir();
-    let _reset = policy_test_hook::ResetOnDrop;
+    enroll_host_key();
     // A baseline with grants on, restricted by overlay.
     let baseline_values = PolicyValues {
         page_eval_enabled: true,
@@ -239,7 +268,6 @@ fn folding_the_effective_values_leaves_effective_unchanged() {
     // The explicit fold act: a new revision
     // carrying the folded fields' EFFECTIVE values with exactly those
     // fields touched.
-    policy_test_hook::set(signed_mock());
     set_signed(
         effective_before.clone(),
         vec![
@@ -248,6 +276,7 @@ fn folding_the_effective_values_leaves_effective_unchanged() {
             PolicyField::DisabledTools,
         ],
         Surface::Core,
+        attest,
     )
     .unwrap();
 
@@ -262,22 +291,23 @@ fn folding_the_effective_values_leaves_effective_unchanged() {
 #[test]
 fn set_signed_signs_exactly_the_bytes_it_stores() {
     let _dir = scratch_runtime_dir();
-    let _reset = policy_test_hook::ResetOnDrop;
-    policy_test_hook::set(signed_mock());
+    let key = enroll_host_key();
     let values = PolicyValues {
         page_eval_enabled: true,
         ..PolicyValues::default()
     };
     let touched = vec![PolicyField::PageEvalEnabled];
-    set_signed(values.clone(), touched.clone(), Surface::Core).unwrap();
-    // The bytes the signing primitive was called with are the bytes the
-    // store persists, byte for byte: the signature can only ever cover
-    // exactly what is stored.
-    let signed = policy_test_hook::last_doc_bytes().unwrap();
+    set_signed(values.clone(), touched.clone(), Surface::Core, attest).unwrap();
+    // The stored signature verifies over the stored bytes and over nothing else: the signature can only
+    // ever cover exactly what is stored.
     let store = PolicyStore::load().unwrap().unwrap();
-    assert_eq!(base64_decode(&store.baseline_b64).unwrap(), signed);
+    assert!(signature_verifies(&key, &store));
+    let mut tampered = store.clone();
+    tampered.baseline_b64 = base64_encode(b"{}");
+    assert!(!signature_verifies(&key, &tampered));
     // And those bytes parse back to a document scoped by exactly the
     // touched set and values that were passed.
+    let signed = base64_decode(&store.baseline_b64).unwrap();
     let doc: PolicyDoc = serde_json::from_slice(&signed).unwrap();
     assert_eq!(doc.touched, touched);
     assert_eq!(doc.values(), values);
@@ -286,11 +316,14 @@ fn set_signed_signs_exactly_the_bytes_it_stores() {
 #[test]
 fn an_empty_touched_set_refuses_before_any_prompt() {
     let _dir = scratch_runtime_dir();
-    let _reset = policy_test_hook::ResetOnDrop;
-    // The mock panics if the signing primitive is reached: the refusal
-    // must be promptless.
-    policy_test_hook::set(Mock::PanicIfCalled);
-    let err = set_signed(PolicyValues::default(), vec![], Surface::Core).unwrap_err();
+    enroll_host_key();
+    let err = set_signed(
+        PolicyValues::default(),
+        vec![],
+        Surface::Core,
+        never_attest!(),
+    )
+    .unwrap_err();
     assert!(matches!(err, PolicyWriteError::Invalid(_)));
     assert!(PolicyStore::load().unwrap().is_none());
 }
@@ -298,13 +331,13 @@ fn an_empty_touched_set_refuses_before_any_prompt() {
 #[test]
 fn revision_overflow_refuses_before_any_prompt() {
     let _dir = scratch_runtime_dir();
-    let _reset = policy_test_hook::ResetOnDrop;
+    enroll_host_key();
     seed_store(JS_SAFE_INT_MAX, &PolicyValues::default(), None);
-    policy_test_hook::set(Mock::PanicIfCalled);
     let err = set_signed(
         PolicyValues::default(),
         vec![PolicyField::CdpMode],
         Surface::Core,
+        never_attest!(),
     )
     .unwrap_err();
     assert!(matches!(err, PolicyWriteError::RevisionOverflow));
@@ -316,13 +349,13 @@ fn the_last_js_safe_revision_still_writes() {
     // MAX, the last legal revision (the overflow test above pins that
     // MAX itself refuses).
     let _dir = scratch_runtime_dir();
-    let _reset = policy_test_hook::ResetOnDrop;
+    enroll_host_key();
     seed_store(JS_SAFE_INT_MAX - 1, &PolicyValues::default(), None);
-    policy_test_hook::set(signed_mock());
     set_signed(
         PolicyValues::default(),
         vec![PolicyField::CdpMode],
         Surface::Core,
+        attest,
     )
     .unwrap();
     assert_eq!(
@@ -352,19 +385,17 @@ fn the_revision_seam_covers_its_boundaries() {
 }
 
 #[test]
-fn a_refused_signature_never_falls_to_the_floor() {
+fn a_refused_presence_never_falls_to_the_floor() {
     let _dir = scratch_runtime_dir();
-    let _reset = policy_test_hook::ResetOnDrop;
+    enroll_host_key();
     let seeded = seed_store(1, &PolicyValues::default(), None);
-    policy_test_hook::set(Mock::Return(PolicySignOutcome::Refused(
-        "user cancelled".into(),
-    )));
     // A refusal is terminal (the no-downgrade rule): never an unsigned
     // write, never a softer prompt.
     let err = set_signed(
         PolicyValues::default(),
         vec![PolicyField::CdpMode],
         Surface::Core,
+        || Err(PresenceError::Declined),
     )
     .unwrap_err();
     assert!(matches!(err, PolicyWriteError::Refused(_)));
@@ -373,14 +404,13 @@ fn a_refused_signature_never_falls_to_the_floor() {
 }
 
 #[test]
-fn unavailable_hardware_refuses_the_grant() {
+fn a_keyless_machine_refuses_the_grant_before_any_prompt() {
     let _dir = scratch_runtime_dir();
-    let _reset = policy_test_hook::ResetOnDrop;
-    // The default mock is Unavailable: a keyless machine.
     let err = set_signed(
         PolicyValues::default(),
         vec![PolicyField::CdpMode],
         Surface::Cli,
+        never_attest!(),
     )
     .unwrap_err();
     assert!(matches!(err, PolicyWriteError::NoSigningKey));
@@ -546,7 +576,7 @@ fn history_evicts_oldest_entries_until_the_ring_encodes_under_its_own_cap() {
 #[test]
 fn a_corrupt_history_file_never_blocks_policy_writes() {
     let _dir = scratch_runtime_dir();
-    let _reset = policy_test_hook::ResetOnDrop;
+    enroll_host_key();
     seed_store(1, &PolicyValues::default(), None);
     fs::write(PolicyHistory::path().unwrap(), b"garbage, not json").unwrap();
     // Reading it fails closed for the (future) rollback surface...
@@ -554,11 +584,11 @@ fn a_corrupt_history_file_never_blocks_policy_writes() {
     // ...but the enforcement paths and both seams stay fully functional:
     // the writer logs, replaces the ring, and the policy writes land.
     assert!(PolicyStore::load().unwrap().is_some());
-    policy_test_hook::set(signed_mock());
     set_signed(
         PolicyValues::default(),
         vec![PolicyField::CdpMode],
         Surface::Core,
+        attest,
     )
     .unwrap();
     restrict(
@@ -782,22 +812,31 @@ fn a_tampered_overlay_that_relaxes_the_baseline_refuses_every_read() {
 #[test]
 fn a_relaxation_outside_the_touched_set_refuses_before_any_prompt() {
     let _dir = scratch_runtime_dir();
-    let _reset = policy_test_hook::ResetOnDrop;
+    enroll_host_key();
     seed_store(1, &PolicyValues::default(), None);
-    // page_eval_enabled: true relaxes the effective anchor, but touched
-    // names only cdpMode: promptless refusal (the mock panics if the
-    // signing primitive is reached).
-    policy_test_hook::set(Mock::PanicIfCalled);
+    // page_eval_enabled: true relaxes the effective anchor, but touched names only cdpMode: promptless refusal.
     let relaxing = PolicyValues {
         page_eval_enabled: true,
         ..PolicyValues::default()
     };
-    let err = set_signed(relaxing.clone(), vec![PolicyField::CdpMode], Surface::Core).unwrap_err();
+    let err = set_signed(
+        relaxing.clone(),
+        vec![PolicyField::CdpMode],
+        Surface::Core,
+        never_attest!(),
+    )
+    .unwrap_err();
     assert!(matches!(err, PolicyWriteError::Invalid(_)));
     // With no store at all the anchor is the deny baseline: an
     // undeclared first-write grant refuses the same way.
     fs::remove_file(PolicyStore::path().unwrap()).unwrap();
-    let err = set_signed(relaxing, vec![PolicyField::CdpMode], Surface::Core).unwrap_err();
+    let err = set_signed(
+        relaxing,
+        vec![PolicyField::CdpMode],
+        Surface::Core,
+        never_attest!(),
+    )
+    .unwrap_err();
     assert!(matches!(err, PolicyWriteError::Invalid(_)));
     assert!(PolicyStore::load().unwrap().is_none());
 }
@@ -805,9 +844,8 @@ fn a_relaxation_outside_the_touched_set_refuses_before_any_prompt() {
 #[test]
 fn a_touched_superset_of_the_relaxations_passes() {
     let _dir = scratch_runtime_dir();
-    let _reset = policy_test_hook::ResetOnDrop;
+    enroll_host_key();
     seed_store(1, &PolicyValues::default(), None);
-    policy_test_hook::set(signed_mock());
     set_signed(
         PolicyValues {
             page_eval_enabled: true,
@@ -815,6 +853,7 @@ fn a_touched_superset_of_the_relaxations_passes() {
         },
         vec![PolicyField::PageEvalEnabled, PolicyField::CdpMode],
         Surface::Core,
+        attest,
     )
     .unwrap();
     assert!(
@@ -830,7 +869,7 @@ fn a_touched_superset_of_the_relaxations_passes() {
 #[test]
 fn a_restriction_lands_when_named_and_refuses_as_untouched_drift() {
     let _dir = scratch_runtime_dir();
-    let _reset = policy_test_hook::ResetOnDrop;
+    enroll_host_key();
     seed_store(
         1,
         &PolicyValues {
@@ -843,20 +882,20 @@ fn a_restriction_lands_when_named_and_refuses_as_untouched_drift() {
     // carries baseline values on fields it does not touch:
     // changing it under an unrelated touched field is an unnamed edit
     // and refuses promptless, in EITHER direction.
-    policy_test_hook::set(Mock::PanicIfCalled);
     let drift = set_signed(
         PolicyValues::default(),
         vec![PolicyField::ConfirmGraceMs],
         Surface::Core,
+        never_attest!(),
     );
     assert!(matches!(drift, Err(PolicyWriteError::Invalid(_))));
     // Named in touched, the same restriction lands (the coverage check
     // binds relaxations only; restrictions just need naming).
-    policy_test_hook::set(signed_mock());
     set_signed(
         PolicyValues::default(),
         vec![PolicyField::PageEvalEnabled],
         Surface::Core,
+        attest,
     )
     .unwrap();
     assert!(
@@ -1004,7 +1043,6 @@ fn every_policy_write_moves_the_policy_epoch_and_a_noop_clear_holds_it() {
             name: "signed write",
             start: || {},
             write: || {
-                policy_test_hook::set(signed_mock());
                 set_signed(
                     PolicyValues {
                         page_eval_enabled: true,
@@ -1012,6 +1050,7 @@ fn every_policy_write_moves_the_policy_epoch_and_a_noop_clear_holds_it() {
                     },
                     vec![PolicyField::PageEvalEnabled],
                     Surface::Core,
+                    attest,
                 )
                 .unwrap();
             },
@@ -1050,7 +1089,7 @@ fn every_policy_write_moves_the_policy_epoch_and_a_noop_clear_holds_it() {
     ];
     for case in cases {
         let _dir = scratch_runtime_dir();
-        let _reset = policy_test_hook::ResetOnDrop;
+        enroll_host_key();
         (case.start)();
         let before = crate::trust::TrustState::current().unwrap().policy_epoch();
         (case.write)();

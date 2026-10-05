@@ -28,22 +28,23 @@ pub enum Command {
     /// Read-only health report; --fix repairs the native-messaging registrations
     #[command(visible_alias = "status")]
     Doctor(DoctorCommand),
-    /// Enroll: mint the Secure Enclave key (macOS)
+    /// Enroll: mint the host identity key the extension pins
     Pair {
-        /// Replace the enrollment key with a fresh one
+        /// Replace the host key with a fresh one
         #[arg(long)]
         reset: bool,
+        /// Keep the key in a 0600 file in the runtime directory instead of the OS credential store
+        #[arg(long)]
+        file_store: bool,
     },
-    /// Delete the enrollment key (a pinning extension then fails closed)
+    /// Delete the host key (a pinning extension then fails closed)
     Revoke,
-    /// Print the enrollment state
+    /// Print the host key state
     EnclaveStatus {
         /// One machine-readable object instead of prose
         #[arg(long)]
         json: bool,
     },
-    /// Raise one user-presence prompt and report the outcome, without a browser
-    PresenceSelftest,
     /// Trust an MCP-client harness
     PairClient(PairClientArgs),
     /// Untrust a client; a live broker drops it at once
@@ -245,7 +246,7 @@ pub enum PolicyCommand {
         #[arg(long)]
         json: bool,
     },
-    /// GRANT lane: mint a fresh SIGNED baseline (Touch ID); refuses where no enrollment key exists
+    /// GRANT lane: mint a fresh SIGNED baseline (interactive confirmation); refuses where no host key exists
     #[command(override_usage = "chromium-bridge policy set <field flags> [--json]")]
     Set {
         #[command(flatten)]
@@ -254,7 +255,7 @@ pub enum PolicyCommand {
         #[arg(long)]
         json: bool,
     },
-    /// FREE lane: apply an unsigned restriction overlay (no Touch ID; only ever removes capability)
+    /// FREE lane: apply an unsigned restriction overlay (no confirmation; only ever removes capability)
     #[command(override_usage = "chromium-bridge policy restrict <field flags>")]
     Restrict {
         #[command(flatten)]
@@ -601,13 +602,25 @@ mod tests {
                     abs("b"),
                 ]))),
             ),
-            (vec!["pair"], Command::Pair { reset: false }),
+            (
+                vec!["pair"],
+                Command::Pair {
+                    reset: false,
+                    file_store: false,
+                },
+            ),
+            (
+                vec!["pair", "--reset", "--file-store"],
+                Command::Pair {
+                    reset: true,
+                    file_store: true,
+                },
+            ),
             (vec!["revoke"], Command::Revoke),
             (
                 vec!["enclave-status", "--json"],
                 Command::EnclaveStatus { json: true },
             ),
-            (vec!["presence-selftest"], Command::PresenceSelftest),
             (
                 vec!["pair-client", "--name", "codex", "--hash", &hash],
                 Command::PairClient(PairClientArgs {
@@ -710,7 +723,6 @@ mod tests {
             (&["pair", "--rest"], UnknownArgument),
             (&["revoke", "--force"], UnknownArgument),
             (&["enclave-status", "--json", "x"], UnknownArgument),
-            (&["presence-selftest", "x"], UnknownArgument),
             (&["kill", "--force"], UnknownArgument),
             (&["unkill", "now"], UnknownArgument),
             (&["list-clients", "--json"], UnknownArgument),

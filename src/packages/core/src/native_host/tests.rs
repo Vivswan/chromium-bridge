@@ -4,21 +4,8 @@ use crate::runtime_record::RuntimeRecord;
 use crate::trust::{Clients, Trust, TrustState};
 use std::io::Cursor;
 
-#[test]
-fn presence_slot_is_single_flight_and_released_on_drop() {
-    // The guard's constructor IS the acquire: while one guard exists the
-    // slot cannot be won again, and dropping it (any exit path, including
-    // a spawn failure dropping the never-run closure) releases it.
-    let first = PresenceSlotGuard::try_acquire().unwrap();
-    assert!(
-        PresenceSlotGuard::try_acquire().is_none(),
-        "the slot is single-flight while a guard exists"
-    );
-    drop(first);
-    assert!(
-        PresenceSlotGuard::try_acquire().is_some(),
-        "dropping the guard releases the slot"
-    );
+fn exchange() -> Exchange {
+    Exchange::new(BrowserLabel::default_label())
 }
 
 #[test]
@@ -88,9 +75,9 @@ fn server_injected_control_frames_are_dropped_not_forwarded() {
         "{\"type\":\"enclave_proof\",\"sig\":\"s\",\"key_id\":\"k\",\"pubkey\":\"p\"}\n",
         "{\"type\":\"enclave_revoke\"}\n",
         "{\"type\":\"enclave_revoked\"}\n",
-        "{\"type\":\"presence_challenge\",\"nonce\":\"n\"}\n",
-        "{\"type\":\"presence_proof\",\"sig\":\"s\",\"key_id\":\"k\",\"pubkey\":\"p\"}\n",
-        "{\"type\":\"presence_error\",\"reason\":\"busy\"}\n",
+        "{\"type\":\"presence_confirm\",\"nonce\":\"n\"}\n",
+        "{\"type\":\"presence_request\",\"challenge\":\"c\",\"nonce\":\"n\",\"action\":\"a\",\"allowed_credential_ids\":[]}\n",
+        "{\"type\":\"presence_result\",\"ok\":true}\n",
         "{\"type\":\"client_list\"}\n",
         "{\"type\":\"client_list_result\",\"ok\":true,\"enrolled\":true,\"clients\":[]}\n",
         "{\"type\":\"client_revoke\",\"name\":\"codex\"}\n",
@@ -156,7 +143,7 @@ fn policy_frames_from_the_browser_are_answered_or_dropped() {
     // arriving FROM the browser are malformed under their tag with nothing owed. All are Handled, never
     // forwarded. A scratch runtime dir isolates the store reads/writes the answers do.
     let _dir = scratch_runtime_dir();
-    let out = Arc::new(Mutex::new(BufWriter::new(io::stdout())));
+    let out = Mutex::new(Vec::new());
     for (frame, is_push) in [
         (serde_json::json!({ "type": "policy_get" }), false),
         (serde_json::json!({ "type": "lang_get" }), false),
@@ -192,7 +179,7 @@ fn policy_frames_from_the_browser_are_answered_or_dropped() {
             }
             FrameDisposition::Forward => panic!("host control must never forward: {frame}"),
         }
-        let verdict = handle_control_frame(frame, &out).unwrap();
+        let verdict = handle_control_frame(frame, &out, &mut exchange()).unwrap();
         assert!(matches!(verdict, Inbound::Handled));
     }
 }
@@ -200,14 +187,17 @@ fn policy_frames_from_the_browser_are_answered_or_dropped() {
 #[test]
 fn policy_get_answers_the_signed_baseline_from_the_store() {
     let _dir = scratch_runtime_dir();
-    let _reset = crate::presence::policy_test_hook::ResetOnDrop;
-    crate::presence::policy_test_hook::set(crate::presence::policy_test_hook::Mock::Return(
-        crate::presence::PolicySignOutcome::Signed {
-            sig: [7; 64],
-            key_id: "kid".into(),
-            pubkey_b64: "pk".into(),
-        },
-    ));
+    crate::ipc::with_runtime_lock(|lock| {
+        Ok(crate::enclave::EnrollmentKey::mint(
+            lock,
+            crate::enclave::KeyStore::File,
+            crate::presence::PresenceAttestation::assume_for_tests(
+                crate::presence::PresencePath::Tty,
+            ),
+        ))
+    })
+    .unwrap()
+    .unwrap();
     crate::policy::set_signed(
         crate::policy::PolicyValues {
             page_eval_enabled: true,
@@ -215,6 +205,11 @@ fn policy_get_answers_the_signed_baseline_from_the_store() {
         },
         vec![crate::policy::PolicyField::PageEvalEnabled],
         crate::audit::Surface::Core,
+        || {
+            Ok(crate::presence::PresenceAttestation::assume_for_tests(
+                crate::presence::PresencePath::Tty,
+            ))
+        },
     )
     .unwrap();
     let reply = policy_current_reply();
@@ -340,20 +335,20 @@ fn registration_report_carries_rows_exactly_when_the_resolver_ran() {
     );
 }
 
-#[test]
-fn policy_restrict_tightens_the_store_and_refuses_a_relaxation() {
-    // The extension's restriction lane rides the same seam as `policy restrict`: a tightening lands in the
-    // store (and the next policy_current carries the overlay), a relaxation is refused with the seam's reason
-    // and leaves the store untouched, and both verdicts are audited with the extension surface.
-    let _dir = scratch_runtime_dir();
-    let _reset = crate::presence::policy_test_hook::ResetOnDrop;
-    crate::presence::policy_test_hook::set(crate::presence::policy_test_hook::Mock::Return(
-        crate::presence::PolicySignOutcome::Signed {
-            sig: [7; 64],
-            key_id: "kid".into(),
-            pubkey_b64: "pk".into(),
-        },
-    ));
+/// A signed baseline that grants `page_eval`, written the way the CLI's grant lane writes one: the host key
+/// minted into the scratch runtime dir's file record, the test attestation standing in for the typed phrase.
+fn signed_baseline_granting_page_eval() {
+    use crate::presence::{PresenceAttestation, PresencePath};
+    let mint_auth = PresenceAttestation::assume_for_tests(PresencePath::Tty);
+    crate::ipc::with_runtime_lock(|lock| {
+        Ok(crate::enclave::EnrollmentKey::mint(
+            lock,
+            crate::enclave::KeyStore::File,
+            mint_auth,
+        ))
+    })
+    .unwrap()
+    .unwrap();
     crate::policy::set_signed(
         crate::policy::PolicyValues {
             page_eval_enabled: true,
@@ -361,8 +356,18 @@ fn policy_restrict_tightens_the_store_and_refuses_a_relaxation() {
         },
         vec![crate::policy::PolicyField::PageEvalEnabled],
         crate::audit::Surface::Core,
+        || Ok(PresenceAttestation::assume_for_tests(PresencePath::Tty)),
     )
     .unwrap();
+}
+
+#[test]
+fn policy_restrict_tightens_the_store_and_refuses_a_relaxation() {
+    // The extension's restriction lane rides the same seam as `policy restrict`: a tightening lands in the
+    // store (and the next policy_current carries the overlay), a relaxation is refused with the seam's reason
+    // and leaves the store untouched, and both verdicts are audited with the extension surface.
+    let _dir = scratch_runtime_dir();
+    signed_baseline_granting_page_eval();
 
     let tightened = policy_restrict_replies(crate::policy::PolicyOverlay {
         page_eval_enabled: Some(false),
@@ -421,23 +426,7 @@ fn an_applied_restrict_pushes_policy_current_even_when_the_epoch_bump_fails() {
     // the restriction must still reach the extension as the reply that follows the result, since
     // confirmPageEval is enforced in the extension's mirror alone.
     let _dir = scratch_runtime_dir();
-    let _reset = crate::presence::policy_test_hook::ResetOnDrop;
-    crate::presence::policy_test_hook::set(crate::presence::policy_test_hook::Mock::Return(
-        crate::presence::PolicySignOutcome::Signed {
-            sig: [7; 64],
-            key_id: "kid".into(),
-            pubkey_b64: "pk".into(),
-        },
-    ));
-    crate::policy::set_signed(
-        crate::policy::PolicyValues {
-            page_eval_enabled: true,
-            ..Default::default()
-        },
-        vec![crate::policy::PolicyField::PageEvalEnabled],
-        crate::audit::Surface::Core,
-    )
-    .unwrap();
+    signed_baseline_granting_page_eval();
     crate::ipc::with_runtime_lock(|lock| {
         Trust::fixture(u64::MAX, false, Clients::NeverPaired).write(lock)
     })
@@ -510,36 +499,6 @@ fn an_out_of_enum_lang_set_replies_the_unchanged_current() {
 }
 
 #[test]
-fn extension_kill_release_is_refused_audited_and_does_not_release() {
-    // The extension has no release path (restoring capability is a CLI act
-    // behind the presence gate). Engage the kill switch, then attempt release
-    // from the extension: the reply
-    // is a refusal (ok:false, no killed claim), the trail records it, and
-    // the bridge stays killed - the refusal never calls kill::release.
-    let _dir = scratch_runtime_dir();
-    crate::kill::engage(crate::audit::Surface::Cli).unwrap();
-    let reply = handle_kill_release_refused();
-    assert!(
-        matches!(
-            reply,
-            AdminControl::KillStatusResult {
-                ok: false,
-                killed: None,
-                error: Some(_),
-            }
-        ),
-        "extension release must be refused with no killed claim: {reply:?}"
-    );
-    assert!(
-        crate::kill::is_killed().unwrap(),
-        "the refusal must NOT release the kill switch"
-    );
-    let trail = audit_text();
-    assert!(trail.contains("kill_release"), "{trail}");
-    assert!(trail.contains("\"outcome\":\"refused\""), "{trail}");
-}
-
-#[test]
 fn kill_status_reply_never_claims_a_state_it_cannot_read() {
     // On a machine whose trust record is absent (the unit-test
     // environment), the reply is ok with an explicit killed flag; the
@@ -568,30 +527,48 @@ fn audit_events_with_host_side_kinds_are_dropped() {
     // The forgery gate lives in the parse (protocol/control.rs: a host-owned kind is not an
     // ExtensionAuditKind); this exercises the host wiring: the frame is Handled (never forwarded), no
     // reply is written, and nothing recordable is ever constructed.
-    let out = Arc::new(Mutex::new(BufWriter::new(io::stdout())));
+    let out = Mutex::new(Vec::new());
     for kind in ["kill_engage", "harness_admit"] {
         let verdict = handle_control_frame(
             serde_json::json!({ "type": "audit_event", "kind": kind }),
             &out,
+            &mut exchange(),
         )
         .unwrap();
         assert!(matches!(verdict, Inbound::Handled));
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+/// The extension's revoke on a machine with no host key answers `enclave_revoked` (the requested end state
+/// holds), and a second one the same; a minted key is gone after it, with the host-key epoch moved.
 #[test]
-fn revoke_on_an_unsupported_platform_reports_the_stable_reason() {
-    // Non-macOS: EnrollmentKey::revoke fails closed with Unsupported and
-    // the reply carries the stable reason code, never a panic.
-    let reply = revoke_host_key();
-    let EnclaveControl::EnclaveError { reason } = reply else {
-        panic!("expected enclave_error, got {reply:?}");
-    };
-    assert_eq!(reason, "unsupported_platform");
+fn extension_revoke_reaches_the_end_state_and_moves_the_host_key_epoch() {
+    let _dir = scratch_runtime_dir();
+    assert!(matches!(
+        revoke_host_key(),
+        EnclaveControl::EnclaveRevoked {}
+    ));
+    crate::ipc::with_runtime_lock(|lock| {
+        Ok(crate::enclave::EnrollmentKey::mint(
+            lock,
+            crate::enclave::KeyStore::File,
+            crate::presence::PresenceAttestation::assume_for_tests(
+                crate::presence::PresencePath::Tty,
+            ),
+        ))
+    })
+    .unwrap()
+    .unwrap();
+    let before = TrustState::current().unwrap().host_key_epoch();
+    assert!(matches!(
+        revoke_host_key(),
+        EnclaveControl::EnclaveRevoked {}
+    ));
+    assert!(crate::enclave::EnrollmentKey::lookup().unwrap().is_none());
+    assert!(TrustState::current().unwrap().host_key_epoch() > before);
 }
 
-// ---- The control-plane unkill drain ---------------------------------------
+// ---- the control-plane unkill drain -------------------------------------------
 
 #[test]
 fn a_buffered_engage_across_unkill_is_drained_and_keeps_the_host_killed() {
@@ -689,7 +666,7 @@ fn the_loop_handles_buffered_frames_before_exiting_on_unkill() {
 fn a_released_record_recovered_after_an_unreadable_gap_hands_the_release_to_the_loop() {
     // The push helpers read the policy, language and trust stores from the runtime dir.
     let _dir = scratch_runtime_dir();
-    let out = Mutex::new(BufWriter::new(io::stdout()));
+    let out = Mutex::new(Vec::new());
     let released = || Ok(TrustState::from(Trust::default()));
     let killed = || {
         Ok(TrustState::from(Trust::fixture(

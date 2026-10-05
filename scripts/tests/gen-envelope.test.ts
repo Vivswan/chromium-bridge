@@ -638,9 +638,6 @@ describe("assertFramePlan (G7)", () => {
         "enclave_error",
         "enclave_revoke",
         "enclave_revoked",
-        "presence_challenge",
-        "presence_proof",
-        "presence_error",
       ].map((tag) => [tag, variant(tag)]),
     );
     expect(() => assertFramePlan("enclave", planned)).not.toThrow();

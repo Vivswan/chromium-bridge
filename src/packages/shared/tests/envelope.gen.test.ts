@@ -37,11 +37,6 @@ import {
   PolicyCurrentFrameSchema,
   PolicyCurrentWireSchema,
   PolicyGetWireSchema,
-  PresenceChallengeWireSchema,
-  PresenceErrorFrameSchema,
-  PresenceErrorWireSchema,
-  PresenceProofFrameSchema,
-  PresenceProofWireSchema,
   TrustedClientSchema,
 } from "../src/envelope.gen";
 
@@ -114,20 +109,6 @@ const WIRE_CASES: ReadonlyArray<{
     schema: EnclaveErrorWireSchema,
     enforced: EnclaveErrorFrameSchema,
     valid: { type: "enclave_error", reason: "denied" },
-    required: ["type", "reason"],
-  },
-  {
-    name: "PresenceProofWireSchema",
-    schema: PresenceProofWireSchema,
-    enforced: PresenceProofFrameSchema,
-    valid: { type: "presence_proof", sig: "s", key_id: "k", pubkey: "p" },
-    required: ["type", "sig", "key_id", "pubkey"],
-  },
-  {
-    name: "PresenceErrorWireSchema",
-    schema: PresenceErrorWireSchema,
-    enforced: PresenceErrorFrameSchema,
-    valid: { type: "presence_error", reason: "busy" },
     required: ["type", "reason"],
   },
   {
@@ -310,10 +291,6 @@ describe("generated writer schemas admit exactly the frames the extension constr
       valid: { type: "enclave_challenge", nonce: "n", context: "ext:id:pair" },
     },
     { schema: EnclaveRevokeWireSchema, valid: { type: "enclave_revoke" } },
-    {
-      schema: PresenceChallengeWireSchema,
-      valid: { type: "presence_challenge", nonce: "n", context: "tool:eval" },
-    },
     { schema: ClientListWireSchema, valid: { type: "client_list" } },
     { schema: ClientRevokeWireSchema, valid: { type: "client_revoke", name: "example-client" } },
     { schema: KillStatusWireSchema, valid: { type: "kill_status" } },

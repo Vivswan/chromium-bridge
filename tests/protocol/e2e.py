@@ -251,7 +251,6 @@ class ControlFrames(E2ECase):
     def test_admin_frames_are_answered_locally(self):
         """client_list and client_revoke are answered by the host from the
         trusted-client store, never forwarded; a stray result frame is dropped."""
-        self.skip_if_enrolled()
         self.skip_unless_unix("the pty-driven pairing")
         env = self.private_runtime("bb-e2e-admin-")
         h.run_with_cli_presence(["pair-client", "--name", "pytest", "--this-parent"], env=env)
@@ -295,10 +294,13 @@ class ControlFrames(E2ECase):
 class KillSwitch(E2ECase):
     def test_kill_engage_refuse_release_recover(self):
         """`kill` halts the live broker with typed BRIDGE_KILLED refusals,
-        severs the browser leg, keeps a fresh host control-plane only, refuses
-        the extension's retired release frame; `unkill` restores everything,
-        and the 0600 audit trail records each step with its surface."""
-        self.skip_if_enrolled()
+        severs the browser leg, and keeps a fresh host control-plane only. The
+        extension's `kill_release` opens a presence request instead of acting:
+        a confirmation naming no outstanding request is refused and leaves the
+        switch engaged; on a machine with no enrolled credential the window's
+        confirmation of the request releases it, the host exits so the
+        extension reconnects into bridge mode, and the 0600 audit trail records
+        each step with its surface and the auth path."""
         self.skip_unless_unix("the pty-driven release")
         for name in ("trust.json", "audit.log", "audit.log.1", "audit.log.lock"):
             self.addCleanup(self._remove, h.runtime_file(name))
@@ -321,14 +323,27 @@ class KillSwitch(E2ECase):
         nm_write(nh2, {"type": "kill_status"})
         self.assertEqual(nm_read(nh2), killed)
         nm_write(nh2, {"type": "kill_release"})
-        refused = nm_read(nh2)
-        self.assertIn("kill_release from the extension is retired", refused.pop("error"))
-        self.assertEqual(refused, {"type": "kill_status_result", "ok": False},
-                         "the extension release is refused with no killed claim")
+        request = nm_read_type(nh2, "presence_request")
+        self.assertEqual((request["action"], request["allowed_credential_ids"]),
+                         ("release the kill switch", []),
+                         "the release opens a presence request; no credential is enrolled to hint")
         nm_write(nh2, {"type": "kill_status"})
-        self.assertEqual(nm_read(nh2), killed, "the refused release left the switch engaged")
+        self.assertEqual(nm_read(nh2), killed, "the request alone releases nothing")
+        nm_write(nh2, {"type": "presence_confirm", "nonce": "not-the-outstanding-request"})
+        self.assertEqual(nm_read(nh2),
+                         {"type": "presence_result", "ok": False, "reason": "request_mismatch"},
+                         "a confirmation naming another request is refused")
+        nm_write(nh2, {"type": "kill_status"})
+        self.assertEqual(nm_read(nh2), killed, "the refused answer left the switch engaged")
 
-        h.run_with_cli_presence(["unkill"])
+        nm_write(nh2, {"type": "kill_release"})
+        request = nm_read_type(nh2, "presence_request")
+        nm_write(nh2, {"type": "presence_confirm", "nonce": request["nonce"]})
+        self.assertEqual(nm_read_type(nh2, "presence_result"), {"type": "presence_result", "ok": True},
+                         "with no enrolled credential the window's confirmation vouches")
+        self.assertEqual(nm_read(nh2),
+                         {"type": "kill_status_result", "ok": True, "killed": False},
+                         "the release is the very next reply after the verdict")
         self.bounded("drain the control-plane host", lambda: list(iter(lambda: nm_read(nh2), None)), 8)
         self.assertExits(nh2, 8, "the control-plane host exits after the release")
         self.assertRoundTrip(c, self.host(), 82, "Recovered")
@@ -346,12 +361,12 @@ class KillSwitch(E2ECase):
             ("kill_engage", "cli", "ok", None),
             ("tool_call", None, "error", "BRIDGE_KILLED"),
             ("kill_release", "extension", "refused", None),
-            ("kill_release", "cli", "ok", None),
+            ("kill_release", "extension", "ok", None),
             ("tool_call", None, "ok", None),
         ])
-        cli_release = next(rec for rec in h.audit_records()
-                           if rec.get("event_kind") == "kill_release" and rec.get("surface") == "cli")
-        self.assertIn("auth=cli_confirm", cli_release["detail"], "the release names its presence rung")
+        release = next(rec for rec in h.audit_records()[already:]
+                       if rec.get("event_kind") == "kill_release" and rec.get("outcome") == "ok")
+        self.assertIn("auth=confirm_window", release["detail"], "the release names its presence path")
         shown = h.run_cli(["audit"])
         self.assertEqual(shown.returncode, 0, shown.stderr)
         self.assertIn("kill_engage", shown.stdout)
