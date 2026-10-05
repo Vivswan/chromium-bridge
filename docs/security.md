@@ -8,7 +8,7 @@ What the bridge promises about your browser, what gates each promise, and where 
 
 What the bar is not: "nothing can ever touch your browser". You installed this bridge so an agent can drive your browser. The bar is the standard the project holds itself to, not a claim that it is met everywhere today.
 
-One place falls short, on purpose. On an approved origin, reads including masked cookies and storage run without a per-action prompt, and tab titles and URLs are readable with no approval at all. [Where we deliberately stop](#where-we-deliberately-stop) carries every accepted gap.
+One place falls short, on purpose. On an approved origin, reads including masked cookies and storage run without a per-action prompt, and tab titles and URLs are readable with no approval at all. [Where we deliberately stop](#where-we-deliberately-stop) names the gaps a reader meets first; the [ledger](security/trust-boundaries.md) carries every residual.
 
 ## What is at stake, and who is trusted
 
@@ -84,7 +84,7 @@ One record ties the hops together: `trust.json` in the runtime directory holds t
 **The confirmation window.** Submit and link clicks, `page_press`, `page_select`, `page_eval`, `tab_close`, and `page_upload` confirm on an extension-owned window in its own process, which the page cannot read, focus, overlay, auto-click, or auto-dismiss. A timeout, a closed window, or a missing provider all deny.
 
 - **Every `page_eval` and `page_upload` call reconfirms.** The [fail-safe defaults](../.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe) own what each confirmation shows and how long the grace window lasts.
-- **One approved click covers repeats** in the same tab, origin, and action kind for that window; another tab on the same origin confirms again. `page_eval` is never in it.
+- **One approved click covers repeats** within the window's [per-tab key](../.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe). `page_eval` is never in it.
 - **Low-risk tools run unprompted** on an approved origin: navigation, `page_text`, `tab_list`, masked cookie and storage reads.
 
 **Presence.** Removing capability is friction-free: `kill`, `revoke`, and `uninstall` need no proof, because fail-closed is the safe state. Granting or restoring capability demands one proof of a human present, consumed by exactly one act:

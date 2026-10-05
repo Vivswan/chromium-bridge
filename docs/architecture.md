@@ -338,7 +338,7 @@ Broker exits when the last attached harness detaches.
 
 ## 6. Security model
 
-The full treatment is in [docs/security/](./security/); this is the map.
+The full treatment is in [docs/security.md](./security.md); this is the map.
 
 | Boundary | Mechanism | Rationale |
 |------|------|-----|

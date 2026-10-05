@@ -247,7 +247,7 @@ Full runbook: [docs/cli.md](./docs/cli.md) and [docs/troubleshooting.md](./docs/
 |-----|--------------|
 | [docs/quickstart.md](./docs/quickstart.md) | Install and first use |
 | [docs/architecture.md](./docs/architecture.md) | Components, data flow, protocols, security model, key constraints |
-| [docs/security/](./docs/security/) | Threat model, trust boundaries, tool risk matrix, incident response |
+| [docs/security/](./docs/security/) | Trust boundaries ledger, tool risk matrix, rationale, incident response; the reader page is [docs/security.md](./docs/security.md) |
 | [docs/cli.md](./docs/cli.md) | The full CLI: doctor/--fix, uninstall, pairing, revocation, kill switch, audit |
 | [docs/troubleshooting.md](./docs/troubleshooting.md) | Symptom by symptom: doctor rows, kill-record recovery, version skew, the two WSL modes |
 | [docs/release.md](./docs/release.md) | Release-please releases, prebuilt archives + checksums, SBOM, which version moves when |
