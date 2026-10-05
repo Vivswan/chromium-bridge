@@ -1,6 +1,6 @@
 # Development guide
 
-This page is the local dev loop, the toolchain, and the test and fuzz machinery. The branch, commit, and merge workflow is [CONTRIBUTING.md](../CONTRIBUTING.md); why the project is shaped as it is lives in [architecture.md](./architecture.md) and [security/rationale.md](./security/rationale.md).
+This page is the local dev loop, the toolchain, the test and fuzz machinery, and the version copies a release moves. The branch, commit, and merge workflow is [CONTRIBUTING.md](../CONTRIBUTING.md); why the project is shaped as it is lives in [architecture.md](./architecture.md) and [security/rationale.md](./security/rationale.md).
 
 ## Prerequisites
 
@@ -16,7 +16,7 @@ bun install      # workspace deps + wires the git hooks (lefthook)
 Four gate tools have no first-party proto plugin and are installed once by hand: `cargo install cargo-nextest` and `brew install typos-cli cargo-machete actionlint` (typos and cargo-machete also come from `cargo install`). Where CI gets them:
 
 - **The `Containerfile` pins all four plus cargo-deb** as `ARG <TOOL>_VERSION`. The CI image carries the four; cargo-deb is installed on the bare release and installer runners alone.
-- **A bare runner reads the same pin** through `bun scripts/pin.ts <tool>`: checks.yml for cargo-machete, the installer workflows for cargo-deb.
+- **A bare runner reads the same pin** through `bun scripts/pin.ts <tool>`: checks.yml for cargo-machete, `installers.yml` and `update-release.yml` for cargo-deb.
 - **typos and actionlint run through the managed ci.yml's fleet actions** at the platform's own pins, so a local skew can at worst surface a finding early.
 
 | Tool | Used for | Notes |
@@ -138,7 +138,7 @@ Every task has one definition with declared inputs: the repo-wide tasks and runb
 
 CI runs the same tasks: the repo-owned `.github/workflows/checks.yml` calls `moon run <task>` wherever a task exists for the step. The Rust OS matrix keeps raw cargo verbs, and the `runInCI: false` suites such as `test-interop` are invoked directly, since moon does not resolve them when `CI=true`.
 
-**Gates are never cached.** Every task is uncached by the workspace default (`taskOptions.cache: false` in `.moon/tasks/all.yml`): a gate that a cache hit can satisfy is not a gate. moon cannot hash gitignored inputs like the generated `.wxt/tsconfig.json`, and a mistaken `hasher.ignorePattern` would silently drop tracked files from every hash.
+**Gates are never cached.** Every task is uncached by the workspace default (`taskOptions.cache: false` in `.moon/tasks/all.yml`): a gate that a cache hit can satisfy is not a gate, because a wrong hash would let unverified code land. moon cannot hash gitignored inputs like the generated `.wxt/tsconfig.json`, and a mistaken `hasher.ignorePattern` would silently drop tracked files from every hash.
 
 The two tasks that opt back in (`web:build`, `shared:typecheck`) are not gate steps. `moon run ci` therefore always executes the full suite, in the fixed order its `deps` list declares (`runDepsInParallel: false`). The underlying tools (cargo, tsc, vite, bun) keep their own incremental caches, so warm reruns stay fast.
 
@@ -202,7 +202,7 @@ The workflow-level `CI_IMAGE_TAG` is the one switch: an empty value runs every j
 | `hygiene` | `moon run hygiene` | image |
 | `tooling` | `machete`, with cargo-machete at the `Containerfile` pin | image |
 | `web` | `web:build`, `web:test` | image |
-| `linux-install` | `scripts/linux-registration.ts`: `doctor --fix`, re-register, multi-browser, `uninstall` under isolated HOME and XDG directories | bare runner |
+| `linux-install` | downloads the `build-release` binary, then `scripts/linux-registration.ts`: `doctor --fix`, re-register, multi-browser, `uninstall` under isolated HOME and XDG directories | bare runner: it needs only that binary and a bun for the scenario driver |
 | `protocol` | the `e2e`, `adversarial`, and `chaos` suites against the downloaded binary | image |
 | `interop` | the official MCP SDK client against the downloaded binary | image |
 | `browser` | the reusable `browser.yml` (input `chrome-version`), which `nightly.yml` calls too | bare runner, Chrome from `setup-chrome` |

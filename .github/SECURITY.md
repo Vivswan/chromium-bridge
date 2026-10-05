@@ -279,7 +279,7 @@ The core is built with panics aborting the process, so a poisoned lock cannot oc
 
 | Site | On poison | Why |
 |------|-----------|-----|
-| the broker's `Lock<T>` wrapper (`broker.rs`) and the native host's stdout writer | recover the inner value and proceed | the reasons below |
+| the broker's `Lock<T>` wrapper (`broker.rs`), the native host's stdout writer, and the Windows pipe's listener and stream locks (`ipc/platform/windows/pipe.rs`) | recover the inner value and proceed | the reasons below |
 | `session.rs`, the connection-registry and pending-call lookups | refuse | a poisoned map could route a call to the wrong browser; the kill sweep (`shutdown_all_browsers`) still recovers, so a halt always reaches every relay |
 
 - **Why recover is safe there.** The guarded values are bookkeeping (a harness count, the relay registry, a frame writer); an inconsistent reading can at worst refuse an attach or release a slot late, never admit a peer, because admission is decided from the trust record, not from a lock.

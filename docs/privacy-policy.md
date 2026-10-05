@@ -16,7 +16,7 @@ To let an approved AI agent operate the pages you are already signed into, the e
 - Read cookies for the active site, including `httpOnly` cookies.
 - Read web storage (`localStorage` / `sessionStorage`).
 - Attach Chrome's debugger to the page (the `debugger` permission) to read its accessibility tree, read its console, attach a file, or answer a dialog; with the CDP mode setting on, page operations run through it too.
-- Execute JavaScript in the page (off by default; each call asks for confirmation unless you turn that confirmation off).
+- Execute JavaScript in the page (off by default).
 - Attach a local file to a page's file input (off by default; every use shows the exact path for confirmation).
 
 Independent of site approval, it can read the list of open tabs (titles and URLs) and open, focus, or close tabs; closing a tab asks for confirmation. Unless you turn the tab-grouping setting off, the tabs it opens are gathered into a tab group of their own in each window, so you can tell them apart from yours.

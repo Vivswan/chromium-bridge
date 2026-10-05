@@ -20,7 +20,7 @@ The machinery is the managed `.github/workflows/ci.yml`, downstream of the all-g
 - **`site`** deploys the site after the publish, in the same run.
 - **`update-release-pr`** calls the repo-owned `update-release-pr.yml` hook whenever release-please creates or refreshes the release PR.
 
-Inside the hook, a last job, `release-ready`, fails unless every packaging job succeeded: a skipped or cancelled job blocks the publish, while the `continue-on-error` jobs (SBOM, Homebrew) read as success there. The managed publish stage sees only the hook's aggregate result, so this job is what keeps an unexpected skip from reaching publication.
+Inside `update-release.yml`, a last job, `release-ready`, fails unless every packaging job succeeded: a skipped or cancelled job blocks the publish, while the `continue-on-error` jobs (SBOM, Homebrew) read as success there. The managed publish stage sees only the hook's aggregate result, so this job is what keeps an unexpected skip from reaching publication.
 
 When the bump changes a lockfile, the release PR carries one commit beyond release-please's own: the `update-release-pr` hook re-locks `Cargo.lock`, `src/packages/core/fuzz/Cargo.lock`, and `bun.lock` for the bumped version and pushes that commit to the PR branch, because release-please bumps the manifests alone and every `--locked` step refuses a lagging lockfile.
 
