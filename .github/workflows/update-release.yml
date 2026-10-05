@@ -242,7 +242,7 @@ jobs:
     continue-on-error: true
     runs-on: ubuntu-latest
     permissions:
-      contents: read # download the two checksum assets from the draft release
+      contents: write # the release is still a draft, which GitHub shows only to push access, so read-only gets "release not found"
     env:
       RELEASE_TAG: ${{ inputs.tag }}
       TAP_REPOSITORY: Vivswan/homebrew-tap
