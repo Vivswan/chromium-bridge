@@ -168,8 +168,6 @@ fn register_writes_manifest_and_labeled_wrapper() {
     let manifest_path = target.registration.manifest_path();
     let manifest: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
-    // Named from identity.rs itself, not the browsers.rs re-export the engine imports: a constant shadowing
-    // that re-export would otherwise register a foreign origin while this assertion stayed green.
     assert_eq!(manifest["name"], crate::identity::NATIVE_HOST_ID);
     assert_eq!(manifest["type"], "stdio");
     assert_eq!(
