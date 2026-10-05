@@ -162,7 +162,7 @@ Nothing releases the switch on its own. Release demands proof of user presence o
 | Surface | The proof a release demands |
 | --- | --- |
 | `chromium-bridge unkill` on the CLI | an explicit confirmation typed on a real terminal; a piped stdin is refused outright, so no script or background program can quietly reopen the bridge through the CLI |
-| the extension | a WebAuthn assertion from a credential enrolled under that browser; the browser's confirmation window only when the browser has no enrolled credential |
+| the extension's options page | a WebAuthn assertion from a credential enrolled under that browser; the browser's confirmation window only when the browser has no enrolled credential |
 
 Every release attempt is audited: a granted release with the auth path that decided it (`auth=tty`, `auth=webauthn:<fingerprint>`, `auth=confirm_window`), a refusal at the presence gate with the presence error, and a refusal by an unwritable record after presence passed with both.
 
