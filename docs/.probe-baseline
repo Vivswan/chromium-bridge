@@ -2,22 +2,6 @@
 # `bun scripts/docs-probe.ts --print-baseline <the pages of moon.yml check-docs-probe>`.
 CONTRIBUTING.md 3ca2c172  # path: .worktrees/
 README.md 9ddf5673  # path: extension/dist/
-docs/architecture.md fea6743a  # list item: No handshake and no session state:
-docs/architecture.md e8b742d2  # list item: server/discover replaces the handshake. Its result
-docs/architecture.md 5f140de1  # path: src/entrypoints/background.ts
-docs/architecture.md 67a11a1f  # path: src/entrypoints/content.ts
-docs/architecture.md 861db4ce  # path: src/entrypoints/confirm/
-docs/architecture.md 555b15b6  # path: src/entrypoints/options/
-docs/architecture.md 5a2f8874  # path: src/lib/background/
-docs/architecture.md 3305cc59  # path: src/lib/dom/
-docs/architecture.md c25fc9a0  # path: src/lib/shared/
-docs/architecture.md 2647e3e4  # list item: Tool catalogue (src/packages/core/src/tools/catalogue.rs): each tool's name,
-docs/architecture.md da60846f  # list item: Enclave signing contract (src/packages/core/src/enclave/: challenge.rs for
-docs/architecture.md 4d57bb96  # path: tests/background/enclave-golden.test.ts
-docs/architecture.md 0310ff87  # list item: Policy document and directions (src/packages/core/src/policy/): the
-docs/architecture.md 5a71f1d5  # paragraph: At the tool-call boundary, Rust's typed
-docs/architecture.md 76067303  # list item: policy_get {} (extension -> host): on-demand
-docs/architecture.md cb8f7ca3  # paragraph: The host also enforces its own
 docs/quickstart.md 03c4d19c  # list item: On macOS, pair. Run chromium-bridge pair
 docs/security/incident-response.md 66fc9762  # list item: Disable a single tool: add the
 docs/security/threat-model.md d929582c  # list item: Prompt injection: page content tricks the
