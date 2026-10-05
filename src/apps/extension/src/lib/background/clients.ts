@@ -22,8 +22,8 @@ import {
   type ClientRevokeWire,
 } from "@chromium-bridge/shared/envelope.gen";
 import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
+import { inLife } from "../shared/in-life";
 import type { Connection, PortCollaborator } from "./connection";
-import { inLife } from "./in-life";
 
 /** How long the host has to answer an admin control frame before the request
  * fails closed. Generous for a local round-trip; nothing here can raise a

@@ -17,8 +17,8 @@ import {
 } from "@chromium-bridge/shared/host-admin";
 import type { PolicyOverlay } from "@chromium-bridge/shared/policy.gen";
 import type { Refusal, RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
+import { inLife } from "../shared/in-life";
 import type { Connection, PortCollaborator } from "./connection";
-import { inLife } from "./in-life";
 
 /** How long the host has to answer before a request fails closed. A repair writes manifests and wrapper
  * scripts for every detected browser, still a local operation; nothing here can raise a presence prompt. */

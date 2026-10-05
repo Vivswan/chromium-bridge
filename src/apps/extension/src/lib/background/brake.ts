@@ -11,7 +11,7 @@
 
 import type { KillMirror } from "@chromium-bridge/shared/enclave";
 import { unreachable } from "@chromium-bridge/shared/util";
-import { inLife } from "./in-life";
+import { inLife } from "../shared/in-life";
 
 /** Watermarks are arrival stamps: `engage` is the latest engage's post (re-posted on reconnect until a killed frame
  * arrives after it), `anchor` is where the panic latch counts evidence from (the engage outstanding when the panic

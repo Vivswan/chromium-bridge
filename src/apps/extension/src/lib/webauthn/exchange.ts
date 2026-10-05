@@ -30,7 +30,7 @@ import {
 } from "@chromium-bridge/shared/webauthn";
 import { browser } from "wxt/browser";
 import type { Connection, PortCollaborator } from "../background/connection";
-import { inLife } from "../background/in-life";
+import { inLife } from "../shared/in-life";
 
 /** How long the host has to answer before an exchange fails closed. Nothing here waits on the user: the
  * tap happens in the page before the frame is posted, so a local round trip is all this covers. */

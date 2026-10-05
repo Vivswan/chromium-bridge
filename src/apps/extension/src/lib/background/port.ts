@@ -7,6 +7,7 @@ import { NATIVE_HOST_ID } from "@chromium-bridge/shared/identity.gen";
 import { unreachable } from "@chromium-bridge/shared/util";
 import type { Browser } from "wxt/browser";
 import { browser } from "wxt/browser";
+import { inLife } from "../shared/in-life";
 import { maskErrorMessage } from "../shared/masking";
 import * as webauthn from "../webauthn/exchange";
 import * as auditLog from "./audit-log";
@@ -16,7 +17,6 @@ import type { Connection, PortCollaborator } from "./connection";
 import { collaborator as cancelSignals, dispatch } from "./dispatch";
 import * as enrollment from "./enrollment";
 import * as hostAdmin from "./host-admin";
-import { inLife } from "./in-life";
 import * as kill from "./kill";
 import * as policySync from "./policy-sync";
 

@@ -38,11 +38,11 @@ import { UI_LANGUAGES, type UiLanguageValue } from "@chromium-bridge/shared/sett
 import { unreachable } from "@chromium-bridge/shared/util";
 import pLimit from "p-limit";
 import { browser } from "wxt/browser";
+import { inLife } from "../shared/in-life";
 import { auditEvent } from "./audit-log";
 import type { Connection, PortCollaborator } from "./connection";
 import { getPin, setCompromised } from "./enclave-pin";
 import { base64Decode, verifyPolicySignatureAgainstPin } from "./enclave-verify";
-import { inLife } from "./in-life";
 
 const POLICY_STATE_KEY = "bridgePolicyState";
 const POLICY_CUTOVER_KEY = "bridgePolicyCutover";

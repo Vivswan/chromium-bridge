@@ -2,7 +2,7 @@ import type { UiLanguageValue } from "@chromium-bridge/shared/settings";
 import type { PublicPath } from "wxt/browser";
 import { browser } from "wxt/browser";
 import type { GeneratedI18nStructure } from "#i18n";
-import { inLife } from "./background/in-life";
+import { inLife } from "./shared/in-life";
 import { getSetting } from "./shared/settings";
 
 // browser.i18n.getMessage always answers in the BROWSER's UI language and cannot honor the uiLanguage setting, so

@@ -36,11 +36,11 @@ import {
 } from "@chromium-bridge/shared/envelope.gen";
 import type { PolicyValues } from "@chromium-bridge/shared/policy.gen";
 import { browser } from "wxt/browser";
+import { inLife } from "../../shared/in-life";
 import type { Connection, PortCollaborator } from "../connection";
 import { getCompromised, getPin, setCompromised } from "../enclave-pin";
 import { generateNonce, hexEncode, verifyPresenceProofAgainstPin } from "../enclave-verify";
 import { platformCanEnroll } from "../enrollment";
-import { inLife } from "../in-life";
 import type { ConfirmationProvider, Presentation } from "./service";
 
 /** The live connection, or null while the link is down; compared by identity per Connection in ../connection.ts. */

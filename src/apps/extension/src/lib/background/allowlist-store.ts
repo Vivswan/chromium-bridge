@@ -14,9 +14,9 @@ import {
   normalizeCookieDomain,
   originGlobOf,
 } from "../shared/allowlist";
+import { inLife } from "../shared/in-life";
 import { getSetting } from "../shared/settings";
 import { BADGE_PENDING_COLOR } from "../shared/theme-colors";
-import { inLife } from "./in-life";
 
 const STORAGE_KEY = "allowlist";
 

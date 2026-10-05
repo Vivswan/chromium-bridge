@@ -12,9 +12,9 @@ import {
 } from "@chromium-bridge/shared/confirm";
 import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
 import pLimit from "p-limit";
+import { inLife } from "../../shared/in-life";
 import { auditEvent } from "../audit-log";
 import { confirmationsLatched } from "../brake";
-import { inLife } from "../in-life";
 
 /** The fields every confirmation request carries. */
 interface ConfirmRequestBase {

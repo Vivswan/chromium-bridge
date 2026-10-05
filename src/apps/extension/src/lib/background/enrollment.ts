@@ -29,6 +29,7 @@ import {
 import type { EnrollmentStatus, RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
 import pLimit from "p-limit";
 import { browser } from "wxt/browser";
+import { inLife } from "../shared/in-life";
 import { BADGE_DANGER_COLOR, BADGE_PENDING_COLOR } from "../shared/theme-colors";
 import { auditEvent } from "./audit-log";
 import type { Connection, PortCollaborator } from "./connection";
@@ -40,7 +41,6 @@ import {
   verifyPairingProof,
   verifyProofAgainstPin,
 } from "./enclave-verify";
-import { inLife } from "./in-life";
 import { killGate } from "./kill";
 import { onPinPinned, onPinRevoked, policyDispatchGate } from "./policy-sync";
 import { hardenStorageAccess } from "./trusted-storage";

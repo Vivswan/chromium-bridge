@@ -7,8 +7,8 @@
 import { type OpArgs, TOOL_GRANTS } from "@chromium-bridge/shared/ops.gen";
 import type { PolicyValues } from "@chromium-bridge/shared/policy.gen";
 import type { ClickProbe } from "../../dom/page-api";
+import { inLife } from "../../shared/in-life";
 import type { PageOp } from "../../shared/page-ops";
-import { inLife } from "../in-life";
 import type { PageBackend } from "../page-backend";
 import type { ResolvedTab } from "../tabs";
 import { presenceRoutingEnabled } from "./presence";
