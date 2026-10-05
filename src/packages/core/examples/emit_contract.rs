@@ -2,7 +2,7 @@
 //! the tool catalogue (each tool's metadata, grants, and the JSON Schema of
 //! its args struct), the error taxonomy, the capability groupings, the
 //! identity constants, the protocol versions, the extension-forwarded
-//! audit kinds, and the host's user-facing constants (the names and values
+//! audit kinds, the refusal-code roster, and the host's user-facing constants (the names and values
 //! the docs and the CLI state). `scripts/gen-ops.ts` (run via `moon run gen`)
 //! consumes this to generate the TypeScript side (`src/packages/shared/src/*.gen.ts`);
 //! the emitted JSON itself is never checked in - the Rust sources are the
@@ -24,7 +24,9 @@ use chromium_bridge_core::protocol::{
     MCP_META_SERVER_INFO, MCP_PROTOCOL_VERSION,
 };
 use chromium_bridge_core::tools::{all, capabilities};
+use chromium_bridge_core::webauthn::RefusalCode;
 use serde_json::{json, Value};
+use strum::VariantArray;
 
 fn main() -> Result<(), serde_json::Error> {
     let tools: Vec<Value> = all()
@@ -75,6 +77,7 @@ fn main() -> Result<(), serde_json::Error> {
             "serverInfo": MCP_META_SERVER_INFO,
         },
         "auditForwardedKinds": extension_kind_wire_names(),
+        "refusalCodes": RefusalCode::VARIANTS.iter().map(ToString::to_string).collect::<Vec<_>>(),
         "identity": {
             "nativeMessagingHostId": NATIVE_HOST_ID,
             "extensionManifestKey": EXTENSION_MANIFEST_KEY,

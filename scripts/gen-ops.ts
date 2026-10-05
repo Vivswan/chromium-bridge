@@ -2,7 +2,8 @@
 // core's emitter examples. Run `moon run gen` after editing the catalogue, taxonomy, enclave, or policy module
 // in src/packages/core; CI regenerates and fails on a stale diff.
 //
-//   emit_contract          -> ops.gen.ts, errors.gen.ts, protocol.gen.ts, identity.gen.ts, audit.gen.ts
+//   emit_contract          -> ops.gen.ts, errors.gen.ts, protocol.gen.ts, identity.gen.ts, audit.gen.ts,
+//                             refusals.gen.ts, host.gen.ts
 //   emit_enclave_contract  -> enclave.gen.ts, enclave-fixture.gen.ts
 //   emit_policy_contract   -> policy.gen.ts
 
@@ -49,6 +50,8 @@ interface Contract {
     serverInfo: string;
   };
   auditForwardedKinds: string[];
+  /** The RefusalCode roster: every reason code a refused presence_result or enroll_result can carry. */
+  refusalCodes: string[];
   identity: {
     nativeMessagingHostId: string;
     extensionManifestKey: string;
@@ -404,6 +407,37 @@ export type AuditForwardedKind = (typeof AUDIT_FORWARDED_KINDS)[number];
 
 writeFileSync(join(root, "src/packages/shared/src/audit.gen.ts"), auditOut);
 console.log("generated src/packages/shared/src/audit.gen.ts from the Rust audit whitelist");
+
+// ---- refusals.gen.ts ------------------------------------------------------------
+
+const RefusalCodesSchema = z
+  .array(z.string().regex(/^[a-z][a-z0-9_]*$/))
+  .min(1)
+  .refine((codes) => new Set(codes).size === codes.length, "repeats a code");
+const refusalCodes = RefusalCodesSchema.safeParse(contract.refusalCodes);
+if (!refusalCodes.success) {
+  throw new Error(
+    `gen-ops: the emitted refusalCodes roster is malformed:\n${z.prettifyError(refusalCodes.error)}`,
+  );
+}
+
+const refusalsOut = `// GENERATED from the Rust core (src/packages/core/src/webauthn/refusal.rs
+// RefusalCode) by scripts/gen-ops.ts - DO NOT EDIT. Add the variant, then run
+// \`moon run gen\`.
+//
+// Every reason code a refused presence_result or enroll_result can carry; the "<code>: <detail>" form keeps
+// the code first. The options page keys its sentences on this union (entrypoints/options/refusals.ts), so a
+// code the host adds has no sentence until a row is added there, and that is a type error until it is.
+
+export const REFUSAL_CODES = [
+  ${refusalCodes.data.map((c) => JSON.stringify(c)).join(",\n  ")},
+] as const;
+
+export type RefusalCode = (typeof REFUSAL_CODES)[number];
+`;
+
+writeFileSync(join(root, "src/packages/shared/src/refusals.gen.ts"), refusalsOut);
+console.log("generated src/packages/shared/src/refusals.gen.ts from the Rust refusal roster");
 
 // ---- host.gen.ts ---------------------------------------------------------------
 // Structural sanity only; the values are the Rust side's.

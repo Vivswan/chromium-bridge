@@ -24,7 +24,7 @@ use crate::protocol::control::{
 use crate::trust::TrustState;
 use crate::webauthn::{
     self, parse_registration, Action, Assertion, CredentialId, Enrollment, EnrollmentAuthority,
-    Nonce, Registration, RpId, Statement, StatementDomain,
+    Nonce, Reason, RefusalCode, Registration, RpId, Statement, StatementDomain,
 };
 
 /// The per-connection exchange state. The label is the browser this host fronts; every statement binds it.
@@ -101,7 +101,7 @@ impl Exchange {
         };
         let enrolled = match enrollments() {
             Ok(enrolled) => enrolled,
-            Err(e) => return vec![enroll_refused(format!("store_error: {e}"))],
+            Err(e) => return vec![enroll_refused(RefusalCode::StoreError.detailed(e))],
         };
         if enrolled.is_empty() {
             return self.start_enrollment(&enrolled, EnrollmentAuthority::FirstUse);
@@ -112,10 +112,10 @@ impl Exchange {
         match PresenceRequest::for_enrollment(&self.label, &enrolled) {
             Ok(request) => {
                 let mut replies = self.await_presence(request, PendingAct::EnrollBegin);
-                replies.push(enroll_refused("presence_required".into()));
+                replies.push(enroll_refused(RefusalCode::PresenceRequired));
                 replies
             }
-            Err(e) => vec![enroll_refused(format!("nonce: {e}"))],
+            Err(e) => vec![enroll_refused(RefusalCode::Nonce.detailed(e))],
         }
     }
 
@@ -134,10 +134,7 @@ impl Exchange {
             Ok(enrolled) => enrolled,
             Err(e) => return refused_early(e),
         };
-        let Some(action) = Action::parse("release the kill switch") else {
-            return refused_early(std::io::Error::other("action text invalid"));
-        };
-        match PresenceRequest::for_browser(&self.label, action, &enrolled) {
+        match PresenceRequest::for_browser(&self.label, Action::release_kill_switch(), &enrolled) {
             Ok(request) => self.await_presence(request, PendingAct::KillRelease),
             Err(e) => refused_early(e),
         }
@@ -150,7 +147,7 @@ impl Exchange {
         assertion: Result<Assertion, webauthn::Refusal>,
     ) -> Vec<HostReply> {
         let Some(Pending::Presence { request, act }) = self.pending.take() else {
-            return vec![presence_refused("no_request_outstanding".into())];
+            return vec![presence_refused(RefusalCode::NoRequestOutstanding)];
         };
         let outcome = CredentialId::from_base64url(credential_id)
             .map_err(|_| {
@@ -171,7 +168,7 @@ impl Exchange {
     /// itself is the request's.
     pub(super) fn presence_confirm(&mut self, nonce: &str) -> Vec<HostReply> {
         let Some(Pending::Presence { request, act }) = self.pending.take() else {
-            return vec![presence_refused("no_request_outstanding".into())];
+            return vec![presence_refused(RefusalCode::NoRequestOutstanding)];
         };
         let outcome = if request.nonce().as_str() == nonce {
             enrollments()
@@ -201,7 +198,7 @@ impl Exchange {
                 if act == PendingAct::KillRelease {
                     crate::kill::audit_refused_release(Surface::Extension, &e);
                 }
-                return vec![presence_refused(e.code().into())];
+                return vec![presence_refused(e.code())];
             }
         };
         audit::record(
@@ -251,7 +248,7 @@ impl Exchange {
             authority,
         }) = self.pending.take()
         else {
-            return vec![enroll_refused("no_enrollment_outstanding".into())];
+            return vec![enroll_refused(RefusalCode::NoEnrollmentOutstanding)];
         };
         let registered = registration.and_then(|registration| {
             parse_registration(&statement, &RpId::pinned(), &registration)
@@ -266,7 +263,7 @@ impl Exchange {
                         .outcome("refused")
                         .detail(&format!("browser={}; {refusal}", self.label)),
                 );
-                return vec![enroll_refused(refusal.code().into())];
+                return vec![enroll_refused(refusal.code())];
             }
         };
         let credential_id = registered.credential.id.to_base64url();
@@ -301,12 +298,13 @@ impl Exchange {
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 log_warn!("native-host", "first-use enrollment refused: {e}");
-                enroll_audit("refused", "machine_already_enrolled".into());
-                vec![enroll_refused("machine_already_enrolled".into())]
+                enroll_audit("refused", RefusalCode::MachineAlreadyEnrolled.to_string());
+                vec![enroll_refused(RefusalCode::MachineAlreadyEnrolled)]
             }
             Err(e) => {
-                enroll_audit("refused", format!("store_error: {e}"));
-                vec![enroll_refused(format!("store_error: {e}"))]
+                let reason = RefusalCode::StoreError.detailed(e);
+                enroll_audit("refused", reason.to_string());
+                vec![enroll_refused(reason)]
             }
         }
     }
@@ -333,15 +331,12 @@ impl Exchange {
     ) -> Vec<HostReply> {
         let nonce = match Nonce::fresh() {
             Ok(nonce) => nonce,
-            Err(e) => return vec![enroll_refused(format!("nonce: {e}"))],
-        };
-        let Some(action) = Action::parse("enroll") else {
-            return vec![enroll_refused("action text invalid".into())];
+            Err(e) => return vec![enroll_refused(RefusalCode::Nonce.detailed(e))],
         };
         let statement = Statement {
             domain: StatementDomain::Enrollment,
             browser_label: self.label.clone(),
-            action,
+            action: Action::enroll(),
             nonce,
         };
         let frame = WebAuthnControl::EnrollOptions {
@@ -381,12 +376,20 @@ fn enrollments() -> std::io::Result<Vec<Enrollment>> {
     TrustState::current().map(|trust| trust.enrollments().to_vec())
 }
 
-fn enroll_refused(reason: String) -> HostReply {
-    EnrollOutcome::Refused { reason }.into_frame().into()
+fn enroll_refused(reason: impl Into<Reason>) -> HostReply {
+    EnrollOutcome::Refused {
+        reason: reason.into().to_string(),
+    }
+    .into_frame()
+    .into()
 }
 
-fn presence_refused(reason: String) -> HostReply {
-    PresenceOutcome::Refused { reason }.into_frame().into()
+fn presence_refused(reason: impl Into<Reason>) -> HostReply {
+    PresenceOutcome::Refused {
+        reason: reason.into().to_string(),
+    }
+    .into_frame()
+    .into()
 }
 
 fn kill_unreadable(error: String) -> HostReply {

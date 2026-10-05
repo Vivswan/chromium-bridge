@@ -434,6 +434,7 @@ tasks:
         src/packages/shared/src/enclave-fixture.gen.ts \
         src/packages/shared/src/envelope.gen.ts \
         src/packages/shared/src/audit.gen.ts \
+        src/packages/shared/src/refusals.gen.ts \
         src/packages/shared/src/host.gen.ts \
         src/packages/shared/src/policy.gen.ts
     env:

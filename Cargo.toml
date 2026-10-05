@@ -39,6 +39,9 @@ nix = { version = "0.31", default-features = false, features = ["signal", "user"
 # hand-rolled JSON-RPC dispatch. `server` only: no HTTP stack, no client, no auth tree.
 rmcp = { version = "3.4.0", default-features = false, features = ["server"] }
 serde = { version = "1", features = ["derive"] }
+# The refusal-code roster (src/packages/core/src/webauthn/refusal.rs): the variant list the contract emitter
+# walks and the snake_case wire names, derived once instead of a hand-kept list beside the enum.
+strum = { version = "0.27", features = ["derive"] }
 # SIGTERM/SIGINT delivery to the cleanup thread (src/packages/core/src/sys.rs). Unix only.
 signal-hook = "0.4"
 # `float_roundtrip`: correctly rounded float parsing, so a JSON number the
