@@ -1,6 +1,6 @@
 # Privacy Policy: Chromium Bridge
 
-_Last updated: 2026-07-17_
+_Last updated: 2026-10-04_
 
 Chromium Bridge is an open-source browser extension that connects an MCP client (such as Claude Code, Claude Desktop, or Codex) to your local Chromium browser through a native-messaging host that runs on your own computer. This policy explains what the extension accesses and what it does, and does not, do with that data.
 
@@ -15,10 +15,11 @@ To let an approved AI agent operate the pages you are already signed into, the e
 - Read the content of the current page (DOM, text, form fields).
 - Read cookies for the active site, including `httpOnly` cookies.
 - Read web storage (`localStorage` / `sessionStorage`).
-- Execute JavaScript in the page.
+- Attach Chrome's debugger to the page (the `debugger` permission) to read its accessibility tree, read its console, attach a file, or answer a dialog; with the CDP mode setting on, page operations run through it too.
+- Execute JavaScript in the page (off by default; each call asks for confirmation unless you turn that confirmation off).
 - Attach a local file to a page's file input (off by default; every use shows the exact path for confirmation).
 
-Independent of site approval, it can read the list of open tabs (titles and URLs) and open, focus, or close tabs; closing a tab asks for confirmation.
+Independent of site approval, it can read the list of open tabs (titles and URLs) and open, focus, or close tabs; closing a tab asks for confirmation. Unless you turn the tab-grouping setting off, the tabs it opens are gathered into a tab group of their own in each window, so you can tell them apart from yours.
 
 Credential-bearing values (cookies and web storage) are **read-only** (the extension has no API to write or modify cookies or storage by design) and are **masked** (JWTs, long hex strings, and long digit runs are redacted) before being returned.
 
@@ -38,7 +39,8 @@ Credential-bearing values (cookies and web storage) are **read-only** (the exten
 The extension stores a small amount of configuration in the browser's local extension storage on your device only:
 
 - Your list of approved sites (the allowlist).
-- Your extension settings/preferences.
+- Your extension settings/preferences, including the display language.
+- The security policy in force for this extension, as received from the native host (verified against the host's signature once you have enrolled), and whether the kill switch is engaged.
 - If you enroll, the public-key fingerprint used to verify your own computer's security hardware (never a private key: that stays in the Secure Enclave).
 - A bounded, local log of recent security decisions (confirmations, revocations), viewable on the options page.
 

@@ -1,7 +1,5 @@
 # Allowed docs-probe findings: page, unit fingerprint, first words. Regenerate with
 # `bun scripts/docs-probe.ts --print-baseline <the pages of moon.yml check-docs-probe>`.
-.github/SECURITY.md a94a3f6e  # list item: Two JS cases the retired bun
-.github/SECURITY.md b63617fd  # paragraph: The core is built with panics
 CONTRIBUTING.md 3ca2c172  # path: .worktrees/
 README.md 9ddf5673  # path: extension/dist/
 docs/architecture.md fea6743a  # list item: No handshake and no session state:
@@ -20,14 +18,6 @@ docs/architecture.md 0310ff87  # list item: Policy document and directions (src/
 docs/architecture.md 5a71f1d5  # paragraph: At the tool-call boundary, Rust's typed
 docs/architecture.md 76067303  # list item: policy_get {} (extension -> host): on-demand
 docs/architecture.md cb8f7ca3  # paragraph: The host also enforces its own
-docs/development.md 0cef9bb1  # path: node_modules/
-docs/development.md 18c5d7e6  # paragraph: Rust dependencies are gated by automated
-docs/development.md 3b02bf2b  # paragraph: The root package.json scripts are thin
-docs/development.md e72883b7  # paragraph: Cache trust, and the one edge
-docs/development.md 7254609c  # path: .moon/cache/
-docs/development.md befb1d3a  # path: build/extension/chrome-mv3/content-scripts/content.js
-docs/development.md 35c08f85  # path: build/
-docs/development.md 4340cb2f  # path: target/
 docs/quickstart.md 03c4d19c  # list item: On macOS, pair. Run chromium-bridge pair
 docs/security/incident-response.md 66fc9762  # list item: Disable a single tool: add the
 docs/security/threat-model.md d929582c  # list item: Prompt injection: page content tricks the
