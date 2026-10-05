@@ -89,7 +89,7 @@ cargo fmt --check && cargo clippy --all-targets -- -D warnings
 uv run --no-project --isolated tests/protocol/e2e.py
 bun install
 bunx tsc -p src/apps/extension  # one TS project; `moon run typecheck` covers them all
-bunx biome ci .                 # lint + format check (biome.json)
+bunx biome ci .                 # lint + format check (biome.jsonc)
 bun run --cwd src/apps/extension build
 ```
 

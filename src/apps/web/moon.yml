@@ -54,7 +54,7 @@ tasks:
     inputs:
       - '**/*'
       - '!**/node_modules/**'
-      - '/biome.json'
+      - '/biome.jsonc'
       - '/.gitignore'
       - '/package.json'
       - '/bun.lock'

@@ -1,3 +1,5 @@
+// Biome's config carries its reasons as comments, which only the .jsonc name allows: with a comment inside
+// biome.json, biome processes zero files.
 {
   "$schema": "https://biomejs.dev/schemas/2.5.12/schema.json",
   "vcs": {
@@ -67,9 +69,13 @@
           "options": {
             "strictCase": false,
             "conventions": [
+              // A custom convention checks the whole name, so biome's default trimming of leading and trailing
+              // underscores and dollars is lost; this forwards the trimmed name (wire tags like __evalError and
+              // _meta, JSON Schema's $ref) to the conventions below.
               {
                 "match": "[_$]*(.*?)[_$]*"
               },
+              // Chrome's _locales directory names (zh_CN) are a key shape no case format covers.
               {
                 "selector": {
                   "kind": "objectLiteralProperty"
@@ -136,6 +142,7 @@
                 },
                 "formats": ["camelCase", "snake_case", "CONSTANT_CASE", "PascalCase"]
               },
+              // Type properties describe the same JSON shapes object literals do (manifest keys, serde fields).
               {
                 "selector": {
                   "kind": "typeProperty"
