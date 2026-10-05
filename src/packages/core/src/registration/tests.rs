@@ -494,6 +494,44 @@ fn fix_default_targets_only_detected_browsers_but_explicit_keys_always_work() {
     ));
 }
 
+/// The options page shows the host's reason as is, so it names what was looked for and the next step
+/// and carries no CLI flag.
+#[test]
+fn no_targets_reason_reads_as_a_page_sentence() {
+    let tree = TempTree::new("no-targets-page");
+    let dirs = BaseDirs {
+        home: tree.path("home"),
+        xdg_config_home: None,
+        xdg_data_home: None,
+        local_app_data: None,
+        roaming_app_data: None,
+        system_applications: tree.path("Applications"),
+    };
+    let entries = browsers::resolve(Os::MacOs, &dirs);
+    let Err(FixError::NoTargets(reason)) =
+        select_targets(&crate::cli::FixTargets::Detected, &entries)
+    else {
+        panic!("an empty machine must refuse the detected selection");
+    };
+    assert!(!reason.contains("--"), "{reason}");
+    assert!(reason.contains(&known_keys()), "{reason}");
+    assert!(reason.contains("install Chrome, Brave or Edge"), "{reason}");
+}
+
+/// The CLI (and the installer logs that capture it) gets the same reason with the flags a terminal
+/// can act on appended, and nothing else changes.
+#[test]
+fn cli_guidance_appends_the_flags_to_the_reason_alone() {
+    let reason = "no browser (looked for chrome): install Chrome, then repair again".to_string();
+    let cli = cli_guidance(&FixError::NoTargets(reason.clone()));
+    assert!(cli.starts_with(&reason), "{cli}");
+    for flag in ["--browser", "--all", "--manifest-dir"] {
+        assert!(cli.contains(flag), "{cli}");
+    }
+    let other = FixError::Environment("HOME is not set".into());
+    assert_eq!(cli_guidance(&other), other.to_string());
+}
+
 #[cfg(unix)]
 #[test]
 fn symlinked_install_dir_is_refused() {

@@ -732,7 +732,7 @@ pub fn run_fix(targets: &FixTargets) -> i32 {
     let outcomes = match fix(targets) {
         Ok(outcomes) => outcomes,
         Err(e) => {
-            log_error!("doctor", "{e}");
+            log_error!("doctor", "{}", cli_guidance(&e));
             return 1;
         }
     };
@@ -767,6 +767,17 @@ pub fn run_fix(targets: &FixTargets) -> i32 {
         1
     } else {
         0
+    }
+}
+
+/// The CLI's rendering of a refusal: the host's reason, which the options page
+/// shows as is, plus the flags a terminal can act on.
+pub fn cli_guidance(error: &FixError) -> String {
+    match error {
+        FixError::NoTargets(reason) => {
+            format!("{reason}; or pass --browser <keys>, --all, or --manifest-dir <dir>")
+        }
+        FixError::Environment(_) | FixError::HostExe(_) => error.to_string(),
     }
 }
 
@@ -944,10 +955,11 @@ fn select_targets(targets: &FixTargets, entries: &[BrowserEntry]) -> Result<Vec<
                 .map(Target::for_browser)
                 .collect();
             if detected.is_empty() {
+                // Read on two surfaces: the CLI (which appends its flags, see cli_guidance) and the
+                // extension's options page, so no flag belongs here.
                 return Err(FixError::NoTargets(format!(
-                    "no Chromium-family browser detected for this user: install Chrome, Brave or Edge, \
-                     then run: chromium-bridge doctor --fix (or pass --browser <keys> (known: {}), \
-                     --all, or --manifest-dir <dir>)",
+                    "no Chromium-family browser detected for this user (looked for {}): install \
+                     Chrome, Brave or Edge, then repair again",
                     known_keys()
                 )));
             }
