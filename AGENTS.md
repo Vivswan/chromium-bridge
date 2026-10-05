@@ -58,7 +58,6 @@ Chromium Bridge: Authenticated MCP bridge to your real Chromium browsers (Brave,
 - Trust no party by default, our own components included; enforce every boundary with a mechanism, never an assumption.
 - Fail closed. No flag, default, env var, or grace window bypasses a gate without a reviewed decision in `.github/SECURITY.md` or `docs/security/rationale.md`. Confirmations the user sees are a feature.
 - Name residual risk honestly in the threat model.
-- Rigor goes to the enforcement core (`src/packages/core`); elsewhere rely on well-adopted libraries. Prefer audited crates over homegrown code even in the core.
 
 ### Pointers
 
