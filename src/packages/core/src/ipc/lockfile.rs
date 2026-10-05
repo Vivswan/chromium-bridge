@@ -5,7 +5,7 @@
 
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -40,40 +40,43 @@ pub struct LockFile {
     pub pid: u32,
 }
 
-/// Per-user runtime/data directory holding the lock file and (on Unix) the
-/// bridge socket. Created 0700 on Unix so no other user can enter it. Also
-/// holds the enrollment policy config (`src/packages/core/src/enclave.rs`).
-pub(crate) fn runtime_dir() -> PathBuf {
+/// The environment variable that places the runtime dir when it is set; the per-platform fallbacks in
+/// [`resolve_runtime_dir`] apply only without it. `crate::test_support` points tests at it, and the protocol
+/// harness mirrors it by hand (tests/protocol/harness.py, `runtime_dir_var`).
+#[cfg(unix)]
+pub(crate) const RUNTIME_DIR_VAR: &str = "XDG_RUNTIME_DIR";
+#[cfg(windows)]
+pub(crate) const RUNTIME_DIR_VAR: &str = "LOCALAPPDATA";
+
+/// Where the per-user runtime directory resolves under this process's environment, with nothing created or
+/// hardened. `doctor --paths` prints this alone, so the protocol harness can refuse a misrouted binary before it
+/// touches the real runtime dir; every writer goes through [`runtime_dir`].
+pub(crate) fn resolve_runtime_dir() -> PathBuf {
     #[cfg(windows)]
     {
-        let base = std::env::var_os("LOCALAPPDATA")
+        std::env::var_os(RUNTIME_DIR_VAR)
             .map(PathBuf::from)
             .or_else(|| {
-                std::env::var_os("USERPROFILE")
-                    .map(PathBuf::from)
-                    .map(|p| p.join("AppData/Local"))
+                std::env::var_os("USERPROFILE").map(|p| PathBuf::from(p).join("AppData/Local"))
             })
-            .unwrap_or_else(std::env::temp_dir);
-        let dir = base.join("chromium-bridge");
-        let _ = fs::create_dir_all(&dir);
-        dir
+            .unwrap_or_else(std::env::temp_dir)
+            .join("chromium-bridge")
     }
 
     #[cfg(target_os = "macos")]
     {
-        let dir = if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
-            PathBuf::from(xdg).join("chromium-bridge")
-        } else {
-            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-            PathBuf::from(home).join("Library/Application Support/chromium-bridge")
-        };
-        harden_runtime_dir(&dir);
-        dir
+        match std::env::var_os(RUNTIME_DIR_VAR) {
+            Some(xdg) => PathBuf::from(xdg).join("chromium-bridge"),
+            None => {
+                let home = std::env::var_os("HOME").unwrap_or_else(|| "/tmp".into());
+                PathBuf::from(home).join("Library/Application Support/chromium-bridge")
+            }
+        }
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        let dir = if let Some(xdg) = std::env::var_os("XDG_RUNTIME_DIR") {
+        if let Some(xdg) = std::env::var_os(RUNTIME_DIR_VAR) {
             PathBuf::from(xdg).join("chromium-bridge")
         } else if let Some(xdg_cache) = std::env::var_os("XDG_CACHE_HOME") {
             PathBuf::from(xdg_cache).join("chromium-bridge")
@@ -81,10 +84,21 @@ pub(crate) fn runtime_dir() -> PathBuf {
             PathBuf::from(home).join(".cache/chromium-bridge")
         } else {
             std::env::temp_dir().join(format!("chromium-bridge-{}", crate::sys::effective_uid()))
-        };
-        harden_runtime_dir(&dir);
-        dir
+        }
     }
+}
+
+/// Per-user runtime/data directory holding the lock file and (on Unix) the
+/// bridge socket: [`resolve_runtime_dir`], created on the way, 0700 on Unix
+/// so no other user can enter it. Also holds the enrollment policy config
+/// (`src/packages/core/src/enclave`).
+pub(crate) fn runtime_dir() -> PathBuf {
+    let dir = resolve_runtime_dir();
+    #[cfg(windows)]
+    let _ = fs::create_dir_all(&dir);
+    #[cfg(unix)]
+    harden_runtime_dir(&dir);
+    dir
 }
 
 /// Directory hardening for [`runtime_dir`], which returns a path, not a `Result`: a directory that cannot be created
@@ -93,7 +107,7 @@ pub(crate) fn runtime_dir() -> PathBuf {
 /// (0600 + `O_NOFOLLOW` opens, exclusive creates, see [`crate::fsguard`]) and fails closed on its own error. Chmod
 /// through the symlink is NOT attempted: chmodding an attacker-chosen path is the primitive fsguard exists to remove.
 #[cfg(unix)]
-fn harden_runtime_dir(dir: &std::path::Path) {
+fn harden_runtime_dir(dir: &Path) {
     if let Err(e) = crate::fsguard::ensure_private_dir(dir) {
         log_warn!(
             "ipc",
@@ -111,9 +125,14 @@ const LOCK_MAX_BYTES: usize = 64 * 1024;
 pub const LOCK_FILENAME: &str = "run.lock";
 
 impl LockFile {
-    /// Path of the lock file in the per-user runtime directory.
+    /// Path of the lock file in the per-user runtime directory, which is created on the way.
     pub fn path() -> PathBuf {
-        runtime_dir().join(LOCK_FILENAME)
+        Self::path_in(&runtime_dir())
+    }
+
+    /// The lock's place inside a runtime dir the caller resolved without creating it ([`resolve_runtime_dir`]).
+    pub(crate) fn path_in(runtime_dir: &Path) -> PathBuf {
+        runtime_dir.join(LOCK_FILENAME)
     }
 
     /// Module-private on purpose: the lock file is mutated only inside this module's [`RuntimeMutex`] critical

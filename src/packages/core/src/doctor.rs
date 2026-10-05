@@ -1,14 +1,15 @@
 //! `doctor` / `status`: diagnosis, and (only with `--fix`) repair.
 //!
-//! Plain `doctor` prints a health report without touching the browser,
-//! spawning processes, or killing anything. It only reads the lock file, does
-//! a passive connect probe against our OWN bridge socket (no bytes sent), and
-//! diagnoses each browser's native-messaging registration
-//! (missing/ok/stale/foreign) through the shared resolver in
-//! `crate::browsers`. `doctor --list` is the short, resolver-only form of
-//! that report. `doctor --fix` hands the diagnosis to
-//! `crate::registration` for an idempotent repair; on a fresh machine that
-//! repair IS the registration (see docs/cli.md).
+//! Plain `doctor` prints a health report without touching the browser, spawning processes, or killing
+//! anything: it reads the lock file, connect-probes our OWN bridge socket passively (no bytes sent), and
+//! diagnoses each browser's native-messaging registration through the shared resolver in `crate::browsers`.
+//!
+//! ```text
+//! doctor --list   -> detection and registration state alone; no lock read, no probe
+//! doctor --paths  -> where the runtime dir and lock file resolve; creates and probes nothing
+//! doctor --fix    -> the diagnosis handed to `crate::registration` for an idempotent repair, which on a
+//!                    fresh machine IS the registration (docs/cli.md)
+//! ```
 
 use std::path::PathBuf;
 
@@ -17,7 +18,7 @@ use serde::Serialize;
 use crate::browsers::{self, BaseDirs, Os};
 use crate::cli::DoctorCommand;
 use crate::identity::NATIVE_HOST_ID;
-use crate::ipc::LockFile;
+use crate::ipc::{resolve_runtime_dir, LockFile};
 use crate::policy::{PolicyStatusReport, PolicyStoreState};
 use crate::registration::{self, RegState};
 
@@ -331,11 +332,26 @@ fn run_list() -> i32 {
     0
 }
 
+/// `doctor --paths`: the runtime dir and lock path as this environment resolves them, through the pure resolver,
+/// so the protocol harness can ask a possibly misrouted binary where it would write and refuse it before it does.
+fn paths_report() -> String {
+    let dir = resolve_runtime_dir();
+    format!(
+        "runtime dir:     {}\nlock file:       {}\n",
+        dir.display(),
+        LockFile::path_in(&dir).display()
+    )
+}
+
 /// Entry point for the `doctor` / `status` subcommand. Returns the process
 /// exit code.
 pub fn run(command: DoctorCommand) -> i32 {
     match command {
         DoctorCommand::List => run_list(),
+        DoctorCommand::Paths => {
+            print!("{}", paths_report());
+            0
+        }
         DoctorCommand::Fix(targets) => registration::run_fix(&targets),
         DoctorCommand::Report { json } => {
             let report = gather();
@@ -514,6 +530,29 @@ mod tests {
         assert!(text.contains("could not check: HOME"));
         // No verified manifest means not healthy.
         assert_eq!(exit_code(&r), 1);
+    }
+
+    /// tests/protocol/harness.py refuses a misrouted binary on what `doctor --paths` prints, before any child
+    /// runs; that holds only while the resolver creates nothing, so an absent runtime dir must stay absent here.
+    #[test]
+    fn paths_name_an_absent_runtime_dir_without_creating_it() {
+        let guard = crate::test_support::scratch_runtime_dir("doctor-paths");
+        let absent = guard.point_at_absent("never-made");
+        let text = paths_report();
+        let dir = absent.join("chromium-bridge");
+        assert_eq!(
+            text,
+            format!(
+                "runtime dir:     {}\nlock file:       {}\n",
+                dir.display(),
+                dir.join("run.lock").display()
+            )
+        );
+        assert!(
+            !absent.exists(),
+            "doctor --paths created {}",
+            absent.display()
+        );
     }
 
     #[cfg(unix)]

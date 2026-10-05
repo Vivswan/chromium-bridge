@@ -2,8 +2,8 @@
 //!
 //! The scratch runtime-dir guard lives HERE, once, because the resource it
 //! guards is process-global: [`crate::ipc::runtime_dir`] resolves from the
-//! `XDG_RUNTIME_DIR` / `LOCALAPPDATA` environment variable on every call,
-//! and `std::env::set_var` mutates the whole process. cargo-nextest runs
+//! [`RUNTIME_DIR_VAR`] environment variable on every call, and
+//! `std::env::set_var` mutates the whole process. cargo-nextest runs
 //! each test in its own process, where any lock is a no-op; plain
 //! `cargo test` (one process, parallel threads - the coverage job's mode)
 //! needs real serialization, and a per-module lock only serializes that
@@ -16,10 +16,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-#[cfg(unix)]
-const RUNTIME_ENV: &str = "XDG_RUNTIME_DIR";
-#[cfg(windows)]
-const RUNTIME_ENV: &str = "LOCALAPPDATA";
+use crate::ipc::RUNTIME_DIR_VAR;
 
 /// The one crate-wide lock over the runtime-dir environment variable.
 fn env_lock() -> &'static Mutex<()> {
@@ -48,8 +45,8 @@ pub(crate) fn scratch_runtime_dir(name: &str) -> RuntimeDirGuard {
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let prev = std::env::var_os(RUNTIME_ENV);
-    std::env::set_var(RUNTIME_ENV, &dir);
+    let prev = std::env::var_os(RUNTIME_DIR_VAR);
+    std::env::set_var(RUNTIME_DIR_VAR, &dir);
     RuntimeDirGuard {
         _serial: serial,
         dir,
@@ -57,11 +54,21 @@ pub(crate) fn scratch_runtime_dir(name: &str) -> RuntimeDirGuard {
     }
 }
 
+impl RuntimeDirGuard {
+    /// Re-point the runtime dir at `name` under the scratch dir WITHOUT creating it, for a test proving that a
+    /// resolver leaves an absent dir absent. Drop still restores the environment and removes the scratch dir.
+    pub(crate) fn point_at_absent(&self, name: &str) -> PathBuf {
+        let absent = self.dir.join(name);
+        std::env::set_var(RUNTIME_DIR_VAR, &absent);
+        absent
+    }
+}
+
 impl Drop for RuntimeDirGuard {
     fn drop(&mut self) {
         match &self.prev {
-            Some(v) => std::env::set_var(RUNTIME_ENV, v),
-            None => std::env::remove_var(RUNTIME_ENV),
+            Some(v) => std::env::set_var(RUNTIME_DIR_VAR, v),
+            None => std::env::remove_var(RUNTIME_DIR_VAR),
         }
         let _ = std::fs::remove_dir_all(&self.dir);
     }

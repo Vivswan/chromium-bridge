@@ -10,9 +10,9 @@ every process a test started.
 Safety rule: every binary spawned here runs inside a private, per-run runtime
 dir (`isolate`), so the lock, socket, pairing state, and broker logic can
 never reach the developer's real bridge. `isolate` proves the dir took by
-asking the binary itself (`doctor`) where its lock resolves, every child
-starts through the one `spawn` that re-checks the env it will see, and the
-dir is removed at interpreter exit on every path.
+asking the binary itself (`doctor --paths`) where its lock resolves, every
+child starts through the one `spawn` that re-checks the env it will see, and
+the dir is removed at interpreter exit on every path.
 
 Stdlib only, on purpose: an independent implementation of the protocols with
 no dependencies is what makes these suites catch framing and encoding bugs the
@@ -89,8 +89,10 @@ def new_runtime_dir(prefix):
 def isolate(prefix):
     """Point every future subprocess at a fresh private runtime dir and prove
     it took; refuse to run otherwise. The proof is the binary's own word: a
-    runtime_dir() that read a variable this env does not set would resolve
-    the lock outside the dir, and `doctor` would say so."""
+    resolver that read a variable this env does not set would place the lock
+    outside the dir, and `doctor --paths` would say so. That probe resolves
+    without creating or probing anything, so a misrouted binary is refused
+    with the real runtime dir untouched."""
     global RUNDIR, LOCK
     rundir = new_runtime_dir(prefix)
     os.environ.update(runtime_env(rundir))
@@ -113,12 +115,12 @@ DOCTOR_LOCK_LINE = "lock file:"
 
 def binary_lock_path():
     """Where the binary resolves its lock under this process's env, read off
-    the `doctor` report it prints for any state of the runtime dir."""
-    report = run_cli(["doctor"])
+    `doctor --paths`, which prints the resolved paths and touches nothing."""
+    report = run_cli(["doctor", "--paths"])
     for line in report.stdout.splitlines():
         if line.startswith(DOCTOR_LOCK_LINE):
             return line[len(DOCTOR_LOCK_LINE):].strip()
-    sys.exit(f"REFUSING TO RUN: doctor printed no {DOCTOR_LOCK_LINE!r} line:\n"
+    sys.exit(f"REFUSING TO RUN: doctor --paths printed no {DOCTOR_LOCK_LINE!r} line:\n"
              f"{report.stdout}{report.stderr}")
 
 

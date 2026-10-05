@@ -12,6 +12,7 @@
 | `chromium-bridge --native-host [--label <browser>]` | native host | Thin bridge, spawned by the browser via the host manifest. Never invoked by hand. |
 | `chromium-bridge doctor [--json]` (alias `status`) | read-only diagnostics | Environment and connectivity self-check; changes nothing. `--json` prints the report as one versioned object. |
 | `chromium-bridge doctor --list` | read-only diagnostics | One line per known browser: detection and registration state. |
+| `chromium-bridge doctor --paths` | read-only diagnostics | Prints the runtime dir and lock path this environment resolves to, creating neither. |
 | `chromium-bridge doctor --fix` | repair / install | Registers (or re-registers) this binary as the native-messaging host. The only mutating form of doctor. |
 | `chromium-bridge uninstall` | removal | Removes exactly the registrations this project wrote, nothing else. |
 | `chromium-bridge pair [--reset]` | enrollment | Mints the Secure Enclave enrollment key (macOS); every use of the key demands Touch ID. |
