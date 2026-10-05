@@ -90,7 +90,8 @@ function macos(installer: string, steps: Steps, home: string): void {
   steps.outputMatches(chromeRegistered, binary, "doctor", "--list");
   steps.ok(binary, "uninstall");
   steps.outputMatches(chromeUnregistered, binary, "doctor", "--list");
-  steps.absent(join(home, ".chromium-bridge", "run-host-chrome.sh"));
+  // Brave reads Chrome's per-user directory on macOS, so Chrome's wrapper is the unlabeled one.
+  steps.absent(join(home, ".chromium-bridge", "run-host.sh"));
   steps.ok("sudo", "pkgutil", "--forget", pkgIdentifier);
   steps.ok("sudo", "rm", binary);
   steps.absent(binary);

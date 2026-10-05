@@ -84,7 +84,10 @@ chromium-bridge doctor --list                     # read-only: detection + regis
 
 The scope is the command's: `--system` writes the directories every account's browser reads (`/etc/opt/chrome/native-messaging-hosts`, `/Library/Google/Chrome/NativeMessagingHosts`, `HKLM`) and needs root, while without it a root shell is refused, since root has no browser of its own.
 
-Opera, and Brave on macOS and Linux, read Chrome's system directory rather than one of their own. For them `--system` registers Chrome's manifest and `doctor` reports it on their rows as Chrome's. That shared manifest carries no browser label (either browser may launch it), so its connections take the broker's default slot, as a `--manifest-dir` registration's do.
+Opera, and Brave on macOS and Linux, read Chrome's system directory rather than one of their own, and Brave on macOS reads Chrome's per-user directory as well. For them `doctor --fix` registers Chrome's manifest in that scope and `doctor` reports it on their rows as Chrome's.
+
+- **No label on the shared manifest:** either browser may launch it, so its connections take the broker's default slot, as a `--manifest-dir` registration's do.
+- **Own pointer per browser, per user on macOS:** Chrome and Brave each keep their own extension pointer there, so both prompt to enable the extension (machine-wide, macOS has one pointer directory for every browser).
 
 Known browser keys: `chrome`, `chromium`, `brave`, `edge`, `vivaldi`, `opera`. "Detected" means the browser is actually installed, as far as a cheap local check can tell:
 

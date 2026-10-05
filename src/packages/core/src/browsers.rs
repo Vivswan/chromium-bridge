@@ -288,40 +288,43 @@ impl Registration {
     }
 }
 
-/// How a browser finds the machine-wide manifest. Brave's main delegate points its system (and on macOS
-/// its user) native-messaging directory at Chrome's, and Opera's extension documentation names Chrome's
-/// locations alone, so those browsers read Chrome's system directory and have none of their own. One
-/// directory holds one manifest: `doctor --fix --system --browser brave` registers Chrome's row and
-/// `doctor` reports it under both; the label rule for a shared manifest is `registration::Target`'s. The
-/// entry's system pointer is the owner's too.
+/// Where a browser's manifest lookup lands in one scope: a directory of its own, or another browser's.
+/// Brave's main delegate (brave-core `app/brave_main_delegate.cc`, `PreSandboxStartup`) points its
+/// machine-wide directory at Chrome's on macOS and Linux, and its per-user one too on macOS alone (on
+/// Linux that override resolves to Brave's own config root); Opera's extension documentation names
+/// Chrome's locations alone. One directory holds one manifest: `doctor --fix --browser brave` on macOS
+/// registers Chrome's row and `doctor` reports it under both; the label rule for a shared manifest is
+/// `registration::Target`'s.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SystemRegistration {
+pub enum Lookup {
     Own {
         registration: Registration,
         /// The other browsers that read this directory; any means the wrapper gets no `--label`.
         readers: Vec<Browser>,
     },
-    /// `registration` is `owner`'s own system-scope one, resolved here so a target needs no second lookup.
+    /// `registration` is `owner`'s own one in the same scope, resolved here so a target needs no second
+    /// lookup.
     ReadsFrom {
         owner: Browser,
         registration: Registration,
     },
 }
 
-impl SystemRegistration {
+impl Lookup {
     /// The registration the browser reads, whosever it is.
     pub fn registration(&self) -> &Registration {
         match self {
-            SystemRegistration::Own { registration, .. }
-            | SystemRegistration::ReadsFrom { registration, .. } => registration,
+            Lookup::Own { registration, .. } | Lookup::ReadsFrom { registration, .. } => {
+                registration
+            }
         }
     }
 
     /// The browser whose directory it is, when not this browser's own.
     pub fn owner(&self) -> Option<Browser> {
         match self {
-            SystemRegistration::Own { .. } => None,
-            SystemRegistration::ReadsFrom { owner, .. } => Some(*owner),
+            Lookup::Own { .. } => None,
+            Lookup::ReadsFrom { owner, .. } => Some(*owner),
         }
     }
 }
@@ -377,8 +380,8 @@ pub struct BrowserEntry {
     /// macOS app elsewhere -> reads "not detected" (residual); the user can register it explicitly
     /// ```
     pub presence: Scoped<Vec<PathBuf>>,
-    pub user: Registration,
-    pub system: SystemRegistration,
+    /// Where the browser's lookup lands per scope.
+    pub manifest: Scoped<Lookup>,
     /// The external-extension pointer per scope, or `None` on Linux, where none is written (see
     /// [`ExtensionPointer`]).
     pub pointer: Option<Scoped<ExtensionPointer>>,
@@ -427,7 +430,7 @@ pub const MACOS_SYSTEM_POINTER_DIR: &str =
 const LINUX_CHROME_SYSTEM_DIR: &str = "etc/opt/chrome/native-messaging-hosts";
 
 /// The machine-wide `NativeMessagingHosts` directory each browser reads on macOS, root-relative, or `None`
-/// for a browser that reads Chrome's ([`SystemRegistration::ReadsFrom`]). Chromium's from Chrome's
+/// for a browser that reads Chrome's ([`Lookup::ReadsFrom`]). Chromium's from Chrome's
 /// documentation, Edge's from Microsoft's, Vivaldi's from the paths native hosts ship for it, since
 /// Vivaldi documents none.
 fn macos_system_manifest_dir(browser: Browser) -> Option<&'static str> {
@@ -473,7 +476,7 @@ fn linux_vendor_dir(browser: Browser) -> &'static str {
 }
 
 /// The machine-wide `native-messaging-hosts` directory each browser reads on Linux, root-relative, or
-/// `None` for a browser that reads Chrome's ([`SystemRegistration::ReadsFrom`]). Chromium's from Chrome's
+/// `None` for a browser that reads Chrome's ([`Lookup::ReadsFrom`]). Chromium's from Chrome's
 /// documentation, Edge's from Microsoft's, Vivaldi's from the paths native hosts ship for it.
 fn linux_system_manifest_dir(browser: Browser) -> Option<&'static str> {
     match browser {
@@ -581,160 +584,171 @@ fn windows_slot(
     )
 }
 
-/// Chrome's own machine-wide registration and pointer: total, because it is what a browser without a
-/// directory of its own falls through to.
-fn chrome_system_slot(os: Os, dirs: &BaseDirs) -> (Registration, Option<ExtensionPointer>) {
-    match os {
-        Os::MacOs => (
-            Registration::ManifestDir(dirs.system_root.join(MACOS_CHROME_SYSTEM_DIR)),
-            Some(pointer_file(
-                dirs.system_root.join(MACOS_SYSTEM_POINTER_DIR),
-            )),
-        ),
-        Os::Linux => (
-            Registration::ManifestDir(dirs.system_root.join(LINUX_CHROME_SYSTEM_DIR)),
-            None,
-        ),
-        Os::Windows => {
-            let (registration, pointer) = windows_slot(os, dirs, Scope::System, Browser::Chrome);
-            (registration, Some(pointer))
+/// The per-user config root each browser keeps on macOS; [`Lookup`] says whose `NativeMessagingHosts`
+/// under it a browser reads.
+fn macos_user_root(dirs: &BaseDirs, browser: Browser) -> PathBuf {
+    dirs.home
+        .join("Library/Application Support")
+        .join(macos_vendor_dir(browser))
+}
+
+fn linux_user_root(dirs: &BaseDirs, browser: Browser) -> PathBuf {
+    dirs.config_home().join(linux_vendor_dir(browser))
+}
+
+/// The per-user registration under a config root: the `NativeMessagingHosts` directory Chromium scans there.
+fn user_registration(root: PathBuf) -> Registration {
+    Registration::ManifestDir(root.join("NativeMessagingHosts"))
+}
+
+/// Chrome's own registration in one scope, total: the per-browser tables say who falls through to it with
+/// a `None`, so the fallthrough itself cannot be one of their entries.
+fn chrome_registration(os: Os, dirs: &BaseDirs, scope: Scope) -> Registration {
+    match (os, scope) {
+        (Os::MacOs, Scope::User) => user_registration(macos_user_root(dirs, Browser::Chrome)),
+        (Os::MacOs, Scope::System) => {
+            Registration::ManifestDir(dirs.system_root.join(MACOS_CHROME_SYSTEM_DIR))
         }
+        (Os::Linux, Scope::User) => user_registration(linux_user_root(dirs, Browser::Chrome)),
+        (Os::Linux, Scope::System) => {
+            Registration::ManifestDir(dirs.system_root.join(LINUX_CHROME_SYSTEM_DIR))
+        }
+        (Os::Windows, _) => windows_slot(os, dirs, scope, Browser::Chrome).0,
     }
 }
 
-/// A browser's own machine-wide registration, or `None` where it reads Chrome's. Brave's delegate
-/// overrides no Windows path, so its key is its own there; Opera's documentation names Chrome's
-/// locations on every OS.
-fn own_system_registration(os: Os, dirs: &BaseDirs, browser: Browser) -> Option<Registration> {
-    match os {
-        Os::MacOs => macos_system_manifest_dir(browser)
+/// A browser's own registration in one scope, or `None` where it reads Chrome's ([`Lookup`] says who).
+/// Brave's delegate overrides no Windows path, so its keys are its own there.
+fn own_registration(
+    os: Os,
+    dirs: &BaseDirs,
+    scope: Scope,
+    browser: Browser,
+) -> Option<Registration> {
+    match (os, scope) {
+        (Os::MacOs, Scope::User) => match browser {
+            Browser::Brave => None,
+            Browser::Chrome
+            | Browser::Chromium
+            | Browser::Edge
+            | Browser::Vivaldi
+            | Browser::Opera => Some(user_registration(macos_user_root(dirs, browser))),
+        },
+        (Os::MacOs, Scope::System) => macos_system_manifest_dir(browser)
             .map(|dir| Registration::ManifestDir(dirs.system_root.join(dir))),
-        Os::Linux => linux_system_manifest_dir(browser)
+        (Os::Linux, Scope::User) => Some(user_registration(linux_user_root(dirs, browser))),
+        (Os::Linux, Scope::System) => linux_system_manifest_dir(browser)
             .map(|dir| Registration::ManifestDir(dirs.system_root.join(dir))),
-        Os::Windows => match browser {
+        (Os::Windows, Scope::User) => Some(windows_slot(os, dirs, scope, browser).0),
+        (Os::Windows, Scope::System) => match browser {
             Browser::Opera => None,
             Browser::Chrome
             | Browser::Chromium
             | Browser::Brave
             | Browser::Edge
-            | Browser::Vivaldi => Some(windows_slot(os, dirs, Scope::System, browser).0),
+            | Browser::Vivaldi => Some(windows_slot(os, dirs, scope, browser).0),
         },
     }
 }
 
-/// The browsers that read Chrome's system directory instead of one of their own, on this OS.
-fn chrome_readers(os: Os, dirs: &BaseDirs) -> Vec<Browser> {
+fn chrome_readers(os: Os, dirs: &BaseDirs, scope: Scope) -> Vec<Browser> {
     Browser::ALL
         .into_iter()
-        .filter(|&b| b != Browser::Chrome && own_system_registration(os, dirs, b).is_none())
+        .filter(|&b| b != Browser::Chrome && own_registration(os, dirs, scope, b).is_none())
         .collect()
 }
 
-/// A browser's machine-wide registration and pointer: its own, or Chrome's, which it reads instead.
-fn system_slot(
-    os: Os,
-    dirs: &BaseDirs,
-    browser: Browser,
-) -> (SystemRegistration, Option<ExtensionPointer>) {
-    match own_system_registration(os, dirs, browser) {
-        Some(registration) => {
-            let pointer = match os {
-                Os::MacOs => Some(pointer_file(
-                    dirs.system_root.join(MACOS_SYSTEM_POINTER_DIR),
-                )),
-                Os::Linux => None,
-                Os::Windows => Some(windows_slot(os, dirs, Scope::System, browser).1),
-            };
-            let readers = match browser {
-                Browser::Chrome => chrome_readers(os, dirs),
+fn lookup(os: Os, dirs: &BaseDirs, scope: Scope, browser: Browser) -> Lookup {
+    match own_registration(os, dirs, scope, browser) {
+        Some(registration) => Lookup::Own {
+            registration,
+            readers: match browser {
+                Browser::Chrome => chrome_readers(os, dirs, scope),
                 Browser::Chromium
                 | Browser::Brave
                 | Browser::Edge
                 | Browser::Vivaldi
                 | Browser::Opera => Vec::new(),
-            };
-            (
-                SystemRegistration::Own {
-                    registration,
-                    readers,
-                },
-                pointer,
+            },
+        },
+        None => Lookup::ReadsFrom {
+            owner: Browser::Chrome,
+            registration: chrome_registration(os, dirs, scope),
+        },
+    }
+}
+
+/// The pointer per scope. The per-user one is the browser's own on every OS: Chromium derives it from the
+/// user-data directory, which no delegate re-points (Brave's moves the manifest directory alone), so a
+/// browser reading Chrome's manifest still prompts from its own pointer. Machine-wide, macOS has the one
+/// directory for all and Windows the owner's key.
+fn pointers(
+    os: Os,
+    dirs: &BaseDirs,
+    browser: Browser,
+    manifest: &Scoped<Lookup>,
+) -> Option<Scoped<ExtensionPointer>> {
+    match os {
+        Os::MacOs => Some(Scoped {
+            user: pointer_file(macos_user_root(dirs, browser).join("External Extensions")),
+            system: pointer_file(dirs.system_root.join(MACOS_SYSTEM_POINTER_DIR)),
+        }),
+        Os::Linux => None,
+        Os::Windows => Some(Scoped {
+            user: windows_slot(os, dirs, Scope::User, browser).1,
+            system: windows_slot(
+                os,
+                dirs,
+                Scope::System,
+                manifest.system.owner().unwrap_or(browser),
             )
+            .1,
+        }),
+    }
+}
+
+/// The paths whose existence says the browser is installed, per scope ([`BrowserEntry::presence`]).
+fn presence(os: Os, dirs: &BaseDirs, browser: Browser) -> Scoped<Vec<PathBuf>> {
+    match os {
+        Os::MacOs => {
+            let bundle = macos_app_bundle(browser);
+            let machine_bundle = dirs.system_root.join("Applications").join(bundle);
+            Scoped {
+                user: vec![
+                    machine_bundle.clone(),
+                    dirs.home.join("Applications").join(bundle),
+                ],
+                system: vec![machine_bundle],
+            }
         }
-        None => {
-            let (registration, pointer) = chrome_system_slot(os, dirs);
-            (
-                SystemRegistration::ReadsFrom {
-                    owner: Browser::Chrome,
-                    registration,
-                },
-                pointer,
-            )
+        Os::Linux => Scoped {
+            user: vec![linux_user_root(dirs, browser)],
+            system: linux_install_dirs(browser)
+                .iter()
+                .map(|dir| dirs.system_root.join(dir))
+                .collect(),
+        },
+        Os::Windows => {
+            let profile = windows_profile_dir(dirs, browser);
+            Scoped {
+                user: vec![profile.clone()],
+                system: vec![profile],
+            }
         }
     }
 }
 
 /// Resolve one browser's entry on one OS.
 pub fn entry(os: Os, dirs: &BaseDirs, browser: Browser) -> BrowserEntry {
-    let (system, system_pointer) = system_slot(os, dirs, browser);
-    match os {
-        Os::MacOs => {
-            let root = dirs
-                .home
-                .join("Library/Application Support")
-                .join(macos_vendor_dir(browser));
-            let bundle = macos_app_bundle(browser);
-            let machine_bundle = dirs.system_root.join("Applications").join(bundle);
-            BrowserEntry {
-                browser,
-                presence: Scoped {
-                    user: vec![
-                        machine_bundle.clone(),
-                        dirs.home.join("Applications").join(bundle),
-                    ],
-                    system: vec![machine_bundle],
-                },
-                user: Registration::ManifestDir(root.join("NativeMessagingHosts")),
-                system,
-                pointer: system_pointer.map(|system| Scoped {
-                    user: pointer_file(root.join("External Extensions")),
-                    system,
-                }),
-            }
-        }
-        Os::Linux => {
-            let root = dirs.config_home().join(linux_vendor_dir(browser));
-            BrowserEntry {
-                browser,
-                presence: Scoped {
-                    user: vec![root.clone()],
-                    system: linux_install_dirs(browser)
-                        .iter()
-                        .map(|dir| dirs.system_root.join(dir))
-                        .collect(),
-                },
-                user: Registration::ManifestDir(root.join("NativeMessagingHosts")),
-                system,
-                pointer: None,
-            }
-        }
-        Os::Windows => {
-            let (user, user_pointer) = windows_slot(os, dirs, Scope::User, browser);
-            let profile = windows_profile_dir(dirs, browser);
-            BrowserEntry {
-                browser,
-                presence: Scoped {
-                    user: vec![profile.clone()],
-                    system: vec![profile],
-                },
-                user,
-                system,
-                pointer: system_pointer.map(|system| Scoped {
-                    user: user_pointer,
-                    system,
-                }),
-            }
-        }
+    let manifest = Scoped {
+        user: lookup(os, dirs, Scope::User, browser),
+        system: lookup(os, dirs, Scope::System, browser),
+    };
+    BrowserEntry {
+        browser,
+        presence: presence(os, dirs, browser),
+        pointer: pointers(os, dirs, browser, &manifest),
+        manifest,
     }
 }
 
@@ -777,13 +791,28 @@ mod tests {
         assert_eq!(Browser::from_key(""), None);
     }
 
+    /// Brave's delegate re-points its per-user manifest directory on macOS and nothing else: the row's
+    /// user lookup is Chrome's directory while its pointer stays under Brave's own user data root.
     #[test]
-    fn macos_layout_matches_the_shell_installer() {
+    fn macos_layout_brave_reads_chromes_user_manifest_and_prompts_from_its_own_pointer() {
         let e = entry(Os::MacOs, &dirs(), Browser::Brave);
         assert_eq!(
-            e.user.manifest_path(),
+            e.manifest.user,
+            Lookup::ReadsFrom {
+                owner: Browser::Chrome,
+                registration: Registration::ManifestDir(PathBuf::from(
+                    "/fix/home/Library/Application Support/Google/Chrome/NativeMessagingHosts"
+                )),
+            }
+        );
+        assert_eq!(
+            entry(Os::MacOs, &dirs(), Browser::Chrome)
+                .manifest
+                .user
+                .registration()
+                .manifest_path(),
             PathBuf::from(
-                "/fix/home/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
+                "/fix/home/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
             )
         );
         // App-presence candidates: the two standard install roots per user, the machine's alone for
@@ -798,8 +827,8 @@ mod tests {
                 system: vec![PathBuf::from("/fix/sys/Applications/Brave Browser.app")],
             }
         );
-        // The per-user pointer file sits beside the manifest dir, under the same user data root; the
-        // machine-wide one is Chromium's single hardcoded directory, Chrome's name included.
+        // The per-user pointer file sits under the browser's own user data root; the machine-wide one is
+        // Chromium's single hardcoded directory, Chrome's name included.
         assert_eq!(
             e.pointer,
             Some(Scoped {
@@ -820,7 +849,9 @@ mod tests {
         // Opera's macOS dir is the bundle-id one, not "Opera".
         let opera = entry(Os::MacOs, &dirs(), Browser::Opera);
         assert!(opera
+            .manifest
             .user
+            .registration()
             .manifest_path()
             .starts_with("/fix/home/Library/Application Support/com.operasoftware.Opera"));
         assert!(opera
@@ -832,14 +863,14 @@ mod tests {
     /// The machine-wide directories, per browser's own source or documentation: Chrome's sits outside
     /// `Application Support` on macOS while its pointer dir sits inside; Brave and Opera have none of their
     /// own and read Chrome's, so their rows resolve to Chrome's registration and pointer under Chrome's
-    /// name; Brave's Windows key is its own.
+    /// name; Brave's Windows key is its own. Per user, Brave on macOS alone reads Chrome's.
     #[test]
-    fn system_scope_resolves_each_browsers_documented_directory_or_chromes() {
+    fn each_browser_resolves_its_documented_directory_or_chromes_per_scope() {
         let d = dirs();
         let host = "com.vivswan.chromium_bridge.host.json";
-        let own = |os: Os, b: Browser| match entry(os, &d, b).system {
-            SystemRegistration::Own { registration, .. } => registration.manifest_path(),
-            other @ SystemRegistration::ReadsFrom { .. } => {
+        let own = |os: Os, b: Browser| match entry(os, &d, b).manifest.system {
+            Lookup::Own { registration, .. } => registration.manifest_path(),
+            other @ Lookup::ReadsFrom { .. } => {
                 panic!("{b:?} on {os:?} should own its system dir, got {other:?}")
             }
         };
@@ -888,18 +919,26 @@ mod tests {
 
         let brave = entry(Os::Linux, &d, Browser::Brave);
         assert_eq!(
-            brave.system,
-            SystemRegistration::ReadsFrom {
+            brave.manifest.system,
+            Lookup::ReadsFrom {
                 owner: Browser::Chrome,
                 registration: Registration::ManifestDir(PathBuf::from(
                     "/fix/sys/etc/opt/chrome/native-messaging-hosts"
                 )),
             }
         );
+        // Brave's Linux user directory is its own: the delegate's override there resolves to Brave's
+        // default config root.
+        assert_eq!(
+            brave.manifest.user.registration().manifest_path(),
+            PathBuf::from(format!(
+                "/fix/home/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts/{host}"
+            ))
+        );
         let opera = entry(Os::MacOs, &d, Browser::Opera);
         assert_eq!(
-            opera.system,
-            SystemRegistration::ReadsFrom {
+            opera.manifest.system,
+            Lookup::ReadsFrom {
                 owner: Browser::Chrome,
                 registration: Registration::ManifestDir(PathBuf::from(
                     "/fix/sys/Library/Google/Chrome/NativeMessagingHosts"
@@ -917,38 +956,53 @@ mod tests {
         );
         let brave_win = entry(Os::Windows, &d, Browser::Brave);
         assert_eq!(
-            brave_win.system.registration().location(),
+            brave_win.manifest.system.registration().location(),
             r"HKLM\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.vivswan.chromium_bridge.host"
         );
-        assert_eq!(brave_win.system.owner(), None);
+        assert_eq!(brave_win.manifest.system.owner(), None);
         assert_eq!(
-            entry(Os::Windows, &d, Browser::Opera).system.owner(),
+            entry(Os::Windows, &d, Browser::Opera)
+                .manifest
+                .system
+                .owner(),
             Some(Browser::Chrome)
         );
         // Every sharer's owner owns its directory and lists the sharer among its readers (the label
-        // decision rests on that list), per OS: Brave and Opera on Unix, Opera alone on Windows.
-        for (os, expected) in [
-            (Os::MacOs, vec![Browser::Brave, Browser::Opera]),
-            (Os::Linux, vec![Browser::Brave, Browser::Opera]),
-            (Os::Windows, vec![Browser::Opera]),
+        // decision rests on that list), per OS and scope: Brave and Opera in Unix system directories,
+        // Opera alone on Windows, and per user Brave on macOS alone.
+        for (os, scope, expected) in [
+            (Os::MacOs, Scope::User, vec![Browser::Brave]),
+            (
+                Os::MacOs,
+                Scope::System,
+                vec![Browser::Brave, Browser::Opera],
+            ),
+            (Os::Linux, Scope::User, vec![]),
+            (
+                Os::Linux,
+                Scope::System,
+                vec![Browser::Brave, Browser::Opera],
+            ),
+            (Os::Windows, Scope::User, vec![]),
+            (Os::Windows, Scope::System, vec![Browser::Opera]),
         ] {
             let sharers: Vec<Browser> = resolve(os, &d)
                 .into_iter()
-                .filter(|e| e.system.owner() == Some(Browser::Chrome))
+                .filter(|e| e.manifest.get(scope).owner() == Some(Browser::Chrome))
                 .map(|e| e.browser)
                 .collect();
-            assert_eq!(sharers, expected, "{os:?}");
-            let SystemRegistration::Own { readers, .. } = entry(os, &d, Browser::Chrome).system
-            else {
-                panic!("Chrome owns its system directory on {os:?}");
+            assert_eq!(sharers, expected, "{os:?} {scope:?}");
+            let chrome = entry(os, &d, Browser::Chrome);
+            let Lookup::Own { readers, .. } = chrome.manifest.get(scope) else {
+                panic!("Chrome owns its {scope:?} directory on {os:?}");
             };
-            assert_eq!(readers, expected, "{os:?}");
+            assert_eq!(*readers, expected, "{os:?} {scope:?}");
             for e in resolve(os, &d) {
-                if let Some(owner) = e.system.owner() {
+                if let Some(owner) = e.manifest.get(scope).owner() {
                     assert_eq!(
-                        entry(os, &d, owner).system.owner(),
+                        entry(os, &d, owner).manifest.get(scope).owner(),
                         None,
-                        "{os:?} {owner:?}"
+                        "{os:?} {scope:?} {owner:?}"
                     );
                 }
             }
@@ -959,7 +1013,7 @@ mod tests {
     fn linux_layout_defaults_to_dot_config_and_honors_xdg() {
         let e = entry(Os::Linux, &dirs(), Browser::Chrome);
         assert_eq!(
-            e.user.manifest_path(),
+            e.manifest.user.registration().manifest_path(),
             PathBuf::from(
                 "/fix/home/.config/google-chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
             )
@@ -995,9 +1049,12 @@ mod tests {
             hive,
             key,
             manifest_path,
-        } = &e.user
+        } = e.manifest.user.registration()
         else {
-            panic!("expected a registry registration, got {:?}", e.user);
+            panic!(
+                "expected a registry registration, got {:?}",
+                e.manifest.user
+            );
         };
         assert_eq!(*hive, Hive::CurrentUser);
         assert_eq!(
@@ -1009,8 +1066,8 @@ mod tests {
             &PathBuf::from("/fix/local/chromium-bridge/com.vivswan.chromium_bridge.host.json")
         );
         assert_eq!(
-            e.system,
-            SystemRegistration::Own {
+            e.manifest.system,
+            Lookup::Own {
                 registration: Registration::Registry {
                     hive: Hive::LocalMachine,
                     key: r"Software\Google\Chrome\NativeMessagingHosts\com.vivswan.chromium_bridge.host"

@@ -28,8 +28,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::browsers::{
-    self, BaseDirs, Browser, BrowserEntry, ExtensionPointer, Hive, Os, Registration, Scope,
-    SystemRegistration,
+    self, BaseDirs, Browser, BrowserEntry, ExtensionPointer, Hive, Lookup, Os, Registration, Scope,
 };
 use crate::cli::{FixTargets, UninstallArgs};
 use crate::identity::{NATIVE_HOST_ID, PINNED_EXTENSION_ID};
@@ -101,54 +100,49 @@ pub enum RegistrarScope {
 
 /// One registration to write or remove. The label rides the wrapper as `--label` so the broker files the
 /// connection under that browser; it exists only when exactly one browser launches the manifest. An
-/// explicit `--manifest-dir` cannot name its browser, and a system directory several browsers read
-/// (Chrome's, which Brave and Opera read) cannot either: a label there would file Brave's connection in
-/// Chrome's slot and route a call aimed at Chrome to Brave, so those connections take the broker's default
-/// slot instead.
+/// explicit `--manifest-dir` cannot name its browser, and a directory several browsers read (Chrome's,
+/// which Brave and Opera read) cannot either: a label there would file Brave's connection in Chrome's
+/// slot and route a call aimed at Chrome to Brave, so those connections take the broker's default slot
+/// instead.
 pub struct Target {
     pub label: Option<Browser>,
     /// What reports call it: the browser key, or the location of an explicit dir.
     pub name: String,
     pub registration: Registration,
-    /// The browser's external-extension pointer; `None` where none is written
-    /// (Linux, and explicit dirs, whose browser we cannot name).
-    pub pointer: Option<ExtensionPointer>,
+    /// The external-extension pointer of every browser launching this manifest, each prompting from its
+    /// own; empty where none is written (Linux, and explicit dirs, whose browser we cannot name).
+    pub pointers: Vec<ExtensionPointer>,
 }
 
 impl Target {
-    /// The browser's target in one scope. A browser that reads another's system directory
-    /// ([`SystemRegistration::ReadsFrom`]) yields the owner's target.
+    /// The browser's target in one scope. A browser that reads another's directory
+    /// ([`Lookup::ReadsFrom`]) yields the owner's target.
     pub fn for_browser(entry: &BrowserEntry, scope: Scope) -> Target {
-        match scope {
-            Scope::User => Target {
-                label: Some(entry.browser),
+        let pointers = entry
+            .pointer
+            .as_ref()
+            .map(|p| p.get(scope).clone())
+            .into_iter()
+            .collect();
+        match entry.manifest.get(scope) {
+            Lookup::Own {
+                registration,
+                readers,
+            } => Target {
+                label: readers.is_empty().then_some(entry.browser),
                 name: entry.browser.key().to_string(),
-                registration: entry.user.clone(),
-                pointer: entry.pointer.as_ref().map(|p| p.user.clone()),
+                registration: registration.clone(),
+                pointers,
             },
-            Scope::System => {
-                let pointer = entry.pointer.as_ref().map(|p| p.system.clone());
-                match &entry.system {
-                    SystemRegistration::Own {
-                        registration,
-                        readers,
-                    } => Target {
-                        label: readers.is_empty().then_some(entry.browser),
-                        name: entry.browser.key().to_string(),
-                        registration: registration.clone(),
-                        pointer,
-                    },
-                    SystemRegistration::ReadsFrom {
-                        owner,
-                        registration,
-                    } => Target {
-                        label: None,
-                        name: owner.key().to_string(),
-                        registration: registration.clone(),
-                        pointer,
-                    },
-                }
-            }
+            Lookup::ReadsFrom {
+                owner,
+                registration,
+            } => Target {
+                label: None,
+                name: owner.key().to_string(),
+                registration: registration.clone(),
+                pointers,
+            },
         }
     }
 
@@ -158,7 +152,7 @@ impl Target {
             label: None,
             name: registration.location(),
             registration,
-            pointer: None,
+            pointers: Vec::new(),
         }
     }
 
@@ -599,7 +593,7 @@ impl Registrar {
             ) => key.replaceable(&format!("registry key {hive}\\{name}"), self.foreign)?,
             _ => None,
         };
-        if let Some(pointer) = &target.pointer {
+        for pointer in &target.pointers {
             pointer_slot(pointer).writable(&format!("extension pointer {}", pointer.location()))?;
         }
 
@@ -609,7 +603,10 @@ impl Registrar {
         if let Registration::ManifestDir(dir) = &target.registration {
             browser_dirs.push(dir);
         }
-        if let Some(ExtensionPointer::File(path)) = &target.pointer {
+        for path in target.pointers.iter().filter_map(|p| match p {
+            ExtensionPointer::File(path) => Some(path),
+            ExtensionPointer::Registry { .. } => None,
+        }) {
             browser_dirs.push(
                 path.parent()
                     .ok_or_else(|| format!("{} has no parent directory", path.display()))?,
@@ -668,7 +665,7 @@ impl Registrar {
                 set_registry_value(*hive, key, "", &manifest_path.to_string_lossy())?;
                 lines.push(format!("  registry key {hive}\\{key}"));
             }
-            if let Some(pointer) = &target.pointer {
+            for pointer in &target.pointers {
                 match pointer {
                     ExtensionPointer::File(path) => {
                         write_atomic(path, pointer_json().as_bytes(), false)
@@ -780,7 +777,7 @@ impl Registrar {
                 .push(format!("{}: not registered", target.name)),
             Err(e) => removal.refused.push(e),
         }
-        if let Some(pointer) = &target.pointer {
+        for pointer in &target.pointers {
             let what = format!("extension pointer {}", pointer.location());
             match pointer_slot(pointer).removable(&what) {
                 Ok(false) => {}
@@ -1375,10 +1372,11 @@ impl Privilege {
 }
 
 /// The targets of one scope for these browsers, each registration once: browsers that read another's
-/// system directory resolve to the owner's target ([`Target::for_browser`]), so Chrome and Brave together
-/// yield Chrome's manifest once rather than two writes of the same file with different labels. The
-/// registration, not the manifest path, is the identity: on Windows every browser's manifest sits in the
-/// one store file while each has its own key.
+/// directory resolve to the owner's target ([`Target::for_browser`]), so Chrome and Brave together yield
+/// Chrome's manifest once rather than two writes of the same file with different labels, and that one
+/// target carries both browsers' pointers, since each prompts from its own. The registration, not the
+/// manifest path, is the identity: on Windows every browser's manifest sits in the one store file while
+/// each has its own key.
 fn browser_targets<'a>(
     entries: impl Iterator<Item = &'a BrowserEntry>,
     scope: Scope,
@@ -1386,8 +1384,18 @@ fn browser_targets<'a>(
     let mut out: Vec<Target> = Vec::new();
     for entry in entries {
         let target = Target::for_browser(entry, scope);
-        if !out.iter().any(|t| t.registration == target.registration) {
-            out.push(target);
+        match out
+            .iter_mut()
+            .find(|t| t.registration == target.registration)
+        {
+            Some(shared) => {
+                for pointer in target.pointers {
+                    if !shared.pointers.contains(&pointer) {
+                        shared.pointers.push(pointer);
+                    }
+                }
+            }
+            None => out.push(target),
         }
     }
     out

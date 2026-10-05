@@ -62,7 +62,7 @@ function conforming(overrides: Partial<Fake> = {}): Fake {
 const local = "C:\\Users\\example-user\\AppData\\Local";
 const exe = join(local, "Programs", "chromium-bridge", "chromium-bridge.exe");
 const home = "/home/user";
-const wrapper = join(home, ".chromium-bridge", "run-host-chrome.sh");
+const wrapper = join(home, ".chromium-bridge", "run-host.sh");
 const macBin = "/usr/local/bin/chromium-bridge";
 const roots = { home, localAppData: local };
 
@@ -185,7 +185,7 @@ describe("each check fails on the one wrong answer it exists to catch", () => {
       "a wrapper the macOS uninstall left behind, outside doctor's view",
       "macos",
       { presence: (path) => (path === wrapper ? "present" : "absent") },
-      /^expected \/home\/user\/\.chromium-bridge\/run-host-chrome\.sh to be gone$/,
+      /^expected \/home\/user\/\.chromium-bridge\/run-host\.sh to be gone$/,
     ],
     [
       "an install that fails, with the log's tail quoted",
