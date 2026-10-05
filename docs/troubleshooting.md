@@ -37,9 +37,9 @@ What each `doctor` row means is on the [CLI page](cli.md#doctor--status-read-onl
 - **It means:** the healthy pre-cutover state. No signed baseline has been written, so the extension enforces the deny baseline: every capability grant off, every confirmation on. The row never flips `doctor`'s exit code.
 - **Do:** nothing, unless you want grants: `chromium-bridge policy set` writes the first baseline ([policy on the CLI page](cli.md#host-owned-policy-policy)). A present store reports its revision, `signed` or `unsigned`, and whether an unsigned restriction overlay is active; the host reports signed-ness and never claims "valid", since only the extension can verify the signature against its own pinned key.
 
-## Doctor reports `policy baseline: present but UNREADABLE`
+## Doctor reports `policy baseline: UNREADABLE`
 
-- **You see:** `present but UNREADABLE (...) - failing closed`, and `doctor` exits non-zero.
+- **You see:** `UNREADABLE (...) - failing closed`, and `doctor` exits non-zero.
 - **It means:** the policy store exists but cannot be read or parsed. Every consumer fails closed: the host's dispatch gate denies every tool, and the extension keeps enforcing its stored effective policy or the deny baseline.
 - **Do:** inspect the store before anything else. It is never replaced with defaults for you, because defaults can be laxer than the policy you restricted, and a relaxation lever made of garbage is not one.
 
