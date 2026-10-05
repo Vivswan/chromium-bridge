@@ -414,7 +414,7 @@ Each node is one layer, labelled with the paths it owns; an arrow means the laye
 ```mermaid
 graph TD
   shared["src/packages/shared/src/"]
-  extension_background["src/apps/extension/src/entrypoints/background.ts<br>src/apps/extension/src/lib/background/"]
+  extension_background["src/apps/extension/src/entrypoints/background.ts<br>src/apps/extension/src/lib/background/<br>src/apps/extension/src/lib/webauthn/"]
   extension_content["src/apps/extension/src/entrypoints/content.ts<br>src/apps/extension/src/lib/content/"]
   extension_confirm["src/apps/extension/src/entrypoints/confirm/"]
   extension_options["src/apps/extension/src/entrypoints/options/"]

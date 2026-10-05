@@ -63,6 +63,8 @@ export function readPage(markdown: string): Page {
     }
     const open = FENCE_OPEN.exec(line);
     if (open === null) continue;
+    // A backtick fence's info string holds no backtick (CommonMark), so ```mermaid``` is inline code.
+    if ((open[3] ?? "").startsWith("`") && (open[4] ?? "").includes("`")) continue;
     // Block-quote depth is what carries over line to line; the space after each `>` is optional on every line.
     const depth = (open[1] ?? "").split(">").length - 1;
     const quotePrefix = new RegExp(`^(?:${QUOTE_MARKER}){${depth}}`);

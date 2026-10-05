@@ -46,6 +46,11 @@ describe("diagramProblems", () => {
       [],
     ],
     [
+      "an inline ```mermaid``` run is code, not a fence opener, so the diagram after it is checked",
+      `## C\n\n\`\`\`mermaid\`\`\`\n\n\`\`\`mermaid\ngraph TD\n a["src/gone.ts"]\n\`\`\`\n\n${DEMO}\n`,
+      ['"src/gone.ts": src/gone.ts does not exist'],
+    ],
+    [
       "a box with a numeric id naming a missing file",
       `## C\n\n\`\`\`mermaid\nflowchart TD\n  123["src/gone.ts"]\n\`\`\`\n\n${DEMO}\n`,
       ['"src/gone.ts": src/gone.ts does not exist'],

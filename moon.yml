@@ -662,11 +662,11 @@ tasks:
       bun test scripts/tests/check-compose-compat.test.ts
 
   check-docs-probe:
-    description: 'Every paragraph and list item of the living docs under the 70-word cap and every path they name real; pre-rewrite findings are allowed by docs/.probe-baseline, which fails when a line goes stale'
+    description: 'Every paragraph and list item of the living docs under the 70-word cap and every path they name real; pre-rewrite findings are allowed by docs/.probe-baseline, which fails when an allowance goes stale (CHANGELOG.md is release-please output and stays out)'
     deps: ['~:install-deps']
     script: |
       set -e
-      bun scripts/docs-probe.ts --baseline docs/.probe-baseline README.md CONTRIBUTING.md 'docs/**/*.md' .github/SECURITY.md
+      bun scripts/docs-probe.ts --baseline docs/.probe-baseline 'README*.md' CONTRIBUTING.md GOVERNANCE.md 'docs/**/*.md' .github/SECURITY.md
       bun test scripts/tests/docs-probe.test.ts
 
   check-architecture:

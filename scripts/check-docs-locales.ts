@@ -1,11 +1,7 @@
 #!/usr/bin/env bun
 // Translated docs live in directories mirroring the English tree, which the docs site turns into
 // locales with a language switcher. A page in one language and not another is a dead switcher
-// entry, so a present locale is judged file-for-file against docs/:
-//   locale absent (no docs/<locale>/, no README.<locale>.md)  -> nothing to judge, pass
-//   locale present                                            -> README.<locale>.md exists, and the
-//                                                                .md set under docs/<locale>/ equals
-//                                                                the .md set under docs/ (locales excluded)
+// entry, so a present locale is judged file-for-file against docs/.
 
 import { statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";

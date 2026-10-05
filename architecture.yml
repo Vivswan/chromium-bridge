@@ -8,6 +8,10 @@ layers:
   extension/background:
     - src/apps/extension/src/entrypoints/background.ts
     - src/apps/extension/src/lib/background/
+    # lib/webauthn/ (the ceremony's page half and worker half) and lib/background/ import each
+    # other: exchange.ts imports connection and in-life, and port and messages import the folder
+    # back, so by the import graph the two folders are one layer.
+    - src/apps/extension/src/lib/webauthn/
   extension/content:
     - src/apps/extension/src/entrypoints/content.ts
     - src/apps/extension/src/lib/content/

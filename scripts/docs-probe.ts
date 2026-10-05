@@ -9,6 +9,7 @@
 // relative link destination; placeholders (<...>), globs, owner/repo slugs, and bare file names are
 // left alone, since a page may name files the reader will create.
 
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +24,28 @@ export interface Finding {
   /** One-based line where the unit or token starts. */
   readonly line: number;
   readonly message: string;
+  /** `page hash`: the baseline allowance this finding would match (see readBaseline). */
+  readonly key: string;
+  /** What the hash covers, for the baseline's comment column. */
+  readonly subject: string;
+  readonly kind: "paragraph" | "list item" | "path" | "link";
+}
+
+/** Prose is whitespace-normalized before hashing; a path is hashed as written. */
+function fingerprint(kind: Finding["kind"], subject: string): string {
+  const prose = kind === "paragraph" || kind === "list item";
+  const normalized = prose ? subject.replace(/\s+/g, " ").trim() : subject;
+  return createHash("sha256").update(`${kind}\n${normalized}`).digest("hex").slice(0, 8);
+}
+
+function finding(
+  file: string,
+  line: number,
+  kind: Finding["kind"],
+  subject: string,
+  message: string,
+): Finding {
+  return { file, line, message, kind, subject, key: `${file} ${fingerprint(kind, subject)}` };
 }
 
 export interface ProbeOptions {
@@ -187,7 +210,7 @@ export function scanPage(text: string): Scan {
   // Rendered text has lost its markup (**bold**, [label](url) with the url between label and text),
   // so a line matches when it carries the unit's first two words, letters and digits only. Fenced,
   // indented, and comment lines are skipped: a path quoted in one before the prose that names it
-  // would otherwise claim the finding's line, and with it the baseline key.
+  // would otherwise claim the finding's line.
   const searchable = readPage(lines.join("\n")).text.map((line) =>
     line === undefined || ONE_LINE_COMMENT.test(line) ? "" : line,
   );
@@ -319,7 +342,14 @@ function ignoredBy(root: string, files: readonly Candidate[]): Set<string> {
     stdout: "pipe",
     stderr: "pipe",
   });
-  if (run.exitCode !== 0) return new Set();
+  // Exit 1 is "none ignored"; outside a repository nothing is ignored; any other failure (a path
+  // beyond a symlink, an unreadable index) must fail the probe, never pass the page as unignored.
+  if (run.exitCode === 1) return new Set();
+  if (run.exitCode !== 0) {
+    const stderr = run.stderr.toString().trim();
+    if (/^fatal: not a git repository\b/.test(stderr)) return new Set();
+    throw new Error(`git check-ignore failed in ${root}: ${stderr}`);
+  }
   const ignoredQueries = new Set(run.stdout.toString().split("\0").filter(Boolean));
   return new Set(inside.filter(({ query }) => ignoredQueries.has(query)).map(({ file }) => file));
 }
@@ -357,11 +387,15 @@ export function probePage(text: string, file: string, options: ProbeOptions): Fi
     const words = wordCount(unit.text);
     if (words > options.maxWords) {
       const noun = unit.kind === "item" ? "list item" : "paragraph";
-      findings.push({
-        file,
-        line: unit.line,
-        message: `${noun} of ${words} words; the cap is ${options.maxWords}. Split it, or turn its facts into bullets, a table, or numbered steps`,
-      });
+      findings.push(
+        finding(
+          file,
+          unit.line,
+          noun,
+          unit.text,
+          `${noun} of ${words} words; the cap is ${options.maxWords}. Split it, or turn its facts into bullets, a table, or numbered steps`,
+        ),
+      );
     }
   }
   if (!options.paths) return findings;
@@ -381,20 +415,26 @@ export function probePage(text: string, file: string, options: ProbeOptions): Fi
     })),
   ]);
   for (const { path, line } of paths) {
-    const state = path ? verdict(options.root, pageDir, extra, path, ignored) : "foreign";
-    if (state === "missing") findings.push({ file, line, message: `\`${path}\` does not exist` });
+    if (path === null) continue;
+    const state = verdict(options.root, pageDir, extra, path, ignored);
+    if (state === "missing")
+      findings.push(finding(file, line, "path", path, `\`${path}\` does not exist`));
     if (state === "ignored")
-      findings.push({ file, line, message: `\`${path}\` ${NOT_IN_REPOSITORY}` });
+      findings.push(finding(file, line, "path", path, `\`${path}\` ${NOT_IN_REPOSITORY}`));
     if (state === "outside")
-      findings.push({ file, line, message: `\`${path}\` escapes the repository` });
+      findings.push(finding(file, line, "path", path, `\`${path}\` escapes the repository`));
   }
   for (const { target, line, resolved } of links) {
     if (!withinRoot(options.root, resolved)) {
-      findings.push({ file, line, message: `link target ${target} escapes the repository` });
+      findings.push(
+        finding(file, line, "link", target, `link target ${target} escapes the repository`),
+      );
     } else if (ignored.has(resolved)) {
-      findings.push({ file, line, message: `link target ${target} ${NOT_IN_REPOSITORY}` });
+      findings.push(
+        finding(file, line, "link", target, `link target ${target} ${NOT_IN_REPOSITORY}`),
+      );
     } else if (!existsSync(resolved)) {
-      findings.push({ file, line, message: `link target ${target} does not exist` });
+      findings.push(finding(file, line, "link", target, `link target ${target} does not exist`));
     }
   }
   return findings.sort((a, b) => a.line - b.line);
@@ -402,19 +442,38 @@ export function probePage(text: string, file: string, options: ProbeOptions): Fi
 
 // --- the baseline --------------------------------------------------------------
 
-const BASELINE_ENTRY = /^(\S.*):(\d+)$/;
+// An allowance names the page and a fingerprint of the unit's own text (or the path a path finding
+// names), never a line: an unrelated line shift leaves it valid, and it goes stale exactly when its
+// paragraph changed or vanished. `page hash  # kind: first words`; the comment is for the reader.
+const BASELINE_ENTRY = /^(\S+) ([0-9a-f]{8})(?:\s+#.*)?$/;
 
 export function readBaseline(text: string, label: string): Set<string> {
   const keys = new Set<string>();
   text.split("\n").forEach((raw, index) => {
     const line = raw.replace(/\r$/, "").trim();
     if (line === "" || line.startsWith("#")) return;
-    if (!BASELINE_ENTRY.test(line)) {
-      throw new Error(`${label}:${index + 1}: a baseline entry is page:line, got "${line}"`);
+    const entry = BASELINE_ENTRY.exec(line);
+    if (!entry) {
+      throw new Error(
+        `${label}:${index + 1}: a baseline entry is "page hash" with an optional # comment, got "${line}"`,
+      );
     }
-    keys.add(line);
+    keys.add(`${entry[1]} ${entry[2]}`);
   });
   return keys;
+}
+
+/** The baseline lines for `findings`, one per distinct key, as --print-baseline writes them. */
+export function baselineLines(findings: readonly Finding[]): string[] {
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  for (const f of findings) {
+    if (seen.has(f.key)) continue;
+    seen.add(f.key);
+    const words = f.subject.replace(/\s+/g, " ").trim().split(" ").slice(0, 6).join(" ");
+    lines.push(`${f.key}  # ${f.kind}: ${words}`);
+  }
+  return lines;
 }
 
 export interface Judgment {
@@ -429,8 +488,7 @@ export function judge(findings: readonly Finding[], baseline: ReadonlySet<string
   const fired = new Set<string>();
   const fresh: Finding[] = [];
   for (const finding of findings) {
-    const key = `${finding.file}:${finding.line}`;
-    if (baseline.has(key)) fired.add(key);
+    if (baseline.has(finding.key)) fired.add(finding.key);
     else fresh.push(finding);
   }
   const stale = [...baseline].filter((key) => !fired.has(key)).sort();
@@ -447,7 +505,8 @@ const USAGE = [
   "  --base        a directory under the root that paths also resolve against (repeatable)",
   "  --max-words   the cap on a paragraph or list item (default: 70)",
   "  --shape-only  word counts only; skip the check that named paths exist",
-  "  --baseline    a file of page:line entries allowed to fire; one that no longer fires fails too",
+  "  --baseline    a file of allowed findings (page and unit fingerprint); one that no longer fires fails too",
+  "  --print-baseline  print the baseline lines for every finding of the pages, then exit 0",
   "  a page argument with a * is a glob, expanded under the root; one that matches nothing is an error",
   "exit 0: every page is clean; 1: findings, one per line as page:line: message; 2: usage or an unreadable page",
 ].join("\n");
@@ -458,6 +517,7 @@ interface CliOptions {
   readonly maxWords: number;
   readonly paths: boolean;
   readonly baseline: string | undefined;
+  readonly printBaseline: boolean;
   /** Root-relative, posix, sorted, globs expanded. */
   readonly pages: readonly string[];
 }
@@ -490,6 +550,7 @@ export function parseArgs(argv: readonly string[]): CliOptions {
   let maxWords = DEFAULT_MAX_WORDS;
   let paths = true;
   let baseline: string | undefined;
+  let printBaseline = false;
   const baseArgs: string[] = [];
   const pageArgs: string[] = [];
   for (let index = 0; index < argv.length; index++) {
@@ -510,6 +571,7 @@ export function parseArgs(argv: readonly string[]): CliOptions {
       if (!Number.isInteger(maxWords) || maxWords < 1)
         throw new Error(`--max-words needs a positive integer\n${USAGE}`);
     } else if (arg === "--baseline") baseline = value();
+    else if (arg === "--print-baseline") printBaseline = true;
     else if (arg === "--shape-only") paths = false;
     else if (arg.startsWith("-")) throw new Error(`unknown option ${arg}\n${USAGE}`);
     else pageArgs.push(arg);
@@ -528,7 +590,15 @@ export function parseArgs(argv: readonly string[]): CliOptions {
     if (!statSync(baseline, { throwIfNoEntry: false })?.isFile())
       throw new Error(`--baseline ${baseline} is not a readable file`);
   }
-  return { root, bases, maxWords, paths, baseline, pages: expandPages(root, pageArgs) };
+  return {
+    root,
+    bases,
+    maxWords,
+    paths,
+    baseline,
+    printBaseline,
+    pages: expandPages(root, pageArgs),
+  };
 }
 
 if (import.meta.main) {
@@ -540,6 +610,10 @@ if (import.meta.main) {
     const findings: Finding[] = [];
     for (const page of options.pages) {
       findings.push(...probePage(readFileSync(resolve(options.root, page), "utf8"), page, options));
+    }
+    if (options.printBaseline) {
+      for (const line of baselineLines(findings)) console.log(line);
+      process.exit(0);
     }
     if (options.baseline === undefined) {
       judgment = { fresh: findings, stale: [], allowed: 0 };
@@ -569,7 +643,7 @@ if (import.meta.main) {
     console.error(`  ${finding.file}:${finding.line}: ${finding.message}`);
   for (const key of stale)
     console.error(
-      `  ${key}: no finding fires here any more; remove the line from ${baselineLabel}`,
+      `  ${key}: no finding fires for this unit any more; remove the line from ${baselineLabel}`,
     );
   process.exit(1);
 }

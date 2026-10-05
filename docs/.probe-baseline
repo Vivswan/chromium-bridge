@@ -1,81 +1,82 @@
-# Allowed docs-probe findings, one page:line per line (moon run check-docs-probe).
-.github/SECURITY.md:232
-.github/SECURITY.md:273
-CONTRIBUTING.md:29
-README.md:60
-docs/architecture.md:89
-docs/architecture.md:90
-docs/architecture.md:162
-docs/architecture.md:163
-docs/architecture.md:164
-docs/architecture.md:165
-docs/architecture.md:166
-docs/architecture.md:167
-docs/architecture.md:168
-docs/architecture.md:313
-docs/architecture.md:351
-docs/architecture.md:358
-docs/architecture.md:359
-docs/architecture.md:362
-docs/architecture.md:366
-docs/architecture.md:376
-docs/architecture.md:378
-docs/architecture.md:384
-docs/architecture.md:386
-docs/chrome-web-store.md:3
-docs/chrome-web-store.md:29
-docs/chrome-web-store.md:47
-docs/compatibility.md:29
-docs/development.md:36
-docs/development.md:61
-docs/development.md:83
-docs/development.md:131
-docs/development.md:181
-docs/development.md:202
-docs/development.md:217
-docs/operations.md:18
-docs/operations.md:37
-docs/operations.md:53
-docs/operations.md:77
-docs/quickstart.md:26
-docs/quickstart.md:28
-docs/quickstart.zh_CN.md:38
-docs/quickstart.zh_TW.md:38
-docs/security/enrollment-manual-test.md:3
-docs/security/incident-response.md:35
-docs/security/threat-model.md:36
-docs/security/threat-model.md:40
-docs/security/threat-model.md:50
-docs/security/threat-model.md:52
-docs/security/threat-model.md:54
-docs/security/threat-model.md:65
-docs/security/threat-model.md:66
-docs/security/threat-model.md:68
-docs/security/threat-model.md:69
-docs/security/threat-model.md:70
-docs/security/threat-model.md:76
-docs/security/threat-model.md:80
-docs/security/threat-model.md:82
-docs/security/threat-model.md:83
-docs/security/threat-model.md:84
-docs/security/threat-model.md:85
-docs/security/threat-model.md:86
-docs/security/threat-model.md:87
-docs/security/threat-model.md:88
-docs/security/threat-model.md:89
-docs/security/threat-model.md:90
-docs/security/threat-model.md:92
-docs/security/threat-model.md:93
-docs/security/threat-model.md:100
-docs/security/threat-model.md:102
-docs/security/threat-model.md:112
-docs/security/threat-model.md:116
-docs/security/threat-model.md:118
-docs/security/tool-risk-matrix.md:47
-docs/security/trust-boundaries.md:19
-docs/security/trust-boundaries.md:25
-docs/security/trust-boundaries.md:37
-docs/security/trust-boundaries.md:43
-docs/security/trust-boundaries.md:44
-docs/security/trust-boundaries.md:51
-docs/security/trust-boundaries.md:54
+# Allowed docs-probe findings: page, unit fingerprint, first words. Regenerate with
+# `bun scripts/docs-probe.ts --print-baseline <the pages of moon.yml check-docs-probe>`.
+.github/SECURITY.md a94a3f6e  # list item: Two JS cases the retired bun
+.github/SECURITY.md b63617fd  # paragraph: The core is built with panics
+CONTRIBUTING.md 3ca2c172  # path: .worktrees/
+README.md 9ddf5673  # path: extension/dist/
+README.zh_CN.md 9ddf5673  # path: extension/dist/
+README.zh_TW.md 9ddf5673  # path: extension/dist/
+docs/architecture.md fea6743a  # list item: No handshake and no session state:
+docs/architecture.md e8b742d2  # list item: server/discover replaces the handshake. Its result
+docs/architecture.md 5f140de1  # path: src/entrypoints/background.ts
+docs/architecture.md 67a11a1f  # path: src/entrypoints/content.ts
+docs/architecture.md 861db4ce  # path: src/entrypoints/confirm/
+docs/architecture.md 555b15b6  # path: src/entrypoints/options/
+docs/architecture.md 5a2f8874  # path: src/lib/background/
+docs/architecture.md 3305cc59  # path: src/lib/dom/
+docs/architecture.md c25fc9a0  # path: src/lib/shared/
+docs/architecture.md 95e97577  # paragraph: page_eval must run code in the
+docs/architecture.md 2647e3e4  # list item: Tool catalogue (src/packages/core/src/tools/catalogue.rs): each tool's name,
+docs/architecture.md da60846f  # list item: Enclave signing contract (src/packages/core/src/enclave/: challenge.rs for
+docs/architecture.md 4d57bb96  # path: tests/background/enclave-golden.test.ts
+docs/architecture.md 0310ff87  # list item: Policy document and directions (src/packages/core/src/policy/): the
+docs/architecture.md b82ebef9  # paragraph: At the tool-call boundary, Rust's typed
+docs/architecture.md 76067303  # list item: policy_get {} (extension -> host): on-demand
+docs/architecture.md cb8f7ca3  # paragraph: The host also enforces its own
+docs/chrome-web-store.md 801f61b5  # paragraph: This doc is a decision checklist,
+docs/chrome-web-store.md 0c28ee30  # path: src/apps/extension/src/public/icons/icon128.png
+docs/chrome-web-store.md dea86cd0  # path: dist/
+docs/compatibility.md 6730188f  # paragraph: Honest statement of the current state:
+docs/development.md 0cef9bb1  # path: node_modules/
+docs/development.md 18c5d7e6  # paragraph: Rust dependencies are gated by automated
+docs/development.md 3b02bf2b  # paragraph: The root package.json scripts are thin
+docs/development.md e72883b7  # paragraph: Cache trust, and the one edge
+docs/development.md 7254609c  # path: .moon/cache/
+docs/development.md befb1d3a  # path: build/extension/chrome-mv3/content-scripts/content.js
+docs/development.md 35c08f85  # path: build/
+docs/development.md 4340cb2f  # path: target/
+docs/operations.md fba4fe5b  # paragraph: chromium-bridge doctor (alias status) is a
+docs/operations.md 91891371  # paragraph: Every enforcement point reads that record
+docs/operations.md 3ec1f561  # list item: present but UNREADABLE means the store
+docs/operations.md 9842d25e  # paragraph: Request/response state (pending calls, their pairing
+docs/quickstart.md 03c4d19c  # list item: On macOS, pair. Run chromium-bridge pair
+docs/quickstart.zh_CN.md 9ddf5673  # path: extension/dist/
+docs/quickstart.zh_TW.md 9ddf5673  # path: extension/dist/
+docs/security/enrollment-manual-test.md 49965e93  # paragraph: The presence-gated parts of the enrollment
+docs/security/incident-response.md 66fc9762  # list item: Disable a single tool: add the
+docs/security/threat-model.md d929582c  # list item: Prompt injection: page content tricks the
+docs/security/threat-model.md ffaccbd5  # list item: Another local process hijacks the bridge
+docs/security/threat-model.md c4d1d21f  # list item: A malformed/oversized message crashes or corrupts
+docs/security/threat-model.md 0066eaba  # list item: Silent pairing: a malicious claude mcp
+docs/security/threat-model.md 35bc4ec9  # list item: A revoked client or a revoked
+docs/security/threat-model.md e59792aa  # list item: Native-messaging manifest substitution (the host-to-extension hop
+docs/security/threat-model.md c4648599  # list item: Read exfiltration on approved origins (accepted).
+docs/security/threat-model.md 6fadf2b4  # list item: Trust-state isolation has a cold-start window
+docs/security/threat-model.md 404f3704  # list item: High-risk confirmations now render off the
+docs/security/threat-model.md 4bdfb967  # list item: page_upload can attach any local file
+docs/security/threat-model.md 5669631a  # list item: CDP mode (cdpMode, a host-owned policy
+docs/security/threat-model.md 76cfc69e  # paragraph: The host-owned policy work moved the
+docs/security/threat-model.md 7da6bb72  # list item: A failed compromise-mark persist plus a
+docs/security/threat-model.md 91ecb695  # list item: One microtask window in the same-key
+docs/security/threat-model.md fd20942a  # list item: One-push disagreement, and requests racing a
+docs/security/threat-model.md b0a0c9a8  # list item: A throwing presence probe denies the
+docs/security/threat-model.md 7f3e8453  # list item: A hostile unpinned host can occupy
+docs/security/threat-model.md 698a0843  # list item: An explicit "en" choice re-offers first-pairing
+docs/security/threat-model.md 2a3b74c5  # list item: Key disposal's epoch bump is best-effort.
+docs/security/threat-model.md de38565a  # list item: A corrupted compromise mark reads as
+docs/security/threat-model.md 8478b550  # list item: The trusted-storage cold-start window now also
+docs/security/threat-model.md a3cd55d4  # list item: A decision racing a cdpMode revocation
+docs/security/threat-model.md fa5dccfc  # list item: A pin revoke leaves live CDP
+docs/security/threat-model.md 5088d9da  # list item: Harness -> MCP server stdio admission
+docs/security/threat-model.md 6ad05930  # list item: The ref-counted broker (delivered). The first
+docs/security/threat-model.md d6ade528  # list item: Host-allowlist writers (delivered). The trusted-client set
+docs/security/threat-model.md ceff9599  # list item: The Touch ID confirmation surface (delivered).
+docs/security/threat-model.md 4db44f80  # list item: The global kill switch and the
+docs/security/tool-risk-matrix.md af83909f  # list item: CDP mode (opt-in, off by default):
+docs/security/trust-boundaries.md dc864a60  # list item: Enforcement (kill switch): the same record
+docs/security/trust-boundaries.md 002decba  # list item: Ownership: the server end of this
+docs/security/trust-boundaries.md 513ae646  # list item: Residual risk: neither a hash nor
+docs/security/trust-boundaries.md f5f8bb99  # list item: Host-handled control frames: the enrollment ceremony,
+docs/security/trust-boundaries.md d81e791c  # list item: Residual (host-to-extension is unauthenticated): allowed_origins pins
+docs/security/trust-boundaries.md 755f0a28  # list item: Confirmation: submit/link clicks, page_press, page_select, page_eval,
+docs/security/trust-boundaries.md ad8c4e44  # list item: Kill-switch mirror and audit ring: the
