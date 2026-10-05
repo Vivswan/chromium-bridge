@@ -76,10 +76,14 @@ export function checkLocales(root: string): LocaleReport[] {
     const generatedDrift = english
       .filter((page) => mirrored.has(page))
       .flatMap((page) => {
+        const ours = generatedRegions(join(docs, page));
         const theirs = generatedRegions(join(dir, page));
-        return [...generatedRegions(join(docs, page))]
-          .filter(([name, region]) => theirs.get(name) !== region)
-          .map(([name]) => `${page}: generated region ${name}`);
+        // Both directions: a region the English page lost but the translation kept is drift too.
+        const names = new Set([...ours.keys(), ...theirs.keys()]);
+        return [...names]
+          .filter((name) => ours.get(name) !== theirs.get(name))
+          .sort()
+          .map((name) => `${page}: generated region ${name}`);
       });
     return {
       locale,

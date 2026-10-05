@@ -97,20 +97,41 @@ describe("checkLocales", () => {
       {
         "docs/a.md":
           "# A\n<!-- BEGIN GENERATED: map (bun x) -->\ngraph TD\n<!-- END GENERATED: map -->\n",
-        "docs/sec/b.md": "# B\n",
+        "docs/sec/b.md":
+          "# B\n<!-- BEGIN GENERATED: map -->\ngraph TD\n<!-- END GENERATED: map -->\n",
+        "docs/c.md": "# C\n<!-- BEGIN GENERATED: map -->\ngraph TD\n<!-- END GENERATED: map -->\n",
         "README.md": "# R\n",
         "docs/zh-cn/a.md":
           "# \u7532\n<!-- BEGIN GENERATED: map (bun x) -->\ngraph LR\n<!-- END GENERATED: map -->\n",
         "docs/zh-cn/sec/b.md": "# \u4e59\n",
+        "docs/zh-cn/c.md":
+          "# \u4e19\n<!-- BEGIN GENERATED: chart -->\ngraph TD\n<!-- END GENERATED: chart -->\n",
         "README.zh-cn.md": "# R\n",
         "docs/zh-tw/a.md":
           "# \u7532\n<!-- BEGIN GENERATED: map (bun x) -->\ngraph TD\n<!-- END GENERATED: map -->\n",
-        "docs/zh-tw/sec/b.md": "# \u4e59\n",
+        "docs/zh-tw/sec/b.md":
+          "# \u4e59\n<!-- BEGIN GENERATED: map -->\ngraph TD\n<!-- END GENERATED: map -->\n",
+        "docs/zh-tw/c.md":
+          "# \u4e19\n<!-- BEGIN GENERATED: map -->\ngraph TD\n<!-- END GENERATED: map -->\n",
         "README.zh-tw.md": "# R\n",
       },
-      [{ ...full("zh-cn"), generatedDrift: ["a.md: generated region map"] }, full("zh-tw")],
+      [
+        {
+          ...full("zh-cn"),
+          generatedDrift: [
+            "a.md: generated region map",
+            "c.md: generated region chart",
+            "c.md: generated region map",
+            "sec/b.md: generated region map",
+          ],
+        },
+        full("zh-tw"),
+      ],
       [
         "docs/zh-cn/a.md: generated region map differs from the English page's; copy it byte for byte",
+        "docs/zh-cn/c.md: generated region chart differs from the English page's; copy it byte for byte",
+        "docs/zh-cn/c.md: generated region map differs from the English page's; copy it byte for byte",
+        "docs/zh-cn/sec/b.md: generated region map differs from the English page's; copy it byte for byte",
       ],
     ],
   ];
