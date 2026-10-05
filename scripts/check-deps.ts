@@ -1,14 +1,10 @@
 #!/usr/bin/env bun
-// Guarantee: a bun task in moon's graph never runs against a workspace that is not installed to bun.lock, and a
-// cargo verb in the pre-commit gate never runs against a toolchain other than the pinned one or crates not
-// fetched to Cargo.lock; each failure names `moon run setup`, and this check installs and fetches nothing.
-//
-// One mode per readiness task (which tasks depend on them is the root moon.yml header's rule):
+// The readiness checks the root moon.yml header's rules hang on, one mode per task; each judges offline, installs
+// and fetches nothing, and names `moon run setup`:
 //   bun scripts/check-deps.ts bun [checkout]     -> root:check-deps
 //   bun scripts/check-deps.ts cargo [checkout]   -> root:check-crates
 // Self-contained on node builtins and Bun globals (no lib.ts import): it runs before any install by contract.
 //
-//   bun pm ls, bun install --dry-run   -> read only the lockfile (a deleted package still counts), so no bun verdict
 //   a checkout under another checkout  -> node's walk would climb into the parent's node_modules; this one stops at the root
 //   cargo                              -> its own read-only verdicts: `cargo --version` under RUSTUP_AUTO_INSTALL=0 (rustup
 //                                         would otherwise download a missing pin) and `cargo fetch --locked --offline`
@@ -20,7 +16,9 @@ import { fileURLToPath } from "node:url";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 export const setupCommand = "moon run setup";
-const relock = "re-lock with `bun install`";
+// Every re-lock finding carries this prefix, so report() can route drift to the re-lock before setup.
+const relockWith = (command: string): string => `(re-lock with \`${command}\`)`;
+const relock = relockWith("bun install");
 
 // bun.lock writes member paths and workspace links with forward slashes on every platform.
 const posix = (path: string): string => path.split(sep).join("/");
@@ -73,7 +71,7 @@ function disagreements(
     .filter((name) => declared[name] !== recorded[name])
     .map(
       (name) =>
-        `${where}: ${name} is ${declared[name] ?? "absent"} in package.json, ${recorded[name] ?? "absent"} in bun.lock (${relock})`,
+        `${where}: ${name} is ${declared[name] ?? "absent"} in package.json, ${recorded[name] ?? "absent"} in bun.lock ${relock}`,
     );
 }
 
@@ -218,7 +216,7 @@ export function auditWorkspace(checkout: string): string[] {
     }
     if (manifest.name !== member.name) {
       findings.push(
-        `${label}: name is ${String(manifest.name)} in package.json, ${member.name} in bun.lock (${relock})`,
+        `${label}: name is ${String(manifest.name)} in package.json, ${member.name} in bun.lock ${relock}`,
       );
     }
     for (const kind of declarationKinds) {
@@ -285,16 +283,22 @@ export function auditCrates(
   }
   return cargoManifests(root).flatMap((manifest) => {
     const failure = cargo("fetch", "--locked", "--offline", "--manifest-path", manifest);
-    return failure === undefined
-      ? []
-      : [`${manifest}: crates are not fetched to its Cargo.lock (${failure})`];
+    if (failure === undefined) return [];
+    // cargo's --locked refusal for a manifest edited without re-locking, which setup (also --locked) cannot fix;
+    // the wording varies by version, the flag's name in it does not.
+    if (failure.includes("--locked was passed")) {
+      return [
+        `${manifest}: its Cargo.lock is behind it ${relockWith(`cargo fetch --manifest-path ${manifest}`)}`,
+      ];
+    }
+    return [`${manifest}: crates are not fetched to its Cargo.lock (${failure})`];
   });
 }
 
 export function report(findings: string[]): string {
   // setup runs with frozen lockfiles, so manifest drift is sent to the re-lock first.
-  const remedy = findings.some((finding) => finding.includes(relock))
-    ? `bun.lock is behind its manifests: ${relock}, then run \`${setupCommand}\` once`
+  const remedy = findings.some((finding) => finding.includes("(re-lock with "))
+    ? `a lockfile is behind its manifest: re-lock as its line says, then run \`${setupCommand}\` once`
     : `run \`${setupCommand}\` once`;
   return [
     `error: the checkout is missing what \`${setupCommand}\` installs:`,

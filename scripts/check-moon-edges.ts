@@ -1,8 +1,7 @@
 #!/usr/bin/env bun
-// The root moon.yml header's first two rules (the check-deps edge and --no-install for bun; the gate's closure
-// confined to the repository's own toolchain, with the check-crates edge and --frozen on its cargo verbs), read
-// from moon's resolved task graph so a task added without them fails here instead of on its first cold run or
-// inside a commit. The mutex rule has no mechanical census: which files a tool opens is not in the task graph.
+// The root moon.yml header's rules, read back from moon's resolved task graph so a task added without them
+// fails here instead of on its first cold run or inside a commit. The mutex rule alone has no mechanical census:
+// which files a tool opens is not in the task graph.
 
 import { die, repoRoot } from "./lib.ts";
 

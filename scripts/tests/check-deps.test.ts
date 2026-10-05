@@ -353,6 +353,19 @@ const cargoCases: {
     asked: ["cargo --version"],
   },
   {
+    name: "a Cargo.toml edited without re-locking: cargo's --locked refusal becomes a re-lock finding",
+    fail: "fetch --locked --offline --manifest-path Cargo.toml",
+    message: "cannot update the lock file Cargo.lock because --locked was passed to prevent this",
+    findings: [
+      "Cargo.toml: its Cargo.lock is behind it (re-lock with `cargo fetch --manifest-path Cargo.toml`)",
+    ],
+    asked: [
+      "cargo --version",
+      "cargo fetch --locked --offline --manifest-path Cargo.toml",
+      "cargo fetch --locked --offline --manifest-path fuzz/Cargo.toml",
+    ],
+  },
+  {
     name: "the fuzz workspace's crates are not fetched: the manifest is named with cargo's error line",
     fail: "fetch --locked --offline --manifest-path fuzz/Cargo.toml",
     message: "no matching package named `arbitrary` found (--offline)",
@@ -389,10 +402,15 @@ test("the remedy line names the re-lock when a finding is manifest drift, and se
   const drift =
     "pkg: epsilon is ^1.0.0 in package.json, absent in bun.lock (re-lock with `bun install`)";
   expect(report([drift]).split("\n").at(-1)).toBe(
-    "bun.lock is behind its manifests: re-lock with `bun install`, then run `moon run setup` once; this check installs and fetches nothing",
+    "a lockfile is behind its manifest: re-lock as its line says, then run `moon run setup` once; this check installs and fetches nothing",
+  );
+  const cargoDrift =
+    "Cargo.toml: its Cargo.lock is behind it (re-lock with `cargo fetch --manifest-path Cargo.toml`)";
+  expect(report([cargoDrift]).split("\n").at(-1)).toBe(
+    "a lockfile is behind its manifest: re-lock as its line says, then run `moon run setup` once; this check installs and fetches nothing",
   );
   expect(report(["node_modules/ is absent", drift]).split("\n").at(-1)).toBe(
-    "bun.lock is behind its manifests: re-lock with `bun install`, then run `moon run setup` once; this check installs and fetches nothing",
+    "a lockfile is behind its manifest: re-lock as its line says, then run `moon run setup` once; this check installs and fetches nothing",
   );
   expect(report(["pkg: beta is missing (bun.lock: beta@1.2.3)"]).split("\n").at(-1)).toBe(
     "run `moon run setup` once; this check installs and fetches nothing",
