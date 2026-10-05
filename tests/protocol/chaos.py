@@ -63,6 +63,10 @@ def setUpModule():
     h.isolate("bb-chaos-")
 
 
+def tearDownModule():
+    h.teardown()
+
+
 def tab(title):
     return [{"id": 1, "title": title, "url": "https://x", "active": True}]
 

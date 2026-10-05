@@ -67,6 +67,10 @@ def setUpModule():
     h.isolate("bb-adversarial-")
 
 
+def tearDownModule():
+    h.teardown()
+
+
 TAB = [{"id": 7, "title": "Adversarial Tab", "url": "https://x", "active": True}]
 FORWARDED_TAB_LIST = {"op": "tab_list", "args": {}, "browser": "default"}
 MISSING_META = "request _meta is missing or has malformed required fields: "
