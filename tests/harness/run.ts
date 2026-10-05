@@ -48,6 +48,7 @@ import {
   type RecordedRequest,
 } from "./fake-llm";
 import {
+  joinSignalTeardown,
   ownedChild,
   ownedTempDir,
   removeAllOwnedDirs,
@@ -1057,7 +1058,10 @@ if (import.meta.main) {
   try {
     code = await main();
   } finally {
-    // The ordinary error exit (a thrown probe) has no other path to the owned dirs.
+    // A signal that kills a probe's child also completes the probe; its teardown must finish first,
+    // and then the re-raised signal ends the process. The ordinary error exit (a thrown probe) has no
+    // other path to the owned dirs.
+    await joinSignalTeardown();
     removeAllOwnedDirs();
   }
   process.exit(code);

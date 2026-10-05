@@ -4,9 +4,11 @@
 // only, like the driver that imports it.
 
 import type { ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import { lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout } from "node:timers/promises";
 
 /** Names the creating process in each dir; the sweep judges staleness by it. */
 export const OWNER_FILE = "harness.pid";
@@ -114,16 +116,30 @@ export function sweepStaleDirs(prefixes: readonly string[], root: string): strin
   return removed;
 }
 
-/** Stop every owned child still running, then remove every owned dir, when a terminating signal arrives; then exit by that signal so the parent sees it. */
+/** The in-flight signal teardown, once a terminating signal has arrived. */
+let terminating: Promise<void> | undefined;
+
+/** Stop every owned child still running and wait for each to be reaped, then remove every owned dir, when a terminating signal arrives; then exit by that signal so the parent sees it. */
 export function teardownOnSignals(): void {
   for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
-    // A once-listener is gone by the time the signal is re-sent, so the default action takes it.
+    // A once-listener is gone by the time the signal is re-sent, so the default action takes it. A
+    // second signal of another kind joins the first teardown instead of starting an empty one.
     process.once(signal, () => {
-      killOwnedChildren();
-      removeAllOwnedDirs();
-      process.kill(process.pid, signal);
+      terminating ??= killOwnedChildren().then(() => {
+        removeAllOwnedDirs();
+        process.kill(process.pid, signal);
+      });
     });
   }
+}
+
+/**
+ * Resolves at once unless a signal teardown is in flight, and then never: the re-raised signal ends
+ * the process first. Normal completion awaits this before exiting, because the signal that kills a
+ * probe's child also completes the probe, and a `process.exit` there would cut the reaping short.
+ */
+export function joinSignalTeardown(): Promise<void> {
+  return terminating ?? Promise.resolve();
 }
 
 const children = new Set<ChildProcess>();
@@ -135,7 +151,24 @@ export function ownedChild(child: ChildProcess): ChildProcess {
   return child;
 }
 
-function killOwnedChildren(): void {
-  for (const child of children) child.kill("SIGKILL");
+/** A SIGKILLed child always exits; the bound only keeps a stuck wait from blocking the signal path. */
+const CHILD_EXIT_WAIT_MS = 5_000;
+
+/**
+ * SIGKILL every registered child that is still running and wait for its exit event, which is the
+ * parent reaping it: a child left unreaped at exit becomes an orphan, and under an init that does not
+ * reap (a CI container) a zombie that still reads as alive.
+ */
+async function killOwnedChildren(): Promise<void> {
+  const running = [...children].filter(
+    (child) => child.pid !== undefined && child.exitCode === null && child.signalCode === null,
+  );
   children.clear();
+  await Promise.all(
+    running.map((child) => {
+      const exited = once(child, "exit");
+      child.kill("SIGKILL");
+      return Promise.race([exited, setTimeout(CHILD_EXIT_WAIT_MS)]);
+    }),
+  );
 }
