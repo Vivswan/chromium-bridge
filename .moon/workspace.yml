@@ -43,7 +43,7 @@ hasher:
     - '**/fuzz/coverage/**'
     - '**/fuzz/failures/**'
     - '**/fuzz/seeds/**'
-    - '**/fuzz/dictionaries/json_protocol.dict'
+    - '**/fuzz/dictionaries/**'
     - '**/target/**'
     - '**/tests/.chrome-for-testing/**'
     - '**/tests/chrome/**'

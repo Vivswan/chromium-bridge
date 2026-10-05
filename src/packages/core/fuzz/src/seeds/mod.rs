@@ -123,9 +123,8 @@ pub struct Written {
     pub refused: usize,
 }
 
-/// Replace `fuzz_dir/seeds/` with the generated corpus and rewrite the JSON dictionary. Nothing under
-/// either directory is tracked, so a fresh checkout has neither, and a stale `seeds/<target>` must not
-/// outlive its target.
+/// Replace `fuzz_dir/seeds/` with the generated corpus and rewrite the JSON dictionary. The seeds tree
+/// is removed whole, so a stale `seeds/<target>` cannot outlive its target.
 pub fn write_corpus(fuzz_dir: &Path) -> io::Result<Summary> {
     let corpus = corpus();
     let seeds_dir = fuzz_dir.join("seeds");
