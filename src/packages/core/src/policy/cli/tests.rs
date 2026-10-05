@@ -151,22 +151,6 @@ fn history_report_maps_entries_and_tolerates_a_damaged_one() {
 }
 
 #[test]
-fn grant_gate_refuses_every_keyless_state_with_a_clear_message() {
-    // The security-critical key-state mapping, driven purely (never the
-    // real keychain): only a present key proceeds.
-    assert!(grant_key_gate(GrantKey::Present).is_ok());
-    assert!(grant_key_gate(GrantKey::Absent)
-        .unwrap_err()
-        .contains("signature-only"));
-    assert!(grant_key_gate(GrantKey::Unsupported)
-        .unwrap_err()
-        .contains("no Secure Enclave"));
-    assert!(grant_key_gate(GrantKey::Unusable("planted".into()))
-        .unwrap_err()
-        .contains("unusable"));
-}
-
-#[test]
 fn a_no_op_rollback_changes_nothing() {
     let v = PolicyValues::default();
     assert_eq!(plan_rollback(&v, &v, &v), RollbackPlan::NoChange);

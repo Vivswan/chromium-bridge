@@ -11,9 +11,10 @@
 //! [`PolicyStore`] / [`PolicyHistory`] (fail-closed loads, atomic
 //! runtime-locked writes), and [`set_signed`] / [`restrict`], the only
 //! mutation paths every editing surface shares. The host-side dispatch gate
-//! lives in [`gating`]. Owned elsewhere: the signing domain and the
-//! sign-as-presence primitive ([`crate::presence::sign_policy_as_presence`])
-//! and the control frames that carry the document (`crate::protocol`).
+//! lives in [`gating`]. Owned elsewhere: the signing domain and the host key
+//! ([`crate::enclave`]), the presence attestation a grant consumes
+//! ([`crate::presence`]), and the control frames that carry the document
+//! (`crate::protocol`).
 
 mod cli;
 mod store;

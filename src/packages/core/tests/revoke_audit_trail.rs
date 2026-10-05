@@ -27,7 +27,7 @@ fn revoke_always_writes_an_audit_trail_entry() {
     // Plant a paired client as the bytes on disk: pairing through the API would demand a user-presence
     // proof, which tests must never raise, and the record's fields are private to the trust module.
     let record = format!(
-        r#"{{"version":{},"epoch":1,"killed":false,"kill_epoch":0,"host_key_epoch":0,"policy_epoch":0,"lang_epoch":0,"clients":[{{"name":"codex","anchor":{{"kind":"hash","value":"{}"}},"added_unix":0}}]}}"#,
+        r#"{{"version":{},"epoch":1,"killed":false,"kill_epoch":0,"host_key_epoch":0,"policy_epoch":0,"lang_epoch":0,"enrollments":[],"clients":[{{"name":"codex","anchor":{{"kind":"hash","value":"{}"}},"added_unix":0}}]}}"#,
         Trust::VERSION,
         "ab".repeat(20)
     );

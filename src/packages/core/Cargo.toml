@@ -2,7 +2,7 @@
 name = "chromium-bridge-core"
 version.workspace = true
 edition.workspace = true
-description = "Chromium Bridge library: IPC, protocols, session, tools, enclave"
+description = "Chromium Bridge library: IPC, protocols, session, tools, host identity and presence"
 license-file.workspace = true
 publish.workspace = true
 
@@ -59,10 +59,10 @@ required-features = ["envelope-schema"]
 [[example]]
 name = "emit_contract"
 
-# Emits the enclave signing contract (domains, bounds, key/sig lengths, reason
-# codes) plus the golden-vector fixture for scripts/gen-ops.ts (`moon run
-# gen`). Signs with software P-256 (RFC 6979 deterministic, so regeneration is
-# byte-identical).
+# Emits the host identity signing contract (domains, bounds, key/sig lengths,
+# reason codes) plus the golden-vector fixture for scripts/gen-ops.ts (`moon
+# run gen`). Signs with the public fixture scalar (RFC 6979 deterministic, so
+# regeneration is byte-identical).
 [[example]]
 name = "emit_enclave_contract"
 
@@ -78,8 +78,11 @@ syn = { workspace = true, features = ["visit"] }
 [lints]
 workspace = true
 
+# One credential store per target behind keyring's single API (src/packages/core/src/enclave/store.rs):
+# the Keychain, the Credential Manager, and the Secret Service over the pure-Rust zbus client on tokio.
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation.workspace = true
+keyring = { workspace = true, features = ["apple-native"] }
 security-framework.workspace = true
 security-framework-sys.workspace = true
 
@@ -87,6 +90,10 @@ security-framework-sys.workspace = true
 nix.workspace = true
 signal-hook.workspace = true
 
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+keyring = { workspace = true, features = ["async-secret-service", "tokio", "crypto-rust"] }
+
 [target.'cfg(windows)'.dependencies]
+keyring = { workspace = true, features = ["windows-native"] }
 windows-sys.workspace = true
 winreg.workspace = true

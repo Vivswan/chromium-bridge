@@ -311,7 +311,7 @@ fn classification_matrix() {
             Malformed(Tag::AuditEvent),
         ),
         (
-            json!({ "type": "audit_event", "kind": "presence_sign" }),
+            json!({ "type": "audit_event", "kind": "presence_assert" }),
             Malformed(Tag::AuditEvent),
         ),
         (

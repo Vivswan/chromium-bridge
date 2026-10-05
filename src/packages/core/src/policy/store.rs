@@ -9,9 +9,9 @@ use super::{
     field_differs, field_relaxes, fold, restricts_or_equal, validate_disabled_tools, PolicyDoc,
     PolicyField, PolicyOverlay, PolicyValues, JS_SAFE_INT_MAX,
 };
-use crate::enclave::{base64_decode, base64_encode};
+use crate::enclave::{base64_decode, base64_encode, EnrollmentKey};
 use crate::ipc;
-use crate::presence::{PolicySignOutcome, PresencePath};
+use crate::presence::{PresenceAttestation, PresenceError, PresencePath};
 use crate::runtime_record::{Ladder, Record, RuntimeRecord};
 
 // ---- The on-disk store ------------------------------------------------------
@@ -34,7 +34,7 @@ pub struct PolicyStore {
     /// The exact signed document bytes, base64 (strict alphabet, one
     /// accepted spelling per byte string - see [`base64_decode`]).
     pub baseline_b64: String,
-    /// The enclave signature over the policy-domain message, base64. `None`
+    /// The host key's signature over the policy-domain message, base64. `None`
     /// is an unsigned baseline, which no host write path produces anymore.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sig_b64: Option<String>,
@@ -181,15 +181,18 @@ fn now_unix() -> u64 {
 pub enum PolicyWriteError {
     /// The request was malformed (empty touched set, a touched set that
     /// does not name every field the write relaxes, invalid document);
-    /// refused BEFORE the signing prompt, so a bad request can never raise
-    /// a hardware sheet.
+    /// refused BEFORE the presence prompt, so a bad request can never put a
+    /// prompt in front of the user.
     Invalid(&'static str),
-    /// The hardware rung ran and did not sign. Never downgraded to a floor,
-    /// already audited.
+    /// Presence was not attested. Terminal, already audited.
     Refused(String),
-    /// No enclave signing key exists and the surface's grant path is
-    /// signature-only. Promptless, audited.
+    /// No host key exists: a grant is a signed baseline, and a keyless
+    /// machine has no path to one on any surface. Promptless, audited.
     NoSigningKey,
+    /// A host key record exists but the key is unusable (planted, malformed,
+    /// or its store unreachable): refused rather than prompting against a
+    /// suspect key. Promptless, audited.
+    KeyUnusable(String),
     /// `restrict` found no baseline: there is nothing to restrict.
     NoBaseline,
     /// The merged overlay would relax the current effective policy;
@@ -211,11 +214,16 @@ impl std::fmt::Display for PolicyWriteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PolicyWriteError::Invalid(m) => write!(f, "invalid policy write: {m}"),
-            PolicyWriteError::Refused(e) => write!(f, "policy signing refused: {e}"),
+            PolicyWriteError::Refused(e) => write!(f, "policy grant refused: {e}"),
             PolicyWriteError::NoSigningKey => write!(
                 f,
-                "no enclave signing key on this machine; this surface's grant \
-                 path is signature-only and refuses (pair first)"
+                "no host key on this machine; a policy grant is a signed baseline \
+                 and refuses without one (pair first)"
+            ),
+            PolicyWriteError::KeyUnusable(e) => write!(
+                f,
+                "the host key is unusable ({e}); refusing to sign a policy grant \
+                 (run `chromium-bridge pair --reset` to replace it)"
             ),
             PolicyWriteError::NoBaseline => {
                 write!(f, "no policy baseline exists; there is nothing to restrict")
@@ -239,22 +247,24 @@ impl std::fmt::Display for PolicyWriteError {
     }
 }
 
-/// Write a new signed policy baseline, the one grant path every editing surface shares;
-/// `restrict` is the free lane. The Enclave signing over the document bytes IS the Touch ID approval
-/// ([`crate::presence::sign_policy_as_presence`]), so this seam never takes a pre-made attestation and cannot
-/// double-prompt; everything is validated BEFORE the prompt so a malformed request never raises a sheet.
+/// Write a new signed policy baseline, the one grant path every editing surface shares; `restrict` is the free
+/// lane. `attest` is the surface's presence prompt (the typed phrase on the CLI, the WebAuthn exchange from the
+/// extension), run only after the request validated and the host key was found, so a malformed request or a
+/// keyless machine never puts a prompt in front of the user; the host key then signs the exact document bytes.
 /// ```text
-/// hardware refused       -> terminal, never downgraded to a softer prompt
-/// hardware unavailable   -> refused (`NoSigningKey`): the grant path exists only as the signature, so a keyless
-///                           machine has no baseline-writing path on any platform
-/// retained overlay       -> survives minus its entries on the `touched` fields, which the tap covers
+/// presence refused       -> terminal, never downgraded to a softer prompt
+/// no host key            -> refused (`NoSigningKey`): the grant exists only as the signature, so a keyless
+///                           machine has no baseline-writing path on any surface
+/// retained overlay       -> survives minus its entries on the `touched` fields, which the attestation covers
 ///                           (the touched set travels inside the signed bytes)
 /// ```
-/// Returns the presence rung that authorized the write. Every sign outcome is audited.
+/// Returns the presence path that authorized the write. Every outcome past validation is audited,
+/// log-after-decide, outside the lock.
 pub fn set_signed(
     values: PolicyValues,
     touched: Vec<PolicyField>,
     surface: crate::audit::Surface,
+    attest: impl FnOnce() -> Result<PresenceAttestation, PresenceError>,
 ) -> Result<PresencePath, PolicyWriteError> {
     if touched.is_empty() {
         return Err(PolicyWriteError::Invalid(
@@ -342,50 +352,49 @@ pub fn set_signed(
     }
     let doc = PolicyDoc::from_values(&values, revision, touched.clone());
     doc.validate().map_err(PolicyWriteError::Invalid)?;
-    // Serialized ONCE: these exact bytes are what the prompt covers, what
-    // the signature signs, and what the store persists.
+    // Serialized ONCE: these exact bytes are what the signature signs and what the store persists.
     let doc_bytes = serde_json::to_vec(&doc)
         .map_err(io::Error::from)
         .map_err(PolicyWriteError::Io)?;
 
-    match crate::presence::sign_policy_as_presence(&doc_bytes) {
-        PolicySignOutcome::Signed {
-            sig,
-            key_id,
-            pubkey_b64: _,
-        } => commit_signed_baseline(
-            observed,
-            &doc_bytes,
-            base64_encode(&sig),
-            key_id,
-            &touched,
-            surface,
-        ),
-        PolicySignOutcome::Refused(e) => {
-            crate::audit::record(
-                crate::audit::AuditRecord::new(crate::audit::AuditKind::PolicyWrite)
-                    .surface(surface)
-                    .outcome("refused")
-                    .detail(&format!(
-                        "presence: {e}; touched={}",
-                        wire_name_list(&touched)
-                    )),
-            );
-            Err(PolicyWriteError::Refused(e))
+    let refused = |detail: String| {
+        crate::audit::record(
+            crate::audit::AuditRecord::new(crate::audit::AuditKind::PolicyWrite)
+                .surface(surface)
+                .outcome("refused")
+                .detail(&format!("{detail}; touched={}", wire_name_list(&touched))),
+        );
+    };
+    let key = match EnrollmentKey::lookup() {
+        Ok(Some(key)) => key,
+        Ok(None) => {
+            refused("no signing key".into());
+            return Err(PolicyWriteError::NoSigningKey);
         }
-        PolicySignOutcome::Unavailable => {
-            crate::audit::record(
-                crate::audit::AuditRecord::new(crate::audit::AuditKind::PolicyWrite)
-                    .surface(surface)
-                    .outcome("refused")
-                    .detail(&format!(
-                        "no signing key; touched={}",
-                        wire_name_list(&touched)
-                    )),
-            );
-            Err(PolicyWriteError::NoSigningKey)
+        Err(e) => {
+            refused(format!("host key unusable: {e}"));
+            return Err(PolicyWriteError::KeyUnusable(e.to_string()));
         }
-    }
+    };
+    let key_id = key.public_key().fingerprint_hex();
+    let auth = attest().map_err(|e| {
+        // The refusal has already happened; the no-downgrade rule makes it terminal, never a floor.
+        refused(format!("presence: {e}"));
+        PolicyWriteError::Refused(e.to_string())
+    })?;
+    let sig = key.sign_policy(&doc_bytes).map_err(|e| {
+        refused(format!("signing: {e}"));
+        PolicyWriteError::KeyUnusable(e.to_string())
+    })?;
+    commit_signed_baseline(
+        observed,
+        &doc_bytes,
+        base64_encode(&sig),
+        key_id,
+        &touched,
+        surface,
+        auth,
+    )
 }
 
 /// The store state [`set_signed`] observed before its prompt: the baseline
@@ -426,8 +435,10 @@ fn next_revision(observed: Option<u64>) -> Result<u64, PolicyWriteError> {
         .ok_or(PolicyWriteError::RevisionOverflow)
 }
 
-/// The locked half of a grant write plus its audit record. The hardware tap
-/// is the only rung that reaches here, so the audit record names `touch_id`.
+/// The locked half of a grant write plus its audit record: take the runtime
+/// lock, land the baseline through [`write_baseline_locked`], then record
+/// the outcome outside the lock (audit I/O never runs inside a critical
+/// section). Consumes the attestation: one tap, one write.
 fn commit_signed_baseline(
     observed: PrePromptObservation,
     doc_bytes: &[u8],
@@ -435,8 +446,9 @@ fn commit_signed_baseline(
     key_id: String,
     touched: &[PolicyField],
     surface: crate::audit::Surface,
+    auth: PresenceAttestation,
 ) -> Result<PresencePath, PolicyWriteError> {
-    let rung = PresencePath::TouchId;
+    let rung = auth.path().clone();
     let result = match ipc::with_runtime_lock(|lock| {
         Ok(write_baseline_locked(
             lock, observed, doc_bytes, sig_b64, key_id, touched,
@@ -451,14 +463,14 @@ fn commit_signed_baseline(
         .surface(surface)
         .detail(&format!(
             "auth={}; touched={}",
-            rung.wire_name(),
+            rung.audit_label(),
             wire_name_list(touched)
         ));
     match &result {
         Ok(()) => crate::audit::record(record.outcome("ok")),
         Err(e) => crate::audit::record(record.outcome("error").detail(&format!(
             "auth={}; touched={}; write refused: {e}",
-            rung.wire_name(),
+            rung.audit_label(),
             wire_name_list(touched)
         ))),
     }
@@ -682,9 +694,9 @@ fn wire_name_list(fields: &[PolicyField]) -> String {
         .join(",")
 }
 
-/// Store, history, and seam tests. Every disk-touching test points the runtime dir at its own scratch directory
-/// through `RuntimeDirGuard` (test_support.rs); signing outcomes come from `presence::policy_test_hook`, never a
-/// real prompt (the real backend is compiled out under cfg(test)).
+/// Store, history, and seam tests. Every disk-touching test points `runtime_dir()` at its own scratch directory
+/// through `RuntimeDirGuard` (test_support.rs); the host key is minted into that directory's file record, and the
+/// injected `attest` closures stand in for the prompt, so no test reads a terminal.
 #[cfg(test)]
 mod store_tests;
 

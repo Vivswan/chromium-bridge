@@ -2,7 +2,7 @@
 //! runtime record, each rung lifting a body from version `i` to `i + 1`. The floor rule, and how a
 //! record's version derives from its ladder, is stated once on that type.
 
-pub(crate) mod config;
+pub(crate) mod host_key;
 pub(crate) mod lang;
 pub(crate) mod policy;
 pub(crate) mod policy_history;

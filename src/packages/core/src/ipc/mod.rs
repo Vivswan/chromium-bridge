@@ -48,7 +48,6 @@ pub use peercred::pid_is_alive;
 pub use socket::{connect, probe_endpoint, BridgeListener, BridgeStream};
 
 pub(crate) use lockfile::{with_runtime_lock, RuntimeLockToken};
-pub(crate) use rand::generate_secret;
 pub(crate) use runtime_dir::RuntimeDir;
 #[cfg(test)]
 pub(crate) use runtime_dir::RUNTIME_DIR_VAR;

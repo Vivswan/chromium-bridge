@@ -37,7 +37,6 @@ macro_rules! json_of {
 mod attach;
 mod bridge_envelope;
 mod classify_frame;
-mod enclave_der;
 mod handshake;
 mod mcp_jsonrpc;
 mod nm_frame;
@@ -97,7 +96,6 @@ pub fn corpus() -> Vec<Directory> {
         attach::directory(),
         bridge_envelope::directory(),
         classify_frame::directory(),
-        enclave_der::directory(),
         handshake::directory(),
         mcp_jsonrpc::directory(),
         nm_frame::directory(),

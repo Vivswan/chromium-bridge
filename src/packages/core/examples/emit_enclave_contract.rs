@@ -1,4 +1,4 @@
-//! Emit the enclave signing contract as one JSON document on stdout: domains, field bounds, byte lengths,
+//! Emit the host-key signing contract as one JSON document on stdout: domains, field bounds, byte lengths,
 //! `enclave_error` reason codes, and golden vectors pinning the signed-message encodings across languages.
 //! `scripts/gen-ops.ts` (`moon run gen`) turns it into `enclave.gen.ts` and `enclave-fixture.gen.ts` under
 //! `src/packages/shared/src`; the JSON itself is never checked in, the Rust sources are the contract.
@@ -12,9 +12,9 @@
 //! ENCLAVE_FIXTURE_KEY_ID  -> extension side
 //! ```
 //!
-//! Every vector goes through the production code (`challenge_message`/`presence_message`, the same
-//! `der_to_raw_signature` the host applies to Security.framework output, `EnclavePublicKey`) and the
-//! extension's tests replay it through WebCrypto, so either side drifting from the byte contract breaks a gate.
+//! Every vector goes through the production code (`challenge_message`/`presence_message`, `EnclavePublicKey`,
+//! the raw `r || s` form the host's own signer emits) and the extension's tests replay it through WebCrypto, so
+//! either side drifting from the byte contract breaks a gate.
 //!
 //! Run:
 //! ```text
@@ -22,9 +22,9 @@
 //! ```
 
 use chromium_bridge_core::enclave::{
-    challenge_message, der_to_raw_signature, policy_message, presence_message, EnclavePublicKey,
-    CHALLENGE_DOMAIN, FIXTURE_KEY_BYTES, FIXTURE_KEY_ID, MAX_CONTEXT_LEN, MAX_NONCE_LEN,
-    POLICY_DOMAIN, PRESENCE_DOMAIN, PUBKEY_LEN, REASON_CODES, SIG_LEN,
+    challenge_message, policy_message, presence_message, EnclavePublicKey, CHALLENGE_DOMAIN,
+    FIXTURE_KEY_BYTES, FIXTURE_KEY_ID, MAX_CONTEXT_LEN, MAX_NONCE_LEN, POLICY_DOMAIN,
+    PRESENCE_DOMAIN, PUBKEY_LEN, REASON_CODES, SIG_LEN,
 };
 use chromium_bridge_core::identity::PINNED_EXTENSION_ID;
 use chromium_bridge_core::policy::{Ms, PolicyDoc, PolicyField};
@@ -111,13 +111,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Domain::Presence => presence_message(nonce, context),
         }?;
         let sig: Signature = signing_key.sign(&message);
-        // Route the signature through the production DER -> P1363
-        // converter, exactly as the host converts Security.framework
-        // output, and cross-check it against p256's own raw form.
-        let raw = der_to_raw_signature(sig.to_der().as_bytes())?;
-        if raw.as_slice() != sig.to_bytes().as_slice() {
-            return Err("der_to_raw_signature disagrees with p256's raw signature form".into());
-        }
+        let raw: [u8; SIG_LEN] = sig.to_bytes().into();
         vector_values.push(json!({
             "domain": domain.as_str(),
             "nonce": nonce,
@@ -127,12 +121,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }));
     }
 
-    // The POLICY_DOMAIN vectors: the exact serialized
-    // PolicyDoc bytes the signature covers, so the extension's policy golden
-    // test can replay a full baseline-verify (WebCrypto over `policy_message`
-    // bytes, then strict parse of the same bytes). Validated before signing:
-    // a malformed fixture document must fail generation, never ship as a
-    // "verified" baseline.
+    // The POLICY_DOMAIN vectors: the exact serialized PolicyDoc bytes the signature covers, so the extension's
+    // policy golden test can replay a full baseline-verify (WebCrypto over `policy_message` bytes, then strict
+    // parse of the same bytes). Validated before signing: a malformed fixture document must fail generation,
+    // never ship as a "verified" baseline.
     let baseline_doc = PolicyDoc {
         revision: 1,
         ..PolicyDoc::default()
@@ -156,10 +148,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let doc_bytes = serde_json::to_vec(doc)?;
         let message = policy_message(&doc_bytes);
         let sig: Signature = signing_key.sign(&message);
-        let raw = der_to_raw_signature(sig.to_der().as_bytes())?;
-        if raw.as_slice() != sig.to_bytes().as_slice() {
-            return Err("der_to_raw_signature disagrees with p256's raw signature form".into());
-        }
+        let raw: [u8; SIG_LEN] = sig.to_bytes().into();
         policy_vectors.push(json!({
             "docB64": chromium_bridge_core::enclave::base64_encode(&doc_bytes),
             "messageHex": hex::encode(&message),

@@ -6,7 +6,7 @@
 
 use std::io::Cursor;
 
-use chromium_bridge_core::enclave::{base64_decode, base64_encode, der_to_raw_signature};
+use chromium_bridge_core::enclave::{base64_decode, base64_encode};
 use chromium_bridge_core::identity::NATIVE_HOST_ID;
 use chromium_bridge_core::ipc::BrowserLabel;
 use chromium_bridge_core::policy::{
@@ -59,10 +59,6 @@ pub const ATTACH: Target = Target {
 pub const CLASSIFY_FRAME: Target = Target {
     name: "classify_frame",
     run: classify_frame,
-};
-pub const ENCLAVE_DER: Target = Target {
-    name: "enclave_der",
-    run: enclave_der,
 };
 pub const REGISTRATION_MANIFEST: Target = Target {
     name: "registration_manifest",
@@ -232,13 +228,6 @@ pub fn classify_frame(data: &[u8]) {
             let _reply = tag.malformed_reply();
         }
     }
-}
-
-/// The hand-written strict-DER parser that converts Security.framework ECDSA signatures to WebCrypto's
-/// raw r||s form: framework-produced in practice, but the byte parser itself must reject any corruption
-/// without panicking.
-pub fn enclave_der(data: &[u8]) {
-    let _ = der_to_raw_signature(data);
 }
 
 /// The two ours/foreign decisions over attacker-controlled JSON on disk: the host manifest and the

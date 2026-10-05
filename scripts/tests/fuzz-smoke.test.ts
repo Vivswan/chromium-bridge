@@ -301,14 +301,13 @@ describe("generatedInputsError", () => {
   test("a checkout without the generated corpus is refused, naming the generator task", () => {
     const core = mkdtempSync(join(tmpdir(), "fuzz-smoke-core-"));
     try {
-      const targets = ["nm_frame", "enclave_der", "handshake_verify"];
+      const targets = ["nm_frame", "classify_frame", "handshake_verify"];
       const refused = generatedInputsError(core, targets);
       expect(refused).toContain("moon run fuzz-seeds");
       for (const path of [
         "fuzz/seeds/nm_frame",
-        "fuzz/seeds/enclave_der",
+        "fuzz/seeds/classify_frame",
         "fuzz/dictionaries/json_protocol.dict",
-        "fuzz/dictionaries/der.dict",
       ]) {
         expect(refused).toContain(path);
       }
@@ -316,11 +315,10 @@ describe("generatedInputsError", () => {
       expect(refused).not.toContain("handshake_verify");
 
       // Positive control: the complete layout is accepted.
-      for (const dir of ["fuzz/seeds/nm_frame", "fuzz/seeds/enclave_der", "fuzz/dictionaries"]) {
+      for (const dir of ["fuzz/seeds/nm_frame", "fuzz/seeds/classify_frame", "fuzz/dictionaries"]) {
         mkdirSync(join(core, dir), { recursive: true });
       }
       writeFileSync(join(core, "fuzz/dictionaries/json_protocol.dict"), '"{"\n');
-      writeFileSync(join(core, "fuzz/dictionaries/der.dict"), '"\\x30"\n');
       expect(generatedInputsError(core, targets)).toBeUndefined();
     } finally {
       rmSync(core, { recursive: true, force: true });

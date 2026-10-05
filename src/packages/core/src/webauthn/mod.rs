@@ -12,7 +12,8 @@
 //!
 //! `chrome-extension://<id>` is a valid WebAuthn origin whose RP ID is the extension id, so the only RP this
 //! host ever serves is [`RpId::pinned`]. Attestation is never trusted: registration accepts `fmt: "none"`
-//! only and takes the credential key from `attestedCredentialData`. Every refusal is a named variant.
+//! only and takes the credential key from `attestedCredentialData`. Every refusal is a named variant. The
+//! enrollments live in the trust record (store.rs); the request/answer exchange is [`crate::presence::request`].
 
 mod authenticator_data;
 mod base64url;
@@ -44,5 +45,7 @@ pub use statement::{
     Action, Challenge, Nonce, Statement, StatementDomain, ENROLL_DOMAIN, MAX_ACTION_LEN,
     MAX_NONCE_LEN, PRESENCE_DOMAIN,
 };
-pub use store::EnrollmentStore;
+pub use store::{
+    advance_sign_count, counter_advances, record, CounterError, Enrollment, EnrollmentAuthority,
+};
 pub use verify::{verify_assertion, Assertion, Verified};

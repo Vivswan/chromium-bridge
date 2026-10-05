@@ -22,7 +22,6 @@ export const SIG_LEN = 64;
 // The enrollment state machine's compromise latch fires on a subset, so an unrecognized code must degrade to a
 // refusal, never match.
 export const ENCLAVE_REASON_CODES = [
-  "unsupported_platform",
   "not_enrolled",
   "invalid_challenge",
   "key_invalid",

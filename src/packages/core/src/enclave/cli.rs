@@ -2,43 +2,83 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::config::HostConfig;
-use super::key::EnrollmentKey;
-use super::pubkey::EnclavePublicKey;
+use super::key::{EnrollmentKey, Revoked, StoreOutcome};
+use super::record::KeyStore;
 use super::{EnclaveError, KEY_LABEL};
-use crate::runtime_record::RuntimeRecord as _;
+use crate::presence::{self, TerminalStdin};
 
-/// `chromium-bridge pair [--reset]`: the user-present half of the enrollment
-/// ceremony. Mints the Enclave key (or reports the existing one), runs a
-/// presence-gated self-test signature so the user proves Touch ID works right
-/// now, and prints the public key + fingerprint for the user to compare
-/// against the extension's enrollment UI.
-pub fn run_pair(reset: bool) -> i32 {
-    // A pre-existing key is never adopted, with or without a valid look: any
-    // same-user process can plant a key under our label (even an Enclave key,
-    // minted without a presence ACL), and public API cannot read the ACL back
-    // to tell the difference. The only key `pair` can vouch for is one it
-    // minted itself in this run, with the ACL it set itself. So the ceremony
-    // completes exclusively with a fresh mint; anything already there means
-    // stop (or, with --reset, delete it all and start clean).
-    let existing = match EnrollmentKey::lookup() {
-        Ok(k) => k.is_some(),
-        Err(EnclaveError::Unsupported) => {
-            println!("pair failed: {}", EnclaveError::Unsupported);
-            return 1;
-        }
-        // KeyInvalid (planted software key, duplicate labels) and keychain
-        // errors both mean "something is there that we did not just mint".
+/// `chromium-bridge pair [--reset] [--file-store]`: mint the host identity key and print the fingerprint the
+/// user compares against the extension's enrollment screen. Minting is a capability grant (the extension will
+/// pin what it sees), so it runs behind the terminal witness and the typed phrase: a background script's
+/// `pair` is refused before anything is read or written. The key goes to the OS credential store unless the
+/// user names the file record; a store that refuses or does not answer fails the command and says so, never a
+/// silent fallback to the weaker place.
+///
+/// ```text
+/// a key already exists   -> `mint` refuses under its lock without --reset; `pair` never adopts a key it did not
+///                           mint in this run, since a same-user process can plant one
+/// --reset                -> disposes first; a store that does not answer stops a store pairing here and only
+///                           warns a file pairing (that is what `--file-store` is for)
+/// phrase declined        -> nothing minted, the old key (if --reset) already gone: the machine is unenrolled
+/// ```
+pub fn run_pair(reset: bool, file_store: bool) -> i32 {
+    let store = if file_store {
+        KeyStore::File
+    } else {
+        KeyStore::CredentialStore
+    };
+    let terminal = match TerminalStdin::require() {
+        Ok(terminal) => terminal,
         Err(e) => {
-            println!("note: the existing enrollment state is suspect: {e}");
-            true
+            println!("pair: refused - {e}");
+            return 1;
         }
     };
 
-    if existing {
-        if !reset {
+    if reset {
+        match dispose_enrollment_and_policy_baseline() {
+            Ok(revoked) => {
+                audit_host_key_revoke(crate::audit::Surface::Cli, &revoked);
+                if let StoreOutcome::Unanswered(e) = &revoked.store {
+                    if !file_store {
+                        println!("pair --reset could not consult the credential store: {e}");
+                        return 1;
+                    }
+                    println!(
+                        "note: the credential store did not answer ({e}); a store entry it may hold stays \
+                         behind, unread while the file key exists"
+                    );
+                }
+                if revoked.existed() {
+                    println!("removed the previous host key.");
+                }
+            }
+            Err(e) => {
+                println!("pair --reset failed to remove the old key: {e}");
+                return 1;
+            }
+        }
+    }
+
+    let auth = match presence::tty_confirm(
+        "Pairing mints the identity key the extension will pin; every policy grant this host signs \
+         will be verified against it.",
+        terminal,
+    ) {
+        Ok(auth) => auth,
+        Err(e) => {
+            println!("pairing was not approved ({e}); nothing was minted.");
+            return 1;
+        }
+    };
+
+    let presence = auth.path().wire_name();
+    let key = match crate::ipc::with_runtime_lock(|lock| Ok(EnrollmentKey::mint(lock, store, auth)))
+    {
+        Ok(Ok(minted)) => minted,
+        Ok(Err(e @ EnclaveError::KeyInvalid(_))) => {
             println!(
-                "an enrollment key already exists on this machine; nothing was changed.\n\
+                "pair: {e}\n\
                  pairing only completes with a freshly minted key, so to (re-)enroll run:\n\
                  \n    chromium-bridge pair --reset\n\
                  \n\
@@ -48,83 +88,35 @@ pub fn run_pair(reset: bool) -> i32 {
             );
             return 1;
         }
-        match dispose_enrollment_and_policy_baseline() {
-            Ok(_) => {
-                // The old key is gone, so any recorded enrollment and any
-                // baseline signed under it are void; the shared seam cleared
-                // them under one lock (ADR-0032 decision 3). Audit the
-                // revocation (the seam is surface-agnostic).
-                audit_host_key_revoke(crate::audit::Surface::Cli);
-                println!("removed the previous enrollment key.");
+        Ok(Err(e)) => {
+            println!("pair failed to mint the host key: {e}");
+            if store == KeyStore::CredentialStore {
+                println!(
+                    "if this machine has no OS credential store (a headless Linux session), rerun with \
+                     `chromium-bridge pair --file-store` to keep the key in a 0600 file instead"
+                );
             }
-            Err(e) => {
-                println!("pair --reset failed to remove the old key: {e}");
-                return 1;
-            }
+            return 1;
         }
-    }
+        Err(e) => {
+            println!("pair failed to take the runtime lock: {e}");
+            return 1;
+        }
+    };
 
-    // No key exists past this point, but a signed baseline still might: a
-    // best-effort clear inside an earlier disposal can fail, and the key can
-    // be deleted out-of-band. Minting over such a leftover would manufacture
-    // exactly the pin mismatch a genuine host must never produce (a baseline
-    // signed by a key that no longer exists, pushed as current), so it is
-    // cleared - history-preserving - before any mint, unconditionally.
-    let cleared = crate::ipc::with_runtime_lock(crate::policy::clear_baseline_locked);
-    if let Err(e) = cleared {
+    println!("enrolled (user presence: {presence}).");
+    let public_key_b64 = key.public_key().to_base64();
+    let fingerprint = key.public_key().fingerprint_display();
+    println!("key store:  {}", store_name(store));
+    if store == KeyStore::File {
         println!(
-            "warning: a leftover policy baseline could not be cleared ({e}); until a new \
-             policy write supersedes it, a paired extension will refuse it as unverifiable."
+            "            the key lives in a 0600 file in the runtime directory; any process running \
+             as you can read it there"
         );
     }
-
-    let key = match EnrollmentKey::mint() {
-        Ok(k) => k,
-        Err(e) => {
-            println!("pair failed to mint the enrollment key: {e}");
-            let _ = crate::ipc::with_runtime_lock(HostConfig::remove);
-            return 1;
-        }
-    };
-    let public = match key.public_key() {
-        Ok(p) => p,
-        Err(e) => {
-            println!("pair failed to export the public key: {e}");
-            rollback_fresh_mint();
-            return 1;
-        }
-    };
-
-    // Presence self-test: one signature, which raises Touch ID. This is the
-    // actual user-present step of the ceremony; declining it must leave the
-    // machine unenrolled, so on failure the freshly minted key is deleted.
-    println!("confirm with Touch ID (or your password) to finish pairing...");
-    let selftest_nonce = match crate::ipc::generate_secret() {
-        Ok(s) => format!("pair-selftest-{s}"),
-        Err(e) => {
-            println!("pair failed to generate a self-test nonce ({e}); rolling back.");
-            rollback_fresh_mint();
-            return 1;
-        }
-    };
-    if let Err(e) = key.sign_challenge(&selftest_nonce, None) {
-        println!("pairing was not approved ({e}); rolling back.");
-        rollback_fresh_mint();
-        return 1;
-    }
-
-    let cfg = HostConfig {
-        enrolled: true,
-        ..HostConfig::default()
-    };
-    if let Err(e) = crate::ipc::with_runtime_lock(|lock| cfg.write(lock)) {
-        println!("pair failed to record the enrollment policy: {e}");
-        rollback_fresh_mint();
-        return 1;
-    }
-
-    println!("enrolled.");
-    print_public_key(&public);
+    println!("public key: {public_key_b64}");
+    println!("fingerprint (sha256):");
+    println!("  {fingerprint}");
     println!(
         "\nnext: open the extension's enrollment screen and check it shows\n\
          EXACTLY this fingerprint before approving."
@@ -132,26 +124,39 @@ pub fn run_pair(reset: bool) -> i32 {
     0
 }
 
-/// `chromium-bridge revoke` (also `pair --reset` uses the same deletion):
-/// delete the enrollment key and the recorded policy, and bump the revocation
-/// epoch's host-key marker (ADR-0025) so a live native host notices and
-/// pushes the `enclave_revoked` frame to the extension -- the pinned
-/// extension flips to its fail-closed state without waiting for an opt-in
-/// reverify. Fail-closed by construction - after this, proofs can no longer
-/// be produced, so a pinned extension refuses the bridge until the user
-/// re-pairs.
+fn store_name(store: KeyStore) -> &'static str {
+    match store {
+        KeyStore::CredentialStore => "the OS credential store",
+        KeyStore::File => "file (host_key.json)",
+    }
+}
+
+/// `chromium-bridge revoke` (also `pair --reset` uses the same deletion): delete the host key and the signed
+/// policy baseline and bump the host-key epoch, so a live native host pushes `enclave_revoked` and a pinned
+/// extension fails closed without waiting for a reverify.
 pub fn run_revoke() -> i32 {
     match dispose_enrollment_and_policy_baseline() {
-        Ok(existed) => {
-            audit_host_key_revoke(crate::audit::Surface::Cli);
-            if existed {
-                println!("enrollment key revoked. re-run `chromium-bridge pair` to re-enroll.");
+        Ok(revoked) => {
+            audit_host_key_revoke(crate::audit::Surface::Cli, &revoked);
+            if let StoreOutcome::Unanswered(e) = &revoked.store {
+                if revoked.file {
+                    println!(
+                        "note: the credential store did not answer ({e}); the file key is revoked, a \
+                         store entry it may hold stays behind"
+                    );
+                } else {
+                    println!("revoke could not consult the credential store: {e}");
+                    return 1;
+                }
+            }
+            if revoked.existed() {
+                println!("host key revoked. re-run `chromium-bridge pair` to re-enroll.");
                 println!(
                     "a connected extension is notified and fails closed; \
                      otherwise it notices on its next connect."
                 );
             } else {
-                println!("no enrollment key found; nothing to revoke.");
+                println!("no host key found; nothing to revoke.");
             }
             0
         }
@@ -162,218 +167,104 @@ pub fn run_revoke() -> i32 {
     }
 }
 
-/// Roll back a pairing ceremony that minted a key but did not complete:
-/// through the shared disposal seam, like every other key deletion, so a
-/// policy write that landed under the doomed key during the ceremony cannot
-/// leave a baseline behind it. Best-effort by nature (the ceremony already
-/// failed; there is nothing better to do with a second failure than log it
-/// inside the seam).
-fn rollback_fresh_mint() {
-    let _ = dispose_enrollment_and_policy_baseline();
-}
-
-/// The shared enrollment-disposal seam (ADR-0032 decision 3): `chromium-bridge revoke`, `pair --reset`, and the
-/// extension-originated `enclave_revoke` all route here, under ONE runtime-lock hold, so no concurrent WRITER (a
-/// policy write under the doomed key) can land a baseline between the key deletion and the clear. Readers take no
-/// lock: a one-shot read (a doctor run, a second browser's host) can see the baseline for the instant between the
-/// two steps, the same state a failed clear leaves behind. Returns whether an enrollment key existed.
+/// The shared disposal seam: `chromium-bridge revoke`, `pair --reset`, and the extension-originated
+/// `enclave_revoke` all route here, under ONE runtime-lock hold, so no concurrent WRITER (a policy write under
+/// the doomed key) can land a baseline between the key deletion and the clear. Returns what each place
+/// confirmed; the surfaces decide what a store that did not answer means for them.
 ///
 /// ```text
-/// key deletion fails                 -> the error bubbles and the baseline stays: the key, and its valid signature, may still exist
+/// file removal fails                 -> the error bubbles and the baseline stays: the key, and its valid signature, may still exist
 /// baseline clear or epoch bump fails -> logged, not fatal: only cleanup or the proactive push is lost, never the deletion
 /// ```
-pub fn dispose_enrollment_and_policy_baseline() -> Result<bool, EnclaveError> {
+pub fn dispose_enrollment_and_policy_baseline() -> Result<Revoked, EnclaveError> {
     match crate::ipc::with_runtime_lock(dispose_locked) {
         Ok(inner) => inner,
-        // The lock guards the whole disposal; if it cannot be taken, nothing
-        // was done. Fail closed with a stable enclave error.
         Err(e) => Err(EnclaveError::Keychain(format!(
-            "runtime lock unavailable during enrollment disposal: {e}"
+            "runtime lock unavailable during host key disposal: {e}"
         ))),
     }
 }
 
 fn dispose_locked(
     lock: &crate::ipc::RuntimeLockToken,
-) -> std::io::Result<Result<bool, EnclaveError>> {
-    let existed = match EnrollmentKey::revoke() {
-        Ok(existed) => existed,
-        // The key (and any signature it produced) may still be present, so the
-        // baseline is NOT an artifact of a dead key: leave it untouched.
+) -> std::io::Result<Result<Revoked, EnclaveError>> {
+    let revoked = match EnrollmentKey::revoke(lock) {
+        Ok(revoked) => revoked,
         Err(e) => return Ok(Err(e)),
     };
-    let _ = HostConfig::remove(lock);
     if let Err(e) = crate::policy::clear_baseline_locked(lock) {
         log_warn!(
             "enclave",
-            "enrollment key deleted but the signed policy baseline could not be \
-             cleared ({e}); it survives as an artifact of the dead key until the \
-             next policy write"
+            "host key deleted but the signed policy baseline could not be cleared ({e}); it \
+             survives as an artifact of the dead key until the next policy write"
         );
     }
     if let Err(e) = crate::trust::Trust::mutate_locked(lock, crate::trust::Scope::HostKey, |_| {}) {
         log_warn!(
             "enclave",
-            "enrollment key deleted but the host-key revocation epoch bump failed \
-             ({e}); other surfaces notice only at their next key verification"
+            "host key deleted but the host-key revocation epoch bump failed ({e}); other \
+             surfaces notice only at their next key verification"
         );
     }
-    Ok(Ok(existed))
+    Ok(Ok(revoked))
 }
 
-/// Record a host-key revocation in the audit trail (ADR-0030,
-/// log-after-decide: the disposal has already happened). The surface is the
-/// caller's own (`Cli` for the CLI paths, `Extension` for the native host's
-/// `enclave_revoke`); the shared seam is surface-agnostic and does the
-/// mechanical bump, so each caller stamps its own surface here.
-pub fn audit_host_key_revoke(surface: crate::audit::Surface) {
-    crate::audit::record(
-        crate::audit::AuditRecord::new(crate::audit::AuditKind::HostKeyRevoke)
-            .surface(surface)
-            .outcome("ok"),
-    );
+/// Record a host-key revocation in the audit trail, log-after-decide, as the verdict says: `ok` when a key
+/// in use is confirmed gone, `error` naming the store's non-answer otherwise, so the trail never claims a
+/// revocation the store did not confirm. The surface is the caller's own; the shared seam is surface-agnostic.
+pub fn audit_host_key_revoke(surface: crate::audit::Surface, revoked: &Revoked) {
+    let record =
+        crate::audit::AuditRecord::new(crate::audit::AuditKind::HostKeyRevoke).surface(surface);
+    crate::audit::record(match &revoked.store {
+        StoreOutcome::Unanswered(e) if !revoked.file => record
+            .outcome("error")
+            .detail(&format!("credential store did not answer: {e}")),
+        StoreOutcome::Unanswered(e) => record.outcome("ok").detail(&format!(
+            "file key removed; credential store did not answer: {e}"
+        )),
+        StoreOutcome::Cleared { .. } => record.outcome("ok"),
+    });
 }
 
-/// `chromium-bridge enclave-status`: read-only report on the enrollment state.
+/// `chromium-bridge enclave-status`: read-only report on the host key. The `key:` line's first word is what
+/// `tests/protocol/harness.py` reads to tell an enrolled machine from a fresh one.
 pub fn run_status() -> i32 {
     println!("chromium-bridge enclave-status");
-    if cfg!(target_os = "macos") {
-        println!("platform:   macos (Secure Enclave supported)");
-    } else {
-        println!(
-            "platform:   {} (Secure Enclave NOT supported)",
-            std::env::consts::OS
-        );
-    }
-
-    match EnrollmentKey::lookup() {
-        Ok(Some(key)) => match key.public_key() {
-            Ok(public) => {
-                println!("key:        present ({KEY_LABEL})");
-                print_public_key(&public);
-            }
-            // The deny-list (and any other invalidity found on export) is
-            // the same REJECTED state as a lookup-time KeyInvalid, not a
-            // generic read failure.
-            Err(e @ EnclaveError::KeyInvalid(_)) => println!(
-                "key:        REJECTED - {e}\n            treat it as untrusted; \
-                 run `chromium-bridge pair --reset` to replace it"
-            ),
-            Err(e) => println!("key:        present, but public key unreadable: {e}"),
-        },
-        Ok(None) => println!("key:        none (run `chromium-bridge pair`)"),
-        Err(EnclaveError::Unsupported) => println!("key:        n/a"),
-        Err(e @ EnclaveError::KeyInvalid(_)) => println!(
-            "key:        REJECTED - {e}\n            treat it as untrusted; \
+    match key_report() {
+        EnclaveStatusReport::Present {
+            store,
+            public_key_b64,
+            fingerprint,
+            ..
+        } => {
+            println!("key:        present ({KEY_LABEL}, {})", store_name(store));
+            println!("public key: {public_key_b64}");
+            println!("fingerprint (sha256):");
+            println!("  {fingerprint}");
+        }
+        EnclaveStatusReport::None { .. } => {
+            println!("key:        none (run `chromium-bridge pair`)")
+        }
+        EnclaveStatusReport::Invalid { detail, .. } => println!(
+            "key:        REJECTED - {detail}\n            treat it as untrusted; \
              run `chromium-bridge pair --reset` to replace it"
         ),
-        Err(e) => println!("key:        lookup failed: {e}"),
-    }
-
-    match HostConfig::path().and_then(|path| HostConfig::load().map(|cfg| (path, cfg))) {
-        Ok((path, Some(cfg))) => println!(
-            "policy:     enrolled={} granularity={} ({})",
-            cfg.enrolled,
-            cfg.granularity,
-            path.display()
-        ),
-        Ok((path, None)) => println!("policy:     no config ({})", path.display()),
-        Err(e) => println!("policy:     unreadable: {e}"),
+        EnclaveStatusReport::Error { detail, .. } => {
+            println!("key:        lookup failed: {detail}")
+        }
     }
     0
 }
 
-fn print_public_key(public: &EnclavePublicKey) {
-    println!("public key: {}", public.to_base64());
-    println!("fingerprint (sha256):");
-    println!("  {}", public.fingerprint_display());
-}
-
-/// `chromium-bridge presence-selftest`: raise ONE per-action user-presence
-/// prompt (ADR-0031) and report the outcome. It signs a throwaway challenge
-/// over the presence domain with the enrollment key - exactly the Enclave
-/// operation the `page_eval`/`page_upload` gate performs when the extension
-/// sends a `presence_challenge` - so the user can see that Touch ID prompt
-/// without a browser. Read-only: nothing is stored, and the signature is
-/// discarded. Returns a process exit code.
-pub fn run_presence_selftest() -> i32 {
-    println!("chromium-bridge presence-selftest");
-    let key = match EnrollmentKey::lookup() {
-        Ok(Some(key)) => key,
-        Ok(None) => {
-            eprintln!(
-                "no enrollment key on this machine; run `chromium-bridge pair` first. \
-                 Without a key the per-action Touch ID gate is unavailable and \
-                 page_eval/page_upload confirmations use the extension window instead."
-            );
-            return 1;
-        }
-        Err(e) => {
-            eprintln!("could not look up the enrollment key: {e}");
-            return 1;
-        }
-    };
-    println!("raising a user-presence prompt (Touch ID or your login password)...");
-    // A fresh nonce + a self-test context; the signature is discarded. The
-    // point is that this Enclave op cannot complete without a live tap.
-    let nonce = format!(
-        "selftest-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    );
-    match key.sign_presence(&nonce, Some("presence-selftest")) {
-        Ok(_sig) => {
-            println!("OK: user presence verified (the Enclave signed under Touch ID).");
-            println!(
-                "this is the exact prompt page_eval / page_upload raise on an enrolled \
-                 Mac when touchIdConfirm is on."
-            );
-            0
-        }
-        Err(e) => {
-            eprintln!("presence NOT verified: {e}");
-            eprintln!("(a cancelled prompt or a failed scan reads as a refusal, fail closed)");
-            1
-        }
-    }
-}
-
-/// `chromium-bridge enclave-status --json`: the machine-readable form of
-/// [`run_status`], for scripts that drive this binary as a subprocess
-/// instead of scraping the human report. One JSON object on stdout; the
-/// shape is versioned (`v`) so a
-/// consumer can refuse a report it does not understand instead of guessing.
+/// `chromium-bridge enclave-status --json`: the machine-readable form of [`run_status`]. One JSON object on
+/// stdout; `v` is read before any other field so a consumer can refuse a report it does not understand.
 pub fn run_status_json() -> i32 {
-    let key = match EnrollmentKey::lookup() {
-        Ok(Some(key)) => match key.public_key() {
-            Ok(public) => KeyReport::Present(public),
-            // Same REJECTED state as a lookup-time KeyInvalid: a consumer
-            // branches on it (EnclaveKeyState), and the deny-list surfaces
-            // here, on export.
-            Err(e @ EnclaveError::KeyInvalid(_)) => KeyReport::Invalid(e.to_string()),
-            Err(e) => KeyReport::Error(format!("public key unreadable: {e}")),
-        },
-        Ok(None) => KeyReport::None,
-        Err(EnclaveError::Unsupported) => KeyReport::Unsupported,
-        Err(e @ EnclaveError::KeyInvalid(_)) => KeyReport::Invalid(e.to_string()),
-        Err(e) => KeyReport::Error(e.to_string()),
-    };
-    let policy = HostConfig::load().map_err(|e| e.to_string());
-    let report = build_status_report(&key, &policy);
-    // Serialize through `Value` so the object keys stay sorted (serde_json's
-    // default `Map` ordering), byte-for-byte as the previous ad-hoc `json!`
-    // rendering emitted them: this JSON is a frozen wire contract, and
-    // routing through `to_value` keeps the emitted bytes identical
-    // regardless of the struct's field declaration order.
-    match serde_json::to_value(&report) {
+    // Through `Value` so the keys come out sorted whatever the enum's declaration order.
+    match serde_json::to_value(key_report()) {
         Ok(value) => {
             println!("{value}");
             0
         }
-        // A struct of plain scalars cannot fail to serialize; refuse loudly on
-        // the impossible rather than print a half-formed object on stdout.
         Err(e) => {
             eprintln!("enclave-status --json failed to serialize the report: {e}");
             1
@@ -381,353 +272,148 @@ pub fn run_status_json() -> i32 {
     }
 }
 
-/// What the keychain lookup found, reduced to the states the JSON report
-/// names. Factored from [`run_status_json`] so the rendering is pure and
-/// unit-testable without a keychain.
-enum KeyReport {
-    Present(EnclavePublicKey),
-    None,
-    Invalid(String),
-    Unsupported,
-    Error(String),
-}
-
-/// The versioned, machine-readable enclave status: the exact object
-/// `chromium-bridge enclave-status --json` prints (ADR-0029). It is a typed
-/// mirror of what used to be an ad-hoc `serde_json::json!`, so the emitting
-/// and the parsing side share one Rust definition instead of two hand-kept
-/// shapes.
-///
-/// The wire form is frozen: a consumer refuses an unrecognized `v` BEFORE it
-/// trusts any other field, so field names and `v` must not change without a
-/// version bump. `deny_unknown_fields` makes an unexpected shape a loud
-/// refusal on the parsing side.
+/// The exact object `chromium-bridge enclave-status --json` prints, and what the prose report renders from. A
+/// sum tagged on `key`, so a `present` report without its public half, or a `none` one naming a store, cannot
+/// even deserialize; `deny_unknown_fields` makes an unexpected shape a loud refusal on the parsing side. A
+/// key that exports no public half (the deny-listed fixture scalar) is the same `invalid` state as a
+/// lookup-time `KeyInvalid`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EnclaveStatusReport {
-    /// Schema version. `1` today; a newer value must be refused before any
-    /// field below is read (fail closed).
-    pub v: u32,
-    /// Whether this platform has a Secure Enclave (macOS today).
-    pub supported: bool,
-    /// The keychain label the enrollment key lives under.
-    pub key_label: String,
-    /// The keychain lookup outcome.
-    pub key: EnclaveKeyState,
-    /// Base64 X9.63 public key; present only when `key == present`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub public_key_b64: Option<String>,
-    /// The public key's SHA-256 fingerprint; present only when `key == present`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fingerprint: Option<String>,
-    /// Human detail for a `key == invalid` or `key == error` state.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
-    /// The recorded enrollment policy, or `null` when there is no readable
-    /// config. Always present on the wire (as `null`), never omitted.
-    pub policy: Option<EnclavePolicyReport>,
-    /// Set only when the policy read itself failed; `policy` is then `null`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub policy_error: Option<String>,
+#[serde(tag = "key", rename_all = "lowercase", deny_unknown_fields)]
+pub enum EnclaveStatusReport {
+    Present {
+        /// Schema version. `1` today; a newer value must be refused before any field below is read.
+        v: u32,
+        /// The credential-store entry name the host key lives under.
+        key_label: String,
+        store: KeyStore,
+        /// Base64 X9.63 public key.
+        public_key_b64: String,
+        /// The public key's SHA-256 fingerprint, grouped for comparison.
+        fingerprint: String,
+    },
+    None {
+        v: u32,
+        key_label: String,
+    },
+    /// A key exists under our name but must be treated as untrusted (planted or malformed).
+    Invalid {
+        v: u32,
+        key_label: String,
+        detail: String,
+    },
+    /// The lookup itself failed (store unreachable, record unreadable).
+    Error {
+        v: u32,
+        key_label: String,
+        detail: String,
+    },
 }
 
-/// The keychain lookup outcome, lowercased on the wire. `invalid` means a key
-/// exists under our label but must be treated as untrusted (planted or
-/// malformed), which a consumer surfaces as loudly as the human report does.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum EnclaveKeyState {
-    /// A key is present and its public half is readable.
-    Present,
-    /// No key on this machine.
-    None,
-    /// A key exists under our label but is untrusted (planted or malformed).
-    Invalid,
-    /// This platform has no Secure Enclave.
-    Unsupported,
-    /// The lookup itself failed (keychain error, unreadable key).
-    Error,
-}
-
-/// The enrollment policy carried in the report, mirrored from [`HostConfig`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EnclavePolicyReport {
-    pub enrolled: bool,
-    pub granularity: String,
-}
-
-/// Build the typed status report. Pure (no keychain access): the caller
-/// resolves the key state and policy, this maps them onto the wire struct.
-fn build_status_report(
-    key: &KeyReport,
-    policy: &Result<Option<HostConfig>, String>,
-) -> EnclaveStatusReport {
-    let mut report = EnclaveStatusReport {
-        v: 1,
-        supported: cfg!(target_os = "macos"),
-        key_label: KEY_LABEL.to_string(),
-        key: EnclaveKeyState::None,
-        public_key_b64: None,
-        fingerprint: None,
-        detail: None,
-        policy: None,
-        policy_error: None,
-    };
-    match key {
-        KeyReport::Present(public) => {
-            report.key = EnclaveKeyState::Present;
-            report.public_key_b64 = Some(public.to_base64());
-            report.fingerprint = Some(public.fingerprint_display());
-        }
-        KeyReport::None => report.key = EnclaveKeyState::None,
-        KeyReport::Invalid(detail) => {
-            report.key = EnclaveKeyState::Invalid;
-            report.detail = Some(detail.clone());
-        }
-        KeyReport::Unsupported => report.key = EnclaveKeyState::Unsupported,
-        KeyReport::Error(detail) => {
-            report.key = EnclaveKeyState::Error;
-            report.detail = Some(detail.clone());
-        }
+/// One lookup, so the store and the public half the report shows come from the same record read.
+fn key_report() -> EnclaveStatusReport {
+    let (v, key_label) = (1, KEY_LABEL.to_string());
+    match EnrollmentKey::lookup() {
+        Ok(Some(key)) => EnclaveStatusReport::Present {
+            v,
+            key_label,
+            store: key.store(),
+            public_key_b64: key.public_key().to_base64(),
+            fingerprint: key.public_key().fingerprint_display(),
+        },
+        Ok(None) => EnclaveStatusReport::None { v, key_label },
+        Err(e @ EnclaveError::KeyInvalid(_)) => EnclaveStatusReport::Invalid {
+            v,
+            key_label,
+            detail: e.to_string(),
+        },
+        Err(e) => EnclaveStatusReport::Error {
+            v,
+            key_label,
+            detail: e.to_string(),
+        },
     }
-    match policy {
-        Ok(Some(cfg)) => {
-            report.policy = Some(EnclavePolicyReport {
-                enrolled: cfg.enrolled,
-                granularity: cfg.granularity.clone(),
-            });
-        }
-        Ok(None) => report.policy = None,
-        Err(e) => {
-            report.policy = None;
-            report.policy_error = Some(e.clone());
-        }
-    }
-    report
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::pubkey::EnclavePublicKey;
     use super::*;
 
-    fn present_key() -> EnclavePublicKey {
-        // A syntactically valid uncompressed P-256 point (0x04 + 64 bytes).
+    /// `enclave-status --json` is documented in docs/cli.md for scripts to parse: the bytes, sorted keys and
+    /// each state's exact field set, are the contract, pinned at the one place they leave the program.
+    #[test]
+    fn json_report_wire_bytes_for_each_key_state() {
         let mut bytes = vec![0x04u8];
         bytes.extend(std::iter::repeat_n(0xabu8, 64));
-        match EnclavePublicKey::from_x963(bytes) {
-            Ok(k) => k,
-            Err(e) => panic!("fixture key must parse: {e}"),
-        }
-    }
-
-    /// The wire bytes `enclave-status --json` emits: the typed struct serialized
-    /// through `Value` exactly as `run_status_json` does. A helper so the tests
-    /// assert against the real emitted form.
-    fn wire(key: &KeyReport, policy: &Result<Option<HostConfig>, String>) -> serde_json::Value {
-        serde_json::to_value(build_status_report(key, policy)).expect("report serializes")
-    }
-
-    /// The pre-refactor ad-hoc `json!` rendering, kept ONLY here as the golden
-    /// reference: the typed struct must serialize to byte-identical JSON.
-    fn legacy_render(
-        key: &KeyReport,
-        policy: &Result<Option<HostConfig>, String>,
-    ) -> serde_json::Value {
-        let mut out = serde_json::json!({
-            "v": 1,
-            "supported": cfg!(target_os = "macos"),
-            "key_label": KEY_LABEL,
-        });
-        let obj = out.as_object_mut().expect("json! literal is an object");
-        match key {
-            KeyReport::Present(public) => {
-                obj.insert("key".into(), "present".into());
-                obj.insert("public_key_b64".into(), public.to_base64().into());
-                obj.insert("fingerprint".into(), public.fingerprint_display().into());
-            }
-            KeyReport::None => {
-                obj.insert("key".into(), "none".into());
-            }
-            KeyReport::Invalid(detail) => {
-                obj.insert("key".into(), "invalid".into());
-                obj.insert("detail".into(), detail.as_str().into());
-            }
-            KeyReport::Unsupported => {
-                obj.insert("key".into(), "unsupported".into());
-            }
-            KeyReport::Error(detail) => {
-                obj.insert("key".into(), "error".into());
-                obj.insert("detail".into(), detail.as_str().into());
-            }
-        }
-        match policy {
-            Ok(Some(cfg)) => {
-                obj.insert(
-                    "policy".into(),
-                    serde_json::json!({ "enrolled": cfg.enrolled, "granularity": cfg.granularity }),
-                );
-            }
-            Ok(None) => {
-                obj.insert("policy".into(), serde_json::Value::Null);
-            }
-            Err(e) => {
-                obj.insert("policy".into(), serde_json::Value::Null);
-                obj.insert("policy_error".into(), e.as_str().into());
-            }
-        }
-        out
-    }
-
-    #[test]
-    fn json_report_carries_the_fingerprint_for_a_present_key() {
-        let public = present_key();
+        let public = EnclavePublicKey::from_x963(bytes).unwrap();
         let (b64, fingerprint) = (public.to_base64(), public.fingerprint_display());
-        let v = wire(
-            &KeyReport::Present(public),
-            &Ok(Some(HostConfig {
-                enrolled: true,
-                ..HostConfig::default()
-            })),
-        );
-        assert_eq!(v["v"], 1);
-        assert_eq!(v["key"], "present");
-        assert_eq!(v["key_label"], KEY_LABEL);
-        assert_eq!(v["public_key_b64"], b64);
-        assert_eq!(v["fingerprint"], fingerprint);
-        assert_eq!(v["policy"]["enrolled"], true);
-    }
-
-    #[test]
-    fn json_report_states_map_one_to_one() {
-        let none = wire(&KeyReport::None, &Ok(None));
-        assert_eq!(none["key"], "none");
-        assert!(none["policy"].is_null());
-        assert!(none.get("fingerprint").is_none());
-
-        let invalid = wire(
-            &KeyReport::Invalid("planted software key".into()),
-            &Ok(None),
-        );
-        assert_eq!(invalid["key"], "invalid");
-        assert_eq!(invalid["detail"], "planted software key");
-
-        let unsupported = wire(&KeyReport::Unsupported, &Ok(None));
-        assert_eq!(unsupported["key"], "unsupported");
-
-        let err = wire(&KeyReport::Error("keychain: -25300".into()), &Ok(None));
-        assert_eq!(err["key"], "error");
-        assert_eq!(err["detail"], "keychain: -25300");
-    }
-
-    #[test]
-    fn json_report_surfaces_an_unreadable_policy() {
-        let v = wire(&KeyReport::None, &Err("config decode: bad".into()));
-        assert!(v["policy"].is_null());
-        assert_eq!(v["policy_error"], "config decode: bad");
-    }
-
-    /// Byte-for-byte wire compatibility: the typed struct must serialize to
-    /// exactly the JSON string the old ad-hoc `json!` renderer produced, for
-    /// every key/policy combination. This is the contract every consumer of
-    /// the report depends on.
-    #[test]
-    fn typed_report_is_byte_identical_to_the_legacy_json() {
-        let enrolled = Ok(Some(HostConfig {
-            enrolled: true,
-            ..HostConfig::default()
-        }));
-        let no_config: Result<Option<HostConfig>, String> = Ok(None);
-        let unreadable: Result<Option<HostConfig>, String> = Err("config decode: bad".into());
-        let cases: Vec<(KeyReport, &Result<Option<HostConfig>, String>)> = vec![
-            (KeyReport::Present(present_key()), &enrolled),
-            (KeyReport::None, &no_config),
+        let label = KEY_LABEL.to_string();
+        let cases = [
             (
-                KeyReport::Invalid("planted software key".into()),
-                &no_config,
+                EnclaveStatusReport::Present {
+                    v: 1,
+                    key_label: label.clone(),
+                    store: KeyStore::File,
+                    public_key_b64: b64.clone(),
+                    fingerprint: fingerprint.clone(),
+                },
+                format!(
+                    "{{\"fingerprint\":\"{fingerprint}\",\"key\":\"present\",\"key_label\":\"{KEY_LABEL}\",\
+                     \"public_key_b64\":\"{b64}\",\"store\":\"file\",\"v\":1}}"
+                ),
             ),
-            (KeyReport::Unsupported, &no_config),
-            (KeyReport::Error("keychain: -25300".into()), &no_config),
-            (KeyReport::None, &unreadable),
+            (
+                EnclaveStatusReport::None {
+                    v: 1,
+                    key_label: label.clone(),
+                },
+                format!("{{\"key\":\"none\",\"key_label\":\"{KEY_LABEL}\",\"v\":1}}"),
+            ),
+            (
+                EnclaveStatusReport::Invalid {
+                    v: 1,
+                    key_label: label.clone(),
+                    detail: "planted scalar".into(),
+                },
+                format!(
+                    "{{\"detail\":\"planted scalar\",\"key\":\"invalid\",\"key_label\":\"{KEY_LABEL}\",\"v\":1}}"
+                ),
+            ),
+            (
+                EnclaveStatusReport::Error {
+                    v: 1,
+                    key_label: label,
+                    detail: "store unreachable".into(),
+                },
+                format!(
+                    "{{\"detail\":\"store unreachable\",\"key\":\"error\",\"key_label\":\"{KEY_LABEL}\",\"v\":1}}"
+                ),
+            ),
         ];
-        for (key, policy) in &cases {
-            let typed = serde_json::to_string(&build_status_report(key, policy))
-                .expect("report serializes");
-            // The emitted form: routed through `Value` so keys stay sorted.
-            let emitted = serde_json::to_value(build_status_report(key, policy))
-                .expect("report serializes")
-                .to_string();
-            let legacy = legacy_render(key, policy).to_string();
-            assert_eq!(
-                emitted, legacy,
-                "emitted wire JSON drifted from the legacy form"
-            );
-            // A struct serialized directly is NOT sorted; it must still round-trip
-            // to the same value, proving no field was dropped or renamed.
-            assert_eq!(
-                serde_json::from_str::<serde_json::Value>(&typed).unwrap(),
-                legacy_render(key, policy),
+        for (report, want) in cases {
+            let emitted = serde_json::to_value(&report).unwrap().to_string();
+            assert_eq!(emitted, want);
+            let back: EnclaveStatusReport = serde_json::from_str(&emitted).unwrap();
+            assert_eq!(back, report, "round trip");
+        }
+        for (case, bad) in [
+            (
+                "an unknown field",
+                r#"{"v":1,"key_label":"x","key":"none","surprise":1}"#,
+            ),
+            (
+                "a present key without its public half",
+                r#"{"v":1,"key_label":"x","key":"present","store":"file"}"#,
+            ),
+            (
+                "an absent key naming a store",
+                r#"{"v":1,"key_label":"x","key":"none","store":"file"}"#,
+            ),
+        ] {
+            assert!(
+                serde_json::from_str::<EnclaveStatusReport>(bad).is_err(),
+                "{case} must be refused"
             );
         }
-    }
-
-    /// A literal byte-golden for the common `key=none`, enrolled case: the
-    /// exact string `enclave-status --json` prints today. Unlike the
-    /// legacy-comparison test (both sides share the serializer), this pins the
-    /// concrete bytes, so a serializer-config change (e.g. enabling
-    /// `preserve_order`) that silently altered the wire form would fail here.
-    #[test]
-    fn emitted_wire_bytes_match_the_frozen_golden() {
-        let report = build_status_report(
-            &KeyReport::None,
-            &Ok(Some(HostConfig {
-                enrolled: true,
-                ..HostConfig::default()
-            })),
-        );
-        let emitted = serde_json::to_value(&report)
-            .expect("report serializes")
-            .to_string();
-        // Keys sorted (serde_json default Map ordering), `key_label` is KEY_LABEL.
-        let golden = format!(
-            "{{\"key\":\"none\",\"key_label\":\"{KEY_LABEL}\",\
-             \"policy\":{{\"enrolled\":true,\"granularity\":\"session\"}},\
-             \"supported\":{},\"v\":1}}",
-            cfg!(target_os = "macos"),
-        );
-        assert_eq!(
-            emitted, golden,
-            "the enclave-status --json wire bytes drifted"
-        );
-    }
-
-    /// The typed report round-trips through serde: what the host emits, a
-    /// consumer deserializes back into the same struct.
-    #[test]
-    fn typed_report_round_trips_through_serde() {
-        let report = build_status_report(
-            &KeyReport::Present(present_key()),
-            &Ok(Some(HostConfig {
-                enrolled: true,
-                ..HostConfig::default()
-            })),
-        );
-        let json = serde_json::to_string(&report).expect("serializes");
-        let back: EnclaveStatusReport = serde_json::from_str(&json).expect("deserializes");
-        assert_eq!(report, back);
-    }
-
-    /// The parse side rejects an unexpected field rather than silently
-    /// coercing it: `deny_unknown_fields` is the fail-closed guard a consumer
-    /// relies on when a host emits a shape it does not understand.
-    #[test]
-    fn typed_report_rejects_unknown_fields() {
-        let with_extra =
-            r#"{"v":1,"supported":true,"key_label":"x","key":"none","policy":null,"surprise":1}"#;
-        let parsed: Result<EnclaveStatusReport, _> = serde_json::from_str(with_extra);
-        assert!(
-            parsed.is_err(),
-            "an unknown field must be refused, not ignored"
-        );
     }
 }

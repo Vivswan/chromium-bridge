@@ -112,13 +112,6 @@ doc = false
 bench = false
 
 [[bin]]
-name = "enclave_der"
-path = "fuzz_targets/enclave_der.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
 name = "enclave_challenge"
 path = "fuzz_targets/enclave_challenge.rs"
 test = false
