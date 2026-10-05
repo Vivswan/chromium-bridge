@@ -187,7 +187,6 @@ function anthropicToolResult(body: AnthropicBody): ToolResult | undefined {
     const content = (message as { content?: unknown } | null)?.content;
     if (!Array.isArray(content)) continue;
     for (const item of content) {
-      // biome-ignore lint/style/useNamingConvention: tool_use_id is the Anthropic wire field
       const block = item as { type?: unknown; content?: unknown; tool_use_id?: unknown } | null;
       if (block?.type === "tool_result") {
         return {
@@ -350,7 +349,6 @@ function openaiToolResult(body: OpenAiBody): ToolResult | undefined {
     const entry = message as {
       role?: unknown;
       content?: unknown;
-      // biome-ignore lint/style/useNamingConvention: tool_call_id is the OpenAI wire field
       tool_call_id?: unknown;
     } | null;
     if (entry?.role === "tool") {
@@ -478,7 +476,6 @@ function responsesToolNames(body: ResponsesBody): string[] {
 function responsesToolResult(body: ResponsesBody): ToolResult | undefined {
   if (!Array.isArray(body.input)) return undefined;
   for (const item of body.input) {
-    // biome-ignore lint/style/useNamingConvention: call_id is the OpenAI wire field
     const entry = item as { type?: unknown; output?: unknown; call_id?: unknown } | null;
     if (entry?.type !== "function_call_output" && entry?.type !== "custom_tool_call_output") {
       continue;

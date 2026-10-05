@@ -18,7 +18,6 @@ declare module "web-ext-run" {
     // web-ext's injectable runner class (its dependency-injection seam). We
     // pass a wrapper so we hold the runner handle even if run() rejects after
     // spawning the browser.
-    // biome-ignore lint/style/useNamingConvention: web-ext's option key is PascalCase (a class)
     MultiExtensionRunner?: new (params: {
       runners: unknown[];
     }) => unknown;

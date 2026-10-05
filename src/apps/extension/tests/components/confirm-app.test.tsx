@@ -4,6 +4,7 @@
 // confirm_ready/confirm_resolve round trip.
 
 import type { ConfirmPayload } from "@chromium-bridge/shared/confirm";
+import type { PolicyFieldName } from "@chromium-bridge/shared/policy.gen";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -19,6 +20,9 @@ const PAYLOAD: ConfirmPayload = {
 };
 
 let sent: Array<{ type: string; approved?: boolean }>;
+
+// The flattened form of the locale bundle's `confirm.pf_<field>` label, one per policy field.
+const policyFieldLabel = (field: PolicyFieldName) => `confirm_pf_${field}` as const;
 
 beforeEach(() => {
   fakeBrowser.reset();
@@ -42,8 +46,8 @@ beforeEach(() => {
     confirm_policy_relax_none: {
       message: "The changes in this policy could not be itemized.",
     },
-    confirm_pf_pageEvalEnabled: { message: "Allow page_eval (arbitrary JavaScript)" },
-    confirm_pf_confirmGraceMs: { message: "Re-confirm grace window" },
+    [policyFieldLabel("pageEvalEnabled")]: { message: "Allow page_eval (arbitrary JavaScript)" },
+    [policyFieldLabel("confirmGraceMs")]: { message: "Re-confirm grace window" },
     confirm_gate_strip_label: { message: "Which gate is held" },
     confirm_gate_client: { message: "client" },
     confirm_gate_host: { message: "host" },
