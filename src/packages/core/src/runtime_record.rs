@@ -504,7 +504,7 @@ mod tests {
 
         fn visit_item_impl(&mut self, imp: &'ast syn::ItemImpl) {
             match &imp.trait_ {
-                Some((_, path, _)) => {
+                Some((path, _)) => {
                     if let (true, syn::Type::Path(ty)) = (name(path) == "Record", &*imp.self_ty) {
                         self.records.push(name(&ty.path));
                     }
