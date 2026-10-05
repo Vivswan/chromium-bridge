@@ -5,15 +5,21 @@
 # Inputs include the inherited rust-contract file group (.moon/tasks/all.yml):
 # the *.gen.ts modules in src/ are generated FROM the Rust core, so a core
 # change must invalidate these caches even before `moon run gen` refreshes the
-# checked-in output. Never narrow that edge.
+# checked-in output. Never narrow that edge. The project-wide mutex follows
+# the root moon.yml header's rule.
 $schema: 'https://moonrepo.dev/schemas/project.json'
 
 language: 'typescript'
 layer: 'library'
 
+# Every task here reads the generated modules, so the mutex is a project default.
+taskOptions:
+  mutex: 'generated-contract'
+
 tasks:
   typecheck:
     description: 'Type-check src/packages/shared alone (the repo-wide pass is the root typecheck task)'
+    deps: ['root:install-deps']
     command: 'bun run typecheck'
     inputs:
       - '**/*'
@@ -27,6 +33,7 @@ tasks:
 
   test:
     description: 'Unit-test src/packages/shared: generated catalogue, boundary validators'
+    deps: ['root:install-deps']
     command: 'bun run test'
     inputs:
       - '**/*'
@@ -40,6 +47,7 @@ tasks:
     description: "Biome lint for the shared package"
     # Same invocation shape as the repo-wide gate (`bunx biome lint .` from
     # the root), scoped to this project so config resolution is identical.
+    deps: ['root:install-deps']
     command: 'bunx biome lint $projectSource'
     inputs:
       - '**/*'
