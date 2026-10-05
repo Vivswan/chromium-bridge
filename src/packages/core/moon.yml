@@ -53,12 +53,37 @@ tasks:
     command: 'cargo test --frozen -p chromium-bridge-core --lib --features loom loom_model'
     inputs: ['@group(workspace-rust)', '$RUSTFLAGS']
 
+  # The fuzz workspace is excluded from the root one, so a root-level cargo verb never reaches it. Plain
+  # commands, not one script: moon's script shell is pwsh on Windows, where `set -e` does not stop at a
+  # failed first verb. Sequential: two clippy runs at once contend for cargo's package cache lock.
   lint:
-    description: 'Lint Rust, denying all warnings (the CI gate)'
+    description: 'Lint every Rust workspace (root + fuzz), denying all warnings (the CI gate)'
+    deps: ['~:lint-workspace', '~:lint-fuzz']
+    options:
+      runDepsInParallel: false
+
+  lint-workspace:
+    description: 'Clippy over the root cargo workspace, denying all warnings'
     command: 'cargo clippy --frozen --all-targets -- -D warnings'
     inputs: ['@group(workspace-rust)', '$RUSTFLAGS']
 
+  lint-fuzz:
+    description: 'Clippy over the fuzz workspace, denying all warnings'
+    command: 'cargo clippy --frozen --manifest-path src/packages/core/fuzz/Cargo.toml --all-targets -- -D warnings'
+    inputs: ['@group(workspace-rust)', '$RUSTFLAGS']
+
   fmt-check:
-    description: 'Verify Rust formatting (CI gate)'
+    description: 'Verify Rust formatting in every workspace (root + fuzz; CI gate)'
+    deps: ['~:fmt-check-workspace', '~:fmt-check-fuzz']
+    options:
+      runDepsInParallel: false
+
+  fmt-check-workspace:
+    description: 'Verify Rust formatting in the root cargo workspace'
     command: 'cargo fmt --check'
+    inputs: ['@group(workspace-rust)']
+
+  fmt-check-fuzz:
+    description: 'Verify Rust formatting in the fuzz workspace'
+    command: 'cargo fmt --check --manifest-path src/packages/core/fuzz/Cargo.toml'
     inputs: ['@group(workspace-rust)']

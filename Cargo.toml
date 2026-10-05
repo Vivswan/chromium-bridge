@@ -130,8 +130,9 @@ loom = "0.7"
 chromium-bridge-core = { path = "src/packages/core", version = "0" }
 
 # Workspace-wide lint tables; every member opts in via `[lints] workspace =
-# true`. The fuzz crate is its own workspace and re-declares the fleet floor
-# entries, so a change to those is made in both files.
+# true`. The fuzz crate is its own workspace and carries a copy of this whole
+# table minus the exceptions its manifest names, so a change here is made in
+# src/packages/core/fuzz/Cargo.toml too.
 #
 # Every gating entry is deny, matching CI's `cargo clippy -- -D warnings`, so
 # no lint listed here passes locally and fails CI. The one allow (rustdoc's

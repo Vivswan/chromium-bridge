@@ -20,7 +20,9 @@ use chromium_bridge_core::protocol::{
     bridge_read, bridge_write, mcp_read, mcp_write, nm_read_frame, nm_write_frame, AttachRequest,
     BridgeReq, Handshake, JsonRpc, ParsedResp, BRIDGE_MAX_LINE, MCP_MAX_LINE, NM_MAX_OUTGOING,
 };
-use chromium_bridge_core::registration::{fuzz_api, manifest_ownership, pointer_ownership, Ownership};
+use chromium_bridge_core::registration::{
+    fuzz_api, manifest_ownership, pointer_ownership, Ownership,
+};
 use chromium_bridge_core::runtime_record::RuntimeRecord as _;
 use chromium_bridge_core::webauthn::encode::P256_GENERATOR_SEC1;
 use chromium_bridge_core::webauthn::{
@@ -245,7 +247,8 @@ pub fn registration_manifest(data: &[u8]) {
                 .get("description")
                 .and_then(|v| v.as_str())
                 .is_some_and(|d| {
-                    d == fuzz_api::MANIFEST_DESCRIPTION || d == fuzz_api::MANIFEST_DESCRIPTION_LEGACY
+                    d == fuzz_api::MANIFEST_DESCRIPTION
+                        || d == fuzz_api::MANIFEST_DESCRIPTION_LEGACY
                 })
     });
     match manifest_ownership(&contents) {

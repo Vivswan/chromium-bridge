@@ -105,7 +105,9 @@ pub(super) fn directory() -> Directory {
         // The same frame wearing a host control tag is an injection the pump drops instead of relaying.
         Seed::refused(
             "signal_cancel_with_control_tag",
-            ndjson(&edited(&cancel, |v| v["type"] = json!("kill_status_result"))),
+            ndjson(&edited(&cancel, |v| {
+                v["type"] = json!("kill_status_result")
+            })),
             relays_to_browser,
         ),
     ]);
