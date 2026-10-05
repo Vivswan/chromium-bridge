@@ -16,7 +16,7 @@ layer: 'application'
 tasks:
   build:
     description: "Build the web app (src/apps/web: Astro over the repo's markdown docs)"
-    deps: ['root:install-deps']
+    deps: ['root:check-deps']
     command: 'bun run build'
     inputs:
       # The site renders the repo's own markdown (src/lib/docs.ts globs the
@@ -39,7 +39,7 @@ tasks:
 
   test:
     description: "Unit-test src/apps/web: the markdown link rewriter's classification"
-    deps: ['root:install-deps']
+    deps: ['root:check-deps']
     command: 'bun run test'
     inputs:
       - '**/*'
@@ -49,8 +49,8 @@ tasks:
 
   lint:
     description: "Biome lint for the web app workspace"
-    deps: ['root:install-deps']
-    command: 'bunx biome lint $projectSource'
+    deps: ['root:check-deps']
+    command: 'bunx --no-install biome lint $projectSource'
     inputs:
       - '**/*'
       - '!**/node_modules/**'

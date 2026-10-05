@@ -10,7 +10,7 @@ Rust is rustup's alone, from `rust-toolchain.toml`, so a fresh machine needs [ru
 
 ```sh
 proto install    # provisions bun, moon, node, uv at the pinned versions (rustup owns rust)
-bun install      # workspace deps + wires the git hooks (lefthook)
+moon run setup   # installs the bun workspace, the pinned Rust toolchain, and the crates; wires the git hooks (lefthook); the gate itself never installs
 ```
 
 Four gate tools have no first-party proto plugin and are installed once by hand: `cargo install cargo-nextest` and `brew install typos-cli cargo-machete actionlint` (typos and cargo-machete also come from `cargo install`). Where CI gets them:
@@ -31,7 +31,7 @@ Four gate tools have no first-party proto plugin and are installed once by hand:
 | [`typos`](https://github.com/crate-ci/typos) + [`cargo-machete`](https://github.com/bnjbvr/cargo-machete) | spelling + unused-dependency gates | `moon run typos` / `moon run machete`; CI gates typos in the managed ci.yml and machete in checks.yml |
 | [`actionlint`](https://github.com/rhysd/actionlint) | GitHub Actions workflow lint gate | `moon run check-actions`; CI runs it in the managed ci.yml's actionlint job |
 
-Git hooks are managed by [lefthook](https://lefthook.dev) (`lefthook.yml`): `bun install` wires a pre-commit hook that runs `moon run ci`, so a commit that would fail CI fails at commit time instead.
+Git hooks are managed by [lefthook](https://lefthook.dev) (`lefthook.yml`): `moon run setup` wires a pre-commit hook that runs `moon run gate`, the checks the repository's own toolchain provides, and `moon run ci` adds the tools only CI provisions.
 
 ## Layout
 
