@@ -311,8 +311,8 @@ img { display: block; max-width: 100%; height: auto; }
   .link-label { text-align: left; }
 }
 
-/* ---- the gate ---- */
-.shots { padding: 32px 32px 96px; }
+/* ---- confirmation ---- */
+.confirmation { padding: 32px 32px 96px; }
 
 /* ---- guarantees ---- */
 .guarantees { padding: 96px 32px; }

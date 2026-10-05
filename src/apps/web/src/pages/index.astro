@@ -152,7 +152,7 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
         enrolling is what arms the gate.</p>
     </section>
 
-    <section class="shots wrap" id="shots">
+    <section class="confirmation wrap" id="confirmation">
       <p class="sec-label">The gate</p>
       <h2 class="sec-title">Every confirmation, one window.</h2>
       <p class="sec-sub">The extension draws every confirmation in its own
@@ -190,9 +190,9 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
           <p>When the extension asks to release the kill switch or enroll
             another credential, the host mints and verifies a presence request:
             a WebAuthn assertion from a credential you already enrolled, which
-            no page, script, or remote client can forge. From the CLI, release
-            takes a phrase typed on a real terminal. Script and upload
-            confirmations stay in the extension's own window on every call.</p>
+            no page, script, or remote client can forge, or, when no enrolled
+            credential could answer, a click in the extension's own window.
+            Script and upload approvals stay in that window on every call.</p>
           <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/security/trust-boundaries.md">trust boundaries</a>
         </div>
         <div class="g-cell">
@@ -271,7 +271,7 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
               a confirmation typed on the terminal, mints the host key into
               your OS credential store, and prints the key's fingerprint.
               Approve that fingerprint on the extension's options page, which
-              refuses to act until the fingerprints match.</p>
+              refuses to act until you approve it.</p>
           </div>
         </li>
         <li class="step">
