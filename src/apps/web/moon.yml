@@ -47,7 +47,7 @@ tasks:
 
   lint:
     description: "Biome lint for the web app workspace"
-    command: 'bunx --no-install biome lint $projectSource'
+    command: 'bun run biome lint $projectSource'
     inputs:
       - '**/*'
       - '!**/node_modules/**'

@@ -4,9 +4,10 @@
 #   wire or re-wire the hooks   -> `moon run setup` (lefthook's postinstall) or `lefthook install`
 #   moon                        -> proto's ~/.proto/shims and ~/.proto/bin (`proto install`, .prototools), prefixed
 #                                  below so a git client that starts hooks without your shell's PATH still finds it
+#   rust                        -> RUSTUP_AUTO_INSTALL=0, so a missing pinned toolchain fails instead of downloading
 #   skip for a WIP commit       -> LEFTHOOK=0 git commit (CI runs the full gate on the PR)
 
 pre-commit:
   jobs:
     - name: gate
-      run: PATH="$HOME/.proto/shims:$HOME/.proto/bin:$PATH" moon run gate
+      run: PATH="$HOME/.proto/shims:$HOME/.proto/bin:$PATH" RUSTUP_AUTO_INSTALL=0 moon run gate

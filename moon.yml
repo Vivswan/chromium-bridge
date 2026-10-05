@@ -4,18 +4,19 @@
 #
 # These rules govern every `moon run`, whatever targets the caller names together, so no caller has to; the
 # first three are read back from the resolved graph by scripts/check-moon-edges.ts, the last two are not:
-#   runs bunx                                           -> takes --no-install (a missing binary fails, never fetches)
-#   reachable from `gate` (the pre-commit hook's task)  -> only bun, bunx, and the toolchain's cargo verbs, never a bun
-#                                                          install; a tool another runtime or a separate install
-#                                                          provides runs in `ci`
+#   runs a package binary                               -> `bun run <bin>` (node_modules/.bin only); never bunx, which
+#                                                          answers from bun's global cache when node_modules is absent
+#   reachable from `gate` (the pre-commit hook's task)  -> only bun, the toolchain's cargo verbs, the shell's set, and
+#                                                          moon's noop, never a bun install; a tool another runtime or
+#                                                          a separate install provides runs in `ci`
 #   a cargo verb reachable from `gate`                  -> takes --frozen (a missing crate fails, never fetches; fmt
 #                                                          reads no crates and has no such flag)
 #   a bun task whose script spawns cargo                -> the same flag by convention (gen-shared, check-gen,
 #                                                          check-gen-isolation): the auditor sees only a task's own command
 #   reads or writes src/packages/shared/src/*.gen.ts    -> options.mutex 'generated-contract', shared with gen-shared,
 #                                                          so one invocation never overlaps a reader with the rewrite
-# Nothing reachable from `gate` installs or fetches: `setup` is the one task that does, and nothing depends on
-# it (`ci` adds tools CI provisions in its own steps, such as uv's). A missing package or crate fails its task
+# Nothing reachable from `gate` installs or fetches; `setup` is the one bootstrap, and nothing depends on it
+# (`ci` adds tools CI provisions in its own steps, such as uv's). A missing package or crate fails its task
 # with the tool's own message; CI is the source of truth for a tree that drifted from its lockfiles. A dependency
 # on gen-shared was rejected for the readers: it would put a cargo build into every TS task and into CI's
 # build-free jobs, while check-gen already proves the committed modules fresh. The per-project moon.yml files
@@ -63,7 +64,7 @@ tasks:
       - 'shared:typecheck'
       - 'extension:build'
       - 'web:build'
-    script: 'bunx --no-install tsc -p scripts && cargo build --workspace'
+    script: 'bun run tsc -p scripts && cargo build --workspace'
     options:
       mutex: 'generated-contract'
       runDepsInParallel: false
@@ -159,21 +160,21 @@ tasks:
 
   fmt:
     description: 'Format everything in place: Rust (cargo fmt) + TS/JS/JSON (Biome)'
-    script: 'set -e; cargo fmt; bunx --no-install biome format --write .'
+    script: 'set -e; cargo fmt; bun run biome format --write .'
     options:
       mutex: 'generated-contract'
       runInCI: false
 
   fmt-ts:
     description: 'Format TS/JS/JSON in place (Biome; what `bun run format` delegates to)'
-    command: 'bunx --no-install biome format --write .'
+    command: 'bun run biome format --write .'
     options:
       mutex: 'generated-contract'
       runInCI: false
 
   fix:
     description: 'Auto-fix everything: Biome lint+format fixes, then cargo fmt'
-    script: 'set -e; bunx --no-install biome check --write .; cargo fmt'
+    script: 'set -e; bun run biome check --write .; cargo fmt'
     options:
       mutex: 'generated-contract'
       runInCI: false
@@ -188,21 +189,21 @@ tasks:
 
   lint-ts:
     description: 'Lint TS/JS/JSON (Biome; what `bun run lint` delegates to)'
-    command: 'bunx --no-install biome lint .'
+    command: 'bun run biome lint .'
     inputs: ['**/*', '!**/node_modules/**']
     options:
       mutex: 'generated-contract'
 
   check-ts:
     description: 'Lint + format-check all TS/JS/JSON, warnings fail (biome ci; what `bun run check` delegates to)'
-    command: 'bunx --no-install biome ci . --error-on-warnings'
+    command: 'bun run biome ci . --error-on-warnings'
     inputs: ['**/*', '!**/node_modules/**']
     options:
       mutex: 'generated-contract'
 
   fmt-check-ts:
     description: 'Verify TS/JS/JSON formatting (Biome; what `bun run format:check` delegates to)'
-    command: 'bunx --no-install biome format .'
+    command: 'bun run biome format .'
     inputs: ['**/*', '!**/node_modules/**']
     options:
       mutex: 'generated-contract'
@@ -239,12 +240,12 @@ tasks:
     description: 'Type-check every TS project (extension, tests, scripts, src/packages/shared)'
     script: |
       set -e
-      bunx --no-install tsc -p src/apps/extension
-      bunx --no-install tsc -p tests/browser
-      bunx --no-install tsc -p tests/interop
-      bunx --no-install tsc -p tests/harness
-      bunx --no-install tsc -p scripts
-      bunx --no-install tsc -p src/packages/shared
+      bun run tsc -p src/apps/extension
+      bun run tsc -p tests/browser
+      bun run tsc -p tests/interop
+      bun run tsc -p tests/harness
+      bun run tsc -p scripts
+      bun run tsc -p src/packages/shared
     options:
       mutex: 'generated-contract'
 
@@ -408,13 +409,12 @@ tasks:
       runDepsInParallel: false
 
   gen-shared:
-    # The scripts spawn `cargo run --frozen` for the emitters: the header's convention for a cargo-spawning script.
     description: 'Regenerate the TS contract modules from the Rust core (src/packages/shared/src/*.gen.ts)'
     script: |
       set -e
       bun scripts/gen-ops.ts
       bun scripts/gen-envelope.ts
-      bunx --no-install biome format --write \
+      bun run biome format --write \
         src/packages/shared/src/ops.gen.ts \
         src/packages/shared/src/identity.gen.ts \
         src/packages/shared/src/errors.gen.ts \
@@ -542,7 +542,7 @@ tasks:
     command: 'bun scripts/check-moon-hasher.ts'
 
   check-moon-edges:
-    description: "The header's first three rules, read from moon's resolved task graph: bunx takes --no-install, and the gate's graph holds only own-toolchain commands (cargo verbs with --frozen, no bun install)"
+    description: "The header's first three rules, read from moon's resolved task graph: no bunx anywhere, and the gate's graph holds only own-toolchain commands (cargo verbs with --frozen, no bun install)"
     script: |
       set -e
       bun scripts/check-moon-edges.ts

@@ -43,9 +43,9 @@ tasks:
 
   lint:
     description: "Biome lint for the shared package"
-    # Same invocation shape as the repo-wide gate (`bunx --no-install biome lint .` from
+    # Same invocation shape as the repo-wide gate (`bun run biome lint .` from
     # the root), scoped to this project so config resolution is identical.
-    command: 'bunx --no-install biome lint $projectSource'
+    command: 'bun run biome lint $projectSource'
     inputs:
       - '**/*'
       - '!**/node_modules/**'
