@@ -5,7 +5,7 @@
 //!
 //! ```text
 //! stderr via log::audit             -> hidden below BB_LOG=info; the FILE is the audit surface, not a diagnostic
-//! runtime_dir()/audit.log, 0600     -> one JSON line per record regardless of BB_LOG, rotated once to audit.log.1,
+//! <runtime dir>/audit.log, 0600     -> one JSON line per record regardless of BB_LOG, rotated once to audit.log.1,
 //!                                      read back by [`read`] (behind `chromium-bridge audit`)
 //! failed write                      -> bumps a process-local counter; the next written record carries dropped: n
 //! rotation                          -> its own NON-BLOCKING sidecar lock (audit.log.lock, see append_at), so it can
@@ -240,8 +240,8 @@ impl AuditRecord {
 }
 
 /// Path of the live audit file in the 0700 per-user runtime directory.
-pub fn audit_path() -> PathBuf {
-    ipc::runtime_dir().join("audit.log")
+pub fn audit_path() -> io::Result<PathBuf> {
+    Ok(ipc::RuntimeDir::ensure()?.join("audit.log"))
 }
 
 /// Path of the single rotated file.
@@ -272,7 +272,7 @@ pub fn record(mut rec: AuditRecord) {
 
     let outcome = serde_json::to_vec(&rec).map(|mut line| {
         line.push(b'\n');
-        append_at(&audit_path(), &line, AUDIT_MAX_BYTES)
+        audit_path().and_then(|path| append_at(&path, &line, AUDIT_MAX_BYTES))
     });
     if !matches!(outcome, Ok(Ok(()))) {
         // Re-arm the count we optimistically claimed, plus this record.
@@ -431,7 +431,7 @@ pub enum AuditEntry {
 /// Read the newest `limit` lines of the trail. Only an unreadable file is an
 /// error; a trail that does not exist yet is an empty page.
 pub fn read(limit: usize) -> io::Result<AuditPage> {
-    read_at(&audit_path(), limit)
+    read_at(&audit_path()?, limit)
 }
 
 fn read_at(live: &Path, limit: usize) -> io::Result<AuditPage> {

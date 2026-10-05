@@ -682,7 +682,7 @@ fn wire_name_list(fields: &[PolicyField]) -> String {
         .join(",")
 }
 
-/// Store, history, and seam tests. Every disk-touching test points `runtime_dir()` at its own scratch directory
+/// Store, history, and seam tests. Every disk-touching test points the runtime dir at its own scratch directory
 /// through `RuntimeDirGuard` (test_support.rs); signing outcomes come from `presence::policy_test_hook`, never a
 /// real prompt (the real backend is compiled out under cfg(test)).
 #[cfg(test)]

@@ -499,15 +499,15 @@ mod tests {
     /// tampering evidence survives and the record keeps failing every read closed.
     #[test]
     fn mutate_refuses_an_unreadable_record_and_leaves_its_bytes_alone() {
-        let _dir = scratch_runtime_dir("trust-mutate-unreadable");
+        let _dir = scratch_runtime_dir();
         let garbage = b"{ this is not json".to_vec();
-        std::fs::write(Trust::path(), &garbage).unwrap();
+        std::fs::write(Trust::path().unwrap(), &garbage).unwrap();
         let err = crate::ipc::with_runtime_lock(|lock| {
             Trust::mutate_locked(lock, Scope::Kill, |t| t.killed = true)
         })
         .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{err}");
-        assert_eq!(std::fs::read(Trust::path()).unwrap(), garbage);
+        assert_eq!(std::fs::read(Trust::path().unwrap()).unwrap(), garbage);
         assert!(
             TrustState::current().is_err(),
             "the record keeps failing closed"

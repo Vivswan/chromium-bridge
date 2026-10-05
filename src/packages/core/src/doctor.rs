@@ -11,6 +11,7 @@
 //!                    fresh machine IS the registration (docs/cli.md)
 //! ```
 
+use std::io;
 use std::path::PathBuf;
 
 use serde::Serialize;
@@ -18,13 +19,13 @@ use serde::Serialize;
 use crate::browsers::{self, BaseDirs, ExtensionPointer, Os};
 use crate::cli::DoctorCommand;
 use crate::identity::NATIVE_HOST_ID;
-use crate::ipc::{resolve_runtime_dir, LockFile};
+use crate::ipc::{LockFile, RuntimeDir};
 use crate::policy::{PolicyStatusReport, PolicyStoreState};
 use crate::registration::{self, PointerState, RegState};
 
 /// Schema version of the serialized [`Report`]. Like every `--json` report of
 /// this binary, a consumer checks `v` first and refuses a newer value.
-pub const REPORT_VERSION: u32 = 1;
+pub const REPORT_VERSION: u32 = 2;
 
 /// Plain facts gathered for the report, free of I/O so every renderer over it is pure. The serialized form is
 /// what `doctor --json` prints and what other readers of the host's health consume.
@@ -34,12 +35,11 @@ pub struct Report {
     pub version: &'static str,
     pub os: &'static str,
     pub arch: &'static str,
-    #[serde(serialize_with = "crate::audit::serialize_path_lossy")]
-    pub lock_path: PathBuf,
-    /// The lock file, classified once at gather time. Each state carries
-    /// exactly the facts it has - contradictory reports (an endpoint without
-    /// a lock file, a parse error beside a pid) cannot be constructed.
-    pub lock: LockState,
+    /// The lock file, located and classified once at gather time, or the reason the runtime dir itself was
+    /// refused (a socket path too long to bind), under which no lock can exist. Each state carries exactly
+    /// the facts it has - contradictory reports (an endpoint without a lock file, a parse error beside a
+    /// pid) cannot be constructed.
+    pub lock: Result<LockReport, String>,
     /// Per known browser: detection and manifest registration, in
     /// `Browser::ALL` order - or the reason the check could not run at all
     /// (e.g. no HOME).
@@ -53,6 +53,15 @@ pub struct Report {
     /// is a present-but-unreadable store), so no outer `Result` is needed -
     /// `gather_policy_status` never fails.
     pub policy: PolicyStatusReport,
+}
+
+/// Where the lock file resolves and what was found there.
+#[derive(Debug, Clone, Serialize)]
+pub struct LockReport {
+    #[serde(serialize_with = "crate::audit::serialize_path_lossy")]
+    pub path: PathBuf,
+    #[serde(flatten)]
+    pub state: LockState,
 }
 
 /// The lock file's classification: exactly absent, present-but-unreadable, or
@@ -162,26 +171,30 @@ pub(crate) fn gather_manifests() -> Result<Vec<ManifestStatus>, String> {
 
 /// Gather the report by reading (never mutating) local state.
 pub fn gather() -> Report {
-    let lock = match LockFile::read() {
-        Ok(Some(lf)) => LockState::Present {
-            reachable: crate::ipc::probe_endpoint(&lf.endpoint),
-            secret_len: lf.secret.len(),
-            pid: lf.pid,
-            endpoint: lf.endpoint,
-        },
-        Ok(None) => LockState::Absent,
-        // File exists but did not read/parse. Present-but-broken.
-        Err(e) => LockState::Unreadable {
-            detail: e.to_string(),
-        },
-    };
+    let lock = RuntimeDir::ensure()
+        .map(|dir| LockReport {
+            path: LockFile::path_in(&dir),
+            state: match LockFile::read() {
+                Ok(Some(lf)) => LockState::Present {
+                    reachable: crate::ipc::probe_endpoint(&lf.endpoint),
+                    secret_len: lf.secret.len(),
+                    pid: lf.pid,
+                    endpoint: lf.endpoint,
+                },
+                Ok(None) => LockState::Absent,
+                // File exists but did not read/parse. Present-but-broken.
+                Err(e) => LockState::Unreadable {
+                    detail: e.to_string(),
+                },
+            },
+        })
+        .map_err(|e| e.to_string());
 
     Report {
         v: REPORT_VERSION,
         version: env!("CARGO_PKG_VERSION"),
         os: std::env::consts::OS,
         arch: std::env::consts::ARCH,
-        lock_path: LockFile::path(),
         lock,
         manifests: gather_manifests(),
         kill: crate::kill::is_killed().map_err(|e| e.to_string()),
@@ -195,38 +208,12 @@ fn render(r: &Report) -> String {
     out.push_str(&format!("chromium-bridge doctor - v{}\n", r.version));
     out.push_str(&format!("platform:        {}/{}\n", r.os, r.arch));
 
-    out.push_str(&format!("lock file:       {}\n", r.lock_path.display()));
     match &r.lock {
-        LockState::Unreadable { detail } => {
-            out.push_str(&format!("  present but unreadable: {detail}\n"));
+        Err(detail) => {
+            out.push_str(&format!("lock file:       none ({detail})\n"));
+            out.push_str("mcp server:      not probed (no runtime dir)\n");
         }
-        LockState::Present {
-            endpoint,
-            pid,
-            secret_len,
-            ..
-        } => {
-            out.push_str("  present: yes\n");
-            out.push_str(&format!("  endpoint: {endpoint}\n"));
-            out.push_str(&format!("  pid:     {pid}\n"));
-            out.push_str(&format!("  secret:  <redacted, {secret_len} chars>\n"));
-        }
-        LockState::Absent => {
-            out.push_str("  present: no (MCP server not running?)\n");
-        }
-    }
-
-    out.push_str("mcp server:      ");
-    match &r.lock {
-        LockState::Present {
-            reachable: true, ..
-        } => out.push_str("reachable (socket connect OK)\n"),
-        LockState::Present {
-            reachable: false, ..
-        } => out.push_str("not reachable\n"),
-        LockState::Absent | LockState::Unreadable { .. } => {
-            out.push_str("not probed (no lock file)\n")
-        }
+        Ok(lock) => render_lock(&mut out, lock),
     }
 
     out.push_str("kill switch:     ");
@@ -269,7 +256,7 @@ fn render(r: &Report) -> String {
             }
         }
         PolicyStatusReport::Error { detail, .. } => out.push_str(&format!(
-            "present but UNREADABLE ({detail}) - failing closed; see docs/troubleshooting.md\n",
+            "UNREADABLE ({detail}) - failing closed; see docs/troubleshooting.md\n",
         )),
     }
 
@@ -318,8 +305,49 @@ fn render(r: &Report) -> String {
     out
 }
 
+fn render_lock(out: &mut String, lock: &LockReport) {
+    out.push_str(&format!("lock file:       {}\n", lock.path.display()));
+    match &lock.state {
+        LockState::Unreadable { detail } => {
+            out.push_str(&format!("  present but unreadable: {detail}\n"));
+        }
+        LockState::Present {
+            endpoint,
+            pid,
+            secret_len,
+            ..
+        } => {
+            out.push_str("  present: yes\n");
+            out.push_str(&format!("  endpoint: {endpoint}\n"));
+            out.push_str(&format!("  pid:     {pid}\n"));
+            out.push_str(&format!("  secret:  <redacted, {secret_len} chars>\n"));
+        }
+        LockState::Absent => {
+            out.push_str("  present: no (MCP server not running?)\n");
+        }
+    }
+
+    out.push_str("mcp server:      ");
+    match &lock.state {
+        LockState::Present {
+            reachable: true, ..
+        } => out.push_str("reachable (socket connect OK)\n"),
+        LockState::Present {
+            reachable: false, ..
+        } => out.push_str("not reachable\n"),
+        LockState::Absent | LockState::Unreadable { .. } => {
+            out.push_str("not probed (no lock file)\n")
+        }
+    }
+}
+
 /// One-line status summary and the derived exit code hint.
 fn summary(r: &Report) -> &'static str {
+    // A refused runtime dir is the one cause behind an unreadable kill state and policy store too, so it is
+    // named first.
+    let Ok(lock) = &r.lock else {
+        return "runtime dir refused - see the lock file line for the cause";
+    };
     if r.kill == Ok(true) {
         return "kill switch ENGAGED - release it with `chromium-bridge unkill`";
     }
@@ -332,7 +360,7 @@ fn summary(r: &Report) -> &'static str {
     if r.policy.store() == PolicyStoreState::Error {
         return "policy store present but unreadable - failing closed; see docs/troubleshooting.md";
     }
-    match &r.lock {
+    match &lock.state {
         LockState::Unreadable { .. } => {
             "lock file present but unreadable - try restarting your MCP client"
         }
@@ -383,14 +411,15 @@ fn run_list() -> i32 {
     0
 }
 
-/// `doctor --paths`: the two paths through the pure resolver; [`resolve_runtime_dir`] owns why it must stay pure.
-fn paths_report() -> String {
-    let dir = resolve_runtime_dir();
-    format!(
+/// `doctor --paths`: the two paths through the pure resolver, which [`RuntimeDir::resolve`] keeps pure; a
+/// refused runtime dir is the refusal itself.
+fn paths_report() -> io::Result<String> {
+    let dir = RuntimeDir::resolve()?;
+    Ok(format!(
         "runtime dir:     {}\nlock file:       {}\n",
-        dir.display(),
+        dir.as_path().display(),
         LockFile::path_in(&dir).display()
-    )
+    ))
 }
 
 /// Entry point for the `doctor` / `status` subcommand. Returns the process
@@ -398,10 +427,16 @@ fn paths_report() -> String {
 pub fn run(command: DoctorCommand) -> i32 {
     match command {
         DoctorCommand::List => run_list(),
-        DoctorCommand::Paths => {
-            print!("{}", paths_report());
-            0
-        }
+        DoctorCommand::Paths => match paths_report() {
+            Ok(text) => {
+                print!("{text}");
+                0
+            }
+            Err(e) => {
+                eprintln!("doctor: {e}");
+                1
+            }
+        },
         DoctorCommand::Fix(targets) => registration::run_fix(&targets),
         DoctorCommand::Report { json } => {
             let report = gather();
@@ -431,13 +466,15 @@ mod tests {
             version: "1.2.3",
             os: "macos",
             arch: "aarch64",
-            lock_path: PathBuf::from("/tmp/run.lock"),
-            lock: LockState::Present {
-                endpoint: "/tmp/chromium-bridge/run.sock".into(),
-                pid: 4242,
-                secret_len: 32,
-                reachable: true,
-            },
+            lock: Ok(LockReport {
+                path: PathBuf::from("/tmp/run.lock"),
+                state: LockState::Present {
+                    endpoint: "/tmp/chromium-bridge/run.sock".into(),
+                    pid: 4242,
+                    secret_len: 32,
+                    reachable: true,
+                },
+            }),
             manifests: Ok(vec![
                 ManifestStatus {
                     key: "chrome",
@@ -540,7 +577,7 @@ mod tests {
         let mut r = healthy_report();
         r.policy = policy_report(PolicyStoreState::Error);
         let text = render(&r);
-        assert!(text.contains("present but UNREADABLE"));
+        assert!(text.contains("UNREADABLE ("));
         assert!(text.contains("policy store present but unreadable - failing closed"));
         assert_eq!(exit_code(&r), 1);
     }
@@ -563,8 +600,10 @@ mod tests {
             version: "1.2.3",
             os: "linux",
             arch: "x86_64",
-            lock_path: PathBuf::from("/run/user/1000/chromium-bridge.lock"),
-            lock: LockState::Absent,
+            lock: Ok(LockReport {
+                path: PathBuf::from("/run/user/1000/chromium-bridge.lock"),
+                state: LockState::Absent,
+            }),
             manifests: Ok(vec![ManifestStatus {
                 key: "chrome",
                 detected: true,
@@ -594,13 +633,47 @@ mod tests {
         assert_eq!(exit_code(&r), 1);
     }
 
+    /// Regression: with the kill check first, a refused runtime dir read as "kill state unreadable", since the kill
+    /// record resolves the same dir.
+    #[test]
+    fn a_refused_runtime_dir_is_the_verdict_not_an_unreadable_kill_state() {
+        let refused = "runtime dir refused: the bridge socket path /tmp/x/run.sock is 104 bytes, over the 103-byte sun_path limit; point XDG_RUNTIME_DIR at a shorter directory".to_string();
+        let mut r = healthy_report();
+        r.lock = Err(refused.clone());
+        r.kill = Err(refused.clone());
+        r.policy = PolicyStatusReport::Error {
+            v: 1,
+            detail: refused.clone(),
+        };
+        let text = render(&r);
+        assert!(
+            text.contains(&format!("lock file:       none ({refused})\n")),
+            "{text}"
+        );
+        assert!(
+            text.contains("mcp server:      not probed (no runtime dir)\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!(
+                "policy baseline: UNREADABLE ({refused}) - failing closed"
+            )),
+            "{text}"
+        );
+        assert!(
+            text.ends_with("\nruntime dir refused - see the lock file line for the cause\n"),
+            "{text}"
+        );
+        assert_eq!(exit_code(&r), 1);
+    }
+
     /// tests/protocol/harness.py refuses a misrouted binary on what `doctor --paths` prints, before any child
     /// runs; that holds only while the resolver creates nothing, so an absent runtime dir must stay absent here.
     #[test]
     fn paths_name_an_absent_runtime_dir_without_creating_it() {
-        let guard = crate::test_support::scratch_runtime_dir("doctor-paths");
+        let guard = crate::test_support::scratch_runtime_dir();
         let absent = guard.point_at_absent("never-made");
-        let text = paths_report();
+        let text = paths_report().unwrap();
         let dir = absent.join("chromium-bridge");
         assert_eq!(
             text,
@@ -644,7 +717,7 @@ mod tests {
         // External fact the probe rests on: a pipe name exists only while a
         // server holds an instance, so opening it succeeds against a live
         // broker and fails once the listener is gone.
-        let _dir = crate::test_support::scratch_runtime_dir("doctor-probe");
+        let _dir = crate::test_support::scratch_runtime_dir();
         let crate::ipc::PublishOutcome::Published(listener, lock) =
             crate::ipc::listen_and_publish().unwrap()
         else {
