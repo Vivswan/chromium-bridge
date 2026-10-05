@@ -77,4 +77,4 @@ Both are described in [cli.md](./cli.md) and the [security page](./security.md).
 | Homebrew | `brew uninstall chromium-bridge` |
 | archive | delete the extracted directory |
 
-Enrollment state is separate: `chromium-bridge revoke --all` deletes the host key and forgets every browser and trusted client, and the extension's options page clears its pin.
+Pairing state is separate: `chromium-bridge revoke --all` deletes the host key and forgets every browser and trusted client, and the extension's options page clears its pin; the authenticators enrolled in step 6 live in the host's trust record, and `revoke <browser>` forgets one browser's alone.

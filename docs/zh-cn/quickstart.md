@@ -77,4 +77,4 @@ CLI 只需要二进制本身, 在桌面机、无头机器和 CI 上都一样。
 | Homebrew | `brew uninstall chromium-bridge` |
 | 压缩包 | 删除解压出的目录 |
 
-登记状态是独立的: `chromium-bridge revoke --all` 删除主机密钥并忘记每一个浏览器和受信任客户端, 扩展的选项页清除其固定的指纹。
+配对状态是独立的: `chromium-bridge revoke --all` 删除主机密钥并忘记每一个浏览器和受信任客户端, 扩展的选项页清除其固定的指纹; 第 6 步登记的认证器保存在主机的信任记录中, `revoke <browser>` 只忘记一个浏览器的。

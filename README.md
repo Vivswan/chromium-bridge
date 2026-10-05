@@ -1,16 +1,20 @@
 # chromium-bridge
 
-Let any MCP client (Claude Code, Claude Desktop, Codex, or anything that speaks the Model Context Protocol) drive your real Chromium browser: your tabs, your logged-in sessions, your cookies, through a browser extension and a native-messaging host. No second browser, no CDP debug port, no `--remote-debugging` flag.
+[![CI](https://github.com/Vivswan/chromium-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/Vivswan/chromium-bridge/actions/workflows/ci.yml) [![License](https://img.shields.io/badge/license-Individual%20and%20Small%20Organization%201.1.0-blue)](./LICENSE.md)
 
-Because it operates the browser you are already signed into, an agent can do what a fresh headless browser cannot:
+English | [Simplified Chinese](./README.zh-cn.md) | [Traditional Chinese](./README.zh-tw.md)
 
-- read a page behind your auth;
-- click through an app you are logged into;
-- pull a token your framework stashed in `localStorage`.
+A program you installed cannot use your browser without you noticing. Under that bar, chromium-bridge lets any MCP client (Claude Code, Claude Desktop, Codex, or anything that speaks the Model Context Protocol) drive your real Chromium browser: your tabs, your logged-in sessions, your cookies, through a browser extension and a native-messaging host. No second browser, no CDP debug port, no `--remote-debugging` flag.
 
-That power is also the risk. Read [Security first](#security-first) before you install.
+Because it operates the browser you are already signed into, an agent can read a page behind your auth, click through an app you are logged into, or pull a token your framework stashed in `localStorage`. That power is also the risk, so read [Security first](#security-first) before you install. Where the bar stops is stated on [the security page](./docs/security.md).
 
-The bar this project holds itself to: a program you installed cannot use your browser without you noticing, held today on macOS, Linux, and Windows ([the security page](./docs/security.md) states it, and where it stops).
+## Features
+
+- **Your real browser, not a headless one:** 26 tools over tabs, pages, cookies, and storage, each with a stated risk level and gate ([below](#what-you-can-do-26-tools)).
+- **Guardrails on by default:** per-site approval, confirmation of the dangerous actions in a window no page can reach, presence by WebAuthn, a kill switch, an audit trail ([Security first](#security-first)).
+- **An authenticated, attested bridge** between the MCP server and the browser's host, with no listening port ([How it works](#how-it-works)).
+- **Several clients at once,** each attested and individually revocable.
+- **One binary, three roles:** the MCP server, the native-messaging host, and the CLI that installs, pairs, kills, and audits.
 
 ## Security first
 
@@ -25,7 +29,7 @@ chromium-bridge drives a real, authenticated browser. It can read page content, 
 - **Trusted-client allowlist.** MCP clients are admitted against an allowlist keyed on attested code identity, and any side can revoke trust at any time.
 - **A global kill switch.** One action from the CLI or the extension halts everything until you release it with proof of presence (a tap, the confirmation window where that browser enrolled no authenticator, or the typed phrase on a terminal). Every security decision lands in an on-disk audit trail.
 
-**Platform honesty.** The bridge guarantees hold on macOS, Linux, and Windows; the mechanism behind each differs per OS ([SECURITY.md](./.github/SECURITY.md#platform-support)).
+The bridge guarantees hold on macOS, Linux, and Windows; the mechanism behind each differs per OS ([SECURITY.md](./.github/SECURITY.md#platform-support)).
 
 | Platform | Bridge transport | What gates a connection |
 |---|---|---|
@@ -34,9 +38,22 @@ chromium-bridge drives a real, authenticated browser. It can read page content, 
 
 Full details: [SECURITY.md](./.github/SECURITY.md), [security page](./docs/security.md), [trust boundaries](./docs/security/trust-boundaries.md), [per-tool risk matrix](./docs/security/tool-risk-matrix.md).
 
-## Quickstart with the CLI (macOS, Linux, Windows)
+## Requirements
 
-The CLI needs nothing beyond the binary itself, on desktops, headless machines, and CI alike. The steps in full, with the install channels and what each does for you, are in [docs/quickstart.md](./docs/quickstart.md); the short form:
+| | Supported |
+|---|---|
+| macOS | Apple Silicon (arm64) prebuilt; Intel builds from source |
+| Linux | x64 prebuilt; any Chromium-based browser |
+| Windows | x64 prebuilt (native, no admin); a user-only named pipe with mutual attestation ([SECURITY.md](./.github/SECURITY.md#platform-support)) |
+| Browser | any Chromium-based browser, Manifest V3: `chrome`, `chromium`, `brave`, `edge`, `vivaldi`, `opera` are the known `--browser` keys; on macOS and Linux another variant registers through `doctor --fix --manifest-dir <dir>`, while Windows registration is an HKCU key for the known browsers |
+| MCP client | any client speaking MCP protocol `2026-07-28` over stdio |
+| Internal bridge protocol | `1` (`BRIDGE_PROTOCOL_VERSION` in [src/packages/core/src/protocol.rs](./src/packages/core/src/protocol.rs)) |
+
+Pre-1.0 ([Cargo.toml](./Cargo.toml)): the protocol layers are covered by end-to-end, adversarial, and chaos tests, and the wire parsers are fuzzed ([CHANGELOG.md](./CHANGELOG.md)).
+
+## Quick start
+
+The CLI needs nothing beyond the binary itself, on desktops, headless machines, and CI alike. The steps in full, with the install channels and what each does for you, are in [the quickstart](./docs/quickstart.md); the short form:
 
 1. Install from the [latest release](https://github.com/Vivswan/chromium-bridge/releases/latest): the `.pkg`, the `.msi`, the `.deb`, Homebrew, or the archive. To verify a download first, the commands are in [SECURITY.md](./.github/SECURITY.md#release-artifact-integrity).
 
@@ -53,123 +70,37 @@ The CLI needs nothing beyond the binary itself, on desktops, headless machines, 
 
 4. Pair and enroll: `chromium-bridge pair` prints the host key's fingerprint; approve it on the extension's options page, then enroll your browser's authenticator from the same page ([docs/cli.md](./docs/cli.md#enrollment-pair--revoke--enclave-status)).
 
-5. Connect your MCP client to the binary's absolute path, as below.
+5. Connect your MCP client to the binary's absolute path (most clients do not expand `~`). Run with no arguments, the binary speaks MCP over stdio.
 
-Building from source instead: `cargo build --release`, then run the same `doctor --fix` from `target/release/chromium-bridge` (see [docs/development.md](./docs/development.md)).
+   ```sh
+   claude mcp add chromium-bridge -- /absolute/path/to/chromium-bridge
+   ```
 
-The full CLI (doctor, pairing, revocation, kill switch, audit) is documented in [docs/cli.md](./docs/cli.md).
+   Claude Desktop and other `mcpServers` JSON clients take `"command": "/ABSOLUTE/PATH/TO/chromium-bridge"` with `"args": []`; Codex takes the same two keys under `[mcp_servers.chromium-bridge]` in `~/.codex/config.toml`.
 
-## Connect your MCP client
-
-Point your client at the installed binary. Run with no arguments, it speaks MCP over stdio. Use an absolute path; most clients do not expand `~`.
-
-Claude Code:
-
-```sh
-claude mcp add chromium-bridge -- /absolute/path/to/chromium-bridge
-```
-
-Claude Desktop and other `mcpServers` JSON clients:
-
-```json
-{
-  "mcpServers": {
-    "chromium-bridge": {
-      "command": "/ABSOLUTE/PATH/TO/chromium-bridge",
-      "args": []
-    }
-  }
-}
-```
-
-Codex (`~/.codex/config.toml`):
-
-```toml
-[mcp_servers.chromium-bridge]
-command = "/absolute/path/to/chromium-bridge"
-args = []
-```
-
-Several clients can be connected at once: the first server instance becomes a broker and later instances attach to it, each one attested and individually revocable.
-
-On WSL, install where the browser runs ([running under WSL](./docs/troubleshooting.md#running-under-wsl)):
-
-- Windows Chrome as your everyday browser: install on Windows and point the WSL client at the `.exe` via `/mnt/c`; do not install a Linux host.
-- Chrome under WSLg: install natively in Linux.
+Building from source instead: `cargo build --release`, then run the same `doctor --fix` from `target/release/chromium-bridge` ([docs/development.md](./docs/development.md)). On WSL, install where the browser runs ([running under WSL](./docs/troubleshooting.md#running-under-wsl)).
 
 ## What you can do: 26 tools
 
-Grouped from the single source of truth, the Rust tool catalogue ([`src/packages/core/src/tools/catalogue.rs`](./src/packages/core/src/tools/catalogue.rs)). Full blast-radius detail per tool is in the [tool risk matrix](./docs/security/tool-risk-matrix.md).
+Grouped from the single source of truth, the Rust tool catalogue ([`src/packages/core/src/tools/catalogue.rs`](./src/packages/core/src/tools/catalogue.rs)); the blast radius and the gate of every tool are in the [tool risk matrix](./docs/security/tool-risk-matrix.md).
 
-### Browsers
+| Group | Tools | Risk |
+|---|---|---|
+| Browsers | `list_browsers` | low |
+| Tabs | `tab_list`, `tab_focus`, `tab_open`; `tab_close` confirms | low to high |
+| Navigate | `page_navigate`, `page_back`, `page_forward`, `page_reload` | low to medium |
+| Inspect a page | `page_snapshot`, `page_snapshot_precise`, `page_text`, `page_screenshot`, `console_get` | low to medium |
+| Drive a page | `page_click`, `page_fill`, `page_press`, `page_select`, `page_hover`, `page_scroll`, `page_wait_for`, `page_handle_dialog`; submit clicks, key presses, and selects confirm, and dialog handling is off by default | low to high |
+| Run code and upload | `page_eval` (off by default; every call confirms, showing the full code), `page_upload` (off by default; every call confirms with the path) | critical |
+| Read credentials | `cookie_get` (including `httpOnly`, allowlisted hosts only), `storage_get` (same-origin); read-only, always masked | high |
 
-| Tool | Does | Risk |
-|------|------|------|
-| `list_browsers` | List the browsers connected to the bridge (label + open-tab count) | low |
-
-Several browsers can be connected at once; on macOS/Linux each gets its own native host and label (for example `chrome` and `brave`). Every other tool takes an optional `browser` argument to pick one. With several connected, an unaddressed call fails with a clear error rather than guessing which logged-in browser to act in.
-
-### Tabs
-
-| Tool | Does | Risk |
-|------|------|------|
-| `tab_list` | List open tabs (id, title, url, active) | low |
-| `tab_focus` | Bring a tab to the foreground | low |
-| `tab_open` | Open a URL in a new tab (host must be allowlisted) | medium |
-| `tab_close` | Close a tab (confirmation window) | high |
-
-### Navigate
-
-| Tool | Does | Risk |
-|------|------|------|
-| `page_navigate` | Load an http(s) URL in the active tab | medium |
-| `page_back` / `page_forward` | Step through history | low |
-| `page_reload` | Reload the active tab | low |
-
-### Inspect a page
-
-| Tool | Does | Risk |
-|------|------|------|
-| `page_snapshot` | Accessibility-style tree of interactive elements, each with a stable `ref` | low |
-| `page_snapshot_precise` | Authoritative a11y tree via `chrome.debugger` (shadow DOM / complex ARIA); refs use a `p` prefix | medium |
-| `page_text` | Visible page text (passwords and card-like numbers masked) | medium |
-| `page_screenshot` | Visible viewport as a PNG | medium |
-| `console_get` | Recent console output, masked | medium |
-
-### Drive a page
-
-| Tool | Does | Risk |
-|------|------|------|
-| `page_click` | Click by `ref` or `selector`; submit/link clicks require confirmation | high |
-| `page_fill` | Type into a field (native setter, so React/Vue detect it) | high |
-| `page_press` | Send a key or combo (confirmation) | high |
-| `page_select` | Choose an option in a `<select>` (confirmation) | high |
-| `page_hover` | Move the pointer over an element | low |
-| `page_scroll` | Up / down / top / bottom / N pixels | low |
-| `page_wait_for` | Wait for a selector, text, or navigation | low |
-| `page_handle_dialog` | Accept or dismiss a JS dialog (off by default) | high |
-
-### Run code and upload (highest risk)
-
-| Tool | Does | Risk |
-|------|------|------|
-| `page_eval` | Execute arbitrary JS. Off by default; every call confirms, showing the full code. Return value masked by default. Prefer the tools above. | critical |
-| `page_upload` | Attach a named local file to a file input (off by default; every call confirms with the path) | critical |
-
-### Read credentials (read-only, always masked)
-
-| Tool | Does | Risk |
-|------|------|------|
-| `cookie_get` | Read cookies for the active tab, incl. `httpOnly`; allowlisted hosts only | high |
-| `storage_get` | Read the page's `localStorage` / `sessionStorage` (same-origin) | high |
-
-No write tools by design; cookie/storage writes are out of scope: a forged httpOnly cookie is a session-fixation risk (the [tool risk matrix](./docs/security/tool-risk-matrix.md) has the full reason).
+Several browsers can be connected at once; on macOS and Linux each gets its own native host and label (for example `chrome` and `brave`), every other tool takes an optional `browser` argument, and an unaddressed call with several connected fails with a clear error rather than guessing. No write tools exist by design: a forged `httpOnly` cookie is a session-fixation risk.
 
 ## How it works
 
-One Rust binary, two modes, joined by an authenticated local socket. The CLI manages the state.
+One Rust binary, two modes, joined by an authenticated local socket; the CLI manages the state.
 
-```
+```text
 MCP client A --stdio--> chromium-bridge (broker: first MCP server instance)
 MCP client B --stdio--> chromium-bridge ----attach----^   |
 (each client attested against the trusted-client         | bridge socket
@@ -184,30 +115,11 @@ MCP client B --stdio--> chromium-bridge ----attach----^   |
                              Chromium Bridge extension (MV3) --> your page
 ```
 
-- **MCP server (default mode)**: launched by your MCP client over stdio. Speaks JSON-RPC 2.0 (MCP protocol `2026-07-28`, stateless, with temporary legacy compatibility for older harnesses).
-  - The first instance owns the socket and becomes the broker; later instances attach as relays, so several clients share the browsers concurrently.
-- **`--native-host`**: launched by the browser via the host manifest. A thin bridge translating Chrome's native-messaging frames to NDJSON on the socket.
-  - Each installed browser launches its own host with its own label, so one broker can address several browsers by name.
-- **CLI**: the management surface over the same core (registration, pairing, revocation, kill switch, audit). It is not a trust root; capability-granting acts end in a user-presence gate.
+- **MCP server (default mode):** launched by your MCP client over stdio; JSON-RPC 2.0, MCP protocol `2026-07-28`, stateless, with temporary legacy compatibility for older harnesses. The first instance owns the socket and becomes the broker; later instances attach as relays.
+- **`--native-host`:** launched by the browser via the host manifest, one per browser with its own label; a thin bridge from Chrome's native-messaging frames to NDJSON on the socket.
+- **CLI:** the management surface over the same core (registration, pairing, revocation, kill switch, audit). It is not a trust root; capability-granting acts end in a user-presence gate.
 
-**Why two processes?** The browser spawns the native host and the MCP client spawns the server, so they are not parent and child and need an IPC. The native host stays thin so that MV3 service-worker recycling (about every 5 minutes) and host restarts do not lose session state.
-
-Deep dive: [docs/architecture.md](./docs/architecture.md).
-
-## Compatibility
-
-| | Supported |
-|---|---|
-| macOS | Apple Silicon (arm64) prebuilt; Intel builds from source. |
-| Linux | x64 prebuilt; any Chromium-based browser; CLI management surface. |
-| Windows | x64 prebuilt (native, no admin). The bridge is a user-only named pipe with mutual attestation; see [SECURITY.md](./.github/SECURITY.md#platform-support). |
-| Browser | Any Chromium-based browser, Manifest V3 |
-| MCP protocol | `2026-07-28` |
-| Internal bridge protocol | `1` (`BRIDGE_PROTOCOL_VERSION` in [src/packages/core/src/protocol.rs](./src/packages/core/src/protocol.rs)) |
-
-Known browsers (`--browser` keys): `chrome`, `chromium`, `brave`, `edge`, `vivaldi`, `opera`. Every Chromium browser reads the same native-messaging manifest; only the per-user `NativeMessagingHosts` location differs, and the shared resolver in the core knows them all.
-
-For a Chromium variant not in that list, `doctor --fix --manifest-dir <dir>` targets its directory explicitly (macOS/Linux; on Windows registration is an HKCU registry key). See [docs/cli.md](./docs/cli.md).
+The browser spawns the native host and the MCP client spawns the server, so they are not parent and child and need an IPC; the host stays thin so that MV3 service-worker recycling (about every 5 minutes) and host restarts lose no session state. The deep dive is [docs/architecture.md](./docs/architecture.md).
 
 ## Configuration
 
@@ -218,65 +130,26 @@ Environment variables read at launch:
 | `BB_LOG` | `error` \| `warn` \| `info` \| `debug` | `info` | stderr log / audit threshold |
 | `BB_LOG_FORMAT` | `text` \| `json` | `text` | Audit-line format; `json` emits one object per line |
 
-The durable audit trail (`chromium-bridge audit`) records independently of these; see [docs/cli.md](./docs/cli.md#logging-and-audit-bb_log--bb_log_format).
+The durable audit trail (`chromium-bridge audit`) records independently of these ([docs/cli.md](./docs/cli.md#logging-and-audit-bb_log--bb_log_format)).
 
-## Troubleshooting
+## Documentation
 
-Run the built-in read-only self-check first:
+The docs are served at <https://vivswan.github.io/chromium-bridge/docs/>, in English, Simplified Chinese, and Traditional Chinese; the same pages live under [docs/](./docs/README.md).
 
-```sh
-chromium-bridge doctor    # or: chromium-bridge status
-```
-
-It reports whether the server is reachable, the lock-file state, the kill switch, and each browser's registration state; `doctor --fix` repairs registrations in place. If that is clean, check:
-
-- your MCP client's server UI (reconnect via `/mcp` in Claude Code);
-- the extension's service-worker console at `chrome://extensions` (look for `[bb]` logs).
-
-Full runbook: [docs/cli.md](./docs/cli.md) and [docs/troubleshooting.md](./docs/troubleshooting.md).
-
-## Docs map
-
-| Doc | What's in it |
-|-----|--------------|
-| [docs/quickstart.md](./docs/quickstart.md) | Install and first use |
-| [docs/architecture.md](./docs/architecture.md) | Components, data flow, protocols, security model, key constraints |
-| [docs/security/](./docs/security/) | Trust boundaries ledger, tool risk matrix, rationale, incident response; the reader page is [docs/security.md](./docs/security.md) |
-| [docs/cli.md](./docs/cli.md) | The full CLI: doctor/--fix, uninstall, pairing, revocation, kill switch, audit |
-| [docs/troubleshooting.md](./docs/troubleshooting.md) | Symptom by symptom: doctor rows, kill-record recovery, version skew, the two WSL modes |
-| [docs/release.md](./docs/release.md) | Release-please releases, prebuilt archives + checksums, SBOM, which version moves when |
-| [docs/security/rationale.md](./docs/security/rationale.md) | Why each security decision was taken, and what was rejected |
-
-<details>
-<summary>Testing and project layout</summary>
-
-Independent suites across two languages ([tests/README.md](./tests/README.md)):
-
-| Suite | Where | What it does |
-|---|---|---|
-| Protocol | `tests/protocol/e2e.py` (plus `adversarial.py` and `chaos.py`) | Drives the real binary over the actual wire protocols |
-| Browser | `tests/browser/run_all.ts`: the DOM, smoke, security, WebAuthn, and cancel suites | Isolated Chrome only: the content script via CDP, the built extension's service worker, the browser-side security proofs, the WebAuthn client, the cancel frame |
-| Real integration (opt-in) | `tests/browser/integration_e2e.ts` with `BB_REAL_E2E=1` | End to end against a real setup |
-
-Layout:
-
-| Path | What lives there |
+| I want to | Page |
 |---|---|
-| `src/apps/host` | the Rust binary |
-| `src/apps/extension` | the MV3 extension (WXT) |
-| `src/packages/core` | the Rust library and the single source for cross-process contracts |
-| `src/packages/shared` | generated TS contracts + validators |
-
-</details>
-
-## Project status
-
-Pre-1.0 ([Cargo.toml](./Cargo.toml)). The protocol layers are covered by end-to-end, adversarial, and chaos tests; the wire parsers are fuzzed. See [CHANGELOG.md](./CHANGELOG.md).
+| Install and connect a client | [Quickstart](https://vivswan.github.io/chromium-bridge/docs/quickstart) |
+| Understand what a tool may do | [Tool risk matrix](https://vivswan.github.io/chromium-bridge/docs/security/tool-risk-matrix) |
+| Run the CLI: doctor, pairing, trusted clients, kill switch, policy, audit | [CLI](https://vivswan.github.io/chromium-bridge/docs/cli) |
+| Fix a symptom | `chromium-bridge doctor` first, then [Troubleshooting](https://vivswan.github.io/chromium-bridge/docs/troubleshooting); if both are clean, your MCP client's server UI (`/mcp` in Claude Code) and the extension's service-worker console at `chrome://extensions` (`[bb]` logs) |
+| Know what is trusted, and what is not | [Security](https://vivswan.github.io/chromium-bridge/docs/security), [trust boundaries](https://vivswan.github.io/chromium-bridge/docs/security/trust-boundaries), [rationale](https://vivswan.github.io/chromium-bridge/docs/security/rationale) |
+| See how the pieces fit | [Architecture](https://vivswan.github.io/chromium-bridge/docs/architecture) |
+| Build, test, or release it | [Development](https://vivswan.github.io/chromium-bridge/docs/development), [Releasing](https://vivswan.github.io/chromium-bridge/docs/release) |
 
 ## Contributing and governance
 
-[CONTRIBUTING.md](./CONTRIBUTING.md) (workflow), [GOVERNANCE.md](./GOVERNANCE.md) (how changes get made), [SECURITY.md](./.github/SECURITY.md) (reporting + review bar), [docs/development.md](./docs/development.md) (build/test/release loop).
+[CONTRIBUTING.md](./CONTRIBUTING.md) is the workflow, [GOVERNANCE.md](./GOVERNANCE.md) how changes get made, [SECURITY.md](./.github/SECURITY.md) the reporting channel and the review bar, and [tests/README.md](./tests/README.md) the suites and the browser-safety rule.
 
 ## License
 
-[Individual and Small Organization License 1.0.0](./LICENSE.md). Incorporates code from [browser-bridge](https://github.com/whg517/browser-bridge) under Apache-2.0; see [LICENSE-APACHE](./LICENSE-APACHE) and [NOTICE](./NOTICE).
+[Individual and Small Organization License 1.1.0](./LICENSE.md). Incorporates code from [browser-bridge](https://github.com/whg517/browser-bridge) under Apache-2.0; see [LICENSE-APACHE](./LICENSE-APACHE) and [NOTICE](./NOTICE).

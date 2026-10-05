@@ -77,4 +77,4 @@ CLI 只需要執行檔本身, 在桌面、無頭機器與 CI 上都一樣。
 | Homebrew | `brew uninstall chromium-bridge` |
 | 壓縮檔 | 刪除解壓出來的目錄 |
 
-登記狀態是分開的: `chromium-bridge revoke --all` 刪除主機金鑰並忘記每一個瀏覽器與受信任用戶端, 擴充功能的選項頁面則清除其固定的金鑰。
+配對狀態是分開的: `chromium-bridge revoke --all` 刪除主機金鑰並忘記每一個瀏覽器與受信任用戶端, 擴充功能的選項頁面則清除其固定的金鑰; 步驟 6 登記的認證器保存在主機的信任記錄中, `revoke <browser>` 只忘記一個瀏覽器的。
