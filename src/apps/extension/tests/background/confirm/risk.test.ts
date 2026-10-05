@@ -7,27 +7,16 @@ function target(over: Partial<ClickProbe>): ClickProbe {
 }
 
 describe("isHighRiskClick", () => {
-  test("submit buttons are high-risk", () => {
-    expect(isHighRiskClick(target({ tagName: "BUTTON", role: "button", type: "submit" }))).toBe(
-      true,
-    );
-  });
-
-  test("non-submit buttons are not high-risk", () => {
-    expect(isHighRiskClick(target({ tagName: "BUTTON", role: "button", type: "button" }))).toBe(
-      false,
-    );
-    expect(isHighRiskClick(target({ tagName: "BUTTON", role: "button", type: "" }))).toBe(false);
-  });
-
-  test("anchors with href and link roles are high-risk", () => {
-    expect(isHighRiskClick(target({ tagName: "A", hasHref: true }))).toBe(true);
-    expect(isHighRiskClick(target({ role: "link" }))).toBe(true);
-  });
-
-  test("anchors without href and plain elements are not", () => {
-    expect(isHighRiskClick(target({ tagName: "A", hasHref: false }))).toBe(false);
-    expect(isHighRiskClick(target({ tagName: "SPAN" }))).toBe(false);
+  test.each([
+    ["a submit button", { tagName: "BUTTON", role: "button", type: "submit" }, true],
+    ["a type=button button", { tagName: "BUTTON", role: "button", type: "button" }, false],
+    ["a typeless button", { tagName: "BUTTON", role: "button", type: "" }, false],
+    ["an anchor with href", { tagName: "A", hasHref: true }, true],
+    ["a link role", { role: "link" }, true],
+    ["an anchor without href", { tagName: "A", hasHref: false }, false],
+    ["a plain span", { tagName: "SPAN" }, false],
+  ] satisfies Array<[string, Partial<ClickProbe>, boolean]>)("%s", (_case, over, expected) => {
+    expect(isHighRiskClick(target(over))).toBe(expected);
   });
 });
 

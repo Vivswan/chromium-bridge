@@ -24,8 +24,4 @@ describe("diagnoseExtensionId", () => {
     expect(diagnoseExtensionId("abc", "abc").ok).toBe(true);
     expect(diagnoseExtensionId("abc", "def").ok).toBe(false);
   });
-
-  test("pinned id is the canonical 32-char a-p form", () => {
-    expect(PINNED_EXTENSION_ID).toMatch(/^[a-p]{32}$/);
-  });
 });

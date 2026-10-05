@@ -63,9 +63,7 @@ interface Contract {
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-// The Rust core is the source: run its contract emitter. `-q` keeps cargo's
-// own output off the pipe; a compile error still lands on stderr and fails
-// loudly here.
+// `-q` keeps cargo's own output off the pipe; a compile error still lands on stderr and fails loudly here.
 const emitted = Bun.spawnSync(
   ["cargo", "run", "-q", "-p", "chromium-bridge-core", "--example", "emit_contract"],
   { cwd: root, stderr: "inherit" },
@@ -75,9 +73,7 @@ if (!emitted.success) {
 }
 const contract = JSON.parse(emitted.stdout.toString()) as Contract;
 
-// Emit an object key: bare when it is a valid JS identifier (matches Biome's
-// quoteProperties: "as-needed", keeping gen output format-stable), quoted
-// otherwise.
+// Bare when a valid JS identifier, quoted otherwise: Biome's quoteProperties "as-needed" would reformat anything else.
 const emitKey = (key: string): string =>
   /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? key : JSON.stringify(key);
 
@@ -85,8 +81,7 @@ const emitKey = (key: string): string =>
 
 const opNames = contract.tools.map((t) => JSON.stringify(t.name)).join(",\n  ");
 
-// Distinct values for each metadata field, so the unions stay in sync with
-// the catalogue (add a new risk level in catalogue.rs and it appears here).
+// The unions follow the catalogue: a new risk level in catalogue.rs appears here unasked.
 const distinct = (key: "risk" | "scope" | "permission" | "confirmation") =>
   [...new Set(contract.tools.map((t) => t[key]))]
     .sort()
@@ -105,9 +100,8 @@ const meta = contract.tools
   )
   .join("\n");
 
-// Per-op Zod arg validators: each tool's args struct schema through the envelope generator's fail-closed
-// rules (G1-G5 in scripts/gen-envelope.ts), so a struct the rules cannot model faithfully aborts generation
-// here too. Strict objects, required fields required, no defaults: the same frame the Rust reader accepts.
+// Each tool's args schema goes through the envelope generator's fail-closed rules (scripts/gen-envelope.ts), so a
+// struct the rules cannot model faithfully aborts generation here too.
 const preparedArgs = new Map<string, Record<string, unknown>>();
 for (const t of contract.tools) {
   const prepared = prepare(t.argsSchema, `$.tools.${t.name}.args`);
@@ -126,9 +120,7 @@ const argSchemas = contract.tools
   .map((t) => `  ${emitKey(t.name)}: ${convert(preparedArgsOf(t), `${t.name} args`)},`)
   .join("\n");
 
-// The envelope-level OpArgs union: every tool's props merged, all optional
-// (per-op required-ness is the per-op validators' job). A prop declared by
-// two tools must agree on its schema, otherwise the union is ill-formed.
+// A prop declared by two tools must agree on its schema, otherwise the OpArgs union is ill-formed.
 const unionProps = new Map<string, unknown>();
 for (const t of contract.tools) {
   const props = preparedArgsOf(t).properties as Record<string, unknown>;
@@ -147,8 +139,7 @@ const opArgsFields = [...unionProps.entries()]
   .map(([k, prop]) => `  ${emitKey(k)}: ${convert(prop, `OpArgs.${k}`)}.optional(),`)
   .join("\n");
 
-// The per-tool capability grants, as policy wire names. Emitted with a compile-time pin against the
-// generated policy contract, so a grant can only ever name a boolean policy field.
+// Emitted with a compile-time pin against the policy contract, so a grant can only ever name a boolean policy field.
 const grants = contract.tools
   .map((t) => `  ${emitKey(t.name)}: [${t.grants.map((g) => JSON.stringify(g)).join(", ")}],`)
   .join("\n");
@@ -157,13 +148,8 @@ const opsOut = `// GENERATED from the Rust core (src/packages/core/src/tools/cat
 // args.rs) by scripts/gen-ops.ts - DO NOT EDIT. Edit the catalogue, then run
 // \`moon run gen\`.
 //
-// The tool catalogue, TS side: op names, policy metadata (risk / scope /
-// permission / confirmation), the per-tool capability grants, and the per-op
-// Zod arg validators the extension enforces at the native-messaging boundary
-// (derived from the Rust args structs, the same structs the Rust reader
-// parses). BridgeCommand (the discriminated request union) is INFERRED from
-// the validators, so the compile-time types and the runtime checks cannot
-// drift apart.
+// The tool catalogue, TS side. The per-op Zod validators derive from the same Rust args structs the Rust reader
+// parses, and BridgeCommand is INFERRED from them, so the compile-time types and the runtime checks cannot drift.
 
 import { z } from "zod";
 import type { PolicyFieldName, PolicyValues } from "./policy.gen";
@@ -180,8 +166,7 @@ export function isOpName(op: string): op is OpName {
   return OP_NAME_SET.has(op);
 }
 
-// Policy metadata, mirrored from the catalogue. Consumed by the policy layer
-// (background/policy.ts) - kept as plain data so it stays import-side-effect-free.
+// Plain data, so importing it has no side effect.
 export type Risk = ${distinct("risk")};
 export type Scope = ${distinct("scope")};
 export type Permission = ${distinct("permission")};
@@ -198,40 +183,30 @@ export const TOOL_META: Readonly<Record<OpName, ToolMeta>> = {
 ${meta}
 };
 
-// The policy fields whose value is a plain boolean: the only shape a grant
-// may have, so enforcement's \`=== true\` reads stay type-honest.
+// A grant may only name a boolean policy field, so enforcement's \`=== true\` reads stay type-honest.
 type BooleanPolicyField = {
   [K in PolicyFieldName]: PolicyValues[K] extends boolean ? K : never;
 }[PolicyFieldName];
 
-// A tool's own capability grants (Tool::grants in catalogue.rs): every one
-// must be true in the effective policy for the tool to run. The background
-// enforcement (confirm/gate.ts, upload.ts, dialog.ts) indexes this table, so
-// a gated tool cannot gain an enforcement gate the policy contract does not
-// carry. The extension's handlers check only the tool's own grants; the host
-// is the cdpMode gate (Tool::required_grants adds it for every debugger-backed
+// A tool's own grants (Tool::grants in catalogue.rs), every one required true for the tool to run. The extension's
+// handlers check only these; the host is the cdpMode gate (Tool::required_grants adds it for every debugger-backed
 // tool).
 export const TOOL_GRANTS = {
 ${grants}
 } as const satisfies Readonly<Record<OpName, readonly BooleanPolicyField[]>>;
 
-// Per-op arg validators, derived from each tool's args struct. The
-// extension parses an inbound request's args against its op's validator
-// before dispatching - fail closed.
+// The extension parses an inbound request's args against its op's validator before dispatching, fail closed.
 export const OP_ARG_SCHEMAS = {
 ${argSchemas}
 } as const satisfies Readonly<Record<OpName, z.ZodType>>;
 
-// Per-op request shapes, inferred from the validators. Discriminated on \`op\`,
-// so consumers (background/dispatch.ts) narrow the args to exactly the fields
-// that tool accepts. envelope.ts intersects this with the request envelope to
-// form BridgeReq.
+// Discriminated on \`op\`, so a consumer narrows the args to exactly the fields that tool accepts. envelope.ts
+// intersects this with the request envelope to form BridgeReq.
 export type BridgeCommand = {
   [K in OpName]: { op: K; args: z.infer<(typeof OP_ARG_SCHEMAS)[K]> };
 }[OpName];
 
-// The envelope-level args bag: the union of every tool's args props, all
-// optional (the per-op validators enforce required-ness).
+// Every tool's args props, all optional; the per-op validators enforce required-ness.
 export const OpArgsSchema = z
   .object({
 ${opArgsFields}
@@ -261,9 +236,8 @@ const errorMeta = contract.errors
 const errorsOut = `// GENERATED from the Rust core (src/packages/core/src/error.rs ERROR_SPECS) by
 // scripts/gen-ops.ts - DO NOT EDIT. Edit the taxonomy, then run \`moon run gen\`.
 //
-// Only the Rust server assigns these codes today: the extension reports its failures as free-form strings
-// (port.ts sendResponse), which the host surfaces as EXECUTION_FAILED, so nothing on the TS side consumes them
-// yet. PROTOCOL_MISMATCH awaits the version/capability handshake wiring (docs/compatibility.md).
+// Only the Rust server assigns these codes: the extension reports its failures as free-form strings, which the host
+// surfaces as EXECUTION_FAILED.
 
 export const ERROR_CODES = [
   ${errorCodes},
@@ -294,8 +268,7 @@ console.log("generated src/packages/shared/src/errors.gen.ts from the Rust taxon
 
 // ---- protocol.gen.ts --------------------------------------------------------
 
-// The MCP revision is a date string pinned by the spec; anything else means
-// the emitter and this generator disagree about the field.
+// The MCP revision is a date string by spec; anything else means the emitter and this generator disagree.
 if (!/^\d{4}-\d{2}-\d{2}$/.test(contract.mcpProtocolVersion)) {
   throw new Error(
     `gen-ops: mcpProtocolVersion ${JSON.stringify(contract.mcpProtocolVersion)} is not a date string`,
@@ -317,29 +290,21 @@ const protocolOut = `// GENERATED from the Rust core (src/packages/core/src/prot
 // src/packages/core/src/tools/capabilities.rs) by scripts/gen-ops.ts - DO NOT EDIT.
 // Run \`moon run gen\`.
 
-// The INTERNAL bridge protocol version (MCP server <-> native host <->
-// extension). Not the MCP JSON-RPC version and not the extension release
-// version; bumped only when the bridge wire contract changes incompatibly.
+// The INTERNAL bridge protocol version (MCP server <-> native host <-> extension), bumped only when the bridge wire
+// contract changes incompatibly. Not the MCP JSON-RPC version, not the extension release version.
 export const BRIDGE_PROTOCOL_VERSION = ${contract.protocolVersion};
 
-// The newest MCP JSON-RPC protocol revision the Rust server serves
-// (protocol.rs MCP_PROTOCOL_VERSION): advertised by \`server/discover\` in
-// \`supportedVersions\`.
+// The newest MCP JSON-RPC revision the Rust server serves, advertised by \`server/discover\` in \`supportedVersions\`.
 export const MCP_PROTOCOL_VERSION = ${JSON.stringify(contract.mcpProtocolVersion)};
 
-// The \`_meta\` key strings of the stateless era, single-sourced from
-// protocol.rs. Every stateless request's \`params._meta\` MUST carry
-// BOTH the protocol version and the client capabilities (an empty object
-// suffices); the server/discover result carries the server identity under
-// the serverInfo key.
+// Every stateless request's \`params._meta\` MUST carry BOTH the protocol version and the client capabilities (an
+// empty object suffices); the server/discover result carries the server identity under the serverInfo key.
 export const MCP_META_PROTOCOL_VERSION = ${JSON.stringify(contract.mcpMetaKeys.protocolVersion)};
 export const MCP_META_CLIENT_CAPABILITIES = ${JSON.stringify(contract.mcpMetaKeys.clientCapabilities)};
 export const MCP_META_SERVER_INFO = ${JSON.stringify(contract.mcpMetaKeys.serverInfo)};
 
-// The capability groupings for connection-time negotiation: each capability
-// covers a set of tools sharing a Chrome permission. On connect the extension
-// advertises which capability ids are actually available; a tool is callable
-// only if its capability is advertised.
+// Each capability covers the tools sharing one Chrome permission. On connect the extension advertises which ids are
+// available; a tool is callable only if its capability is advertised.
 export interface CapabilityInfo {
   id: string;
   permissions: readonly string[];
@@ -360,8 +325,7 @@ const { extensionManifestKey, nativeMessagingHostId, pinnedExtensionId } = contr
 if (typeof extensionManifestKey !== "string" || extensionManifestKey.length === 0) {
   throw new Error("gen-ops: the emitted contract has no extensionManifestKey");
 }
-// Chrome's id derivation: sha256 of the DER key, first 16 bytes, hex mapped
-// onto a-p.
+// Chrome's id derivation: sha256 of the DER key, first 16 bytes, hex mapped onto a-p.
 const hex = createHash("sha256")
   .update(Buffer.from(extensionManifestKey, "base64"))
   .digest("hex")
@@ -370,17 +334,14 @@ const extensionId = [...hex]
   .map((digit) => String.fromCharCode(97 + Number.parseInt(digit, 16)))
   .join("");
 
-// The Rust core also pins the derived id as a constant (identity.rs, used by
-// the registration engine's allowed_origins). It must be exactly what the
-// key derives, or the pin has drifted from the key.
+// identity.rs pins the derived id too (the registration engine's allowed_origins); a drift from the key fails here.
 if (pinnedExtensionId !== extensionId) {
   throw new Error(
     `gen-ops: identity.rs PINNED_EXTENSION_ID=${pinnedExtensionId} but the key derives ${extensionId}`,
   );
 }
 
-// Chrome's charset for host names: dot-separated segments of [a-z0-9_], so
-// no leading/trailing dots and no empty segments.
+// Chrome's charset for host names: dot-separated segments of [a-z0-9_].
 if (
   typeof nativeMessagingHostId !== "string" ||
   !/^[a-z0-9_]+(\.[a-z0-9_]+)*$/.test(nativeMessagingHostId)
@@ -391,23 +352,17 @@ if (
 const identityOut = `// GENERATED from the Rust core (src/packages/core/src/identity.rs) by
 // scripts/gen-ops.ts - DO NOT EDIT. Run \`moon run gen\`.
 //
-// The bridge's identity constants. PINNED_EXTENSION_ID is DERIVED from
-// EXTENSION_MANIFEST_KEY (Chrome's own id derivation), so it cannot drift
-// from the generated manifest. scripts/check-extension-id.ts verifies the
-// built manifest against the same values.
+// PINNED_EXTENSION_ID is DERIVED from EXTENSION_MANIFEST_KEY by Chrome's own id derivation, so it cannot drift from
+// the generated manifest; scripts/check-extension-id.ts verifies the built manifest against the same values.
 
-// The extension ID Chrome derives from the manifest \`key\`. The native-
-// messaging host manifest pins this in \`allowed_origins\`, so a build without
-// the pinned key is rejected by the host.
+// The native-messaging host manifest pins this in \`allowed_origins\`, so a build without the key is rejected.
 export const PINNED_EXTENSION_ID = ${JSON.stringify(extensionId)};
 
-// The extension's pinned manifest \`key\` (base64 DER public key).
-// src/apps/extension/wxt.config.ts injects it into the generated manifest.
+// The manifest \`key\` (base64 DER public key); src/apps/extension/wxt.config.ts injects it into the manifest.
 export const EXTENSION_MANIFEST_KEY =
   ${JSON.stringify(extensionManifestKey)};
 
-// The native-messaging host id: what the extension passes to connectNative,
-// what the Rust host expects, and the host manifest's name/filename stem.
+// What the extension passes to connectNative, what the Rust host expects, and the host manifest's name stem.
 export const NATIVE_HOST_ID = ${JSON.stringify(nativeMessagingHostId)};
 `;
 
@@ -415,15 +370,13 @@ writeFileSync(join(root, "src/packages/shared/src/identity.gen.ts"), identityOut
 console.log("generated src/packages/shared/src/identity.gen.ts from the Rust core");
 
 // ---- audit.gen.ts -------------------------------------------------------------
-// Self-contained: consumes only contract.auditForwardedKinds.
 
 const forwardedKinds = contract.auditForwardedKinds;
 if (!Array.isArray(forwardedKinds) || forwardedKinds.length === 0) {
   throw new Error("gen-ops: the emitted contract has no auditForwardedKinds");
 }
 for (const kind of forwardedKinds) {
-  // The kinds are serde snake_case wire names; anything else means the
-  // emitter and this generator disagree about the field.
+  // serde snake_case wire names; anything else means the emitter and this generator disagree.
   if (typeof kind !== "string" || !/^[a-z][a-z0-9_]*$/.test(kind)) {
     throw new Error(
       `gen-ops: auditForwardedKinds carries a non-snake_case kind ${JSON.stringify(kind)}`,
@@ -438,10 +391,8 @@ const auditOut = `// GENERATED from the Rust core (src/packages/core/src/audit.r
 // EXTENSION_AUDIT_KINDS) by scripts/gen-ops.ts - DO NOT EDIT. Edit the kind
 // list, then run \`moon run gen\`.
 //
-// The audit kinds the host accepts over the extension's audit_event control
-// frame (audit::extension_kind). The extension's forwarding set
-// (background/audit-log.ts) and the forwarded prefix of its audit-ring
-// vocabulary (shared/enclave.ts AUDIT_EVENT_KINDS) build on this, so the two
+// The audit kinds the host accepts over the audit_event control frame (audit::extension_kind). The extension's
+// forwarding set (background/audit-log.ts) and its ring vocabulary (shared/enclave.ts) build on this, so the two
 // sides of the forwarding boundary cannot drift apart.
 
 export const AUDIT_FORWARDED_KINDS = [
@@ -455,7 +406,7 @@ writeFileSync(join(root, "src/packages/shared/src/audit.gen.ts"), auditOut);
 console.log("generated src/packages/shared/src/audit.gen.ts from the Rust audit whitelist");
 
 // ---- host.gen.ts ---------------------------------------------------------------
-// Self-contained: consumes only contract.host. Structural sanity only; the values are the Rust side's.
+// Structural sanity only; the values are the Rust side's.
 
 const envName = z.string().regex(/^[A-Z][A-Z0-9_]*$/);
 const lowerWords = z
@@ -497,10 +448,8 @@ const hostOut = `// GENERATED from the Rust core (enclave/mod.rs KEY_LABEL, ipc/
 // DEFAULT_AUDIT_LIMIT, browsers.rs Browser::ALL) by scripts/gen-ops.ts - DO NOT
 // EDIT. Run \`moon run gen\`.
 //
-// The host's user-facing constants: the names and values the living docs
-// state and the CLI prints. scripts/check-docs-literals.ts holds the docs to
-// these, so a rename in the Rust core fails the docs gate instead of leaving
-// a troubleshooting page quietly wrong.
+// The host's user-facing constants. scripts/check-docs-literals.ts holds the docs to these, so a rename in the Rust
+// core fails the docs gate instead of leaving a troubleshooting page quietly wrong.
 
 // The keychain label of the enclave signing key.
 export const KEYCHAIN_LABEL = ${JSON.stringify(keychainLabel)};
@@ -529,9 +478,7 @@ export const BROWSER_KEYS = [${wordList(browserKeys)}] as const;
 writeFileSync(join(root, "src/packages/shared/src/host.gen.ts"), hostOut);
 console.log("generated src/packages/shared/src/host.gen.ts from the Rust core");
 // ---- enclave.gen.ts + enclave-fixture.gen.ts --------------------------------
-// Self-contained section: the enclave signing contract has its own Rust
-// emitter (examples/emit_enclave_contract.rs) so this block shares no state
-// with the emit_contract flow above.
+// Its own Rust emitter (examples/emit_enclave_contract.rs); shares no state with the emit_contract flow above.
 
 interface EnclaveVector {
   domain: "challenge" | "presence";
@@ -577,9 +524,7 @@ if (!enclaveEmitted.success) {
 }
 const enclave = JSON.parse(enclaveEmitted.stdout.toString()) as EnclaveContract;
 
-// Structural sanity only - the values themselves are the Rust side's to
-// choose. Anything malformed here would generate a silently weaker verifier,
-// so fail generation instead.
+// Structural sanity only; anything malformed would generate a silently weaker verifier, so generation fails.
 for (const domain of [enclave.challengeDomain, enclave.presenceDomain]) {
   if (typeof domain !== "string" || domain.length === 0 || domain.includes("\0")) {
     throw new Error(`gen-ops: malformed enclave domain string ${JSON.stringify(domain)}`);
@@ -615,10 +560,7 @@ for (const v of enclave.fixture.vectors) {
 if (!/^[0-9a-f]{64}$/.test(enclave.fixture.keyIdHex)) {
   throw new Error("gen-ops: the fixture key id is not a lowercase-hex SHA-256");
 }
-// The policy vectors must actually be POLICY_DOMAIN messages over their own
-// document bytes: messageHex is hex(domain) || 00 || hex(doc), and the doc is
-// JSON (the strict parse itself is replayed in policy.gen.test.ts against
-// the generated PolicyDocSchema).
+// Each policy vector is a POLICY_DOMAIN message over its own document bytes: hex(domain) || 00 || hex(doc), doc JSON.
 if (enclave.policyFixture.vectors.length === 0) {
   throw new Error("gen-ops: the policy golden fixture has no vectors");
 }
@@ -634,10 +576,8 @@ for (const v of enclave.policyFixture.vectors) {
   JSON.parse(docBytes.toString("utf8"));
 }
 
-// String emitter for every emitted enclave string: JSON.stringify plus \u
-// escapes for everything non-ASCII, so a non-ASCII value (deliberate in the
-// multi-byte UTF-8 vectors, accidental anywhere else) keeps the generated
-// file plain ASCII instead of tripping the typography gate downstream.
+// \u-escapes everything non-ASCII (deliberate in the multi-byte UTF-8 vectors), so the generated file stays plain
+// ASCII for the typography gate.
 const emitAsciiString = (s: string): string =>
   JSON.stringify(s).replace(
     /[\u0080-\uffff]/g,
@@ -650,33 +590,25 @@ const enclaveOut = `// GENERATED from the Rust core (src/packages/core/src/encla
 // pubkey.rs, der.rs, and mod.rs REASON_CODES) by scripts/gen-ops.ts - DO NOT
 // EDIT. Edit the enclave module, then run \`moon run gen\`.
 //
-// The enclave signing contract, TS side: the constants the extension's
-// WebCrypto verifier (background/enclave-verify.ts) and the enrollment state
-// machine (background/enrollment.ts) enforce. The signed-message ALGORITHM
-// (NUL-separated domain || nonce || context, ECDSA P-256/SHA-256) is pinned
-// separately by the golden vectors in enclave-fixture.gen.ts.
+// The enclave signing contract, TS side: the constants the WebCrypto verifier (background/enclave-verify.ts) and the
+// enrollment state machine (background/enrollment.ts) enforce. The signed-message ALGORITHM is pinned separately by
+// the golden vectors in enclave-fixture.gen.ts.
 
-// Domain-separation prefixes: enrollment challenge signatures and per-action
-// user-presence signatures sign under distinct domains, so the two statement
-// types can never be replayed as one another.
+// Enrollment challenges and per-action presence sign under distinct domains, so neither can be replayed as the other.
 export const CHALLENGE_DOMAIN = ${emitAsciiString(enclave.challengeDomain)};
 export const PRESENCE_DOMAIN = ${emitAsciiString(enclave.presenceDomain)};
 
-// Host-enforced bounds on challenge fields, in UTF-8 bytes (Rust's
-// MAX_NONCE_LEN / MAX_CONTEXT_LEN). The verifier rejects anything outside
-// them before touching the crypto.
+// Host-enforced bounds on challenge fields, in UTF-8 bytes; the verifier rejects anything outside them before the crypto.
 export const MAX_NONCE_BYTES = ${enclave.maxNonceLen};
 export const MAX_CONTEXT_BYTES = ${enclave.maxContextLen};
 
-// Wire byte lengths of the proof fields: the X9.63 uncompressed P-256 point
-// and the raw IEEE P1363 r||s signature.
+// The X9.63 uncompressed P-256 point and the raw IEEE P1363 r||s signature.
 export const PUBKEY_LEN = ${enclave.pubkeyLen};
 export const SIG_LEN = ${enclave.sigLen};
 
-// The closed set of enclave_error.reason codes the host can emit
-// (reason_code in src/packages/core/src/enclave/mod.rs; append-only). The
-// enrollment state machine branches on these - its compromise latch fires on
-// a subset - so an unrecognized code must degrade to a refusal, never match.
+// The closed, append-only set of enclave_error.reason codes (reason_code in src/packages/core/src/enclave/mod.rs).
+// The enrollment state machine's compromise latch fires on a subset, so an unrecognized code must degrade to a
+// refusal, never match.
 export const ENCLAVE_REASON_CODES = [
   ${reasonCodes},
 ] as const;
@@ -689,12 +621,9 @@ export function isEnclaveReasonCode(reason: string): reason is EnclaveReasonCode
   return ENCLAVE_REASON_SET.has(reason);
 }
 
-// Fingerprint of the PUBLIC golden-fixture signing key (FIXTURE_KEY_BYTES /
-// FIXTURE_KEY_ID in src/packages/core/src/enclave/mod.rs). Its private
-// scalar is checked into the repo, so anyone can sign fresh challenges with
-// it: it must never become an enrollment identity. The pairing verifier
-// (background/enclave-verify.ts) and the stored-pin validators (enclave.ts)
-// refuse it fail-closed; the host refuses it in EnrollmentKey::public_key.
+// Fingerprint of the PUBLIC golden-fixture key (FIXTURE_KEY_ID in src/packages/core/src/enclave/mod.rs). Its private
+// scalar is checked into the repo, so it must never become an enrollment identity: the pairing verifier
+// (background/enclave-verify.ts), the stored-pin validators (enclave.ts), and the host all refuse it.
 export const ENCLAVE_FIXTURE_KEY_ID =
   ${JSON.stringify(enclave.fixture.keyIdHex)};
 `;
@@ -730,13 +659,10 @@ const fixtureOut = `// GENERATED from the Rust core (examples/emit_enclave_contr
 // src/packages/core/src/enclave/) by scripts/gen-ops.ts - DO NOT EDIT.
 // Run \`moon run gen\`.
 //
-// Golden vectors pinning the cross-language enclave crypto contract: Rust-built message bytes signed with
-// deterministic (RFC 6979) software-P256 signatures, replayed by tests/background/enclave-golden.test.ts through
-// the extension's WebCrypto verifier, so a Rust-side encoding change that outruns the TS verifier fails the
-// replay. The key protects nothing and is deny-listed as an enrollment identity on both sides
-// (ENCLAVE_FIXTURE_KEY_ID in enclave.gen.ts).
-//
-// Test-only data: production code never imports this module.
+// Golden vectors pinning the cross-language enclave crypto contract: Rust-built message bytes with deterministic
+// (RFC 6979) P-256 signatures, replayed through the extension's WebCrypto verifier, so a Rust-side encoding change
+// that outruns the TS verifier fails the replay. The key protects nothing and is deny-listed as an enrollment
+// identity on both sides (ENCLAVE_FIXTURE_KEY_ID in enclave.gen.ts). Test-only: production code never imports this.
 
 export interface EnclaveGoldenVector {
   /** Which domain-separation prefix the message was built under. */
@@ -766,12 +692,8 @@ ${vectorItems}
   ],
 };
 
-// The POLICY_DOMAIN vectors: signed policy baselines over the same fixture key.
-// Each message is the Rust policy_message (POLICY_DOMAIN || 0x00 || the exact
-// document bytes), docB64 is those exact bytes as the wire \`baseline\` carries
-// them, and the document strict-parses under the generated PolicyDocSchema. The
-// extension's policy golden test replays the full verify-then-parse path
-// through WebCrypto.
+// Signed policy baselines over the same fixture key: each message is POLICY_DOMAIN || 0x00 || the exact document
+// bytes, and docB64 is those bytes as the wire \`baseline\` carries them.
 
 export interface PolicyGoldenVector {
   /** Base64 of the exact signed document bytes (the wire \`baseline\`). */
@@ -804,17 +726,12 @@ console.log(
 );
 
 // ---- policy.gen.ts -----------------------------------------------------------
-// Self-contained section (the enclave pattern): the policy contract has its
-// own Rust emitter (examples/emit_policy_contract.rs). The one deliberate
-// cross-reference is the domain-separation check against the enclave
-// contract parsed above: the policy signing domain must be a THIRD domain,
-// distinct from both enclave domains, or a policy signature could be
+// Its own Rust emitter (examples/emit_policy_contract.rs). The one cross-reference is the domain-separation check
+// against the enclave contract above: the policy domain must be a THIRD domain, or a policy signature could be
 // replayed as an enrollment or presence proof.
 
-// The direction tags each value kind may carry (Rust BoolPole / MsOrder /
-// the single set order). The Rust types make a kind/direction mismatch
-// unrepresentable; this table lets generation refuse an unknown tag with a
-// clear message instead of emitting a table the typed TS object rejects.
+// The direction tags each value kind may carry (Rust BoolPole / MsOrder / the set order), so generation refuses an
+// unknown tag with a clear message instead of emitting a table the typed TS object rejects.
 const POLICY_KIND_DIRECTIONS = {
   bool: ["truePermissive", "falsePermissive"],
   ms: ["growsPermissive", "growsPermissiveZeroTop"],
@@ -852,9 +769,7 @@ if (!policyEmitted.success) {
 }
 const policy = JSON.parse(policyEmitted.stdout.toString()) as PolicyContract;
 
-// Structural sanity only - the values themselves are the Rust side's to
-// choose. Anything malformed here would generate a silently weaker validator
-// or a mislabeled direction table, so fail generation instead.
+// Structural sanity only; anything malformed would generate a silently weaker validator, so generation fails.
 if (
   typeof policy.policyDomain !== "string" ||
   policy.policyDomain.length === 0 ||
@@ -870,9 +785,7 @@ if (
 ) {
   throw new Error("gen-ops: the policy domain must differ from both enclave domains");
 }
-// The policy fixture vectors (enclave-fixture.gen.ts above) sign under the
-// same domain this contract names, or a golden replay would verify against
-// bytes the real push never carries.
+// The fixture vectors must sign under this domain, or a golden replay would verify bytes the real push never carries.
 if (policy.policyDomain !== enclave.policyFixture.policyDomain) {
   throw new Error("gen-ops: the policy fixture signs under a different domain than the contract");
 }
@@ -894,8 +807,8 @@ if (
 ) {
   throw new Error("gen-ops: the disabledTools bounds must be positive integers");
 }
-if (!Array.isArray(policy.fields) || policy.fields.length !== 15) {
-  throw new Error(`gen-ops: expected 15 policy fields, got ${policy.fields?.length}`);
+if (!Array.isArray(policy.fields) || policy.fields.length === 0) {
+  throw new Error("gen-ops: the policy contract carries no fields");
 }
 for (const field of policy.fields) {
   if (typeof field.name !== "string" || !/^[a-z][A-Za-z0-9]*$/.test(field.name)) {
@@ -926,10 +839,7 @@ if (policy.docDefaults.v !== policy.docVersion) {
   throw new Error("gen-ops: the default policy document disagrees with docVersion");
 }
 
-// A field's value kind determines its Zod shape, and the emitted default
-// must already inhabit it. A mismatch means the Rust catalogue and this
-// derivation disagree, so fail generation rather than emit a validator that
-// rejects the defaults.
+// The emitted default must already inhabit the field's Zod shape, or the validator would reject the defaults.
 const policyZodType = (field: PolicyContractField): string => {
   const dflt = policy.defaults[field.name];
   switch (field.kind) {
@@ -991,35 +901,24 @@ const policyOut = `// GENERATED from the Rust core (src/packages/core/src/policy
 
 import { z } from "zod";
 
-// Domain-separation prefix for policy signatures: the enrollment key signs
-// UTF8(POLICY_DOMAIN) || 0x00 || doc_bytes. A third domain, distinct from
-// the enclave challenge and presence domains (generation fails otherwise),
-// so a policy signature can never be replayed as an enrollment or
-// per-action presence proof, nor either of those as a policy.
+// The enrollment key signs UTF8(POLICY_DOMAIN) || 0x00 || doc_bytes. A third domain, distinct from the enclave
+// challenge and presence domains, so a policy signature can never be replayed as either proof, nor they as a policy.
 export const POLICY_DOMAIN = ${JSON.stringify(policy.policyDomain)};
 
-// The policy document schema version. PolicyDocSchema pins it as a literal:
-// a newer document is rejected rather than misinterpreted, the same
-// fail-closed posture as the Rust parser's deny_unknown_fields.
+// PolicyDocSchema pins this as a literal: a newer document is rejected rather than misinterpreted.
 export const POLICY_DOC_VERSION = ${policy.docVersion};
 
-// The JS-safe integer bound (2^53 - 1) on the document's revision counter
-// and (Rust-side, via the same JS_SAFE_INT_MAX) its millisecond fields, so
-// both sides' parsers read the same numbers.
+// The JS-safe integer bound (2^53 - 1) on the revision counter and, Rust-side via JS_SAFE_INT_MAX, the millisecond
+// fields, so both parsers read the same numbers.
 export const POLICY_REVISION_MAX = ${policy.revisionMax};
 
-// Bounds on disabledTools (Rust DISABLED_TOOLS_MAX_ENTRIES /
-// DISABLED_TOOL_NAME_MAX_BYTES), enforced by the schemas below so the two
-// sides' parsers stay equivalent and no list can outgrow the host store's
-// read cap. The Rust bound counts bytes, this one UTF-16 code units; tool
-// names are ASCII identifiers, where the two agree, and elsewhere the Rust
-// side is the stricter, fail-closed one.
+// Bounds on disabledTools, so no list can outgrow the host store's read cap. The Rust bound counts bytes, this one
+// UTF-16 code units; tool names are ASCII identifiers, where the two agree, and elsewhere Rust is the stricter side.
 export const DISABLED_TOOLS_MAX_ENTRIES = ${policy.disabledToolsMaxEntries};
 export const DISABLED_TOOL_NAME_MAX_BYTES = ${policy.disabledToolNameMaxBytes};
 
-// The host-owned policy fields, in the catalogue's declaration order. An
-// unknown name never parses (touched entries ride z.enum over this list),
-// so a touched set cannot smuggle a field the catalogue does not own.
+// In the catalogue's declaration order. touched entries ride z.enum over this list, so a touched set cannot smuggle
+// a field the catalogue does not own.
 export const POLICY_FIELDS = [
   ${policyFieldNameItems},
 ] as const;
@@ -1032,10 +931,8 @@ export function isPolicyFieldName(field: string): field is PolicyFieldName {
   return POLICY_FIELD_SET.has(field);
 }
 
-// The fields by value kind (Rust FieldKind), each list in catalogue order,
-// and the refinement from a field name to its kind-typed handle: a boolean
-// comparison can only ever read a boolean field, so no direction can meet a
-// value of the wrong shape.
+// The fields by value kind (Rust FieldKind) and the refinement from a name to its kind-typed handle, so a boolean
+// comparison can only ever read a boolean field.
 export const BOOL_POLICY_FIELDS = [
 ${policyFieldNamesOfKind("bool")}
 ] as const;
@@ -1068,11 +965,10 @@ ${policyFieldKindCases("toolSet")}
   }
 }
 
-// A field's declared permissive pole (Rust Direction), typed by kind so the
-// table cannot pair a field with a direction of another kind.
+// A field's permissive pole (Rust Direction), typed by kind so the table cannot pair a field with a direction of
+// another kind.
 //   bool    -> "truePermissive" | "falsePermissive" (a skipped confirmation is a grant)
-//   ms      -> "growsPermissive" (a longer window grants) | "growsPermissiveZeroTop"
-//              (hostReverifyMs: 0 = never re-verify = MOST permissive, topping the scale)
+//   ms      -> "growsPermissive" (a longer window grants) | "growsPermissiveZeroTop" (0 = never re-verify = MOST permissive)
 //   toolSet -> "shrinksPermissiveSet" (dropping an entry re-enables a tool)
 export type BoolPole = "truePermissive" | "falsePermissive";
 export type MsOrder = "growsPermissive" | "growsPermissiveZeroTop";
@@ -1086,19 +982,16 @@ export const POLICY_DIRECTIONS: Readonly<
 ${policyDirectionItems}
 };
 
-// The 15 field values, detached from the document's scoping fields (Rust
-// PolicyValues): the shape comparisons and the effective policy work in.
+// The field values without the document's scoping fields (Rust PolicyValues): what comparisons and the effective
+// policy work in.
 export const PolicyValuesSchema = z.strictObject({
 ${policyValueFields}
 });
 
 export type PolicyValues = z.infer<typeof PolicyValuesSchema>;
 
-// The signed policy document (Rust PolicyDoc): the exact bytes the enclave
-// signature covers, strict-parsed only AFTER the signature verifies.
-// \`touched\` is the set of fields the producing write explicitly edited,
-// inside the signed bytes so a fresh signature warrants relaxation on
-// exactly those fields, never on the document at large.
+// The signed policy document (Rust PolicyDoc), strict-parsed only AFTER the signature verifies. \`touched\` sits
+// inside the signed bytes so a fresh signature warrants relaxation on exactly those fields, never the document at large.
 export const PolicyDocSchema = z.strictObject({
   v: z.literal(${policy.docVersion}),
   revision: z.int().nonnegative().max(POLICY_REVISION_MAX),
@@ -1108,22 +1001,17 @@ ${policyValueFields}
 
 export type PolicyDoc = z.infer<typeof PolicyDocSchema>;
 
-// The unsigned restriction overlay (Rust PolicyOverlay): per-field overrides
-// on top of the signed baseline, every field optional, the same per-field
-// bounds as the document (JS-safe millisecond values, the disabledTools
-// caps). Strict on purpose, unlike the R5-loose control-frame wrappers: an
-// overlay field the catalogue does not own fails the whole frame parse,
-// fail closed. Whether a parsed overlay actually RESTRICTS is the
-// consumer's direction check, never this shape's.
+// The unsigned restriction overlay (Rust PolicyOverlay), every field optional under the document's bounds. Strict,
+// unlike the loose control-frame wrappers: an overlay field the catalogue does not own fails the whole frame parse.
+// Whether a parsed overlay actually RESTRICTS is the consumer's direction check, never this shape's.
 export const PolicyOverlaySchema = z.strictObject({
 ${policyOverlayFields}
 });
 
 export type PolicyOverlay = z.infer<typeof PolicyOverlaySchema>;
 
-// Frozen (including the nested array): the pre-cutover posture hands this
-// instance out as the effective policy, so a caller mutating its "copy" must
-// throw instead of quietly rewriting the defaults for everyone after it.
+// Deep-frozen: the pre-cutover posture hands this instance out as the effective policy, so a caller mutating its
+// "copy" must throw instead of rewriting the defaults for everyone after it.
 export const POLICY_DEFAULTS: Readonly<PolicyValues> = deepFreeze(
   PolicyValuesSchema.parse({
 ${policyDefaultItems}
@@ -1135,17 +1023,6 @@ function deepFreeze<T>(value: T): T {
     if (typeof inner === "object" && inner !== null) deepFreeze(inner);
   }
   return Object.freeze(value);
-}
-
-/**
- * Strict parse of the extension's stored effective policy: \`null\` on ANY failure (a corrupt field, a
- * non-object, an extra key), never a salvage, which would hand a corrupted store a relaxation. Its caller,
- * policy-sync.ts classifyStored, reads null as CORRUPT, never absent: the state resolves to compromised, every
- * enforcement read refuses, and no replacement push lands while the record stays corrupt.
- */
-export function parseStoredPolicyValues(stored: unknown): PolicyValues | null {
-  const parsed = PolicyValuesSchema.safeParse(stored);
-  return parsed.success ? parsed.data : null;
 }
 `;
 

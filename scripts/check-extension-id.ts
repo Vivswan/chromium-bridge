@@ -58,12 +58,7 @@ if (existsSync(builtManifestPath)) {
 }
 
 const coreSrc = resolve(root, "src/packages/core/src");
-const identityNames = [
-  "NATIVE_HOST_ID",
-  "HOST_ID",
-  "PINNED_EXTENSION_ID",
-  "EXTENSION_MANIFEST_KEY",
-];
+const identityNames = ["NATIVE_HOST_ID", "PINNED_EXTENSION_ID", "EXTENSION_MANIFEST_KEY"];
 const identityValues = [NATIVE_HOST_ID, PINNED_EXTENSION_ID, EXTENSION_MANIFEST_KEY].map(
   RegExp.escape,
 );

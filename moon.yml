@@ -181,9 +181,9 @@ tasks:
       mutex: 'generated-contract'
 
   check-ts:
-    description: 'Lint + format-check all TS/JS/JSON (biome ci; what `bun run check` delegates to)'
+    description: 'Lint + format-check all TS/JS/JSON, warnings fail (biome ci; what `bun run check` delegates to)'
     deps: ['~:install-deps']
-    command: 'bunx biome ci .'
+    command: 'bunx biome ci . --error-on-warnings'
     inputs: ['**/*', '!**/node_modules/**']
     options:
       mutex: 'generated-contract'

@@ -6,6 +6,7 @@
 
 import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { UI_LANGUAGES } from "@chromium-bridge/shared/settings";
 import { describe, expect, test } from "vitest";
 import { parse } from "yaml";
 
@@ -39,8 +40,9 @@ const flattened = new Map(
 );
 
 describe("locale files", () => {
-  test("ship exactly the three supported locales", () => {
-    expect(localeFiles.sort()).toEqual(["en.yml", "zh_CN.yml", "zh_TW.yml"]);
+  test("ship one file per uiLanguage value the settings schema accepts", () => {
+    const expected = UI_LANGUAGES.filter((lang) => lang !== "auto").map((lang) => `${lang}.yml`);
+    expect([...localeFiles].sort()).toEqual([...expected].sort());
   });
 
   const base = flattened.get(BASE_LOCALE);

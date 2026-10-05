@@ -65,12 +65,12 @@ describe("prepare accepts the shapes schemars actually emits", () => {
         "kind",
         "value",
       ]);
-    const out = prepare({ oneOf: [branch("hash"), branch("team_id")] }, "$") as {
+    const out = prepare({ oneOf: [branch("hash"), branch("label")] }, "$") as {
       oneOf?: unknown;
       anyOf?: unknown;
     };
     expect(out.oneOf).toBeUndefined();
-    expect(out.anyOf).toEqual([branch("hash"), branch("team_id")]);
+    expect(out.anyOf).toEqual([branch("hash"), branch("label")]);
   });
 });
 
@@ -365,9 +365,9 @@ describe("splitFlattenedCommand (G6)", () => {
 
 describe("prepare models string enums (G5 placement)", () => {
   test("a string enum survives and emits z.enum; anything else is refused", () => {
-    const kind = { type: "string", enum: ["hash", "team_id"] };
+    const kind = { type: "string", enum: ["hash", "label"] };
     expect(prepare(kind, "$")).toEqual(kind);
-    expect(convert(prepare(kind, "$"), "t")).toBe('z.enum(["hash", "team_id"])');
+    expect(convert(prepare(kind, "$"), "t")).toBe('z.enum(["hash", "label"])');
     for (const bad of [
       { type: "string", enum: [] },
       { type: "string", enum: ["a", "a"] },
@@ -394,7 +394,7 @@ describe("applyAsymmetries", () => {
             "kind",
             "value",
           ]),
-          strictObject({ kind: { type: "string", const: "team_id" }, value: { type: "string" } }, [
+          strictObject({ kind: { type: "string", const: "label" }, value: { type: "string" } }, [
             "kind",
             "value",
           ]),
@@ -416,7 +416,7 @@ describe("applyAsymmetries", () => {
     expect(convert(loose, "t")).toBe(
       'z.object({ "id": z.number().int().gte(0), "error": z.string().optional(), "label": z.string().optional(), ' +
         '"anchor": z.union([z.object({ "kind": z.literal("hash"), "value": z.string() }).catchall(z.unknown()), ' +
-        'z.object({ "kind": z.literal("team_id"), "value": z.string() }).catchall(z.unknown())]), ' +
+        'z.object({ "kind": z.literal("label"), "value": z.string() }).catchall(z.unknown())]), ' +
         '"overlay": z.object({ "cdpMode": z.boolean().optional() }).catchall(z.unknown()).optional() }).catchall(z.unknown())',
     );
     const strict = applyAsymmetries(reader, "t", {}, false).schema;
@@ -444,7 +444,7 @@ describe("applyAsymmetries", () => {
     expect(convert(schema, "t")).toBe(
       'z.object({ "id": z.union([z.number().int().gte(0), z.string()]), "error": z.string().optional(), ' +
         '"label": z.string().min(1).max(32).regex(/^[a-z\\/]+$/).optional(), ' +
-        '"anchor": z.object({ "kind": z.enum(["hash", "team_id"]), "value": z.string().min(1) }).catchall(z.unknown()), ' +
+        '"anchor": z.object({ "kind": z.enum(["hash", "label"]), "value": z.string().min(1) }).catchall(z.unknown()), ' +
         '"overlay": OverlaySchema.optional() }).catchall(z.unknown())',
     );
     // The replacement keeps the Rust node (post null-arm drop) for the A2 cross-check.

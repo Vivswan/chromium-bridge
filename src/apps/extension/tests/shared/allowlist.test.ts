@@ -9,18 +9,14 @@ import {
 } from "@/lib/shared/allowlist";
 
 describe("simpleMatch", () => {
-  test("exact match", () => {
-    expect(simpleMatch("https://a.com/x", "https://a.com/x")).toBe(true);
-  });
-  test("trailing /* matches base and sub-paths", () => {
-    expect(simpleMatch("https://a.com/*", "https://a.com/")).toBe(true);
-    expect(simpleMatch("https://a.com/*", "https://a.com/page")).toBe(true);
-  });
-  test("does not match a different host", () => {
-    expect(simpleMatch("https://a.com/*", "https://b.com/")).toBe(false);
-  });
-  test("trailing * (no slash) is a prefix match", () => {
-    expect(simpleMatch("https://a.com*", "https://a.com/anything")).toBe(true);
+  test.each([
+    ["an exact pattern", "https://a.com/x", "https://a.com/x", true],
+    ["a trailing /* matches the base", "https://a.com/*", "https://a.com/", true],
+    ["a trailing /* matches a sub-path", "https://a.com/*", "https://a.com/page", true],
+    ["a trailing /* does not match another host", "https://a.com/*", "https://b.com/", false],
+    ["a bare trailing * is a prefix match", "https://a.com*", "https://a.com/anything", true],
+  ])("%s", (_case, pattern, target, expected) => {
+    expect(simpleMatch(pattern, target)).toBe(expected);
   });
 });
 
@@ -32,12 +28,12 @@ describe("matchesAny", () => {
 });
 
 describe("originGlobOf", () => {
-  test("derives host/* from a URL", () => {
-    expect(originGlobOf("https://x.com/path?q=1")).toBe("https://x.com/*");
-  });
-  test("null for unparsable input", () => {
-    expect(originGlobOf("not a url")).toBeNull();
-    expect(originGlobOf(undefined)).toBeNull();
+  test.each([
+    ["a URL with a path and query", "https://x.com/path?q=1", "https://x.com/*"],
+    ["an unparsable string", "not a url", null],
+    ["undefined", undefined, null],
+  ])("%s", (_case, input, expected) => {
+    expect(originGlobOf(input)).toBe(expected);
   });
 });
 
@@ -48,21 +44,23 @@ describe("hostFromOriginGlob", () => {
 });
 
 describe("normalizeCookieDomain", () => {
-  test("strips leading dots and lowercases", () => {
-    expect(normalizeCookieDomain(".Example.com")).toBe("example.com");
-  });
-  test("rejects scheme/path/glob/non-strings", () => {
-    expect(normalizeCookieDomain("http://x.com")).toBeNull();
-    expect(normalizeCookieDomain("a/b")).toBeNull();
-    expect(normalizeCookieDomain("*.x.com")).toBeNull();
-    expect(normalizeCookieDomain(123)).toBeNull();
+  test.each([
+    ["leading dots stripped and lowercased", ".Example.com", "example.com"],
+    ["a scheme", "http://x.com", null],
+    ["a path", "a/b", null],
+    ["a glob", "*.x.com", null],
+    ["a non-string", 123, null],
+  ])("%s", (_case, input, expected) => {
+    expect(normalizeCookieDomain(input)).toBe(expected);
   });
 });
 
 describe("globToPermissionPattern", () => {
-  test("keeps /* globs, appends * otherwise, null for empty", () => {
-    expect(globToPermissionPattern("https://a.com/*")).toBe("https://a.com/*");
-    expect(globToPermissionPattern("https://a.com")).toBe("https://a.com*");
-    expect(globToPermissionPattern("")).toBeNull();
+  test.each([
+    ["a /* glob is kept", "https://a.com/*", "https://a.com/*"],
+    ["a bare origin gets a trailing *", "https://a.com", "https://a.com*"],
+    ["an empty string", "", null],
+  ])("%s", (_case, input, expected) => {
+    expect(globToPermissionPattern(input)).toBe(expected);
   });
 });

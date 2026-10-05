@@ -1,20 +1,12 @@
-// Shared sensitive-data masking.
-//
-// The JWT/hex/number/bearer pattern catalogue was previously duplicated
-// verbatim between background.ts (maskCookieValue) and content.ts
-// (maskString). It is unified here. NOTE the two entry points are deliberately
-// NOT identical: `maskString` additionally full-masks a value that *looks* like
-// a bare credential, while `maskCookieValue` applies only the pattern catalogue
-// (cookies are structured; a full-mask would hide too much). Preserve that.
+// Shared sensitive-data masking. The two entry points differ on purpose: `maskString` also full-masks a value
+// that reads like a bare credential, while `maskCookieValue` applies only the pattern catalogue (cookies are
+// structured; a full-mask would hide too much).
 
 // Keys/values whose name hints at a secret.
 export const SENSITIVE_KEY = /(token|cookie|password|passwd|secret|api[_-]?key|auth|cred|session)/i;
 
-// Apply the credential-pattern catalogue to a string (no length guard). Shared
-// core of both maskString and maskCookieValue. This is a heuristic, best-effort
-// filter (see SECURITY.md): it targets common secret shapes (JWT, long hex,
-// long digit runs, opaque base64url tokens, bearer/key assignments) and will
-// not catch every possible secret format.
+// The credential-pattern catalogue (no length guard), the core of both entry points. Best-effort by design
+// (SECURITY.md): common secret shapes only.
 export function maskPatterns(s: string): string {
   let out = s;
   // JWT (eyJ... . ... . ...)
@@ -23,14 +15,9 @@ export function maskPatterns(s: string): string {
   out = out.replace(/\b[a-fA-F0-9]{32,}\b/g, "••••[hex]");
   // Long digit runs (>=12): card numbers, account ids
   out = out.replace(/\b\d{12,}\b/g, "••••[num]");
-  // Opaque tokens (base64url / random ids, >=32 chars containing BOTH a letter
-  // and a digit): session tokens and API keys that are not in JWT or bare-hex
-  // form. Runs after the hex/digit rules so those keep their specific tags. We
-  // match the candidate run with a single greedy pass, then test it in the
-  // callback: this stays linear-time (no nested lookaheads re-scanning at every
-  // word boundary, which would be quadratic on adversarial input). The
-  // letter+digit requirement keeps it off long natural-language words.
-  // Best-effort only (see maskPatterns note / SECURITY.md).
+  // Opaque tokens: >=32 chars with BOTH a letter and a digit (keeps it off long words), after the hex/digit rules
+  // so those keep their tags. One greedy pass plus a callback test stays linear; a nested lookahead was quadratic
+  // on "a-a-a-...".
   out = out.replace(/\b[A-Za-z0-9_-]{32,}\b/g, (m) =>
     /[A-Za-z]/.test(m) && /\d/.test(m) ? "••••[token]" : m,
   );
@@ -72,11 +59,8 @@ export function maskKeyName(key: string): string {
   return SENSITIVE_KEY.test(key) ? `••••${key.slice(-2)}` : key;
 }
 
-// Stringify + mask a caught error for the outer egress paths (content.ts's
-// __error reply, port.ts's BridgeResp.error). Error messages can embed
-// page-derived data (a getter that throws, a CDP exception description), so
-// both catches route through this one helper and cannot drift out of the
-// masking regime.
+// Stringify + mask a caught error for the outer egress paths (content.ts's __error reply, port.ts's
+// BridgeResp.error): a message can embed page-derived data (a throwing getter, a CDP exception description).
 export function maskErrorMessage(e: unknown): string {
   const message = (e as { message?: unknown } | null | undefined)?.message;
   return maskString(String(message || e || "error"));

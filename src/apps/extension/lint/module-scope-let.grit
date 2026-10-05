@@ -1,6 +1,6 @@
 language js(typescript)
 
-// A bare module-scope `let` under lib/background/ or lib/webauthn/ is worker-scoped state nothing enumerates or resets; it goes in an
+// A bare module-scope `let` under lib/ is worker-scoped state nothing enumerates or resets; it goes in an
 // inLife cell (src/lib/background/in-life.ts). Nesting is matched by exclusion, so an unlisted construct over-flags
 // rather than misses. tests/lint/module-scope-let.test.ts runs this file against a fixture of every shape.
 or {

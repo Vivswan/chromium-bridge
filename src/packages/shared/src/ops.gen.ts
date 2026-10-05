@@ -2,13 +2,8 @@
 // args.rs) by scripts/gen-ops.ts - DO NOT EDIT. Edit the catalogue, then run
 // `moon run gen`.
 //
-// The tool catalogue, TS side: op names, policy metadata (risk / scope /
-// permission / confirmation), the per-tool capability grants, and the per-op
-// Zod arg validators the extension enforces at the native-messaging boundary
-// (derived from the Rust args structs, the same structs the Rust reader
-// parses). BridgeCommand (the discriminated request union) is INFERRED from
-// the validators, so the compile-time types and the runtime checks cannot
-// drift apart.
+// The tool catalogue, TS side. The per-op Zod validators derive from the same Rust args structs the Rust reader
+// parses, and BridgeCommand is INFERRED from them, so the compile-time types and the runtime checks cannot drift.
 
 import { z } from "zod";
 import type { PolicyFieldName, PolicyValues } from "./policy.gen";
@@ -50,8 +45,7 @@ export function isOpName(op: string): op is OpName {
   return OP_NAME_SET.has(op);
 }
 
-// Policy metadata, mirrored from the catalogue. Consumed by the policy layer
-// (background/policy.ts) - kept as plain data so it stays import-side-effect-free.
+// Plain data, so importing it has no side effect.
 export type Risk = "critical" | "high" | "low" | "medium";
 export type Scope = "page" | "server" | "tab";
 export type Permission = "cookies" | "debugger" | "scripting" | "tabs";
@@ -223,18 +217,13 @@ export const TOOL_META: Readonly<Record<OpName, ToolMeta>> = {
   },
 };
 
-// The policy fields whose value is a plain boolean: the only shape a grant
-// may have, so enforcement's `=== true` reads stay type-honest.
+// A grant may only name a boolean policy field, so enforcement's `=== true` reads stay type-honest.
 type BooleanPolicyField = {
   [K in PolicyFieldName]: PolicyValues[K] extends boolean ? K : never;
 }[PolicyFieldName];
 
-// A tool's own capability grants (Tool::grants in catalogue.rs): every one
-// must be true in the effective policy for the tool to run. The background
-// enforcement (confirm/gate.ts, upload.ts, dialog.ts) indexes this table, so
-// a gated tool cannot gain an enforcement gate the policy contract does not
-// carry. The extension's handlers check only the tool's own grants; the host
-// is the cdpMode gate (Tool::required_grants adds it for every debugger-backed
+// A tool's own grants (Tool::grants in catalogue.rs), every one required true for the tool to run. The extension's
+// handlers check only these; the host is the cdpMode gate (Tool::required_grants adds it for every debugger-backed
 // tool).
 export const TOOL_GRANTS = {
   list_browsers: [],
@@ -265,9 +254,7 @@ export const TOOL_GRANTS = {
   page_upload: ["fileUploadEnabled"],
 } as const satisfies Readonly<Record<OpName, readonly BooleanPolicyField[]>>;
 
-// Per-op arg validators, derived from each tool's args struct. The
-// extension parses an inbound request's args against its op's validator
-// before dispatching - fail closed.
+// The extension parses an inbound request's args against its op's validator before dispatching, fail closed.
 export const OP_ARG_SCHEMAS = {
   list_browsers: z.object({}).strict(),
   tab_list: z.object({}).strict(),
@@ -339,16 +326,13 @@ export const OP_ARG_SCHEMAS = {
   page_upload: z.object({ "path": z.string(), "selector": z.string() }).strict(),
 } as const satisfies Readonly<Record<OpName, z.ZodType>>;
 
-// Per-op request shapes, inferred from the validators. Discriminated on `op`,
-// so consumers (background/dispatch.ts) narrow the args to exactly the fields
-// that tool accepts. envelope.ts intersects this with the request envelope to
-// form BridgeReq.
+// Discriminated on `op`, so a consumer narrows the args to exactly the fields that tool accepts. envelope.ts
+// intersects this with the request envelope to form BridgeReq.
 export type BridgeCommand = {
   [K in OpName]: { op: K; args: z.infer<(typeof OP_ARG_SCHEMAS)[K]> };
 }[OpName];
 
-// The envelope-level args bag: the union of every tool's args props, all
-// optional (the per-op validators enforce required-ness).
+// Every tool's args props, all optional; the per-op validators enforce required-ness.
 export const OpArgsSchema = z
   .object({
     tabId: z.number().int().gte(-9007199254740991).lte(9007199254740991).optional(),

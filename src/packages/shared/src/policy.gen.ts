@@ -9,35 +9,24 @@
 
 import { z } from "zod";
 
-// Domain-separation prefix for policy signatures: the enrollment key signs
-// UTF8(POLICY_DOMAIN) || 0x00 || doc_bytes. A third domain, distinct from
-// the enclave challenge and presence domains (generation fails otherwise),
-// so a policy signature can never be replayed as an enrollment or
-// per-action presence proof, nor either of those as a policy.
+// The enrollment key signs UTF8(POLICY_DOMAIN) || 0x00 || doc_bytes. A third domain, distinct from the enclave
+// challenge and presence domains, so a policy signature can never be replayed as either proof, nor they as a policy.
 export const POLICY_DOMAIN = "chromium-bridge-policy-v1";
 
-// The policy document schema version. PolicyDocSchema pins it as a literal:
-// a newer document is rejected rather than misinterpreted, the same
-// fail-closed posture as the Rust parser's deny_unknown_fields.
+// PolicyDocSchema pins this as a literal: a newer document is rejected rather than misinterpreted.
 export const POLICY_DOC_VERSION = 1;
 
-// The JS-safe integer bound (2^53 - 1) on the document's revision counter
-// and (Rust-side, via the same JS_SAFE_INT_MAX) its millisecond fields, so
-// both sides' parsers read the same numbers.
+// The JS-safe integer bound (2^53 - 1) on the revision counter and, Rust-side via JS_SAFE_INT_MAX, the millisecond
+// fields, so both parsers read the same numbers.
 export const POLICY_REVISION_MAX = 9007199254740991;
 
-// Bounds on disabledTools (Rust DISABLED_TOOLS_MAX_ENTRIES /
-// DISABLED_TOOL_NAME_MAX_BYTES), enforced by the schemas below so the two
-// sides' parsers stay equivalent and no list can outgrow the host store's
-// read cap. The Rust bound counts bytes, this one UTF-16 code units; tool
-// names are ASCII identifiers, where the two agree, and elsewhere the Rust
-// side is the stricter, fail-closed one.
+// Bounds on disabledTools, so no list can outgrow the host store's read cap. The Rust bound counts bytes, this one
+// UTF-16 code units; tool names are ASCII identifiers, where the two agree, and elsewhere Rust is the stricter side.
 export const DISABLED_TOOLS_MAX_ENTRIES = 256;
 export const DISABLED_TOOL_NAME_MAX_BYTES = 128;
 
-// The host-owned policy fields, in the catalogue's declaration order. An
-// unknown name never parses (touched entries ride z.enum over this list),
-// so a touched set cannot smuggle a field the catalogue does not own.
+// In the catalogue's declaration order. touched entries ride z.enum over this list, so a touched set cannot smuggle
+// a field the catalogue does not own.
 export const POLICY_FIELDS = [
   "cdpMode",
   "fileUploadEnabled",
@@ -64,10 +53,8 @@ export function isPolicyFieldName(field: string): field is PolicyFieldName {
   return POLICY_FIELD_SET.has(field);
 }
 
-// The fields by value kind (Rust FieldKind), each list in catalogue order,
-// and the refinement from a field name to its kind-typed handle: a boolean
-// comparison can only ever read a boolean field, so no direction can meet a
-// value of the wrong shape.
+// The fields by value kind (Rust FieldKind) and the refinement from a name to its kind-typed handle, so a boolean
+// comparison can only ever read a boolean field.
 export const BOOL_POLICY_FIELDS = [
   "cdpMode",
   "fileUploadEnabled",
@@ -122,11 +109,10 @@ export function policyFieldKind(field: PolicyFieldName): PolicyFieldKind {
   }
 }
 
-// A field's declared permissive pole (Rust Direction), typed by kind so the
-// table cannot pair a field with a direction of another kind.
+// A field's permissive pole (Rust Direction), typed by kind so the table cannot pair a field with a direction of
+// another kind.
 //   bool    -> "truePermissive" | "falsePermissive" (a skipped confirmation is a grant)
-//   ms      -> "growsPermissive" (a longer window grants) | "growsPermissiveZeroTop"
-//              (hostReverifyMs: 0 = never re-verify = MOST permissive, topping the scale)
+//   ms      -> "growsPermissive" (a longer window grants) | "growsPermissiveZeroTop" (0 = never re-verify = MOST permissive)
 //   toolSet -> "shrinksPermissiveSet" (dropping an entry re-enables a tool)
 export type BoolPole = "truePermissive" | "falsePermissive";
 export type MsOrder = "growsPermissive" | "growsPermissiveZeroTop";
@@ -154,8 +140,8 @@ export const POLICY_DIRECTIONS: Readonly<
   disabledTools: "shrinksPermissiveSet",
 };
 
-// The 15 field values, detached from the document's scoping fields (Rust
-// PolicyValues): the shape comparisons and the effective policy work in.
+// The field values without the document's scoping fields (Rust PolicyValues): what comparisons and the effective
+// policy work in.
 export const PolicyValuesSchema = z.strictObject({
   cdpMode: z.boolean(),
   fileUploadEnabled: z.boolean(),
@@ -176,11 +162,8 @@ export const PolicyValuesSchema = z.strictObject({
 
 export type PolicyValues = z.infer<typeof PolicyValuesSchema>;
 
-// The signed policy document (Rust PolicyDoc): the exact bytes the enclave
-// signature covers, strict-parsed only AFTER the signature verifies.
-// `touched` is the set of fields the producing write explicitly edited,
-// inside the signed bytes so a fresh signature warrants relaxation on
-// exactly those fields, never on the document at large.
+// The signed policy document (Rust PolicyDoc), strict-parsed only AFTER the signature verifies. `touched` sits
+// inside the signed bytes so a fresh signature warrants relaxation on exactly those fields, never the document at large.
 export const PolicyDocSchema = z.strictObject({
   v: z.literal(1),
   revision: z.int().nonnegative().max(POLICY_REVISION_MAX),
@@ -204,13 +187,9 @@ export const PolicyDocSchema = z.strictObject({
 
 export type PolicyDoc = z.infer<typeof PolicyDocSchema>;
 
-// The unsigned restriction overlay (Rust PolicyOverlay): per-field overrides
-// on top of the signed baseline, every field optional, the same per-field
-// bounds as the document (JS-safe millisecond values, the disabledTools
-// caps). Strict on purpose, unlike the R5-loose control-frame wrappers: an
-// overlay field the catalogue does not own fails the whole frame parse,
-// fail closed. Whether a parsed overlay actually RESTRICTS is the
-// consumer's direction check, never this shape's.
+// The unsigned restriction overlay (Rust PolicyOverlay), every field optional under the document's bounds. Strict,
+// unlike the loose control-frame wrappers: an overlay field the catalogue does not own fails the whole frame parse.
+// Whether a parsed overlay actually RESTRICTS is the consumer's direction check, never this shape's.
 export const PolicyOverlaySchema = z.strictObject({
   cdpMode: z.boolean().optional(),
   fileUploadEnabled: z.boolean().optional(),
@@ -231,9 +210,8 @@ export const PolicyOverlaySchema = z.strictObject({
 
 export type PolicyOverlay = z.infer<typeof PolicyOverlaySchema>;
 
-// Frozen (including the nested array): the pre-cutover posture hands this
-// instance out as the effective policy, so a caller mutating its "copy" must
-// throw instead of quietly rewriting the defaults for everyone after it.
+// Deep-frozen: the pre-cutover posture hands this instance out as the effective policy, so a caller mutating its
+// "copy" must throw instead of rewriting the defaults for everyone after it.
 export const POLICY_DEFAULTS: Readonly<PolicyValues> = deepFreeze(
   PolicyValuesSchema.parse({
     cdpMode: false,
@@ -259,15 +237,4 @@ function deepFreeze<T>(value: T): T {
     if (typeof inner === "object" && inner !== null) deepFreeze(inner);
   }
   return Object.freeze(value);
-}
-
-/**
- * Strict parse of the extension's stored effective policy: `null` on ANY failure (a corrupt field, a
- * non-object, an extra key), never a salvage, which would hand a corrupted store a relaxation. Its caller,
- * policy-sync.ts classifyStored, reads null as CORRUPT, never absent: the state resolves to compromised, every
- * enforcement read refuses, and no replacement push lands while the record stays corrupt.
- */
-export function parseStoredPolicyValues(stored: unknown): PolicyValues | null {
-  const parsed = PolicyValuesSchema.safeParse(stored);
-  return parsed.success ? parsed.data : null;
 }

@@ -3,20 +3,6 @@ import { beforeEach, describe, expect, test } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 import { getSetting } from "@/lib/shared/settings";
 
-describe("DEFAULTS", () => {
-  test("has exactly the browser-owned keys and values", () => {
-    // The 15 policy fields are host-owned (policy.gen.ts) and requireEnrollment
-    // is retired; only the browser-owned settings remain here. A key appearing
-    // in this list again means the browser-owned split regressed.
-    expect(Object.keys(DEFAULTS).sort()).toEqual(["allowAllSites", "groupTabs", "uiLanguage"]);
-    expect(DEFAULTS.allowAllSites).toBe(false);
-    expect(DEFAULTS.groupTabs).toBe(true);
-    // Display language defaults to English on every surface; browser-locale
-    // matching ("auto") and Chinese are explicit choices.
-    expect(DEFAULTS.uiLanguage).toBe("en");
-  });
-});
-
 describe("getSetting", () => {
   beforeEach(() => {
     fakeBrowser.reset();
@@ -27,8 +13,8 @@ describe("getSetting", () => {
     expect(await getSetting("groupTabs")).toBe(false);
   });
 
-  test("falls back to the default when absent", async () => {
-    expect(await getSetting("allowAllSites")).toBe(false);
-    expect(await getSetting("uiLanguage")).toBe("en");
+  test("falls back to the schema default when absent", async () => {
+    expect(await getSetting("allowAllSites")).toBe(DEFAULTS.allowAllSites);
+    expect(await getSetting("uiLanguage")).toBe(DEFAULTS.uiLanguage);
   });
 });

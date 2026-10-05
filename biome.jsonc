@@ -1,5 +1,7 @@
+// Biome's config carries its reasons as comments, which only the .jsonc name allows: with a comment inside
+// biome.json, biome processes zero files.
 {
-  "$schema": "https://biomejs.dev/schemas/2.5.4/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.5.12/schema.json",
   "vcs": {
     "enabled": true,
     "clientKind": "git",
@@ -34,7 +36,7 @@
   "plugins": [
     {
       "path": "./src/apps/extension/lint/module-scope-let.grit",
-      "includes": ["**/extension/src/lib/background/**", "**/extension/src/lib/webauthn/**"]
+      "includes": ["**/extension/src/lib/**"]
     }
   ],
   "linter": {
@@ -43,7 +45,7 @@
       "project": "all"
     },
     "rules": {
-      "recommended": true,
+      "preset": "recommended",
       "correctness": {
         "noUnusedImports": "error",
         "noUnusedVariables": "error",
@@ -67,6 +69,19 @@
           "options": {
             "strictCase": false,
             "conventions": [
+              // A custom convention checks the whole name, so biome's default trimming of leading and trailing
+              // underscores and dollars is lost; this forwards the trimmed name (wire tags like __evalError and
+              // _meta, JSON Schema's $ref) to the conventions below.
+              {
+                "match": "[_$]*(.*?)[_$]*"
+              },
+              // Chrome's _locales directory names (zh_CN) are a key shape no case format covers.
+              {
+                "selector": {
+                  "kind": "objectLiteralProperty"
+                },
+                "match": "[a-z]{2}_[A-Z]{2}|(.*)"
+              },
               {
                 "selector": {
                   "kind": "function"
@@ -124,6 +139,13 @@
               {
                 "selector": {
                   "kind": "objectLiteralProperty"
+                },
+                "formats": ["camelCase", "snake_case", "CONSTANT_CASE", "PascalCase"]
+              },
+              // Type properties describe the same JSON shapes object literals do (manifest keys, serde fields).
+              {
+                "selector": {
+                  "kind": "typeProperty"
                 },
                 "formats": ["camelCase", "snake_case", "CONSTANT_CASE", "PascalCase"]
               }

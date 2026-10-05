@@ -3,32 +3,23 @@ import {
   buildEvaluateExpression,
   evalExceptionMessage,
   isDebuggable,
-  NON_DEBUGGABLE,
 } from "@/lib/background/cdp/session";
 
 describe("isDebuggable", () => {
-  test("ordinary http(s) pages are debuggable", () => {
-    expect(isDebuggable("https://www.bing.com/")).toBe(true);
-    expect(isDebuggable("http://localhost:3000/app")).toBe(true);
-  });
-
-  test("restricted schemes are not debuggable", () => {
-    expect(isDebuggable("chrome://settings")).toBe(false);
-    expect(isDebuggable("chrome-extension://abc/options.html")).toBe(false);
-    expect(isDebuggable("https://chrome.google.com/webstore/detail/x")).toBe(false);
-    expect(isDebuggable("view-source:https://example.com")).toBe(false);
-    expect(isDebuggable("about:blank")).toBe(false);
-    expect(isDebuggable("edge://flags")).toBe(false);
-  });
-
-  test("empty / undefined URLs are not debuggable", () => {
-    expect(isDebuggable(undefined)).toBe(false);
-    expect(isDebuggable("")).toBe(false);
-  });
-
-  test("NON_DEBUGGABLE is the source of the deny patterns", () => {
-    expect(NON_DEBUGGABLE.some((re) => re.test("chrome://x"))).toBe(true);
-    expect(NON_DEBUGGABLE.some((re) => re.test("https://example.com"))).toBe(false);
+  // Chrome rejects chrome.debugger.attach on these targets after the fact, so the refusal has to come first.
+  test.each([
+    ["https://www.bing.com/", true],
+    ["http://localhost:3000/app", true],
+    ["chrome://settings", false],
+    ["chrome-extension://abc/options.html", false],
+    ["https://chrome.google.com/webstore/detail/x", false],
+    ["view-source:https://example.com", false],
+    ["about:blank", false],
+    ["edge://flags", false],
+    [undefined, false],
+    ["", false],
+  ])("%s -> %s", (url, debuggable) => {
+    expect(isDebuggable(url)).toBe(debuggable);
   });
 });
 

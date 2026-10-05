@@ -39,36 +39,23 @@ beforeEach(() => {
 });
 
 describe("kill gate fail-closed matrix", () => {
-  test("absent mirror allows (fresh install; the host side enforces)", () => {
-    expect(killGateFromStored(undefined)).toEqual({ allowed: true });
-  });
-
-  test("alive allows", () => {
-    expect(killGateFromStored({ state: "alive", at: 1 }).allowed).toBe(true);
-  });
-
-  test("killed refuses", () => {
-    const gate = killGateFromStored({ state: "killed", at: 1 });
-    expect(gate.allowed).toBe(false);
-  });
-
-  test("unknown refuses (host cannot read its own state)", () => {
-    expect(killGateFromStored({ state: "unknown", at: 1 }).allowed).toBe(false);
-  });
-
-  test("malformed mirror values refuse, never map to absent", () => {
-    // Mapping garbage to absent would fail OPEN (absent allows); a planted or
-    // corrupted value must therefore refuse.
-    for (const bad of [
-      null,
-      42,
-      "killed",
-      { state: "alive" }, // missing at
-      { state: "alive", at: 1, extra: true }, // strict: unknown field
-      { state: "dead", at: 1 }, // unknown state word
-    ]) {
-      expect(killGateFromStored(bad).allowed, JSON.stringify(bad)).toBe(false);
-    }
+  // Absent allows (a fresh install must not be bricked; the host enforces), so a malformed value mapped to absent
+  // would fail OPEN: every malformed shape must refuse.
+  test.each([
+    ["absent", undefined, true],
+    ["alive", { state: "alive", at: 1 }, true],
+    ["killed", { state: "killed", at: 1 }, false],
+    ["unknown (the host cannot read its own state)", { state: "unknown", at: 1 }, false],
+    ["null", null, false],
+    ["a number", 42, false],
+    ["a bare string", "killed", false],
+    ["missing at", { state: "alive" }, false],
+    ["an unknown field", { state: "alive", at: 1, extra: true }, false],
+    ["an unknown state word", { state: "dead", at: 1 }, false],
+  ])("%s", (_case, stored, allowed) => {
+    expect(killGateFromStored(stored)).toEqual(
+      allowed ? { allowed: true } : { allowed: false, reason: expect.any(String) },
+    );
   });
 
   test("killGate reads the stored mirror", async () => {
