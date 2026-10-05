@@ -289,22 +289,37 @@ fn registration_report_carries_rows_exactly_when_the_resolver_ran() {
     // The row mapping doctor's `ManifestStatus` takes onto the wire, without a HOME: the browser key,
     // detection, state, and location all cross, and an unresolvable environment answers ok:false with the
     // reason and no rows (the extension shows the error instead of an empty healthy-looking table).
-    use crate::doctor::ManifestStatus;
+    use crate::browsers::{Scope, Scoped};
+    use crate::doctor::{ManifestStatus, SlotStatus};
     use crate::protocol::control::RegistrationState;
     use crate::registration::RegState;
+    let slot = |state: RegState, location: &str| SlotStatus {
+        state,
+        location: location.into(),
+        owner: None,
+    };
     let report = registration_report(Ok(vec![
         ManifestStatus {
             key: "chrome",
             detected: true,
-            state: RegState::Ok,
-            location: "/home/user/chrome/host.json".into(),
+            manifest: Scoped {
+                user: slot(RegState::Ok, "/home/user/chrome/host.json"),
+                system: slot(RegState::Missing, "/etc/chrome/host.json"),
+            },
+            effective_scope: Scope::User,
             pointer: None,
         },
         ManifestStatus {
             key: "brave",
             detected: false,
-            state: RegState::Foreign("another host's manifest".into()),
-            location: "/home/user/brave/host.json".into(),
+            manifest: Scoped {
+                user: slot(
+                    RegState::Foreign("another host's manifest".into()),
+                    "/home/user/brave/host.json",
+                ),
+                system: slot(RegState::Missing, "/etc/brave/host.json"),
+            },
+            effective_scope: Scope::User,
             pointer: None,
         },
     ]));

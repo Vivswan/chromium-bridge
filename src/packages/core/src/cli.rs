@@ -11,7 +11,7 @@ use clap::{Arg, ArgAction, ArgMatches, Args, FromArgMatches, Parser, Subcommand}
 
 use crate::allowlist::ClientName;
 use crate::audit::DEFAULT_AUDIT_LIMIT;
-use crate::browsers::Browser;
+use crate::browsers::{Browser, Scope};
 use crate::ipc::{BrowserLabel, HashDigest, SignerId};
 use crate::policy::{FieldKind, Ms, PolicyField, PolicyOverlay};
 use crate::registration::known_keys;
@@ -83,9 +83,9 @@ pub enum DoctorCommand {
     /// `--paths`: the runtime dir and lock path this environment resolves
     /// to, with neither created nor probed.
     Paths,
-    /// `--fix`: (re-)register the targeted browsers. Idempotent, so this is
-    /// also the fresh-machine registration path.
-    Fix(FixTargets),
+    /// `--fix`: (re-)register the targeted browsers in one scope. Idempotent,
+    /// so this is also the fresh-machine registration path.
+    Fix { targets: FixTargets, scope: Scope },
 }
 
 /// Which registrations `doctor --fix` repairs. Exactly one mode.
@@ -135,6 +135,9 @@ struct DoctorFlags {
     /// Register into this NativeMessagingHosts dir (absolute; repeatable)
     #[arg(long, group = "target", value_parser = absolute_dir, value_name = "DIR")]
     manifest_dir: Vec<PathBuf>,
+    /// Register machine-wide, where every account's browser looks (root only; the .deb's post-install)
+    #[arg(long, requires = "fix", conflicts_with_all = ["list", "paths", "json"])]
+    system: bool,
 }
 
 impl From<DoctorFlags> for DoctorCommand {
@@ -148,7 +151,7 @@ impl From<DoctorFlags> for DoctorCommand {
         if !flags.fix {
             return DoctorCommand::Report { json: flags.json };
         }
-        DoctorCommand::Fix(if flags.all {
+        let targets = if flags.all {
             FixTargets::All
         } else if !flags.browser.is_empty() {
             let mut browsers: Vec<Browser> = Vec::new();
@@ -162,7 +165,20 @@ impl From<DoctorFlags> for DoctorCommand {
             FixTargets::ManifestDirs(flags.manifest_dir)
         } else {
             FixTargets::Detected
-        })
+        };
+        DoctorCommand::Fix {
+            targets,
+            scope: scope_flag(flags.system),
+        }
+    }
+}
+
+/// The one place `--system` becomes a [`Scope`].
+fn scope_flag(system: bool) -> Scope {
+    if system {
+        Scope::System
+    } else {
+        Scope::User
     }
 }
 
@@ -221,13 +237,32 @@ impl From<PairClientFlags> for PairClientArgs {
     }
 }
 
-/// `uninstall`: the `--manifest-dir` targets to clear beyond the known-browser
-/// table (re-pass what `doctor --fix` was given).
-#[derive(Debug, PartialEq, Eq, Args)]
+/// `uninstall`: the scope to clear, and the `--manifest-dir` targets beyond the
+/// known-browser table (re-pass what `doctor --fix` was given).
+#[derive(Debug, PartialEq, Eq)]
 pub struct UninstallArgs {
+    pub manifest_dirs: Vec<PathBuf>,
+    pub scope: Scope,
+}
+
+/// The flag surface clap parses `uninstall` from; [`UninstallArgs`] is the typed result.
+#[derive(Args)]
+struct UninstallFlags {
     /// Also clear this NativeMessagingHosts dir (absolute; repeatable)
     #[arg(long = "manifest-dir", value_parser = absolute_dir, value_name = "DIR")]
-    pub manifest_dirs: Vec<PathBuf>,
+    manifest_dir: Vec<PathBuf>,
+    /// Remove the machine-wide registrations instead of this account's (root only; the .deb's removal)
+    #[arg(long)]
+    system: bool,
+}
+
+impl From<UninstallFlags> for UninstallArgs {
+    fn from(flags: UninstallFlags) -> Self {
+        UninstallArgs {
+            manifest_dirs: flags.manifest_dir,
+            scope: scope_flag(flags.system),
+        }
+    }
 }
 
 /// `policy <sub>`: the read surfaces, the two write lanes, and rollback, each
@@ -372,6 +407,7 @@ macro_rules! typed_args {
 
 typed_args!(DoctorCommand, DoctorFlags);
 typed_args!(PairClientArgs, PairClientFlags);
+typed_args!(UninstallArgs, UninstallFlags);
 
 // ---- Value parsers: each newtype is validated once, here ----------------------
 
@@ -575,18 +611,37 @@ mod tests {
             ),
             (
                 vec!["doctor", "--fix"],
-                Command::Doctor(DoctorCommand::Fix(FixTargets::Detected)),
+                Command::Doctor(DoctorCommand::Fix {
+                    targets: FixTargets::Detected,
+                    scope: Scope::User,
+                }),
+            ),
+            (
+                vec!["doctor", "--fix", "--system"],
+                Command::Doctor(DoctorCommand::Fix {
+                    targets: FixTargets::Detected,
+                    scope: Scope::System,
+                }),
             ),
             (
                 vec!["doctor", "--fix", "--all"],
-                Command::Doctor(DoctorCommand::Fix(FixTargets::All)),
+                Command::Doctor(DoctorCommand::Fix {
+                    targets: FixTargets::All,
+                    scope: Scope::User,
+                }),
             ),
             (
-                vec!["doctor", "--fix", "--browser", "chrome, brave,chrome"],
-                Command::Doctor(DoctorCommand::Fix(FixTargets::Browsers(vec![
-                    Browser::Chrome,
-                    Browser::Brave,
-                ]))),
+                vec![
+                    "doctor",
+                    "--fix",
+                    "--browser",
+                    "chrome, brave,chrome",
+                    "--system",
+                ],
+                Command::Doctor(DoctorCommand::Fix {
+                    targets: FixTargets::Browsers(vec![Browser::Chrome, Browser::Brave]),
+                    scope: Scope::System,
+                }),
             ),
             (
                 vec![
@@ -597,10 +652,10 @@ mod tests {
                     "--manifest-dir",
                     &dir_b,
                 ],
-                Command::Doctor(DoctorCommand::Fix(FixTargets::ManifestDirs(vec![
-                    abs("a"),
-                    abs("b"),
-                ]))),
+                Command::Doctor(DoctorCommand::Fix {
+                    targets: FixTargets::ManifestDirs(vec![abs("a"), abs("b")]),
+                    scope: Scope::User,
+                }),
             ),
             (
                 vec!["pair"],
@@ -655,6 +710,14 @@ mod tests {
                 vec!["uninstall", "--manifest-dir", &dir_a],
                 Command::Uninstall(UninstallArgs {
                     manifest_dirs: vec![abs("a")],
+                    scope: Scope::User,
+                }),
+            ),
+            (
+                vec!["uninstall", "--system"],
+                Command::Uninstall(UninstallArgs {
+                    manifest_dirs: vec![],
+                    scope: Scope::System,
                 }),
             ),
             (vec!["kill"], Command::Kill),
@@ -731,6 +794,8 @@ mod tests {
             // --json alone, typed values.
             (&["doctor", "--browser", "chrome"], MissingRequiredArgument),
             (&["doctor", "--all"], MissingRequiredArgument),
+            (&["doctor", "--system"], MissingRequiredArgument),
+            (&["doctor", "--list", "--system"], ArgumentConflict),
             (
                 &["doctor", "--fix", "--all", "--browser", "chrome"],
                 ArgumentConflict,

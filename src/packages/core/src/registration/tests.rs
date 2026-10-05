@@ -36,13 +36,30 @@ fn registrar(tree: &TempTree) -> Registrar {
     Registrar {
         host_exe: exe,
         install_dir: tree.path("install"),
+        scope: Scope::User,
+        system_root: tree.path("sys"),
         extension_id: PINNED_EXTENSION_ID.to_string(),
+    }
+}
+
+/// Base dirs rooted in the tree: `home/` for the account, `sys/` for the machine (`sys/etc`, `sys/opt`,
+/// `sys/Applications`, ...), so a system-scope registration lands in the fixture, never in `/etc`.
+fn tree_dirs(tree: &TempTree) -> BaseDirs {
+    BaseDirs {
+        home: tree.path("home"),
+        xdg_config_home: None,
+        xdg_data_home: None,
+        local_app_data: None,
+        roaming_app_data: None,
+        program_files: None,
+        system_root: tree.path("sys"),
     }
 }
 
 fn browser_target(tree: &TempTree) -> Target {
     Target {
-        browser: Some(Browser::Chrome),
+        label: Some(Browser::Chrome),
+        name: "chrome".into(),
         registration: Registration::ManifestDir(tree.path("nm/chrome/NativeMessagingHosts")),
         pointer: None,
     }
@@ -51,15 +68,10 @@ fn browser_target(tree: &TempTree) -> Target {
 /// The macOS shape, through the resolver: the pointer file sits beside the
 /// manifest dir, under the browser's user data root.
 fn macos_target(tree: &TempTree) -> Target {
-    let dirs = BaseDirs {
-        home: tree.path("home"),
-        xdg_config_home: None,
-        xdg_data_home: None,
-        local_app_data: None,
-        roaming_app_data: None,
-        system_applications: tree.path("Applications"),
-    };
-    Target::for_browser(&browsers::entry(Os::MacOs, &dirs, Browser::Chrome))
+    Target::for_browser(
+        &browsers::entry(Os::MacOs, &tree_dirs(tree), Browser::Chrome),
+        Scope::User,
+    )
 }
 
 fn pointer_path(target: &Target) -> PathBuf {
@@ -308,7 +320,8 @@ fn unreadable_manifest_path_fails_closed() {
     let planted: Vec<(&str, Plant)> = vec![("directory", directory)];
     for (case, plant) in planted {
         let target = Target {
-            browser: Some(Browser::Chrome),
+            label: Some(Browser::Chrome),
+            name: "chrome".into(),
             registration: Registration::ManifestDir(
                 tree.path(&format!("nm/{case}/NativeMessagingHosts")),
             ),
@@ -448,24 +461,17 @@ fn fix_default_targets_only_detected_browsers_but_explicit_keys_always_work() {
     // Fixture tree: Chrome is really installed (app bundle + config
     // root); Vivaldi is a ghost (leftover config root, no app).
     let tree = TempTree::new("select");
-    fs::create_dir_all(tree.path("Applications/Google Chrome.app")).unwrap();
+    fs::create_dir_all(tree.path("sys/Applications/Google Chrome.app")).unwrap();
     fs::create_dir_all(tree.path("home/Library/Application Support/Google/Chrome")).unwrap();
     fs::create_dir_all(tree.path("home/Library/Application Support/Vivaldi")).unwrap();
-    let dirs = BaseDirs {
-        home: tree.path("home"),
-        xdg_config_home: None,
-        xdg_data_home: None,
-        local_app_data: None,
-        roaming_app_data: None,
-        system_applications: tree.path("Applications"),
-    };
+    let dirs = tree_dirs(&tree);
     let entries = browsers::resolve(Os::MacOs, &dirs);
 
     // Default --fix: only the detected browser; the ghost gets no
     // manifest written into its leftover directory.
-    let targets = select_targets(&crate::cli::FixTargets::Detected, &entries).unwrap();
+    let targets = select_targets(&crate::cli::FixTargets::Detected, &entries, Scope::User).unwrap();
     assert_eq!(
-        targets.iter().map(Target::describe).collect::<Vec<_>>(),
+        targets.iter().map(|t| t.name.clone()).collect::<Vec<_>>(),
         vec!["chrome"]
     );
 
@@ -474,24 +480,346 @@ fn fix_default_targets_only_detected_browsers_but_explicit_keys_always_work() {
     let targets = select_targets(
         &crate::cli::FixTargets::Browsers(vec![Browser::Vivaldi, Browser::Opera]),
         &entries,
+        Scope::User,
     )
     .unwrap();
     assert_eq!(
-        targets.iter().map(Target::describe).collect::<Vec<_>>(),
+        targets.iter().map(|t| t.name.clone()).collect::<Vec<_>>(),
         vec!["vivaldi", "opera"]
     );
 
     // Nothing detected at all: refuse with guidance, never guess.
     let empty_dirs = BaseDirs {
         home: tree.path("empty-home"),
-        system_applications: tree.path("empty-apps"),
+        system_root: tree.path("empty-sys"),
         ..dirs
     };
     let entries = browsers::resolve(Os::MacOs, &empty_dirs);
     assert!(matches!(
-        select_targets(&crate::cli::FixTargets::Detected, &entries),
+        select_targets(&crate::cli::FixTargets::Detected, &entries, Scope::User),
         Err(FixError::NoTargets(_))
     ));
+}
+
+/// The .deb's post-install, as root with the vendor packages under `/opt` and no browser run by root:
+/// `--fix --system` detects by the install dirs, writes one manifest per system directory into the system
+/// roots (Chrome's and Brave's rows share Chrome's directory, so Chrome's manifest once, unlabeled since
+/// either browser may launch it, while Vivaldi's own directory keeps its label), a wrapper dir every
+/// account can traverse, nothing under any home, and `uninstall --system` reverses it.
+#[test]
+fn system_scope_registers_into_the_system_roots_once_per_shared_directory() {
+    let tree = TempTree::new("system");
+    fs::create_dir_all(tree.path("sys/opt/google/chrome")).unwrap();
+    fs::create_dir_all(tree.path("sys/opt/brave.com/brave")).unwrap();
+    fs::create_dir_all(tree.path("sys/opt/vivaldi")).unwrap();
+    let dirs = tree_dirs(&tree);
+    let entries = browsers::resolve(Os::Linux, &dirs);
+    let install_dir = browsers::install_dir(Os::Linux, &dirs, Scope::System);
+    assert_eq!(install_dir, tree.path("sys/var/lib/chromium-bridge"));
+
+    let targets =
+        select_targets(&crate::cli::FixTargets::Detected, &entries, Scope::System).unwrap();
+    assert_eq!(
+        targets.iter().map(|t| t.name.clone()).collect::<Vec<_>>(),
+        vec!["chrome", "vivaldi"],
+        "Brave reads Chrome's system directory, so the three detected browsers are two manifests"
+    );
+    // The same collapse under an explicit selection, whichever order the keys come in.
+    let explicit = select_targets(
+        &crate::cli::FixTargets::Browsers(vec![Browser::Brave, Browser::Chrome, Browser::Vivaldi]),
+        &entries,
+        Scope::System,
+    )
+    .unwrap();
+    assert_eq!(
+        explicit.iter().map(|t| t.name.clone()).collect::<Vec<_>>(),
+        vec!["chrome", "vivaldi"]
+    );
+
+    let reg = Registrar {
+        scope: Scope::System,
+        install_dir: install_dir.clone(),
+        ..registrar(&tree)
+    };
+    for target in &targets {
+        reg.register(target).unwrap();
+    }
+    let manifest = tree
+        .path("sys/etc/opt/chrome/native-messaging-hosts/com.vivswan.chromium_bridge.host.json");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&manifest).unwrap()).unwrap();
+    // Chrome's directory is launched by Brave too, so its wrapper carries no label: a label would file
+    // Brave's connection in Chrome's slot. Vivaldi's own directory keeps its label.
+    let wrapper = install_dir.join("run-host.sh");
+    assert_eq!(parsed["path"], wrapper.to_string_lossy().as_ref());
+    assert!(!fs::read_to_string(&wrapper).unwrap().contains("--label"));
+    let vivaldi: serde_json::Value =
+        serde_json::from_str(
+            &fs::read_to_string(tree.path(
+                "sys/etc/vivaldi/native-messaging-hosts/com.vivswan.chromium_bridge.host.json",
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        vivaldi["path"],
+        install_dir
+            .join("run-host-vivaldi.sh")
+            .to_string_lossy()
+            .as_ref()
+    );
+    assert!(fs::read_to_string(install_dir.join("run-host-vivaldi.sh"))
+        .unwrap()
+        .contains("--label 'vivaldi'"));
+    assert_eq!(assess(&targets[0].registration), RegState::Ok);
+    assert_eq!(assess(&targets[1].registration), RegState::Ok);
+    assert!(
+        !tree.path("home").exists(),
+        "a system-scope registration wrote under the home directory"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode(&install_dir),
+            0o755,
+            "every account's browser must traverse it"
+        );
+        assert_eq!(mode(&wrapper), 0o755);
+        assert_eq!(mode(&manifest), 0o644);
+    }
+
+    // Every created manifest directory is traversable, whatever the umask of the account that ran this.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for dir in [
+            tree.path("sys/etc/opt/chrome/native-messaging-hosts"),
+            tree.path("sys/etc/opt/chrome"),
+            tree.path("sys/etc/opt"),
+        ] {
+            let mode = fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o755, "{}", dir.display());
+        }
+    }
+
+    // A system directory someone else made unreachable is refused before any write, never loosened.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let edge = tree.path("sys/etc/opt/edge");
+        fs::create_dir_all(&edge).unwrap();
+        fs::set_permissions(&edge, fs::Permissions::from_mode(0o700)).unwrap();
+        let target = Target::for_browser(
+            entries.iter().find(|e| e.browser == Browser::Edge).unwrap(),
+            Scope::System,
+        );
+        let err = reg.register(&target).unwrap_err();
+        assert!(err.contains("not traversable by other accounts"), "{err}");
+        assert!(!edge.join("native-messaging-hosts").exists());
+        assert!(
+            !install_dir.join("run-host-edge.sh").exists(),
+            "a refused registration wrote its wrapper"
+        );
+        fs::set_permissions(&edge, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    // On Windows every browser's manifest is the one store file, so the identity is the registry key:
+    // nothing collapses there but Opera, which reads Chrome's key.
+    let windows = browser_targets(browsers::resolve(Os::Windows, &dirs).iter(), Scope::System);
+    assert_eq!(
+        windows.iter().map(|t| t.name.clone()).collect::<Vec<_>>(),
+        vec!["chrome", "chromium", "brave", "edge", "vivaldi"]
+    );
+
+    // doctor rows: Brave's system slot is Chrome's, reported under Chrome's name.
+    let brave = entries
+        .iter()
+        .find(|e| e.browser == Browser::Brave)
+        .unwrap();
+    assert_eq!(brave.system.owner(), Some(Browser::Chrome));
+    assert_eq!(assess(brave.system.registration()), RegState::Ok);
+    assert_eq!(assess(&brave.user), RegState::Missing);
+
+    // uninstall --system: every known browser's system target, once per directory, then the wrappers.
+    for target in browser_targets(entries.iter(), Scope::System) {
+        let (_, errors) = Registrar::uninstall(&target);
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+    let (removed, errors) = remove_wrappers(&install_dir);
+    assert_eq!(removed.len(), 2, "{removed:?}");
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(!manifest.exists());
+    assert!(!install_dir.exists());
+}
+
+/// Chromium on Windows selects a manifest through the registry key alone, so the shared store file is
+/// not this browser's whatever it holds: without the key it reads missing (and so lets a machine-wide
+/// key serve), while a key without its file is ours and stale.
+#[test]
+fn a_windows_registration_is_its_key() {
+    let tree = TempTree::new("classify");
+    let launch = tree.path("bin/chromium-bridge");
+    fs::create_dir_all(launch.parent().unwrap()).unwrap();
+    fs::write(&launch, "").unwrap();
+    let ours = format!(r#"{{"path":{:?}}}"#, launch.to_string_lossy());
+    let cases: Vec<(&str, Slot, Option<Slot>, RegState)> = vec![
+        (
+            "file without the key",
+            Slot::Ours(ours.clone()),
+            Some(Slot::Absent),
+            RegState::Missing,
+        ),
+        (
+            "foreign file without the key",
+            Slot::Foreign("not JSON".into()),
+            Some(Slot::Absent),
+            RegState::Missing,
+        ),
+        (
+            "unreadable file without the key",
+            Slot::Unreadable("a directory".into()),
+            Some(Slot::Absent),
+            RegState::Missing,
+        ),
+        (
+            "key without the file",
+            Slot::Absent,
+            Some(Slot::Ours(String::new())),
+            RegState::Stale("manifest file missing but registry key HKCU\\k present".into()),
+        ),
+        (
+            "both, launchable",
+            Slot::Ours(ours.clone()),
+            Some(Slot::Ours(String::new())),
+            RegState::Ok,
+        ),
+        (
+            "a directory registration needs no key",
+            Slot::Ours(ours),
+            None,
+            RegState::Ok,
+        ),
+        (
+            "a foreign key is reported before the file",
+            Slot::Ours(String::new()),
+            Some(Slot::Foreign("re-pointed".into())),
+            RegState::Foreign("re-pointed".into()),
+        ),
+    ];
+    for (case, file, key, expected) in cases {
+        assert_eq!(
+            classify(ManifestSlots { file, key }, "HKCU\\k"),
+            expected,
+            "{case}"
+        );
+    }
+}
+
+/// Chromium probes the per-user manifest with an existence check that follows symlinks, so a dangling
+/// link there is skipped and the system registration serves, while a directory or a file (ours or not)
+/// stops the lookup; `register` still refuses the dangling link as an entry nobody verified.
+#[cfg(unix)]
+#[test]
+fn lookup_hit_follows_chromiums_existence_probe() {
+    let tree = TempTree::new("lookup");
+    let dir = tree.path("nm");
+    fs::create_dir_all(&dir).unwrap();
+    let reg = Registration::ManifestDir(dir.clone());
+    let manifest = reg.manifest_path();
+    assert!(!lookup_hit(&reg), "absent");
+    std::os::unix::fs::symlink(dir.join("gone"), &manifest).unwrap();
+    assert!(!lookup_hit(&reg), "dangling link");
+    assert!(matches!(assess(&reg), RegState::Unreadable(_)));
+    fs::remove_file(&manifest).unwrap();
+    fs::write(&manifest, "not ours").unwrap();
+    assert!(lookup_hit(&reg), "a foreign file");
+    fs::remove_file(&manifest).unwrap();
+    fs::create_dir(&manifest).unwrap();
+    assert!(lookup_hit(&reg), "a directory");
+}
+
+/// A machine-wide registration launches as other accounts, so the binary must be readable and executable
+/// by them along its whole path: one under a 0700 home reads healthy to `doctor` and fails at launch.
+#[cfg(unix)]
+#[test]
+fn system_scope_refuses_a_binary_other_accounts_cannot_launch() {
+    use std::os::unix::fs::PermissionsExt;
+    let tree = TempTree::new("launchable");
+    let root = tree.path("sys");
+    let place = |rel: &str, dir_modes: &[(&str, u32)], file_mode: u32| -> PathBuf {
+        let exe = root.join(rel);
+        fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        fs::write(&exe, "").unwrap();
+        fs::set_permissions(&exe, fs::Permissions::from_mode(file_mode)).unwrap();
+        for (dir, mode) in dir_modes {
+            fs::set_permissions(root.join(dir), fs::Permissions::from_mode(*mode)).unwrap();
+        }
+        exe
+    };
+    let cases: Vec<(&str, PathBuf, Option<&str>)> = vec![
+        (
+            "a package binary",
+            place("usr/local/bin/chromium-bridge", &[("usr", 0o755)], 0o755),
+            None,
+        ),
+        (
+            "a binary under a private home",
+            place(
+                "home/user/.local/lib/chromium-bridge/chromium-bridge",
+                &[("home/user", 0o700)],
+                0o755,
+            ),
+            Some("home/user is not traversable"),
+        ),
+        (
+            "an owner-only binary in a public directory",
+            place(
+                "opt/example/chromium-bridge",
+                &[("opt/example", 0o755)],
+                0o700,
+            ),
+            Some("chromium-bridge is not readable and executable"),
+        ),
+    ];
+    for (case, exe, refusal) in cases {
+        let got = launchable_by_every_account(&exe, &root);
+        match refusal {
+            None => assert_eq!(got, Ok(()), "{case}"),
+            Some(text) => {
+                let why = got.expect_err(&format!("{case} must be refused"));
+                assert!(why.contains(text), "{case}: {why}");
+            }
+        }
+    }
+    // Restore traversal so the tree's cleanup can remove it.
+    fs::set_permissions(root.join("home/user"), fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// Fail closed both ways, the macOS .pkg's root refusal mirrored: a plain account cannot write the system
+/// roots, and root (HOME is `/root`, or a sudo caller's with root as the owner of what it writes) must not
+/// write a home. Windows elevation keeps the account, so it may write either.
+#[test]
+fn privilege_admits_exactly_the_scope_it_can_write_correctly() {
+    let cases: &[(Privilege, Scope, Result<(), &str>)] = &[
+        (Privilege::User, Scope::User, Ok(())),
+        (Privilege::User, Scope::System, Err("run it as root (sudo)")),
+        (Privilege::Root, Scope::System, Ok(())),
+        (Privilege::Root, Scope::User, Err("pass --system")),
+        (Privilege::Elevated, Scope::User, Ok(())),
+        (Privilege::Elevated, Scope::System, Ok(())),
+    ];
+    for (privilege, scope, expected) in cases {
+        let got = privilege.admit(*scope);
+        match expected {
+            Ok(()) => assert_eq!(got, Ok(()), "{privilege:?} {scope:?}"),
+            Err(hint) => {
+                let refusal = got.expect_err(&format!("{privilege:?} {scope:?} must refuse"));
+                assert!(refusal.contains(hint), "{privilege:?} {scope:?}: {refusal}");
+            }
+        }
+    }
 }
 
 /// The options page shows the host's reason as is, so it names what was looked for and the next step
@@ -499,23 +827,32 @@ fn fix_default_targets_only_detected_browsers_but_explicit_keys_always_work() {
 #[test]
 fn no_targets_reason_reads_as_a_page_sentence() {
     let tree = TempTree::new("no-targets-page");
-    let dirs = BaseDirs {
-        home: tree.path("home"),
-        xdg_config_home: None,
-        xdg_data_home: None,
-        local_app_data: None,
-        roaming_app_data: None,
-        system_applications: tree.path("Applications"),
-    };
-    let entries = browsers::resolve(Os::MacOs, &dirs);
+    let entries = browsers::resolve(Os::MacOs, &tree_dirs(&tree));
     let Err(FixError::NoTargets(reason)) =
-        select_targets(&crate::cli::FixTargets::Detected, &entries)
+        select_targets(&crate::cli::FixTargets::Detected, &entries, Scope::User)
     else {
         panic!("an empty machine must refuse the detected selection");
     };
     assert!(!reason.contains("--"), "{reason}");
     assert!(reason.contains(&known_keys()), "{reason}");
     assert!(reason.contains("install Chrome, Brave or Edge"), "{reason}");
+}
+
+/// packaging/deb/postinst accepts exactly exit 3 as "no browser on this machine yet" and lets dpkg
+/// configure the package; every other refusal, and clap's usage exit 2, must still fail the install.
+#[test]
+fn nothing_detected_exits_three_and_every_other_refusal_exits_one() {
+    assert_eq!(NOTHING_TO_REGISTER, 3);
+    let cases: Vec<(FixError, i32)> = vec![
+        (FixError::NoTargets("none".into()), NOTHING_TO_REGISTER),
+        (FixError::Environment("no HOME".into()), 1),
+        (FixError::Privilege("not root".into()), 1),
+        (FixError::HostExe(std::io::Error::other("gone")), 1),
+        (FixError::Unlaunchable("0700".into()), 1),
+    ];
+    for (error, code) in cases {
+        assert_eq!(fix_exit_code(&error), code, "{error:?}");
+    }
 }
 
 /// The CLI (and the installer logs that capture it) gets the same reason with the flags a terminal
@@ -543,6 +880,8 @@ fn symlinked_install_dir_is_refused() {
     let reg = Registrar {
         host_exe: tree.path("bin/chromium-bridge"),
         install_dir: link,
+        scope: Scope::User,
+        system_root: tree.path("sys"),
         extension_id: PINNED_EXTENSION_ID.to_string(),
     };
     let target = macos_target(&tree);
@@ -560,12 +899,15 @@ fn registry_targets_fail_closed_off_windows() {
         let tree = TempTree::new("registry");
         let reg = registrar(&tree);
         let target = Target {
-            browser: Some(Browser::Chrome),
+            label: Some(Browser::Chrome),
+            name: "chrome".into(),
             registration: Registration::Registry {
+                hive: Hive::CurrentUser,
                 key: r"Software\Google\Chrome\NativeMessagingHosts\x".into(),
                 manifest_path: tree.path("store/x.json"),
             },
             pointer: Some(ExtensionPointer::Registry {
+                hive: Hive::CurrentUser,
                 key: r"Software\Google\Chrome\Extensions\x".into(),
             }),
         };

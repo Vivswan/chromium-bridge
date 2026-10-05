@@ -166,7 +166,10 @@ fn registration_report(
 /// that failed on any target answers that failure in place of rows, so the extension re-asks for the state it
 /// should show.
 fn registration_repair_reply() -> AdminControl {
-    let outcomes = match crate::registration::fix(&crate::cli::FixTargets::Detected) {
+    let outcomes = match crate::registration::fix(
+        &crate::cli::FixTargets::Detected,
+        crate::browsers::Scope::User,
+    ) {
         Ok(outcomes) => outcomes,
         Err(e) => {
             log_warn!(

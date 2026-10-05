@@ -16,7 +16,7 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
-use crate::browsers::{self, BaseDirs, ExtensionPointer, Os};
+use crate::browsers::{self, BaseDirs, ExtensionPointer, Os, Registration, Scope, Scoped};
 use crate::cli::DoctorCommand;
 use crate::identity::NATIVE_HOST_ID;
 use crate::ipc::{LockFile, RuntimeDir};
@@ -85,20 +85,52 @@ pub enum LockState {
     },
 }
 
-/// One browser's registration state, as diagnosed through the shared
-/// resolver and `registration::assess`. Stores the assessed [`RegState`]
-/// itself; the rendered wording and the health verdict are derived at use,
-/// so they cannot disagree with each other.
+/// One browser's registration state in both scopes, as diagnosed through the
+/// shared resolver and `registration::assess`. Stores the assessed
+/// [`RegState`]s themselves; the rendered wording and the health verdict are
+/// derived at use, so they cannot disagree with each other.
 #[derive(Debug, Clone, Serialize)]
 pub struct ManifestStatus {
     pub key: &'static str,
     pub detected: bool,
+    pub manifest: Scoped<SlotStatus>,
+    /// The scope the browser's own lookup lands on (`registration::lookup_hit` on the per-user entry):
+    /// the per-user one when an entry exists there, whatever it holds, else the machine-wide one.
+    pub effective_scope: Scope,
+    /// The browser's external-extension pointer per scope; `None` where the
+    /// resolver defines none (Linux). It informs and never decides the
+    /// verdict: the bridge works without it once the extension is loaded any
+    /// other way.
+    pub pointer: Option<Scoped<PointerStatus>>,
+}
+
+/// One scope's manifest state and where it lives.
+#[derive(Debug, Clone, Serialize)]
+pub struct SlotStatus {
     pub state: RegState,
     pub location: String,
-    /// The browser's external-extension pointer; `None` where the resolver
-    /// defines none (Linux). It informs and never decides the verdict: the
-    /// bridge works without it once the extension is loaded any other way.
-    pub pointer: Option<PointerStatus>,
+    /// The browser whose directory this is, when the row's browser reads another's
+    /// ([`crate::browsers::SystemRegistration::ReadsFrom`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<&'static str>,
+}
+
+impl SlotStatus {
+    fn assess(registration: &Registration, owner: Option<&'static str>) -> SlotStatus {
+        SlotStatus {
+            state: registration::assess(registration),
+            location: registration.location(),
+            owner,
+        }
+    }
+
+    /// The location, with the directory's owner when it is another browser's.
+    fn describe_location(&self) -> String {
+        match self.owner {
+            Some(owner) => format!("{} (reads {owner}'s)", self.location),
+            None => self.location.clone(),
+        }
+    }
 }
 
 /// One browser's external-extension pointer state, beside its manifest's.
@@ -115,10 +147,6 @@ impl PointerStatus {
             location: pointer.location(),
         }
     }
-
-    fn describe(status: Option<&PointerStatus>) -> String {
-        status.map_or_else(|| "n/a".into(), |p| p.state.describe())
-    }
 }
 
 /// Why Linux rows carry no pointer, as the full report says beside them.
@@ -126,18 +154,24 @@ const NO_POINTER_ON_LINUX: &str =
     "none on linux: Chrome would install the extension silently; add it from the Web Store";
 
 impl ManifestStatus {
+    /// The registration the browser acts on.
+    fn effective(&self) -> &SlotStatus {
+        self.manifest.get(self.effective_scope)
+    }
+
     fn healthy(&self) -> bool {
-        self.state == RegState::Ok
+        self.effective().state == RegState::Ok
     }
 }
 
 impl From<&ManifestStatus> for crate::protocol::control::RegistrationRow {
     fn from(status: &ManifestStatus) -> Self {
+        let effective = status.effective();
         crate::protocol::control::RegistrationRow {
             browser: status.key.to_string(),
             detected: status.detected,
-            state: (&status.state).into(),
-            location: status.location.clone(),
+            state: (&effective.state).into(),
+            location: effective.location.clone(),
         }
     }
 }
@@ -156,15 +190,28 @@ impl Report {
 /// check could not run. The native host answers `registration_status` from
 /// this same read.
 pub(crate) fn gather_manifests() -> Result<Vec<ManifestStatus>, String> {
-    let dirs = BaseDirs::from_env()?;
+    let dirs = BaseDirs::from_env(Scope::User)?;
     Ok(browsers::resolve(Os::current(), &dirs)
         .iter()
         .map(|entry| ManifestStatus {
             key: entry.browser.key(),
             detected: entry.detected(),
-            state: registration::assess(&entry.registration),
-            location: entry.registration.location(),
-            pointer: entry.pointer.as_ref().map(PointerStatus::assess),
+            manifest: Scoped {
+                user: SlotStatus::assess(&entry.user, None),
+                system: SlotStatus::assess(
+                    entry.system.registration(),
+                    entry.system.owner().map(browsers::Browser::key),
+                ),
+            },
+            effective_scope: if registration::lookup_hit(&entry.user) {
+                Scope::User
+            } else {
+                Scope::System
+            },
+            pointer: entry.pointer.as_ref().map(|pointer| Scoped {
+                user: PointerStatus::assess(&pointer.user),
+                system: PointerStatus::assess(&pointer.system),
+            }),
         })
         .collect())
 }
@@ -266,25 +313,46 @@ fn render(r: &Report) -> String {
         Ok(list) => {
             for m in list {
                 out.push_str(&format!(
-                    "  {:<9} {:<13} manifest {:<10} {}\n",
+                    "  {:<9} {:<13} manifest {:<7} {:<10} {}\n",
                     m.key,
                     if m.detected {
                         "detected"
                     } else {
                         "not detected"
                     },
-                    m.state.describe(),
-                    m.location,
+                    Scope::User.key(),
+                    m.manifest.user.state.describe(),
+                    m.manifest.user.describe_location(),
                 ));
                 out.push_str(&format!(
-                    "  {:<9} {:<13} pointer  {:<10} {}\n",
+                    "  {:<9} {:<13} manifest {:<7} {:<10} {}\n",
                     "",
                     "",
-                    PointerStatus::describe(m.pointer.as_ref()),
-                    m.pointer
-                        .as_ref()
-                        .map_or(NO_POINTER_ON_LINUX, |p| p.location.as_str()),
+                    Scope::System.key(),
+                    m.manifest.system.state.describe(),
+                    m.manifest.system.describe_location(),
                 ));
+                match &m.pointer {
+                    Some(pointer) => {
+                        for (scope, p) in [
+                            (Scope::User, &pointer.user),
+                            (Scope::System, &pointer.system),
+                        ] {
+                            out.push_str(&format!(
+                                "  {:<9} {:<13} pointer  {:<7} {:<10} {}\n",
+                                "",
+                                "",
+                                scope.key(),
+                                p.state.describe(),
+                                p.location,
+                            ));
+                        }
+                    }
+                    None => out.push_str(&format!(
+                        "  {:<9} {:<13} pointer  {:<7} {:<10} {NO_POINTER_ON_LINUX}\n",
+                        "", "", "", "n/a",
+                    )),
+                }
             }
         }
     }
@@ -386,27 +454,46 @@ fn exit_code(r: &Report) -> i32 {
     }
 }
 
-/// `doctor --list`: one line per known browser (detection, registration
-/// state, location). Read-only, resolver-only: no lock file, no probe.
+/// `doctor --list`: one line per known browser and scope (detection,
+/// registration state, pointer state, location). Read-only, resolver-only:
+/// no lock file, no probe.
 fn run_list() -> i32 {
-    let (os, dirs) = match registration::resolve_env() {
+    let (os, dirs) = match registration::resolve_env(Scope::User) {
         Ok(v) => v,
         Err(code) => return code,
     };
     println!("known browsers (host id {NATIVE_HOST_ID}):");
     for entry in browsers::resolve(os, &dirs) {
-        println!(
-            "  {:<9} {:<13} manifest {:<10} pointer {:<10} {}",
-            entry.browser.key(),
-            if entry.detected() {
-                "detected"
-            } else {
-                "not detected"
-            },
-            registration::assess(&entry.registration).describe(),
-            PointerStatus::describe(entry.pointer.as_ref().map(PointerStatus::assess).as_ref()),
-            entry.registration.location()
-        );
+        let detected = if entry.detected() {
+            "detected"
+        } else {
+            "not detected"
+        };
+        let rows = [
+            (Scope::User, SlotStatus::assess(&entry.user, None)),
+            (
+                Scope::System,
+                SlotStatus::assess(
+                    entry.system.registration(),
+                    entry.system.owner().map(browsers::Browser::key),
+                ),
+            ),
+        ];
+        for (scope, slot) in rows {
+            let pointer = entry.pointer.as_ref().map_or_else(
+                || "n/a".into(),
+                |p| PointerStatus::assess(p.get(scope)).state.describe(),
+            );
+            println!(
+                "  {:<9} {:<13} {:<7} manifest {:<10} pointer {:<10} {}",
+                entry.browser.key(),
+                detected,
+                scope.key(),
+                slot.state.describe(),
+                pointer,
+                slot.describe_location()
+            );
+        }
     }
     0
 }
@@ -437,7 +524,7 @@ pub fn run(command: DoctorCommand) -> i32 {
                 1
             }
         },
-        DoctorCommand::Fix(targets) => registration::run_fix(&targets),
+        DoctorCommand::Fix { targets, scope } => registration::run_fix(&targets, scope),
         DoctorCommand::Report { json } => {
             let report = gather();
             if json {
@@ -479,24 +566,65 @@ mod tests {
                 ManifestStatus {
                     key: "chrome",
                     detected: true,
-                    state: RegState::Ok,
-                    location: "/tmp/com.vivswan.chromium_bridge.host.json".into(),
-                    pointer: Some(PointerStatus {
-                        state: PointerState::Ok,
-                        location: "/tmp/External Extensions/mkjjlmjbcljpcfkfadfmhblmmddkdihf.json"
-                            .into(),
+                    manifest: Scoped {
+                        user: slot(RegState::Ok, "/tmp/com.vivswan.chromium_bridge.host.json", None),
+                        system: slot(
+                            RegState::Missing,
+                            "/Library/Google/Chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json",
+                            None,
+                        ),
+                    },
+                    effective_scope: Scope::User,
+                    pointer: Some(Scoped {
+                        user: PointerStatus {
+                            state: PointerState::Ok,
+                            location:
+                                "/tmp/External Extensions/mkjjlmjbcljpcfkfadfmhblmmddkdihf.json"
+                                    .into(),
+                        },
+                        system: PointerStatus {
+                            state: PointerState::Missing,
+                            location: "/Library/Application Support/Google/Chrome/External Extensions/mkjjlmjbcljpcfkfadfmhblmmddkdihf.json".into(),
+                        },
                     }),
                 },
                 ManifestStatus {
                     key: "brave",
                     detected: false,
-                    state: RegState::Missing,
-                    location: "/tmp/brave/com.vivswan.chromium_bridge.host.json".into(),
+                    manifest: Scoped {
+                        user: slot(RegState::Missing, "/tmp/brave/com.vivswan.chromium_bridge.host.json", None),
+                        system: slot(
+                            RegState::Missing,
+                            "/Library/Google/Chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json",
+                            Some("chrome"),
+                        ),
+                    },
+                    effective_scope: Scope::System,
                     pointer: None,
                 },
             ]),
             kill: Ok(false),
             policy: policy_report(PolicyStoreState::None),
+        }
+    }
+
+    fn row(
+        state: crate::protocol::control::RegistrationState,
+        location: &str,
+    ) -> crate::protocol::control::RegistrationRow {
+        crate::protocol::control::RegistrationRow {
+            browser: "chrome".into(),
+            detected: true,
+            state,
+            location: location.into(),
+        }
+    }
+
+    fn slot(state: RegState, location: &str, owner: Option<&'static str>) -> SlotStatus {
+        SlotStatus {
+            state,
+            location: location.into(),
+            owner,
         }
     }
 
@@ -532,13 +660,17 @@ mod tests {
         assert!(text.contains("reachable (socket connect OK)"));
         // Per-browser manifest lines from the shared resolver.
         assert!(text.contains("host id com.vivswan.chromium_bridge.host"));
-        assert!(text.contains("chrome"));
-        assert!(text.contains("manifest ok"));
-        assert!(text.contains("manifest missing"));
-        // The pointer row beside each manifest: its state and location, or why Linux has none.
-        assert!(text.contains("pointer  ok         /tmp/External Extensions/"));
+        // Both scopes per browser, and a shared system directory named after its owner.
+        assert!(text.contains("chrome    detected      manifest user    ok         /tmp/"));
+        assert!(text.contains("manifest system  missing    /Library/Google/Chrome/"));
         assert!(text.contains(
-            "pointer  n/a        none on linux: Chrome would install the extension silently"
+            "NativeMessagingHosts/com.vivswan.chromium_bridge.host.json (reads chrome's)"
+        ));
+        // The pointer rows beside each manifest: state and location per scope, or why Linux has none.
+        assert!(text.contains("pointer  user    ok         /tmp/External Extensions/"));
+        assert!(text.contains("pointer  system  missing    /Library/Application Support/Google/Chrome/External Extensions/"));
+        assert!(text.contains(
+            "pointer          n/a        none on linux: Chrome would install the extension silently"
         ));
         // Honest note: green checks still don't prove the extension connected.
         assert!(text.contains("do NOT confirm the Chrome extension"));
@@ -593,6 +725,92 @@ mod tests {
         assert_eq!(exit_code(&r), 1);
     }
 
+    /// Chromium's lookup order, which the verdict and the wire row follow: the per-user entry wins when
+    /// one exists, whatever it holds, the system one counts only in its absence, and an entry its
+    /// existence probe skips (a dangling link, unreadable to us) does not shadow.
+    #[test]
+    fn verdict_follows_the_per_user_entry_first_then_the_system_one() {
+        use crate::protocol::control::{RegistrationRow, RegistrationState};
+        let user_path = "/tmp/com.vivswan.chromium_bridge.host.json";
+        let system_path =
+            "/Library/Google/Chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json";
+        let cases: Vec<(&str, RegState, RegState, Scope, i32, RegistrationRow)> = vec![
+            (
+                "user ok shadows system missing",
+                RegState::Ok,
+                RegState::Missing,
+                Scope::User,
+                0,
+                row(RegistrationState::Ok {}, user_path),
+            ),
+            (
+                "system ok serves when user missing (the .deb)",
+                RegState::Missing,
+                RegState::Ok,
+                Scope::System,
+                0,
+                row(RegistrationState::Ok {}, system_path),
+            ),
+            (
+                "a foreign user file shadows a healthy system one",
+                RegState::Foreign("other".into()),
+                RegState::Ok,
+                Scope::User,
+                1,
+                row(
+                    RegistrationState::Foreign {
+                        detail: "other".into(),
+                    },
+                    user_path,
+                ),
+            ),
+            (
+                "a stale user file shadows too",
+                RegState::Stale("launch path missing: /x".into()),
+                RegState::Ok,
+                Scope::User,
+                1,
+                row(
+                    RegistrationState::Stale {
+                        detail: "launch path missing: /x".into(),
+                    },
+                    user_path,
+                ),
+            ),
+            (
+                "a dangling user link is skipped by the browser and does not shadow",
+                RegState::Unreadable("a dangling symlink sits at this path".into()),
+                RegState::Ok,
+                Scope::System,
+                0,
+                row(RegistrationState::Ok {}, system_path),
+            ),
+            (
+                "both missing",
+                RegState::Missing,
+                RegState::Missing,
+                Scope::System,
+                1,
+                row(RegistrationState::Missing {}, system_path),
+            ),
+        ];
+        for (case, user, system, effective_scope, exit, wire) in cases {
+            let mut r = healthy_report();
+            {
+                let chrome = &mut r.manifests.as_mut().unwrap()[0];
+                chrome.manifest.user.state = user;
+                chrome.manifest.system.state = system;
+                chrome.effective_scope = effective_scope;
+            }
+            assert_eq!(exit_code(&r), exit, "{case}");
+            assert_eq!(
+                RegistrationRow::from(&r.manifests.as_ref().unwrap()[0]),
+                wire,
+                "{case}"
+            );
+        }
+    }
+
     #[test]
     fn render_missing_lock_reports_not_running() {
         let r = Report {
@@ -607,17 +825,27 @@ mod tests {
             manifests: Ok(vec![ManifestStatus {
                 key: "chrome",
                 detected: true,
-                state: RegState::Missing,
-                location:
-                    "/home/u/.config/google-chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
-                        .into(),
+                manifest: Scoped {
+                    user: slot(
+                        RegState::Missing,
+                        "/home/user/.config/google-chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json",
+                        None,
+                    ),
+                    system: slot(
+                        RegState::Missing,
+                        "/etc/opt/chrome/native-messaging-hosts/com.vivswan.chromium_bridge.host.json",
+                        None,
+                    ),
+                },
+                effective_scope: Scope::System,
                 pointer: None,
             }]),
             kill: Ok(false),
             policy: policy_report(PolicyStoreState::None),
         };
         let text = render(&r);
-        assert!(text.contains("manifest missing"));
+        assert!(text.contains("manifest user    missing"));
+        assert!(text.contains("manifest system  missing"));
         assert!(text.contains("not probed (no lock file)"));
         assert!(text.contains("server not running"));
         assert_eq!(exit_code(&r), 1);

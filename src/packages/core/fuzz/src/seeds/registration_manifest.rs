@@ -4,6 +4,7 @@
 
 use std::path::Path;
 
+use chromium_bridge_core::browsers::Scope;
 use chromium_bridge_core::identity::PINNED_EXTENSION_ID;
 use chromium_bridge_core::registration::{
     fuzz_api, manifest_ownership, pointer_json, pointer_ownership, Ownership, Registrar,
@@ -32,6 +33,8 @@ pub(super) fn directory() -> Directory {
     let registrar = Registrar {
         host_exe: "/opt/example/chromium-bridge".into(),
         install_dir: "/opt/example".into(),
+        scope: Scope::User,
+        system_root: "/".into(),
         extension_id: PINNED_EXTENSION_ID.into(),
     };
     let written = registrar

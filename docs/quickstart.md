@@ -16,13 +16,13 @@ The CLI needs nothing but the binary, on desktops, headless machines, and CI ali
    | --- | --- | --- |
    | macOS `.pkg` | right-click, Open (unsigned for now) | installs `/usr/local/bin/chromium-bridge` and runs step 3 for you |
    | Windows `.msi` | double-click (unsigned for now; SmartScreen warns) | installs under `%LOCALAPPDATA%\Programs\chromium-bridge` for your account, adds it to your PATH, and runs step 3 for you |
-   | Linux `.deb` | `sudo dpkg -i chromium-bridge-<tag>-linux-x64.deb` | installs `/usr/bin/chromium-bridge`; run step 3 yourself |
+   | Linux `.deb` | `sudo dpkg -i chromium-bridge-<tag>-linux-x64.deb` | installs `/usr/bin/chromium-bridge` and runs step 3 for you, machine-wide |
    | Homebrew | `brew install vivswan/tap/chromium-bridge`, once the tap exists ([release.md](./release.md#homebrew-tap)) | installs the binary and runs step 3 for you |
    | archive | extract `chromium-bridge-<tag>-<platform>-<arch>.tar.gz` (`.zip` on Windows) | the binary and `extension/dist`; steps 2 and 3 are yours |
 
    Or build from source with `cargo build --release`. Windows registration has not yet been tried on a user's machine ([cli.md's Windows note](./cli.md#doctor---fix--uninstall-native-messaging-registration)).
 2. **Archive only: put it somewhere stable.** Registrations point at the binary in place, so pick a path that will not disappear: `~/.local/lib/chromium-bridge/` on Linux, anywhere under your home on macOS. An AppImage mount or a temp directory is not stable, and `doctor --fix` warns if you try.
-3. **Register it with your browsers.** The .pkg, the .msi and Homebrew did this already; the .deb and the archive need it (from the archive, run the binary from its extracted directory with a `./` prefix):
+3. **Register it with your browsers.** The .pkg, the .deb, the .msi and Homebrew did this already; the archive needs it (run the binary from its extracted directory with a `./` prefix):
 
    ```sh
    chromium-bridge doctor --fix                       # every detected browser

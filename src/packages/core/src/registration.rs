@@ -8,6 +8,9 @@
 //! ```text
 //! target         -> THIS binary (current_exe); nothing is built, downloaded, or copied, and repairing is idempotent
 //!                   re-registration, so on a fresh machine `doctor --fix` IS the install
+//! scope          -> one per command: the account's own locations, or with `--system` the root-owned ones every
+//!                   account's browser reads (the .deb's post-install, which runs as root); the command's privilege
+//!                   must match the scope ([`Privilege`]), so root never writes into a home and a user never into /etc
 //! macOS / Linux  -> Chrome's manifest has no `args` field, so each browser gets a wrapper script baking in
 //!                   `--native-host --label <browser>` (the label rides the bridge handshake)
 //! Windows        -> Chrome appends the extension origin to the command line, which selects native-host mode, so the
@@ -23,7 +26,10 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use crate::browsers::{self, BaseDirs, Browser, BrowserEntry, ExtensionPointer, Os, Registration};
+use crate::browsers::{
+    self, BaseDirs, Browser, BrowserEntry, ExtensionPointer, Hive, Os, Registration, Scope,
+    SystemRegistration,
+};
 use crate::cli::{FixTargets, UninstallArgs};
 use crate::identity::{NATIVE_HOST_ID, PINNED_EXTENSION_ID};
 use serde::Serialize;
@@ -67,16 +73,25 @@ pub struct Registrar {
     /// Where wrapper scripts live (Unix). Same directory the shell installer
     /// used, so re-registering over a legacy `install.sh` install converges.
     pub install_dir: PathBuf,
+    /// Whose registrations these are; decides the install dir's mode (0700 per user, 0755 machine-wide).
+    pub scope: Scope,
+    /// Where a machine-wide reachability walk stops: the directory whose own reachability by every account
+    /// is taken as given (`/` on a real machine, the fixture root in tests). Unused per user.
+    pub system_root: PathBuf,
     /// The extension ID trusted in `allowed_origins`.
     pub extension_id: String,
 }
 
-/// One registration to write or remove: a known browser (labeled) or an
-/// explicit `--manifest-dir` (unlabeled).
+/// One registration to write or remove. The label rides the wrapper as `--label` so the broker files the
+/// connection under that browser; it exists only when exactly one browser launches the manifest. An
+/// explicit `--manifest-dir` cannot name its browser, and a system directory several browsers read
+/// (Chrome's, which Brave and Opera read) cannot either: a label there would file Brave's connection in
+/// Chrome's slot and route a call aimed at Chrome to Brave, so those connections take the broker's default
+/// slot instead.
 pub struct Target {
-    /// The browser whose key is baked into the wrapper as `--label`; `None`
-    /// for explicit dirs, whose browser we cannot name.
-    pub browser: Option<Browser>,
+    pub label: Option<Browser>,
+    /// What reports call it: the browser key, or the location of an explicit dir.
+    pub name: String,
     pub registration: Registration,
     /// The browser's external-extension pointer; `None` where none is written
     /// (Linux, and explicit dirs, whose browser we cannot name).
@@ -84,31 +99,54 @@ pub struct Target {
 }
 
 impl Target {
-    pub fn for_browser(entry: &BrowserEntry) -> Target {
-        Target {
-            browser: Some(entry.browser),
-            registration: entry.registration.clone(),
-            pointer: entry.pointer.clone(),
+    /// The browser's target in one scope. A browser that reads another's system directory
+    /// ([`SystemRegistration::ReadsFrom`]) yields the owner's target.
+    pub fn for_browser(entry: &BrowserEntry, scope: Scope) -> Target {
+        match scope {
+            Scope::User => Target {
+                label: Some(entry.browser),
+                name: entry.browser.key().to_string(),
+                registration: entry.user.clone(),
+                pointer: entry.pointer.as_ref().map(|p| p.user.clone()),
+            },
+            Scope::System => {
+                let pointer = entry.pointer.as_ref().map(|p| p.system.clone());
+                match &entry.system {
+                    SystemRegistration::Own {
+                        registration,
+                        readers,
+                    } => Target {
+                        label: readers.is_empty().then_some(entry.browser),
+                        name: entry.browser.key().to_string(),
+                        registration: registration.clone(),
+                        pointer,
+                    },
+                    SystemRegistration::ReadsFrom {
+                        owner,
+                        registration,
+                    } => Target {
+                        label: None,
+                        name: owner.key().to_string(),
+                        registration: registration.clone(),
+                        pointer,
+                    },
+                }
+            }
         }
     }
 
     pub fn for_explicit_dir(dir: &Path) -> Target {
+        let registration = browsers::explicit_dir_registration(dir);
         Target {
-            browser: None,
-            registration: browsers::explicit_dir_registration(dir),
+            label: None,
+            name: registration.location(),
+            registration,
             pointer: None,
         }
     }
 
     fn label(&self) -> Option<&'static str> {
-        self.browser.map(Browser::key)
-    }
-
-    fn describe(&self) -> String {
-        match self.browser {
-            Some(b) => b.key().to_string(),
-            None => self.registration.location(),
-        }
+        self.label.map(Browser::key)
     }
 }
 
@@ -254,20 +292,20 @@ fn file_slot(path: &Path, ownership: fn(&str) -> Ownership) -> Slot {
 /// A registry key this engine may own holds exactly one REG_SZ value, the one
 /// it wrote, and no child key; `expected` judges that value. Any other shape
 /// is someone else's key.
-fn registry_slot(key: &str, name: &str, expected: impl Fn(&str) -> bool) -> Slot {
-    match registry_key(key) {
-        Err(why) => Slot::Unreadable(format!("registry key HKCU\\{key}: {why}")),
+fn registry_slot(hive: Hive, key: &str, name: &str, expected: impl Fn(&str) -> bool) -> Slot {
+    match registry_key(hive, key) {
+        Err(why) => Slot::Unreadable(format!("registry key {hive}\\{key}: {why}")),
         Ok(None) => Slot::Absent,
         Ok(Some(RegistryKey { children, .. })) if children > 0 => Slot::Foreign(format!(
-            "registry key HKCU\\{key} carries child keys this project never writes"
+            "registry key {hive}\\{key} carries child keys this project never writes"
         )),
         Ok(Some(RegistryKey { values, .. })) => match values.as_slice() {
             [(only, value)] if only == name && expected(value) => Slot::Ours(value.clone()),
             [(only, value)] if only == name => Slot::Foreign(format!(
-                "registry key HKCU\\{key} points at {value:?}, not ours"
+                "registry key {hive}\\{key} points at {value:?}, not ours"
             )),
             _ => Slot::Foreign(format!(
-                "registry key HKCU\\{key} carries values this project never writes"
+                "registry key {hive}\\{key} carries values this project never writes"
             )),
         },
     }
@@ -299,8 +337,10 @@ pub fn pointer_ownership(contents: &str) -> Ownership {
 fn pointer_slot(pointer: &ExtensionPointer) -> Slot {
     match pointer {
         ExtensionPointer::File(path) => file_slot(path, pointer_ownership),
-        ExtensionPointer::Registry { key } => {
-            registry_slot(key, POINTER_VALUE_NAME, |url| url == WEB_STORE_UPDATE_URL)
+        ExtensionPointer::Registry { hive, key } => {
+            registry_slot(*hive, key, POINTER_VALUE_NAME, |url| {
+                url == WEB_STORE_UPDATE_URL
+            })
         }
     }
 }
@@ -354,7 +394,7 @@ fn manifest_slots(reg: &Registration) -> ManifestSlots {
         file: file_slot(&manifest_path, manifest_ownership),
         key: match reg {
             Registration::ManifestDir(_) => None,
-            Registration::Registry { key, .. } => Some(registry_slot(key, "", |v| {
+            Registration::Registry { hive, key, .. } => Some(registry_slot(*hive, key, "", |v| {
                 same_windows_path(v, &manifest_path)
             })),
         },
@@ -364,26 +404,32 @@ fn manifest_slots(reg: &Registration) -> ManifestSlots {
 /// Diagnose one registration (read-only). This is what `doctor` prints per
 /// browser and what decides whether `--fix` has anything to repair.
 pub fn assess(reg: &Registration) -> RegState {
-    let slots = manifest_slots(reg);
     let key_name = match reg {
-        Registration::ManifestDir(_) => "",
-        Registration::Registry { key, .. } => key.as_str(),
+        Registration::ManifestDir(_) => String::new(),
+        Registration::Registry { hive, key, .. } => format!("{hive}\\{key}"),
     };
-    // On Windows the key is half the registration: a surviving key must be
-    // reported even when the manifest file is gone, and a re-pointed or
-    // unreadable key must never be summarized as merely "missing".
+    classify(manifest_slots(reg), &key_name)
+}
+
+/// The state the two slots amount to. A Windows registration IS its key: Chromium selects the manifest
+/// through the key alone, and the file sits in a store every browser's registration shares, so without
+/// the key the browser has nothing here whatever the file holds (a key alone reads stale, a file alone
+/// reads missing; `register` still judges the file before writing).
+fn classify(slots: ManifestSlots, key_name: &str) -> RegState {
+    // A re-pointed or unreadable key must never be summarized as merely "missing".
     match &slots.key {
         Some(Slot::Foreign(why)) => return RegState::Foreign(why.clone()),
         Some(Slot::Unreadable(why)) => return RegState::Unreadable(why.clone()),
-        Some(Slot::Absent | Slot::Ours(_)) | None => {}
+        Some(Slot::Absent) => return RegState::Missing,
+        Some(Slot::Ours(_)) | None => {}
     }
     let contents = match slots.file {
         Slot::Absent => {
             return match slots.key {
-                Some(Slot::Ours(_)) => RegState::Stale(format!(
-                    "manifest file missing but registry key HKCU\\{key_name} present"
+                Some(_) => RegState::Stale(format!(
+                    "manifest file missing but registry key {key_name} present"
                 )),
-                _ => RegState::Missing,
+                None => RegState::Missing,
             };
         }
         Slot::Unreadable(why) => return RegState::Unreadable(why),
@@ -395,14 +441,10 @@ pub fn assess(reg: &Registration) -> RegState {
         .ok()
         .and_then(|v| v.get("path").and_then(|p| p.as_str()).map(PathBuf::from));
     match launch {
-        Some(p) if p.is_file() => {}
-        Some(p) => return RegState::Stale(format!("launch path missing: {}", p.display())),
-        None => return RegState::Stale("manifest has no launch path".into()),
+        Some(p) if p.is_file() => RegState::Ok,
+        Some(p) => RegState::Stale(format!("launch path missing: {}", p.display())),
+        None => RegState::Stale("manifest has no launch path".into()),
     }
-    if let Some(Slot::Absent) = slots.key {
-        return RegState::Stale(format!("registry key HKCU\\{key_name} missing"));
-    }
-    RegState::Ok
 }
 
 impl Registrar {
@@ -452,33 +494,48 @@ impl Registrar {
     pub fn register(&self, target: &Target) -> Result<Vec<String>, String> {
         // A registry registration is impossible from a non-Windows build;
         // refuse before writing anything at all.
-        if let Registration::Registry { key, .. } = &target.registration {
-            registry_supported(key)?;
+        if let Registration::Registry { hive, key, .. } = &target.registration {
+            registry_supported(*hive, key)?;
         }
         let manifest_path = target.registration.manifest_path();
         let slots = manifest_slots(&target.registration);
         slots.file.writable(&manifest_path.display().to_string())?;
-        if let (Some(key), Registration::Registry { key: name, .. }) =
-            (&slots.key, &target.registration)
+        if let (
+            Some(key),
+            Registration::Registry {
+                hive, key: name, ..
+            },
+        ) = (&slots.key, &target.registration)
         {
-            key.writable(&format!("registry key HKCU\\{name}"))?;
+            key.writable(&format!("registry key {hive}\\{name}"))?;
         }
         if let Some(pointer) = &target.pointer {
             pointer_slot(pointer).writable(&format!("extension pointer {}", pointer.location()))?;
         }
 
+        // Every directory before any file, so a refusal (a system directory other accounts cannot
+        // traverse) leaves nothing written.
+        if let Registration::ManifestDir(dir) = &target.registration {
+            self.create_dir(dir)
+                .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+        }
+        if let Some(ExtensionPointer::File(path)) = &target.pointer {
+            let dir = path
+                .parent()
+                .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
+            self.create_dir(dir)
+                .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+        }
+        self.ensure_install_dir()?;
+
         let mut lines = Vec::new();
         let launch_path = match &target.registration {
-            Registration::ManifestDir(dir) => {
+            Registration::ManifestDir(_) => {
                 // Unix: wrapper first, then the manifest that points at it.
-                crate::fsguard::ensure_private_dir(&self.install_dir)
-                    .map_err(|e| format!("could not create {}: {e}", self.install_dir.display()))?;
                 let label = target.label();
                 let wrapper = self.wrapper_path(label);
                 write_atomic(&wrapper, self.wrapper_script(label).as_bytes(), true)
                     .map_err(|e| format!("could not write {}: {e}", wrapper.display()))?;
-                fs::create_dir_all(dir)
-                    .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
                 lines.push(format!(
                     "  launches {}{}",
                     wrapper.display(),
@@ -486,12 +543,10 @@ impl Registrar {
                 ));
                 wrapper
             }
-            Registration::Registry { key, .. } => {
+            Registration::Registry { hive, key, .. } => {
                 // Windows: manifest in our own store dir, registry key points
                 // at it, binary launched directly (origin argv selects mode).
-                crate::fsguard::ensure_private_dir(&self.install_dir)
-                    .map_err(|e| format!("could not create {}: {e}", self.install_dir.display()))?;
-                lines.push(format!("  registry key HKCU\\{key}"));
+                lines.push(format!("  registry key {hive}\\{key}"));
                 self.host_exe.clone()
             }
         };
@@ -506,32 +561,56 @@ impl Registrar {
             0,
             format!(
                 "{}: manifest written to {}",
-                target.describe(),
+                target.name.clone(),
                 manifest_path.display()
             ),
         );
 
-        if let Registration::Registry { key, .. } = &target.registration {
-            set_registry_value(key, "", &manifest_path.to_string_lossy())?;
+        if let Registration::Registry { hive, key, .. } = &target.registration {
+            set_registry_value(*hive, key, "", &manifest_path.to_string_lossy())?;
         }
         if let Some(pointer) = &target.pointer {
             match pointer {
                 ExtensionPointer::File(path) => {
-                    let dir = path
-                        .parent()
-                        .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
-                    fs::create_dir_all(dir)
-                        .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
                     write_atomic(path, pointer_json().as_bytes(), false)
                         .map_err(|e| format!("could not write {}: {e}", path.display()))?;
                 }
-                ExtensionPointer::Registry { key } => {
-                    set_registry_value(key, POINTER_VALUE_NAME, WEB_STORE_UPDATE_URL)?;
+                ExtensionPointer::Registry { hive, key } => {
+                    set_registry_value(*hive, key, POINTER_VALUE_NAME, WEB_STORE_UPDATE_URL)?;
                 }
             }
             lines.push(format!("  extension pointer {}", pointer.location()));
         }
         Ok(lines)
+    }
+
+    /// The wrapper dir, with the scope's mode: private (0700) for an account's own, since only its browser
+    /// reads it; 0755 machine-wide, since every account's browser must traverse a root-owned one. The
+    /// symlink refusal is `fsguard`'s either way.
+    fn ensure_install_dir(&self) -> Result<(), String> {
+        let create = || -> std::io::Result<()> {
+            if let (Scope::System, Some(parent)) = (self.scope, self.install_dir.parent()) {
+                create_traversable_dirs(parent, &self.system_root)?;
+            }
+            crate::fsguard::ensure_private_dir(&self.install_dir)?;
+            #[cfg(unix)]
+            if self.scope == Scope::System {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&self.install_dir, fs::Permissions::from_mode(0o755))?;
+            }
+            Ok(())
+        };
+        create().map_err(|e| format!("could not create {}: {e}", self.install_dir.display()))
+    }
+
+    /// A manifest or pointer directory for this scope. An account's own tree takes its umask; a
+    /// machine-wide one is read by other accounts' browsers, so every directory made on the way is
+    /// traversable whatever root's umask (a maintainer script may run under 077).
+    fn create_dir(&self, dir: &Path) -> std::io::Result<()> {
+        match self.scope {
+            Scope::User => fs::create_dir_all(dir),
+            Scope::System => create_traversable_dirs(dir, &self.system_root),
+        }
     }
 
     /// Reverse one registration: (report lines, refusals). Each slot (the
@@ -547,14 +626,18 @@ impl Registrar {
         let manifest_path = target.registration.manifest_path();
         let slots = manifest_slots(&target.registration);
 
-        if let (Some(key), Registration::Registry { key: name, .. }) =
-            (&slots.key, &target.registration)
+        if let (
+            Some(key),
+            Registration::Registry {
+                hive, key: name, ..
+            },
+        ) = (&slots.key, &target.registration)
         {
             match key
-                .removable(&format!("registry key HKCU\\{name}"))
+                .removable(&format!("registry key {hive}\\{name}"))
                 .and_then(|remove| {
                     if remove {
-                        delete_registry_key(name)
+                        delete_registry_key(*hive, name)
                     } else {
                         Ok(())
                     }
@@ -567,12 +650,12 @@ impl Registrar {
             Ok(true) => match fs::remove_file(&manifest_path) {
                 Ok(()) => lines.push(format!(
                     "{}: removed manifest {}",
-                    target.describe(),
+                    target.name.clone(),
                     manifest_path.display()
                 )),
                 Err(e) => errors.push(format!("could not remove {}: {e}", manifest_path.display())),
             },
-            Ok(false) => lines.push(format!("{}: not registered", target.describe())),
+            Ok(false) => lines.push(format!("{}: not registered", target.name.clone())),
             Err(e) => errors.push(e),
         }
         if let Some(pointer) = &target.pointer {
@@ -583,7 +666,7 @@ impl Registrar {
                     let removed = match pointer {
                         ExtensionPointer::File(path) => fs::remove_file(path)
                             .map_err(|e| format!("could not remove {}: {e}", path.display())),
-                        ExtensionPointer::Registry { key } => delete_registry_key(key),
+                        ExtensionPointer::Registry { hive, key } => delete_registry_key(*hive, key),
                     };
                     match removed {
                         Ok(()) => lines.push(format!("  removed {what}")),
@@ -595,6 +678,32 @@ impl Registrar {
         }
         (lines, errors)
     }
+}
+
+/// `create_dir_all` whose every created directory is 0755 regardless of the umask. Directories that
+/// already exist are not ours to loosen: one that other accounts cannot traverse (a root-made 0700
+/// `/etc/opt/chrome`) is refused before anything is created, since a manifest under it would read
+/// healthy and be unreachable for every other account.
+fn create_traversable_dirs(dir: &Path, root: &Path) -> std::io::Result<()> {
+    let mut missing = Vec::new();
+    let mut cursor = dir;
+    while !cursor.as_os_str().is_empty() && fs::symlink_metadata(cursor).is_err() {
+        missing.push(cursor);
+        match cursor.parent() {
+            Some(parent) => cursor = parent,
+            None => break,
+        }
+    }
+    traversable_by_every_account(cursor, root).map_err(std::io::Error::other)?;
+    for path in missing.into_iter().rev() {
+        fs::create_dir(path)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
+        }
+    }
+    Ok(())
 }
 
 /// Split one line of wrapper shell into its literal tokens. Understands only
@@ -727,13 +836,19 @@ pub fn remove_wrappers(install_dir: &Path) -> (Vec<String>, Vec<String>) {
 }
 
 /// `doctor --fix`: [`fix`] with its report printed. Returns the process exit
-/// code: 1 when the repair could not start or any target failed.
-pub fn run_fix(targets: &FixTargets) -> i32 {
-    let outcomes = match fix(targets) {
+/// code: [`NOTHING_TO_REGISTER`] when detection found no browser, 1 when the
+/// repair could not start for any other reason or any target failed.
+pub fn run_fix(targets: &FixTargets, scope: Scope) -> i32 {
+    let outcomes = match fix(targets, scope) {
         Ok(outcomes) => outcomes,
         Err(e) => {
-            log_error!("doctor", "{}", cli_guidance(&e));
-            return 1;
+            let code = fix_exit_code(&e);
+            if code == NOTHING_TO_REGISTER {
+                log_warn!("doctor", "{}", cli_guidance(&e));
+            } else {
+                log_error!("doctor", "{}", cli_guidance(&e));
+            }
+            return code;
         }
     };
     println!("chromium-bridge doctor --fix (host id {NATIVE_HOST_ID})");
@@ -770,6 +885,22 @@ pub fn run_fix(targets: &FixTargets) -> i32 {
     }
 }
 
+/// `doctor --fix`'s exit code when nothing was detected to register: distinct from a failure (1) so the
+/// .deb's post-install can treat a machine with no browser yet as a valid install, and not clap's 2 (a
+/// usage error), which that script must not swallow.
+pub const NOTHING_TO_REGISTER: i32 = 3;
+
+/// The exit code for a repair that could not start.
+fn fix_exit_code(error: &FixError) -> i32 {
+    match error {
+        FixError::NoTargets(_) => NOTHING_TO_REGISTER,
+        FixError::Environment(_)
+        | FixError::Privilege(_)
+        | FixError::HostExe(_)
+        | FixError::Unlaunchable(_) => 1,
+    }
+}
+
 /// The CLI's rendering of a refusal: the host's reason, which the options page
 /// shows as is, plus the flags a terminal can act on.
 pub fn cli_guidance(error: &FixError) -> String {
@@ -777,7 +908,10 @@ pub fn cli_guidance(error: &FixError) -> String {
         FixError::NoTargets(reason) => {
             format!("{reason}; or pass --browser <keys>, --all, or --manifest-dir <dir>")
         }
-        FixError::Environment(_) | FixError::HostExe(_) => error.to_string(),
+        FixError::Environment(_)
+        | FixError::Privilege(_)
+        | FixError::HostExe(_)
+        | FixError::Unlaunchable(_) => error.to_string(),
     }
 }
 
@@ -787,18 +921,26 @@ pub fn cli_guidance(error: &FixError) -> String {
 pub enum FixError {
     /// The platform's home variable is missing or not absolute.
     Environment(String),
+    /// The process's privilege does not match the scope ([`Privilege::admit`]).
+    Privilege(String),
     /// The targeting mode resolved to no browser; the message carries the
     /// guidance the CLI prints.
     NoTargets(String),
     /// This binary's own path could not be resolved.
     HostExe(std::io::Error),
+    /// A machine-wide registration would point at a binary other accounts cannot launch
+    /// ([`launchable_by_every_account`]).
+    Unlaunchable(String),
 }
 
 impl fmt::Display for FixError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            FixError::Environment(e) | FixError::NoTargets(e) => f.write_str(e),
+            FixError::Environment(e) | FixError::Privilege(e) | FixError::NoTargets(e) => {
+                f.write_str(e)
+            }
             FixError::HostExe(e) => write!(f, "cannot resolve this binary's path: {e}"),
+            FixError::Unlaunchable(why) => f.write_str(why),
         }
     }
 }
@@ -814,44 +956,57 @@ pub struct TargetOutcome {
     pub result: Result<Vec<String>, String>,
 }
 
-/// The repair `doctor --fix` runs, with nothing printed: resolve the
-/// environment and the targets, then register each. Idempotent, so a fresh
-/// machine gets its first registration and a broken one its repair through
-/// this one path. `run_fix` prints the outcomes for the CLI; the native host
-/// logs them when the extension asks for a repair, since stdout is its
-/// protocol. Diagnostics (the ephemeral-path warning) still go to the log.
-pub fn fix(targets: &FixTargets) -> Result<Vec<TargetOutcome>, FixError> {
-    let dirs = BaseDirs::from_env().map_err(FixError::Environment)?;
+/// The repair `doctor --fix` runs, with nothing printed: admit the scope,
+/// resolve the environment and the targets, then register each. Idempotent,
+/// so a fresh machine gets its first registration and a broken one its repair
+/// through this one path. `run_fix` prints the outcomes for the CLI; the
+/// native host logs them when the extension asks for a repair, since stdout
+/// is its protocol. Diagnostics (the ephemeral-path warning) still go to the log.
+pub fn fix(targets: &FixTargets, scope: Scope) -> Result<Vec<TargetOutcome>, FixError> {
+    Privilege::current()
+        .admit(scope)
+        .map_err(FixError::Privilege)?;
+    let dirs = BaseDirs::from_env(scope).map_err(FixError::Environment)?;
     let os = Os::current();
     let entries = browsers::resolve(os, &dirs);
-    let targets = select_targets(targets, &entries)?;
+    let targets = select_targets(targets, &entries, scope)?;
     let host_exe = resolve_host_exe().map_err(FixError::HostExe)?;
+    if scope == Scope::System {
+        launchable_by_every_account(&host_exe, &dirs.system_root)
+            .map_err(FixError::Unlaunchable)?;
+    }
     let registrar = Registrar {
         host_exe,
-        install_dir: browsers::install_dir(os, &dirs),
+        install_dir: browsers::install_dir(os, &dirs, scope),
+        scope,
+        system_root: dirs.system_root.clone(),
         extension_id: PINNED_EXTENSION_ID.to_string(),
     };
     Ok(targets
         .iter()
         .map(|target| TargetOutcome {
-            target: target.describe(),
+            target: target.name.clone(),
             result: registrar.register(target),
         })
         .collect())
 }
 
-/// `chromium-bridge uninstall`: entry point. Removes the registrations for
-/// every known browser plus any re-passed `--manifest-dir`, and the wrapper
-/// scripts -- exactly what this project writes, nothing else. The binary, the
-/// browser, and the loaded extension are never touched.
+/// `chromium-bridge uninstall`: entry point. Removes the registrations of one
+/// scope for every known browser plus any re-passed `--manifest-dir`, and the
+/// wrapper scripts -- exactly what this project writes, nothing else. The
+/// binary, the browser, and the loaded extension are never touched.
 pub fn run_uninstall(args: &UninstallArgs) -> i32 {
-    let (os, dirs) = match resolve_env() {
+    if let Err(e) = Privilege::current().admit(args.scope) {
+        log_error!("uninstall", "{e}");
+        return 1;
+    }
+    let (os, dirs) = match resolve_env(args.scope) {
         Ok(v) => v,
         Err(code) => return code,
     };
     let entries = browsers::resolve(os, &dirs);
 
-    let mut targets: Vec<Target> = entries.iter().map(Target::for_browser).collect();
+    let mut targets = browser_targets(entries.iter(), args.scope);
     for dir in &args.manifest_dirs {
         targets.push(Target::for_explicit_dir(dir));
     }
@@ -864,11 +1019,11 @@ pub fn run_uninstall(args: &UninstallArgs) -> i32 {
             println!("{line}");
         }
         for e in &errors {
-            log_error!("uninstall", "{}: {e}", target.describe());
+            log_error!("uninstall", "{}: {e}", target.name.clone());
         }
         failed = failed || !errors.is_empty();
     }
-    let (removed, errors) = remove_wrappers(&browsers::install_dir(os, &dirs));
+    let (removed, errors) = remove_wrappers(&browsers::install_dir(os, &dirs, args.scope));
     for line in removed {
         println!("{line}");
     }
@@ -888,14 +1043,76 @@ pub fn run_uninstall(args: &UninstallArgs) -> i32 {
 }
 
 /// Shared CLI preamble: pick the OS layout and read the base dirs, failing
-/// closed (exit 1) when the environment cannot name a home directory.
-pub(crate) fn resolve_env() -> Result<(Os, BaseDirs), i32> {
-    match BaseDirs::from_env() {
+/// closed (exit 1) when a per-user command's environment cannot name a home directory.
+pub(crate) fn resolve_env(scope: Scope) -> Result<(Os, BaseDirs), i32> {
+    match BaseDirs::from_env(scope) {
         Ok(dirs) => Ok((Os::current(), dirs)),
         Err(e) => {
             log_error!("doctor", "{e}");
             Err(1)
         }
+    }
+}
+
+/// Whether every account can launch `exe`: the file readable and executable by others, and each
+/// directory from it up to (not including) `root` traversable by them. A machine-wide registration that
+/// points into one account's home (`sudo ~/.local/lib/chromium-bridge/chromium-bridge doctor --fix
+/// --system`) reads healthy and fails for everyone else at launch, so it is refused before any write.
+/// `root` is the directory whose reachability is the caller's premise: `/` for a real install, the
+/// fixture root in tests. Windows ACLs are not inspected (residual: the .msi installs per user).
+fn launchable_by_every_account(exe: &Path, root: &Path) -> Result<(), String> {
+    if unix_mode(exe)? & 0o005 != 0o005 {
+        return Err(format!(
+            "{} is not readable and executable by other accounts, so a machine-wide registration \
+             would fail for them; install the binary under /usr/local/bin, or drop --system",
+            exe.display()
+        ));
+    }
+    match exe.parent() {
+        Some(dir) => traversable_by_every_account(dir, root),
+        None => Ok(()),
+    }
+}
+
+/// Whether other accounts can traverse `dir` and every directory above it, up to (not including) `root`.
+fn traversable_by_every_account(dir: &Path, root: &Path) -> Result<(), String> {
+    for dir in dir.ancestors().take_while(|d| *d != root) {
+        if unix_mode(dir)? & 0o001 == 0 {
+            return Err(format!(
+                "{} is not traversable by other accounts, so their browsers cannot reach what sits \
+                 under it; fix its mode, or drop --system",
+                dir.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The Unix permission bits of `path`; off Unix every bit reads set, so the reachability checks pass
+/// (Windows ACLs are not inspected: a residual, the .msi installs per user).
+fn unix_mode(path: &Path) -> Result<u32, String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(path)
+            .map(|m| m.permissions().mode() & 0o777)
+            .map_err(|e| format!("cannot inspect {}: {e}", path.display()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(0o777)
+    }
+}
+
+/// Whether Chromium's manifest lookup stops at this registration: on macOS and Linux an existence probe of
+/// the per-user file that follows symlinks (a dangling link is skipped, a directory is not), on Windows
+/// the key in any state. What `register` may write is a separate question ([`Slot`]): a dangling link
+/// is refused there and skipped here.
+pub fn lookup_hit(reg: &Registration) -> bool {
+    match reg {
+        Registration::ManifestDir(_) => reg.manifest_path().exists(),
+        Registration::Registry { .. } => assess(reg) != RegState::Missing,
     }
 }
 
@@ -921,19 +1138,97 @@ fn resolve_host_exe() -> std::io::Result<PathBuf> {
     Ok(exe)
 }
 
+/// Who runs the command, read once per command. Unix root is a different account from the one whose
+/// browser is to be registered (its HOME is `/root`, or a sudo caller's with root as owner), with no browser
+/// of its own; a Windows elevated token is the same account with HKLM writable as well.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Privilege {
+    User,
+    Root,
+    Elevated,
+}
+
+impl Privilege {
+    #[cfg(unix)]
+    pub fn current() -> Privilege {
+        if nix::unistd::geteuid().is_root() {
+            Privilege::Root
+        } else {
+            Privilege::User
+        }
+    }
+
+    /// Elevation is judged by the capability the scope needs: a handle on HKLM with write access, which UAC's
+    /// filtered token is refused. Any failure to open it reads as not elevated, so the check fails closed.
+    #[cfg(windows)]
+    pub fn current() -> Privilege {
+        use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_SET_VALUE};
+        match winreg::RegKey::predef(HKEY_LOCAL_MACHINE)
+            .open_subkey_with_flags("SOFTWARE", KEY_SET_VALUE)
+        {
+            Ok(_) => Privilege::Elevated,
+            Err(_) => Privilege::User,
+        }
+    }
+
+    /// Whether this privilege may write `scope`, with the refusal that names the way out. Both mismatches
+    /// fail closed: a user cannot write the system directories, and root must not write into a home (the
+    /// macOS .pkg's post-install mirrors this by refusing to run `doctor --fix` as root).
+    pub fn admit(self, scope: Scope) -> Result<(), String> {
+        match (self, scope) {
+            (Privilege::User, Scope::User)
+            | (Privilege::Root, Scope::System)
+            | (Privilege::Elevated, Scope::User | Scope::System) => Ok(()),
+            (Privilege::User, Scope::System) => Err(
+                "--system writes the root-owned directories every account's browser reads; run it as \
+                 root (sudo), or drop --system to register for this account"
+                    .into(),
+            ),
+            (Privilege::Root, Scope::User) => Err(
+                "running as root, which has no browser of its own: pass --system for the machine-wide \
+                 registration, or run this as the account whose browser it is"
+                    .into(),
+            ),
+        }
+    }
+}
+
+/// The targets of one scope for these browsers, each registration once: browsers that read another's
+/// system directory resolve to the owner's target ([`Target::for_browser`]), so Chrome and Brave together
+/// yield Chrome's manifest once rather than two writes of the same file with different labels. The
+/// registration, not the manifest path, is the identity: on Windows every browser's manifest sits in the
+/// one store file while each has its own key.
+fn browser_targets<'a>(
+    entries: impl Iterator<Item = &'a BrowserEntry>,
+    scope: Scope,
+) -> Vec<Target> {
+    let mut out: Vec<Target> = Vec::new();
+    for entry in entries {
+        let target = Target::for_browser(entry, scope);
+        if !out.iter().any(|t| t.registration == target.registration) {
+            out.push(target);
+        }
+    }
+    out
+}
+
 /// Resolve the typed `--fix` targeting mode into concrete targets. Unknown
 /// `--browser` keys were already refused at the argv boundary
 /// ([`crate::cli::parse`] resolves them into [`Browser`]s), so the match
 /// here is exhaustive, with no priority chain to order wrongly.
-fn select_targets(targets: &FixTargets, entries: &[BrowserEntry]) -> Result<Vec<Target>, FixError> {
+fn select_targets(
+    targets: &FixTargets,
+    entries: &[BrowserEntry],
+    scope: Scope,
+) -> Result<Vec<Target>, FixError> {
     match targets {
         FixTargets::ManifestDirs(dirs) => Ok(dirs
             .iter()
             .map(|dir| Target::for_explicit_dir(dir))
             .collect()),
-        FixTargets::All => Ok(entries.iter().map(Target::for_browser).collect()),
+        FixTargets::All => Ok(browser_targets(entries.iter(), scope)),
         FixTargets::Browsers(browsers) => {
-            let mut out = Vec::new();
+            let mut selected = Vec::new();
             for browser in browsers {
                 let Some(entry) = entries.iter().find(|e| e.browser == *browser) else {
                     // resolve() enumerates every Browser variant, so this
@@ -944,21 +1239,17 @@ fn select_targets(targets: &FixTargets, entries: &[BrowserEntry]) -> Result<Vec<
                         browser.key()
                     )));
                 };
-                out.push(Target::for_browser(entry));
+                selected.push(entry);
             }
-            Ok(out)
+            Ok(browser_targets(selected.into_iter(), scope))
         }
         FixTargets::Detected => {
-            let detected: Vec<Target> = entries
-                .iter()
-                .filter(|e| e.detected())
-                .map(Target::for_browser)
-                .collect();
+            let detected = browser_targets(entries.iter().filter(|e| e.detected()), scope);
             if detected.is_empty() {
                 // Read on two surfaces: the CLI (which appends its flags, see cli_guidance) and the
                 // extension's options page, so no flag belongs here.
                 return Err(FixError::NoTargets(format!(
-                    "no Chromium-family browser detected for this user (looked for {}): install \
+                    "no Chromium-family browser detected on this machine (looked for {}): install \
                      Chrome, Brave or Edge, then repair again",
                     known_keys()
                 )));
@@ -1024,15 +1315,23 @@ fn same_windows_path(v: &str, manifest_path: &Path) -> bool {
 }
 
 #[cfg(windows)]
-fn registry_supported(_key: &str) -> Result<(), String> {
+fn registry_supported(_hive: Hive, _key: &str) -> Result<(), String> {
     Ok(())
 }
 
 #[cfg(not(windows))]
-fn registry_supported(key: &str) -> Result<(), String> {
+fn registry_supported(hive: Hive, key: &str) -> Result<(), String> {
     Err(format!(
-        "registry registration (HKCU\\{key}) requires a Windows build of chromium-bridge"
+        "registry registration ({hive}\\{key}) requires a Windows build of chromium-bridge"
     ))
+}
+
+#[cfg(windows)]
+fn hive_root(hive: Hive) -> winreg::RegKey {
+    winreg::RegKey::predef(match hive {
+        Hive::CurrentUser => winreg::enums::HKEY_CURRENT_USER,
+        Hive::LocalMachine => winreg::enums::HKEY_LOCAL_MACHINE,
+    })
 }
 
 /// One registry key, read whole so ownership is judged on all of it.
@@ -1043,14 +1342,13 @@ struct RegistryKey {
     children: u32,
 }
 
-/// `HKCU\{key}` whole, or `None` when the key is absent. A value that is not
+/// `<hive>\{key}` whole, or `None` when the key is absent. A value that is not
 /// REG_SZ is an error rather than a lossy conversion: this engine writes
 /// REG_SZ alone, so anything else was never ours.
 #[cfg(windows)]
-fn registry_key(key: &str) -> Result<Option<RegistryKey>, String> {
+fn registry_key(hive: Hive, key: &str) -> Result<Option<RegistryKey>, String> {
     use winreg::types::FromRegValue;
-    let hkcu = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER);
-    let subkey = match hkcu.open_subkey(key) {
+    let subkey = match hive_root(hive).open_subkey(key) {
         Ok(k) => k,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e.to_string()),
@@ -1073,45 +1371,43 @@ fn registry_key(key: &str) -> Result<Option<RegistryKey>, String> {
 }
 
 #[cfg(not(windows))]
-fn registry_key(_key: &str) -> Result<Option<RegistryKey>, String> {
+fn registry_key(_hive: Hive, _key: &str) -> Result<Option<RegistryKey>, String> {
     Err("registry access requires a Windows build of chromium-bridge".into())
 }
 
 #[cfg(windows)]
-fn set_registry_value(key: &str, name: &str, value: &str) -> Result<(), String> {
-    let hkcu = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER);
-    let (subkey, _) = hkcu
+fn set_registry_value(hive: Hive, key: &str, name: &str, value: &str) -> Result<(), String> {
+    let (subkey, _) = hive_root(hive)
         .create_subkey(key)
-        .map_err(|e| format!("could not create HKCU\\{key}: {e}"))?;
+        .map_err(|e| format!("could not create {hive}\\{key}: {e}"))?;
     subkey
         .set_value(name, &value)
-        .map_err(|e| format!("could not set HKCU\\{key}: {e}"))
+        .map_err(|e| format!("could not set {hive}\\{key}: {e}"))
 }
 
 #[cfg(not(windows))]
-fn set_registry_value(key: &str, _name: &str, _value: &str) -> Result<(), String> {
+fn set_registry_value(hive: Hive, key: &str, _name: &str, _value: &str) -> Result<(), String> {
     Err(format!(
-        "registry registration (HKCU\\{key}) requires a Windows build of chromium-bridge"
+        "registry registration ({hive}\\{key}) requires a Windows build of chromium-bridge"
     ))
 }
 
-/// Delete `HKCU\{key}` once its slot was judged ours. delete_subkey (not _all):
+/// Delete `<hive>\{key}` once its slot was judged ours. delete_subkey (not _all):
 /// our keys have no children, and failing on an unexpected child is the
 /// fail-closed behavior we want.
 #[cfg(windows)]
-fn delete_registry_key(key: &str) -> Result<(), String> {
-    let hkcu = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER);
-    match hkcu.delete_subkey(key) {
+fn delete_registry_key(hive: Hive, key: &str) -> Result<(), String> {
+    match hive_root(hive).delete_subkey(key) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(format!("could not delete HKCU\\{key}: {e}")),
+        Err(e) => Err(format!("could not delete {hive}\\{key}: {e}")),
     }
 }
 
 #[cfg(not(windows))]
-fn delete_registry_key(key: &str) -> Result<(), String> {
+fn delete_registry_key(hive: Hive, key: &str) -> Result<(), String> {
     Err(format!(
-        "registry removal (HKCU\\{key}) requires a Windows build of chromium-bridge"
+        "registry removal ({hive}\\{key}) requires a Windows build of chromium-bridge"
     ))
 }
 
