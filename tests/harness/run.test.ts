@@ -144,7 +144,10 @@ test("SIGTERM stops the owned child and removes the owned dirs before the proces
       child.stdout.once("data", (chunk) => done(JSON.parse(String(chunk))));
     });
     sleeper = started.sleeper;
-    expect(existsSync(join(started.dir, OWNER_FILE)) && pidAlive(sleeper)).toBe(true);
+    expect({
+      dirOwned: existsSync(join(started.dir, OWNER_FILE)),
+      sleeperAlive: pidAlive(sleeper),
+    }).toEqual({ dirOwned: true, sleeperAlive: true });
     child.kill("SIGTERM");
     const signal = await new Promise<NodeJS.Signals | null>((done) => {
       child.once("exit", (_code, sig) => done(sig));
