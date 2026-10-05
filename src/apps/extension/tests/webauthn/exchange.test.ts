@@ -150,8 +150,8 @@ describe("kill release", () => {
     await expect(answered).resolves.toEqual({ ok: true });
   });
 
-  // The host answers presence_result ok and THEN writes the record; a write that fails answers
-  // kill_status_result ok:false, so the verdict alone would call a still-engaged switch released.
+  // The host writes the record, then emits presence_result ok followed by kill_status_result: ok:false with
+  // the error when the write failed, so the presence verdict alone would call a still-engaged switch released.
   test("a release answer waits for the kill_status_result after presence_result ok, and a failed write is its refusal", async () => {
     vi.useFakeTimers();
     const p = beginKillRelease();

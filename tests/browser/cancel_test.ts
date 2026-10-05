@@ -5,13 +5,13 @@
  *
  *   cancel { id: 41 }                   -> consumed by the dispatch collaborator, answered with NOTHING
  *   tab_list { id: 42 }                 -> answered, the control that the pipe works: refused by the
- *                                          enrollment gate on macOS (unpaired profile), served elsewhere
+ *                                          enrollment gate (the profile is unpaired)
  *
  * Frames are ordered on one port, so the answer to 42 arriving with no answer to 41 before it is the proof;
  * before the collaborator existed the cancel fell through parseBridgeReq and 41 was answered as a malformed
- * bridge request. Only the frame routing is proved here: on macOS the enrollment gate refuses every bridge
- * request until a Touch ID pairing, and elsewhere tab_list is served, so the abort of a RUNNING op is pinned
- * by the vitest suite (tests/background/dispatch-cancel.test.ts).
+ * bridge request. Only the frame routing is proved here: the enrollment gate refuses every bridge request
+ * until the profile is paired, on every platform, so the abort of a RUNNING op is pinned by the vitest suite
+ * (tests/background/dispatch-cancel.test.ts).
  *
  * Run:  CHROME_BIN=<Chrome for Testing> bun tests/browser/cancel_test.ts
  */
@@ -127,7 +127,7 @@ async function main(): Promise<void> {
     }
     const frames = logged(logFile);
     const answer42 = frames.find((f) => f.id === 42);
-    // Answered at all is the control: the verdict is the platform's (refused on macOS, served elsewhere).
+    // Answered at all is the control: the verdict is the gate's (refused, since the profile is unpaired).
     check(
       answer42 !== undefined && typeof answer42.ok === "boolean",
       "control: the request the fake host sent after the cancel is answered",

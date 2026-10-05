@@ -235,9 +235,9 @@ export function beginKillRelease(): Promise<KillReleaseView> {
 }
 
 /** The handoff from kill.ts, the one statement of it. The host's reply to a kill_release crosses the two
- * collaborators: a presence_request here, and after the page's answer passes presence (presence_result ok) the
- * host writes the record and reports that write in the kill_status_result there (ok killed:false, or ok:false
- * with the error when the write failed). Frame routing keeps claimers disjoint, so kill.ts calls this the
+ * collaborators: a presence_request here; then, when the page's answer passes presence, the host writes the
+ * record and emits presence_result ok followed by the kill_status_result that reports the write there (ok
+ * killed:false, or ok:false with the error). Frame routing keeps claimers disjoint, so kill.ts calls this the
  * moment a kill_status_result ARRIVES, before its own lane and awaits, and later settles what it claimed: a
  * handler still writing an earlier frame's mirror must not settle a release that began after that frame. The
  * slot itself is taken synchronously inside the presence_result's settle (awaitReleaseOutcome), so the frame

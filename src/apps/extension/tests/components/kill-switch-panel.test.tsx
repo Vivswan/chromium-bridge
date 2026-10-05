@@ -1,8 +1,5 @@
-// The kill panel's release over the SW contract and a stood-in WebAuthn client: while killed the panel offers
-// Release, which asks the host and signs the pushed request with this browser's authenticator; a request that
-// admits no credential is offered as the software confirmation it is, answered with the request's nonce; the
-// panel never claims a release itself (the answer's verdict and the mirror do); and every refusal renders as
-// the sentence keyed to it.
+// The kill panel's release over the SW contract and a stood-in WebAuthn client. The panel never claims a release
+// itself: the answer's verdict and the mirror do.
 
 import type { PresenceRequestFrame } from "@chromium-bridge/shared/envelope.gen";
 import { render, screen, waitFor } from "@testing-library/react";

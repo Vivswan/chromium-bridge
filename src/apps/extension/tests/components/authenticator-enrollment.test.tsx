@@ -1,9 +1,6 @@
-// The authenticator block of the identity panel over the SW contract and a stood-in WebAuthn client: a fresh
-// machine enrolls in one click (begin -> create -> finish), an enrolled machine shows the host's pushed request
-// as an approval step whose tap is followed by the enrollment continuing on its own (the host holds the
-// approval 60 s for exactly that next enroll_begin), and every refusal, the host's codes and the browser's
-// ceremony failures alike, renders as the sentence keyed to it, never the raw code. What the worker's note
-// looks like once a real enrollment wrote it is tests/browser/presence_exchange_test.ts's.
+// The authenticator block of the identity panel over the SW contract and a stood-in WebAuthn client. The
+// approval step continues on its own because the host holds the approval 60 s for exactly the next enroll_begin.
+// What the worker's note looks like once a real enrollment wrote it is tests/browser/presence_exchange_test.ts's.
 
 import type {
   EnrollOptionsFrame,

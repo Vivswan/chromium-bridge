@@ -122,8 +122,8 @@ describe("kill mirror updates from host frames only", () => {
     expect((await getKillMirror())?.state).toBe("unknown");
   });
 
-  // After presence_result ok the host writes the record and answers kill_status_result: ok killed:false when
-  // the switch released, ok:false with the error when the write failed. The panel's answer must be that frame.
+  // The host writes the record, then emits presence_result ok followed by kill_status_result: ok killed:false
+  // when the switch released, ok:false with the error when the write failed. The panel's answer is that frame.
   test.each([
     {
       name: "the record wrote: the answer is ok and the mirror is alive",
