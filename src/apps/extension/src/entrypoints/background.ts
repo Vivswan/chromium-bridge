@@ -51,9 +51,7 @@ export default defineBackground(() => {
 
   // The off-DOM confirmation surface. Without a provider the confirmation
   // service denies everything, so install it before any bridge traffic can
-  // arrive. No presence provider is installed: the "eval"/"upload" kinds
-  // confirm on this window until a WebAuthn presence route exists for them
-  // (the service keeps the slot; the routing verdict travels in the request).
+  // arrive. No presence provider is installed, so every kind confirms here.
   installConfirmationProvider(new ExtensionWindowProvider());
 
   // On an UNPINNED extension nothing can verify a signature, so an unsigned

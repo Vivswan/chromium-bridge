@@ -31,7 +31,7 @@ use crate::webauthn::{CredentialId, Refusal};
 pub enum PresencePath {
     /// A WebAuthn assertion from this enrolled credential.
     WebAuthn(CredentialId),
-    /// The extension's confirmation window: the software fallback where the browser has no authenticator.
+    /// The extension's confirmation window: the software fallback for a browser with no enrolled credential.
     ConfirmWindow,
     /// The typed confirmation on the CLI's controlling terminal.
     Tty,

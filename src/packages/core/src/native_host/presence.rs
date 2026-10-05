@@ -1,22 +1,15 @@
 //! The host side of the extension's WebAuthn exchange: enrollment and per-act presence for one browser
-//! connection. One request is outstanding at a time; a new one supersedes it, so an abandoned ceremony never
-//! wedges the host, and the superseded nonce can no longer verify anything.
+//! connection. One slot ([`Pending`]) holds what is outstanding, and every request answers in one reply, so the
+//! extension's single-flight exchange never waits on a tap.
 //!
 //! ```text
-//! enroll_begin      -> no enrollment on the machine: trust on first use, enroll_options at once
-//!                      otherwise: presence_request any enrolled credential may answer, and the enroll_begin is
-//!                      answered enroll_result { presence_required }; once presence is attested the NEXT
-//!                      enroll_begin consumes the approval and gets enroll_options (one reply per request, so
-//!                      the extension's single-flight exchange never waits on a tap). The approval lives for
-//!                      APPROVAL_TTL or until the next WebAuthn request, whichever comes first, and only while
-//!                      the machine still has enrollments: an empty store is first use again
-//! enroll_finish     -> registration verified against the outstanding enrollment statement, stored, enroll_result
-//! kill_release      -> presence_request only credentials enrolled under THIS browser may answer; on an accepted
-//!                      assertion the switch is released and kill_status_result follows presence_result
-//! presence_assert   -> verified against the outstanding request, the sign counter persisted, then the pending
-//!                      act runs; every refusal is one presence_result code
-//! presence_confirm  -> the window's answer to the outstanding request, named by its nonce; accepted only when the
-//!                      request admits no enrolled credential, so an enrolled browser is never demoted to a click
+//! enroll_begin      -> fresh machine: enroll_options (trust on first use)
+//!                      enrolled machine: presence_request + enroll_result { presence_required }
+//!                      held approval: enroll_options
+//! enroll_finish     -> enroll_result
+//! kill_release      -> presence_request (this browser's credentials); on approval presence_result, kill_status_result
+//! presence_assert   -> presence_result, then the pending act
+//! presence_confirm  -> presence_result (the window's answer; only where the request admits no credential)
 //! ```
 
 use std::time::{Duration, Instant};
@@ -53,8 +46,8 @@ enum Pending {
         act: PendingAct,
     },
     /// Presence was attested for enrolling another credential; the next `enroll_begin` consumes it. Any
-    /// other WebAuthn request supersedes it and [`APPROVAL_TTL`] bounds it, so an approval never outlives the
-    /// ceremony it was given for by more than the page needs to ask.
+    /// other WebAuthn request supersedes it, [`APPROVAL_TTL`] bounds it, and an emptied store voids it (first
+    /// use governs again), so an approval never outlives the ceremony it was given for.
     EnrollmentApproved {
         auth: PresenceAttestation,
         since: Instant,

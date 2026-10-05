@@ -46,7 +46,7 @@ pub struct PresenceRequest {
 
 impl PresenceRequest {
     /// A request for `label`'s own act: only credentials enrolled under that label may answer. An empty hint
-    /// is a browser with no authenticator, whose only answer is the window.
+    /// is a browser with no enrolled credential, whose only answer is the window.
     pub fn for_browser(
         label: &BrowserLabel,
         action: Action,
