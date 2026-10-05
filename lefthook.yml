@@ -1,7 +1,5 @@
-# Git hooks, managed by lefthook (https://lefthook.dev). The hook checks and fails; it never installs, stages,
-# or commits, and it runs only what the repository's own toolchain provides (`moon run gate`; `moon run ci`
-# adds the CI-only tools). A tree not installed to bun.lock, or crates not fetched to Cargo.lock, fails the
-# gate naming `moon run setup`.
+# Git hooks, managed by lefthook (https://lefthook.dev). The hook checks and fails, never installs, stages, or
+# commits; what `gate` may run is the root moon.yml header's rule.
 #
 #   wire or re-wire the hooks   -> `moon run setup` (lefthook's postinstall) or `lefthook install`
 #   moon on PATH                -> proto (`proto install`, .prototools): ~/.proto/shims and ~/.proto/bin

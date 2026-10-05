@@ -1,6 +1,5 @@
 # moon tasks for the Rust security core: the cargo gate steps the root gate aggregate (moon.yml at the
-# repo root) depends on, under its header's rules: each depends on root:check-crates and takes --frozen
-# (fmt reads no crates), so a commit never fetches.
+# repo root) depends on, under its header's rules (the check-crates edge, --frozen).
 $schema: 'https://moonrepo.dev/schemas/project.json'
 
 language: 'rust'

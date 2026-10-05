@@ -924,6 +924,7 @@ async function main(): Promise<void> {
     [
       "cargo",
       "run",
+      "--frozen",
       "-q",
       "-p",
       "chromium-bridge-core",

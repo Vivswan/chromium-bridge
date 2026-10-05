@@ -31,6 +31,7 @@ const lockfile = `{
         "@fixture/shared": "workspace:*",
         "alpha": "2.0.0",
         "beta": "^1.0.0",
+        "delta": "git+ssh://git@example.com/example-user/delta.git#abc1234",
       },
     },
     "shared": {
@@ -53,6 +54,8 @@ const lockfile = `{
     "beta-linux-x64": ["beta-linux-x64@1.2.3", "", { "os": "linux", "cpu": "x64" }, "sha512-fixture-beta-linux"],
 
     "gamma": ["gamma@1.0.0", "", {}, "sha512-fixture-gamma"],
+
+    "delta": ["delta@git+ssh://git@example.com/example-user/delta.git#abc1234", {}, "sha512-fixture-delta"],
   }
 }
 `;
@@ -71,6 +74,7 @@ const pkgManifest = (
     "@fixture/shared": "workspace:*",
     alpha: "2.0.0",
     beta: "^1.0.0",
+    delta: "git+ssh://git@example.com/example-user/delta.git#abc1234",
   },
 ) => manifest("fixture-pkg", "0.0.0", { dependencies });
 
@@ -90,8 +94,17 @@ function installedRoot(parent = scratch.dir("check-deps")): string {
     [`${store("alpha", "2.0.0")}/package.json`]: manifest("alpha", "2.0.0"),
     [`${store("beta", "1.2.3")}/package.json`]: manifest("beta", "1.2.3"),
     [`${store("gamma", "1.0.0")}/package.json`]: manifest("gamma", "1.0.0"),
+    // A git dependency: bun stores it under its commit, and only its name is comparable to the lockfile.
+    "node_modules/.bun/delta@git+abc1234/node_modules/delta/package.json": manifest(
+      "delta",
+      "0.3.1",
+    ),
   });
   mkdirSync(join(root, "pkg/node_modules/@fixture"), { recursive: true });
+  symlinkSync(
+    "../../node_modules/.bun/delta@git+abc1234/node_modules/delta",
+    join(root, "pkg/node_modules/delta"),
+  );
   symlinkSync(`.bun/alpha@1.0.0/node_modules/alpha`, join(root, "node_modules/alpha"));
   symlinkSync(`.bun/beta@1.2.3/node_modules/beta`, join(root, "node_modules/beta"));
   symlinkSync(`../../${store("alpha", "2.0.0")}`, join(root, "pkg/node_modules/alpha"));
@@ -146,6 +159,15 @@ const cases: { name: string; drift: (root: string) => void; findings: (string | 
     findings: ["pkg: beta is 1.2.2 (bun.lock: beta@1.2.3)"],
   },
   {
+    name: "a member renamed in its package.json without re-locking",
+    drift: (root) =>
+      writeFileSync(join(root, "shared/package.json"), manifest("@fixture/renamed", "0.0.0")),
+    findings: [
+      "pkg: @fixture/shared is @fixture/renamed (bun.lock: @fixture/shared@workspace:shared)",
+      "shared: name is @fixture/renamed in package.json, @fixture/shared in bun.lock (re-lock with `bun install`)",
+    ],
+  },
+  {
     name: "a member's package.json changed without re-locking: one dependency added, one spec moved",
     drift: (root) =>
       writeFileSync(
@@ -154,12 +176,13 @@ const cases: { name: string; drift: (root: string) => void; findings: (string | 
           "@fixture/shared": "workspace:*",
           alpha: "2.0.0",
           beta: "^2.0.0",
-          delta: "^1.0.0",
+          delta: "git+ssh://git@example.com/example-user/delta.git#abc1234",
+          epsilon: "^1.0.0",
         }),
       ),
     findings: [
       "pkg: beta is ^2.0.0 in package.json, ^1.0.0 in bun.lock (re-lock with `bun install`)",
-      "pkg: delta is ^1.0.0 in package.json, absent in bun.lock (re-lock with `bun install`)",
+      "pkg: epsilon is ^1.0.0 in package.json, absent in bun.lock (re-lock with `bun install`)",
     ],
   },
   {

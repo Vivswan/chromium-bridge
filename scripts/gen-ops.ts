@@ -65,7 +65,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 // `-q` keeps cargo's own output off the pipe; a compile error still lands on stderr and fails loudly here.
 const emitted = Bun.spawnSync(
-  ["cargo", "run", "-q", "-p", "chromium-bridge-core", "--example", "emit_contract"],
+  ["cargo", "run", "--frozen", "-q", "-p", "chromium-bridge-core", "--example", "emit_contract"],
   { cwd: root, stderr: "inherit" },
 );
 if (!emitted.success) {
@@ -512,7 +512,16 @@ interface EnclaveContract {
 }
 
 const enclaveEmitted = Bun.spawnSync(
-  ["cargo", "run", "-q", "-p", "chromium-bridge-core", "--example", "emit_enclave_contract"],
+  [
+    "cargo",
+    "run",
+    "--frozen",
+    "-q",
+    "-p",
+    "chromium-bridge-core",
+    "--example",
+    "emit_enclave_contract",
+  ],
   { cwd: root, stderr: "inherit" },
 );
 if (!enclaveEmitted.success) {
@@ -754,7 +763,16 @@ interface PolicyContract {
 }
 
 const policyEmitted = Bun.spawnSync(
-  ["cargo", "run", "-q", "-p", "chromium-bridge-core", "--example", "emit_policy_contract"],
+  [
+    "cargo",
+    "run",
+    "--frozen",
+    "-q",
+    "-p",
+    "chromium-bridge-core",
+    "--example",
+    "emit_policy_contract",
+  ],
   { cwd: root, stderr: "inherit" },
 );
 if (!policyEmitted.success) {

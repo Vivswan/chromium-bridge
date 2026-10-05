@@ -3,7 +3,7 @@
 // cargo verb in the pre-commit gate never runs against a toolchain other than the pinned one or crates not
 // fetched to Cargo.lock; each failure names `moon run setup`, and this check installs and fetches nothing.
 //
-// One mode per readiness task (the root moon.yml header's first two rules name which tasks depend on them):
+// One mode per readiness task (which tasks depend on them is the root moon.yml header's rule):
 //   bun scripts/check-deps.ts bun [checkout]     -> root:check-deps
 //   bun scripts/check-deps.ts cargo [checkout]   -> root:check-crates
 // Self-contained on node builtins and Bun globals (no lib.ts import): it runs before any install by contract.
@@ -118,7 +118,8 @@ type Judged = { ok: true; real: string; workspace: boolean } | { ok: false; find
 
 /** `name@version` as bun.lock resolves it; a workspace member resolves to `name@workspace:<path>`. */
 function judge(root: string, from: string, dep: string, resolution: string): Judged {
-  const at = resolution.lastIndexOf("@");
+  // The separator is the first `@` past a scope's; a git resolution carries `@` in its URL.
+  const at = resolution.indexOf("@", 1);
   const name = resolution.slice(0, at);
   const version = resolution.slice(at + 1);
   const found = locate(root, from, dep);
@@ -208,6 +209,11 @@ export function auditWorkspace(checkout: string): string[] {
     if (manifest === undefined) {
       findings.push(`${label}: has no readable package.json`);
       continue;
+    }
+    if (manifest.name !== member.name) {
+      findings.push(
+        `${label}: name is ${String(manifest.name)} in package.json, ${member.name} in bun.lock (re-lock with \`bun install\`)`,
+      );
     }
     for (const kind of declarationKinds) {
       findings.push(...disagreements(label, manifest[kind] ?? {}, member[kind] ?? {}));

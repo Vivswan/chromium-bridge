@@ -167,6 +167,11 @@ jobs:
         with:
           cargo: "true"
       - run: bun install --frozen-lockfile
+      # check-gen and check-gen-isolation reach root:check-crates (their scripts spawn cargo), which judges the
+      # crate cache offline, so this job fetches what the cache judges; rust-cache restores no registry here.
+      - run: |
+          cargo fetch --locked
+          cargo fetch --locked --manifest-path src/packages/core/fuzz/Cargo.toml
       - run: moon run check-gen
       - run: moon run check-envelope check-gen-isolation check-refresh-lockfiles
 

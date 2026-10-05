@@ -9,7 +9,11 @@
 #   reachable from `gate` (what the pre-commit hook runs) -> only bun, bunx, and the toolchain's cargo verbs: nothing
 #                                                          another runtime or a separately installed binary provides
 #                                                          (those run in `ci`, where CI provisions them); a cargo verb
-#                                                          there depends on check-crates and takes --frozen
+#                                                          there depends on check-crates and takes --frozen (fmt
+#                                                          reads no crates and has no such flag); a bun task whose
+#                                                          script spawns cargo (gen-shared, check-gen, check-gen-isolation)
+#                                                          carries the edge and the flag by convention, since the
+#                                                          auditor sees only a task's own command
 #   reads or writes src/packages/shared/src/*.gen.ts    -> options.mutex 'generated-contract', shared with gen-shared,
 #                                                          so one invocation never overlaps a reader with the rewrite
 # Nothing reachable from `gate` installs or fetches: `setup` is the one task that does, and nothing depends on
@@ -42,9 +46,8 @@ tasks:
       runInCI: false
 
   setup:
-    # The one task that installs or fetches. Never a dependency of anything: the pre-commit hook runs the gate
-    # graph, and a hook installs nothing. The frozen and locked flags make a drifted lockfile fail here instead
-    # of being rewritten. `rustup toolchain install` with no name installs rust-toolchain.toml's pin.
+    # `rustup toolchain install` with no name installs the active toolchain: the pin, unless RUSTUP_TOOLCHAIN
+    # overrides it (the Containerfile's rustup step says the same; check-crates refuses the override).
     description: 'Run once per fresh checkout: install the bun workspace to bun.lock (lefthook wires the git hooks from its postinstall), the pinned Rust toolchain, and the crates of both cargo workspaces to their Cargo.lock'
     script: |
       set -e
@@ -101,7 +104,6 @@ tasks:
       - 'extension:test'
       - 'extension:build'
       - '~:hygiene'
-      - '~:check-refresh-lockfiles'
       - '~:check-fuzz-workspace'
       - '~:test-fuzz'
       - '~:check-gen'
@@ -111,12 +113,13 @@ tasks:
       runDepsInParallel: false
 
   ci:
-    description: 'THE GATE CI runs: gate, then the checks that need another runtime or a separately installed binary (typos, cargo-machete, the Python protocol e2e, yamllint, actionlint); CI layers the OS matrix, linux-install, the adversarial/chaos suites, the browser suites, and the web build on top'
+    description: 'THE GATE CI runs: gate, then the checks that need another runtime or a separately installed binary (typos, cargo-machete, the Python protocol e2e, yamllint, actionlint) or re-lock a scratch workspace (check-refresh-lockfiles); CI layers the OS matrix, linux-install, the adversarial/chaos suites, the browser suites, and the web build on top'
     deps:
       - '~:gate'
       - '~:typos'
       - '~:machete'
       - '~:test-e2e'
+      - '~:check-refresh-lockfiles'
       - '~:check-yaml'
       - '~:check-actions'
     options:
@@ -447,8 +450,7 @@ tasks:
       runDepsInParallel: false
 
   gen-shared:
-    # The scripts spawn `cargo run` for the emitters, so the crates edge joins the bun one (check-moon-edges
-    # sees only the task's own command; this edge is the reviewed rule for a script that spawns cargo).
+    # The scripts spawn `cargo run --frozen` for the emitters: the header's convention for a cargo-spawning script.
     description: 'Regenerate the TS contract modules from the Rust core (src/packages/shared/src/*.gen.ts)'
     deps: ['~:check-deps', '~:check-crates']
     script: |

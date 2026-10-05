@@ -48,7 +48,7 @@ export function isolationProblems(tree: string, inverse: () => string): string[]
 
 if (import.meta.main) {
   const cargoTree = (...args: string[]): string => {
-    const argv = ["cargo", "tree", "-e", "normal", "-p", binary, "--locked", ...args];
+    const argv = ["cargo", "tree", "-e", "normal", "-p", binary, "--frozen", ...args];
     const run = Bun.spawnSync(argv, { cwd: repoRoot, stdout: "pipe", stderr: "pipe" });
     if (run.exitCode !== 0) die(`${argv.join(" ")} failed:\n${run.stderr.toString()}`);
     return run.stdout.toString();
