@@ -16,7 +16,7 @@ bun install      # workspace deps + wires the git hooks (lefthook)
 有四個閘門工具沒有第一方的 proto 外掛, 需手動安裝一次: `cargo install cargo-nextest` 與 `brew install typos-cli cargo-machete actionlint` (typos 與 cargo-machete 也可透過 `cargo install` 取得)。CI 從哪裡取得它們:
 
 - **`Containerfile` 以 `ARG <TOOL>_VERSION` 固定這四個工具加上 cargo-deb**。CI 映像檔帶有這四個; cargo-deb 只安裝在裸機的發行與安裝程式執行器上。
-- **裸機執行器透過 `bun scripts/pin.ts <tool>` 讀取同一個固定版本**: checks.yml 讀 cargo-machete, `installers.yml` 與 `update-release.yml` 讀 cargo-deb。
+- **自行安裝某個工具的工作透過 `bun scripts/pin.ts <tool>` 讀取同一個固定版本**: checks.yml 的 tooling 工作讀 cargo-machete (在映像檔內, 該版本已經就位), `installers.yml` 與 `update-release.yml` 在各自的裸機執行器上讀 cargo-deb。
 - **typos 與 actionlint 經由受管理的 ci.yml 的 fleet actions 執行**, 使用平台自己的固定版本, 所以本機的版本偏差最壞也只是提早浮現一項發現。
 
 | 工具 | 用途 | 備註 |

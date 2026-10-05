@@ -16,7 +16,7 @@ bun install      # workspace deps + wires the git hooks (lefthook)
 四个门禁工具没有第一方 proto 插件, 需要手动安装一次: `cargo install cargo-nextest` 和 `brew install typos-cli cargo-machete actionlint` (typos 和 cargo-machete 也可以通过 `cargo install` 获得)。CI 从哪里获取它们:
 
 - **`Containerfile` 以 `ARG <TOOL>_VERSION` 的形式固定这四个工具外加 cargo-deb**。CI 镜像携带这四个; cargo-deb 只安装在裸的发布与安装程序运行器上。
-- **裸运行器通过 `bun scripts/pin.ts <tool>` 读取同一处固定版本**: checks.yml 读 cargo-machete, `installers.yml` 与 `update-release.yml` 读 cargo-deb。
+- **自行安装某个工具的作业通过 `bun scripts/pin.ts <tool>` 读取同一处固定版本**: checks.yml 的 tooling 作业读 cargo-machete (在镜像内, 该版本已经就位), `installers.yml` 与 `update-release.yml` 在各自的裸运行器上读 cargo-deb。
 - **typos 和 actionlint 通过受管 ci.yml 的 fleet actions 运行**, 使用平台自己固定的版本, 所以本地版本偏差最多只会让某个发现提前浮现。
 
 | 工具 | 用途 | 说明 |
