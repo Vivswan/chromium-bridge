@@ -22,7 +22,7 @@ The CLI needs nothing but the binary, on desktops, headless machines, and CI ali
 
    Or build from source with `cargo build --release`. Windows registration has not yet been tried on a user's machine ([cli.md's Windows note](./cli.md#doctor---fix--uninstall-native-messaging-registration)).
 2. **Archive only: put it somewhere stable.** Registrations point at the binary in place, so pick a path that will not disappear: `~/.local/lib/chromium-bridge/` on Linux, anywhere under your home on macOS. An AppImage mount or a temp directory is not stable, and `doctor --fix` warns if you try.
-3. **Register it with your browsers.** The .pkg, the .deb, the .msi and Homebrew did this already; the archive needs it (run the binary from its extracted directory with a `./` prefix):
+3. **Register it with your browsers.** The .pkg, the .msi and Homebrew did this already, and the .deb did for the browsers installed at the time; the archive needs it (run the binary from its extracted directory with a `./` prefix):
 
    ```sh
    chromium-bridge doctor --fix                       # every detected browser

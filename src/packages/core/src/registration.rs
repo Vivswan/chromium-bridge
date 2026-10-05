@@ -644,9 +644,8 @@ impl Registrar {
 
         if let Registration::Registry { hive, key, .. } = &target.registration {
             if let Some(line) = foreign_key {
-                // A foreign key is replaced whole, here in the write phase once every guard has passed:
-                // setting the default alone would leave the values that made it foreign, and `uninstall`
-                // would then refuse the key we point at.
+                // Replaced whole, in the write phase: a key that kept the values that made it foreign
+                // would be refused by `uninstall`.
                 delete_registry_key(*hive, key)?;
                 lines.push(line);
             }
@@ -1466,9 +1465,10 @@ struct RegistryKey {
     children: u32,
 }
 
-/// `<hive>\{key}` whole, or `None` when the key is absent. A value that is not
-/// REG_SZ is an error rather than a lossy conversion: this engine writes
-/// REG_SZ alone, so anything else was never ours.
+/// `<hive>\{key}` whole, or `None` when the key is absent. This engine writes
+/// REG_SZ alone, so a value of any other type was never ours: it reads as its
+/// type name in place of a text, which the ownership judgment calls foreign (a
+/// shape an explicit `--fix` replaces whole), never as an error.
 #[cfg(windows)]
 fn registry_key(hive: Hive, key: &str) -> Result<Option<RegistryKey>, String> {
     use winreg::types::FromRegValue;
@@ -1480,11 +1480,12 @@ fn registry_key(hive: Hive, key: &str) -> Result<Option<RegistryKey>, String> {
     let mut values = Vec::new();
     for entry in subkey.enum_values() {
         let (name, value) = entry.map_err(|e| format!("could not list its values: {e}"))?;
-        if value.vtype != winreg::enums::RegType::REG_SZ {
-            return Err(format!("value {name:?} is not a REG_SZ string"));
-        }
-        let text = String::from_reg_value(&value)
-            .map_err(|e| format!("value {name:?} is not readable text: {e}"))?;
+        let text = if value.vtype == winreg::enums::RegType::REG_SZ {
+            String::from_reg_value(&value)
+                .map_err(|e| format!("value {name:?} is not readable text: {e}"))?
+        } else {
+            format!("<{:?}>", value.vtype)
+        };
         values.push((name, text));
     }
     let children = subkey
