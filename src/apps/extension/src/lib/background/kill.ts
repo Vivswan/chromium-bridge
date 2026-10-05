@@ -1,11 +1,10 @@
 // The extension half of the kill switch: a service-worker-only mirror of the host's kill state, and the
 // control-frame plumbing that reads and toggles it.
 //
-// The host's trust record is the AUTHORITY; the mirror only lets the extension's own gate refuse ops locally while
-// killed (defense in depth, and correct UI even if the SW slept through the transition) and lets the options page
-// render the state. It is written ONLY from the host's kill_status_result frames, never from a runtime message: the
-// router relays get_kill/set_kill to the host, which decides and answers with the resulting state, and the storage is
-// confined to trusted contexts (trusted-storage.ts), so a page can neither read nor plant it.
+// The host's trust record is the AUTHORITY; the mirror lets the extension's own gate refuse locally while killed and
+// the options page render the state. It is written ONLY from kill_status_result frames, never from a runtime message
+// (the router relays get_kill/set_kill to the host, which answers with the resulting state), and it lives in trusted
+// storage (trusted-storage.ts), so a page can neither read nor plant it.
 //
 // Gate verdict per stored value; fail closed on everything but a positive "alive":
 //   absent           -> allowed (never heard from a host; a fresh install must not be bricked, the host enforces)
@@ -14,9 +13,8 @@
 //   {state: unknown} -> refused (the host cannot read its own state)
 //   malformed        -> refused (tampering evidence, never mapped to absent)
 //
-// port.ts drives `collaborator` (the connection, then every kill_status_result frame); messages.ts routes the
-// options-page actions here. Unsolicited results update the mirror; solicited ones also resolve the pending request.
-// The panic brake, its latch, and the re-post watermark are brake.ts.
+// port.ts drives `collaborator`; messages.ts routes the options-page actions here. Every result updates the mirror;
+// a solicited one also resolves the pending request. The panic brake, its latch, and the re-post watermark are brake.ts.
 
 import {
   isKillStatusFrame,
@@ -219,10 +217,9 @@ export function requestKillStatus(): Promise<KillView> {
   return request({ type: "kill_status" }).view;
 }
 
-/** Engage the switch, the ONLY transition this extension can request: the host refuses kill_release from the
- * extension, so release lives behind `chromium-bridge unkill`'s presence gate. The host performs the transition (and
- * audits it, surface=extension); the mirror adopts the host's answer. The router accepts set_kill only from extension
- * pages and its schema pins `on` to true, so a page can neither reach this nor express a release. */
+/** Engage, the ONLY transition the extension can request: the host refuses kill_release from the extension (release
+ * is `chromium-bridge unkill` behind its presence gate), and the router accepts set_kill from extension pages only,
+ * with `on` pinned to true. The host performs and audits the transition; the mirror adopts its answer. */
 export function engageKill(): Promise<KillView> {
   // Local ring only: the host records the authoritative kill_engage.
   auditEvent("kill_engaged", { outcome: "requested" });
@@ -231,13 +228,11 @@ export function engageKill(): Promise<KillView> {
   return view;
 }
 
-/** The confirm window's panic engage: never refused because another exchange (the startup status query, an
- * options-page read) holds the single request slot.
+/** The confirm window's panic engage: never refused because another exchange holds the single request slot.
  *   slot free      -> engageKill's exchange under the brake's panic event; the view carries the host's answer
- *   slot occupied  -> the engage is posted uncorrelated and the view is the SEND outcome plus the last-known mirror
- * The uncorrelated post is safe because the control frames carry no ids and the host applies them in arrival order on
- * one pipe: the pending exchange settles with equally authoritative state, and an engage racing a host-side release
- * still lands after it. */
+ *   slot occupied  -> the engage is posted uncorrelated; the view is the SEND outcome plus the last-known mirror
+ * Uncorrelated is safe: control frames carry no ids and the host applies them in arrival order on one pipe, so the
+ * pending exchange settles with equally authoritative state and an engage racing a release still lands after it. */
 export function panicEngage(): Promise<KillView> {
   auditEvent("kill_engaged", { outcome: "requested" });
   if (!pending.value) {
@@ -273,13 +268,10 @@ export function handleKillFrame(msg: KillStatusResult): Promise<void> {
 }
 
 async function handleOneKillFrame(msg: KillStatusResult, seq: number): Promise<void> {
-  // Claim the pending request BEFORE any await: the host answers on one ordered pipe, so a frame arriving while a
+  // Claim the pending request BEFORE any await: the host answers in order on one pipe, so a frame arriving while a
   // request is outstanding is its answer or an equally authoritative push. Claiming late would let the timeout fire
-  // mid-await and a NEXT request take the slot, which this frame would then wrongly resolve.
-  //
-  // Pushes and replies are not correlated (the control frames have no ids): a cross-surface push mid-request settles
-  // the request one frame early with the push's state. Safe by construction: nothing enforcing reads the returned
-  // view (the gate reads the mirror, which applies every frame in order) and the panel re-renders from the mirror.
+  // mid-await and a NEXT request take the slot, which this frame would then wrongly resolve. A cross-surface push
+  // mid-request settles the request one frame early; nothing enforcing reads the view (the gate reads the mirror).
   const current = pending.value;
   pending.value = null;
   if (current) clearTimeout(current.timer);

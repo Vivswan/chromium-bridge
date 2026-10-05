@@ -1,8 +1,4 @@
-// Pure allowlist / origin-glob helpers.
-//
-// Extracted from background.ts so they can be unit-tested without a browser.
-// The browser.storage-backed read/write of the allowlist stays in background.ts;
-// only the pure string logic lives here.
+// Pure allowlist / origin-glob string helpers; no browser API in here.
 
 // Derive the origin glob ("https://host/*") for a URL, or null if unparsable.
 export function originGlobOf(url: string | undefined): string | null {

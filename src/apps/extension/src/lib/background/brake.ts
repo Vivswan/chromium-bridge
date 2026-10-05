@@ -1,16 +1,13 @@
-// The panic brake: one state for the confirm window's deny-and-kill and for the at-least-once engage re-post. kill.ts
-// feeds it (the posts, the committed frames); confirm/service.ts reads the latch and kill.ts the re-post.
+// The panic brake: one state for the confirm window's deny-and-kill and for the at-least-once engage re-post.
+// kill.ts feeds it (the posts, the committed frames); confirm/service.ts reads the latch, kill.ts the re-post.
 //
-// Frames are the only evidence: at panic time the stored mirror can read a stale "killed" while a release is about to
-// write "alive" with the engage queued behind it. A frame counts only if it ARRIVED after the watermark it is judged
-// against; kill.ts stamps arrivals before the serialized mirror write, so a pre-panic frame whose write was still in
-// flight when the panic landed stays pre-panic however late it commits.
-//
-// "unknown" (the host answered ok:false, so the kill WRITE failed) advances nothing: as the refusal it would let a
-// plain alive read lift the latch with no release, and as the confirmation it would let a dying host swallow the
-// brake. Residual: a cross-surface kill push already in flight when the panic lands counts as its refusal one frame
-// early. Only a presence-gated release racing the brake reaches it, and no page, content script, or MCP client can
-// mint either frame (docs/security/trust-boundaries.md).
+// Frames are the only evidence (at panic time the mirror can read a stale "killed" with a release about to write
+// "alive"), and a frame counts only if it ARRIVED after the watermark it is judged against: kill.ts stamps arrivals
+// before the serialized mirror write, so a pre-panic frame whose write commits late stays pre-panic.
+// "unknown" (the kill WRITE failed host-side) advances nothing: as a refusal it would let a plain alive read lift
+// the latch, as a confirmation it would let a dying host swallow the brake.
+// Residual (docs/security/trust-boundaries.md): a cross-surface kill push already in flight at panic time counts as
+// its refusal one frame early; only a presence-gated release racing the brake can produce one.
 
 import type { KillMirror } from "@chromium-bridge/shared/enclave";
 import { unreachable } from "@chromium-bridge/shared/util";

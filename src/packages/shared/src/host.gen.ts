@@ -3,10 +3,8 @@
 // DEFAULT_AUDIT_LIMIT, browsers.rs Browser::ALL) by scripts/gen-ops.ts - DO NOT
 // EDIT. Run `moon run gen`.
 //
-// The host's user-facing constants: the names and values the living docs
-// state and the CLI prints. scripts/check-docs-literals.ts holds the docs to
-// these, so a rename in the Rust core fails the docs gate instead of leaving
-// a troubleshooting page quietly wrong.
+// The host's user-facing constants. scripts/check-docs-literals.ts holds the docs to these, so a rename in the Rust
+// core fails the docs gate instead of leaving a troubleshooting page quietly wrong.
 
 // The keychain label of the enclave signing key.
 export const KEYCHAIN_LABEL = "com.vivswan.chromium-bridge.enclave.signing.v1";

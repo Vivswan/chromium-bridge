@@ -2,13 +2,10 @@
 // src/packages/core/src/enclave/) by scripts/gen-ops.ts - DO NOT EDIT.
 // Run `moon run gen`.
 //
-// Golden vectors pinning the cross-language enclave crypto contract: Rust-built message bytes signed with
-// deterministic (RFC 6979) software-P256 signatures, replayed by tests/background/enclave-golden.test.ts through
-// the extension's WebCrypto verifier, so a Rust-side encoding change that outruns the TS verifier fails the
-// replay. The key protects nothing and is deny-listed as an enrollment identity on both sides
-// (ENCLAVE_FIXTURE_KEY_ID in enclave.gen.ts).
-//
-// Test-only data: production code never imports this module.
+// Golden vectors pinning the cross-language enclave crypto contract: Rust-built message bytes with deterministic
+// (RFC 6979) P-256 signatures, replayed through the extension's WebCrypto verifier, so a Rust-side encoding change
+// that outruns the TS verifier fails the replay. The key protects nothing and is deny-listed as an enrollment
+// identity on both sides (ENCLAVE_FIXTURE_KEY_ID in enclave.gen.ts). Test-only: production code never imports this.
 
 export interface EnclaveGoldenVector {
   /** Which domain-separation prefix the message was built under. */
@@ -109,12 +106,8 @@ export const ENCLAVE_GOLDEN_FIXTURE: EnclaveGoldenFixture = {
   ],
 };
 
-// The POLICY_DOMAIN vectors: signed policy baselines over the same fixture key.
-// Each message is the Rust policy_message (POLICY_DOMAIN || 0x00 || the exact
-// document bytes), docB64 is those exact bytes as the wire `baseline` carries
-// them, and the document strict-parses under the generated PolicyDocSchema. The
-// extension's policy golden test replays the full verify-then-parse path
-// through WebCrypto.
+// Signed policy baselines over the same fixture key: each message is POLICY_DOMAIN || 0x00 || the exact document
+// bytes, and docB64 is those bytes as the wire `baseline` carries them.
 
 export interface PolicyGoldenVector {
   /** Base64 of the exact signed document bytes (the wire `baseline`). */

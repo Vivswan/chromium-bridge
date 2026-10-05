@@ -2,29 +2,21 @@
 // src/packages/core/src/tools/capabilities.rs) by scripts/gen-ops.ts - DO NOT EDIT.
 // Run `moon run gen`.
 
-// The INTERNAL bridge protocol version (MCP server <-> native host <->
-// extension). Not the MCP JSON-RPC version and not the extension release
-// version; bumped only when the bridge wire contract changes incompatibly.
+// The INTERNAL bridge protocol version (MCP server <-> native host <-> extension), bumped only when the bridge wire
+// contract changes incompatibly. Not the MCP JSON-RPC version, not the extension release version.
 export const BRIDGE_PROTOCOL_VERSION = 1;
 
-// The newest MCP JSON-RPC protocol revision the Rust server serves
-// (protocol.rs MCP_PROTOCOL_VERSION): advertised by `server/discover` in
-// `supportedVersions`.
+// The newest MCP JSON-RPC revision the Rust server serves, advertised by `server/discover` in `supportedVersions`.
 export const MCP_PROTOCOL_VERSION = "2026-07-28";
 
-// The `_meta` key strings of the stateless era, single-sourced from
-// protocol.rs. Every stateless request's `params._meta` MUST carry
-// BOTH the protocol version and the client capabilities (an empty object
-// suffices); the server/discover result carries the server identity under
-// the serverInfo key.
+// Every stateless request's `params._meta` MUST carry BOTH the protocol version and the client capabilities (an
+// empty object suffices); the server/discover result carries the server identity under the serverInfo key.
 export const MCP_META_PROTOCOL_VERSION = "io.modelcontextprotocol/protocolVersion";
 export const MCP_META_CLIENT_CAPABILITIES = "io.modelcontextprotocol/clientCapabilities";
 export const MCP_META_SERVER_INFO = "io.modelcontextprotocol/serverInfo";
 
-// The capability groupings for connection-time negotiation: each capability
-// covers a set of tools sharing a Chrome permission. On connect the extension
-// advertises which capability ids are actually available; a tool is callable
-// only if its capability is advertised.
+// Each capability covers the tools sharing one Chrome permission. On connect the extension advertises which ids are
+// available; a tool is callable only if its capability is advertised.
 export interface CapabilityInfo {
   id: string;
   permissions: readonly string[];
