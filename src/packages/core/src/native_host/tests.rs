@@ -303,12 +303,14 @@ fn registration_report_carries_rows_exactly_when_the_resolver_ran() {
             detected: true,
             state: RegState::Ok,
             location: "/home/user/chrome/host.json".into(),
+            pointer: None,
         },
         ManifestStatus {
             key: "brave",
             detected: false,
             state: RegState::Foreign("another host's manifest".into()),
             location: "/home/user/brave/host.json".into(),
+            pointer: None,
         },
     ]));
     assert_eq!(
