@@ -190,25 +190,29 @@ fn registration_repair_reply() -> AdminControl {
     }
 }
 
-/// Handle a `policy_restrict` frame through the free restriction seam, which refuses a relaxation itself and
-/// writes the audit record; the written state reaches the extension as the trust watch's next `policy_current`.
-fn handle_policy_restrict(overlay: crate::policy::PolicyOverlay) -> PolicyControl {
+/// Answer a `policy_restrict` frame: the result, then the freshly loaded `policy_current` when the restriction
+/// applied. The seam's epoch bump is best-effort after the store write and `confirmPageEval` is enforced in the
+/// extension's mirror alone, so the written state is pushed here; the watch's push on a successful bump duplicates it.
+fn policy_restrict_replies(overlay: crate::policy::PolicyOverlay) -> Vec<PolicyControl> {
     match crate::policy::restrict(overlay, crate::audit::Surface::Extension) {
         Ok(()) => {
             log_info!("native-host", "extension applied a policy restriction");
-            RestrictOutcome::Applied
+            vec![
+                RestrictOutcome::Applied.into_frame(),
+                policy_current_reply(),
+            ]
         }
         Err(e) => {
             log_warn!(
                 "native-host",
                 "extension-requested policy restriction refused: {e}"
             );
-            RestrictOutcome::Refused {
+            vec![RestrictOutcome::Refused {
                 error: e.to_string(),
             }
+            .into_frame()]
         }
     }
-    .into_frame()
 }
 
 // ---- ADR-0030: kill-switch control frames and the audit-event sink ----------
@@ -753,9 +757,9 @@ fn handle_request(request: HostRequest, out: &Arc<Mutex<BufWriter<io::Stdout>>>)
             write_control_reply(out, &registration_repair_reply())
         }
         HostRequest::PolicyGet {} => write_control_reply(out, &policy_current_reply()),
-        HostRequest::PolicyRestrict { overlay } => {
-            write_control_reply(out, &handle_policy_restrict(overlay))
-        }
+        HostRequest::PolicyRestrict { overlay } => policy_restrict_replies(overlay)
+            .iter()
+            .try_for_each(|reply| write_control_reply(out, reply)),
         HostRequest::LangGet {} => match lang_current_frame() {
             Some(reply) => write_control_reply(out, &reply),
             None => Ok(()),

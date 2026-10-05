@@ -1,5 +1,6 @@
 use super::*;
 use crate::protocol::BRIDGE_MAX_LINE;
+use crate::runtime_record::RuntimeRecord;
 use crate::trust::{Clients, Trust, TrustState};
 use std::io::Cursor;
 
@@ -361,12 +362,12 @@ fn policy_restrict_tightens_the_store_and_refuses_a_relaxation() {
     )
     .unwrap();
 
-    let tightened = handle_policy_restrict(crate::policy::PolicyOverlay {
+    let tightened = policy_restrict_replies(crate::policy::PolicyOverlay {
         page_eval_enabled: Some(false),
         ..Default::default()
     });
     assert_eq!(
-        serde_json::to_value(&tightened).unwrap(),
+        serde_json::to_value(&tightened[0]).unwrap(),
         serde_json::json!({ "type": "policy_restrict_result", "ok": true })
     );
     let PolicyControl::PolicyCurrent {
@@ -378,16 +379,16 @@ fn policy_restrict_tightens_the_store_and_refuses_a_relaxation() {
     };
     assert_eq!(overlay.page_eval_enabled, Some(false));
 
-    let relaxed = handle_policy_restrict(crate::policy::PolicyOverlay {
+    let relaxed = policy_restrict_replies(crate::policy::PolicyOverlay {
         page_eval_enabled: Some(true),
         ..Default::default()
     });
-    let PolicyControl::PolicyRestrictResult {
+    let [PolicyControl::PolicyRestrictResult {
         ok: false,
         error: Some(error),
-    } = relaxed
+    }] = relaxed.as_slice()
     else {
-        panic!("a relaxation must be refused: {relaxed:?}");
+        panic!("a relaxation must be refused with nothing pushed: {relaxed:?}");
     };
     assert!(error.contains("relax"), "{error}");
     let PolicyControl::PolicyCurrent {
@@ -408,6 +409,55 @@ fn policy_restrict_tightens_the_store_and_refuses_a_relaxation() {
             && trail.contains("\"outcome\":\"refused\"")
             && trail.contains("refused: relaxes the effective policy"),
         "{trail}"
+    );
+}
+
+#[test]
+fn an_applied_restrict_pushes_policy_current_even_when_the_epoch_bump_fails() {
+    // The store write and the epoch bump are two steps, and the bump is best-effort. A trust record whose
+    // epoch cannot climb makes the bump fail after a successful write, so the watch sees nothing to push;
+    // the restriction must still reach the extension as the reply that follows the result, since
+    // confirmPageEval is enforced in the extension's mirror alone.
+    let _dir = scratch_runtime_dir("native-host-policy-restrict-push");
+    let _reset = crate::presence::policy_test_hook::ResetOnDrop;
+    crate::presence::policy_test_hook::set(crate::presence::policy_test_hook::Mock::Return(
+        crate::presence::PolicySignOutcome::Signed {
+            sig: [7; 64],
+            key_id: "kid".into(),
+            pubkey_b64: "pk".into(),
+        },
+    ));
+    crate::policy::set_signed(
+        crate::policy::PolicyValues {
+            page_eval_enabled: true,
+            ..Default::default()
+        },
+        vec![crate::policy::PolicyField::PageEvalEnabled],
+        crate::audit::Surface::Core,
+    )
+    .unwrap();
+    crate::ipc::with_runtime_lock(|lock| {
+        Trust::fixture(u64::MAX, false, Clients::NeverPaired).write(lock)
+    })
+    .unwrap();
+
+    let replies = policy_restrict_replies(crate::policy::PolicyOverlay {
+        page_eval_enabled: Some(false),
+        ..Default::default()
+    });
+    let [PolicyControl::PolicyRestrictResult { ok: true, .. }, PolicyControl::PolicyCurrent {
+        overlay: Some(overlay),
+        ..
+    }] = replies.as_slice()
+    else {
+        panic!("an applied restriction must be followed by policy_current: {replies:?}");
+    };
+    assert_eq!(overlay.page_eval_enabled, Some(false));
+    let trust = TrustState::current().unwrap();
+    assert_eq!(
+        (trust.epoch(), trust.policy_epoch()),
+        (u64::MAX, 0),
+        "the bump must have failed, so the reply above is the only push"
     );
 }
 
