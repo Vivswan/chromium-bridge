@@ -91,7 +91,7 @@ Known browser keys: `chrome`, `chromium`, `brave`, `edge`, `vivaldi`, `opera`. "
 | Platform | The detection check | What it means |
 | --- | --- | --- |
 | macOS | the application bundle under `/Applications` or `~/Applications` | a leftover per-user config directory alone does not count (uninstalled browsers keep those forever, and some dev tools create them); a freshly installed browser counts before its first run |
-| Linux | the per-user config directory, or the vendor package's install directory (`/opt/google/chrome`, `/usr/lib/chromium`, and the like) | a browser installed for every account counts before this account ever ran it, which is how the `.deb`'s post-install sees it from root |
+| Linux | the per-user config directory; with `--system`, the vendor package's install directory (`/opt/google/chrome`, `/usr/lib/chromium`, and the like) | a per-user repair registers the browsers this account has run; the `.deb`'s post-install, from root, registers the ones installed for every account |
 | Windows | the per-user profile directory | the best cheap signal there |
 
 - **A non-standard install on macOS** reads as "not detected"; it can still be registered explicitly with `--browser <key>` or `--manifest-dir`.

@@ -197,7 +197,7 @@ pub(crate) fn gather_manifests() -> Result<Vec<ManifestStatus>, String> {
         .iter()
         .map(|entry| ManifestStatus {
             key: entry.browser.key(),
-            detected: entry.detected(),
+            detected: entry.installed(),
             manifest: Scoped {
                 user: SlotStatus::assess(&entry.user, None),
                 system: SlotStatus::assess(
@@ -466,7 +466,7 @@ fn run_list() -> i32 {
     };
     println!("known browsers (host id {NATIVE_HOST_ID}):");
     for entry in browsers::resolve(os, &dirs) {
-        let detected = if entry.detected() {
+        let detected = if entry.installed() {
             "detected"
         } else {
             "not detected"

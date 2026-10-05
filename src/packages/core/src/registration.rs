@@ -1368,13 +1368,13 @@ fn select_targets(
             Ok(browser_targets(selected.into_iter(), scope))
         }
         FixTargets::Detected => {
-            let detected = browser_targets(entries.iter().filter(|e| e.detected()), scope);
+            let detected = browser_targets(entries.iter().filter(|e| e.detected(scope)), scope);
             if detected.is_empty() {
                 // Read on two surfaces: the CLI (which appends its flags, see cli_guidance) and the
                 // extension's options page, so no flag belongs here.
                 return Err(FixError::NoTargets(format!(
-                    "no Chromium-family browser detected on this machine (looked for {}): install \
-                     Chrome, Brave or Edge, then repair again",
+                    "no Chromium-family browser detected (looked for {}): install Chrome, Brave or \
+                     Edge and open it once, then repair again",
                     known_keys()
                 )));
             }

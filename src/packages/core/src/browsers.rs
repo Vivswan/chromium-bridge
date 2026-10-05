@@ -359,21 +359,24 @@ impl ExtensionPointer {
 #[derive(Debug, Clone)]
 pub struct BrowserEntry {
     pub browser: Browser,
-    /// Paths whose existence says the browser is installed, any one sufficing. Purely paths; the caller
-    /// checks existence.
+    /// Paths whose existence says the browser is installed, any one sufficing, per scope: the account's
+    /// own signals decide a per-user repair, the machine-wide ones a `--system` repair, so an isolated
+    /// account (the Linux registration smoke's XDG roots) sees nothing on a runner that ships Chrome under
+    /// `/opt`. Purely paths; the caller checks existence.
     ///
     /// ```text
-    /// macOS           -> the bundle under `/Applications` or `~/Applications`; the per-user config root is
+    /// macOS, user     -> the bundle under `/Applications` or `~/Applications`; the per-user config root is
     ///                    NOT a signal (an uninstalled browser leaves it behind forever, dev tooling creates
     ///                    a bare `Chromium` folder), so a fresh install counts before its first run and a
     ///                    leftover root never lights the row
-    /// Linux           -> the per-user config root (the browser ran as this account) or the vendor
-    ///                    package's install dir (installed for every account, as the .deb's post-install
-    ///                    sees it from root)
-    /// Windows         -> the per-user profile root; elevation keeps the account, so it serves both scopes
+    /// macOS, system   -> the bundle under `/Applications` alone
+    /// Linux, user     -> the per-user config root (the browser ran as this account)
+    /// Linux, system   -> the vendor package's install dir (installed for every account, as the .deb's
+    ///                    post-install sees it from root)
+    /// Windows         -> the per-user profile root in both; elevation keeps the account
     /// macOS app elsewhere -> reads "not detected" (residual); the user can register it explicitly
     /// ```
-    pub presence: Vec<PathBuf>,
+    pub presence: Scoped<Vec<PathBuf>>,
     pub user: Registration,
     pub system: SystemRegistration,
     /// The external-extension pointer per scope, or `None` on Linux, where none is written (see
@@ -386,8 +389,13 @@ impl BrowserEntry {
     /// `resolve` stays pure for tests. A display/guidance heuristic, not a security gate: default
     /// `doctor --fix` uses it to pick which browsers to register (fewer detected means fewer manifests
     /// written, never more), and the explicit register paths still reach an undetected browser.
-    pub fn detected(&self) -> bool {
-        self.presence.iter().any(|p| p.is_dir())
+    pub fn detected(&self, scope: Scope) -> bool {
+        self.presence.get(scope).iter().any(|p| p.is_dir())
+    }
+
+    /// Present for either scope: what `doctor`'s row calls detected.
+    pub fn installed(&self) -> bool {
+        self.detected(Scope::User) || self.detected(Scope::System)
     }
 }
 
@@ -676,12 +684,16 @@ pub fn entry(os: Os, dirs: &BaseDirs, browser: Browser) -> BrowserEntry {
                 .join("Library/Application Support")
                 .join(macos_vendor_dir(browser));
             let bundle = macos_app_bundle(browser);
+            let machine_bundle = dirs.system_root.join("Applications").join(bundle);
             BrowserEntry {
                 browser,
-                presence: vec![
-                    dirs.system_root.join("Applications").join(bundle),
-                    dirs.home.join("Applications").join(bundle),
-                ],
+                presence: Scoped {
+                    user: vec![
+                        machine_bundle.clone(),
+                        dirs.home.join("Applications").join(bundle),
+                    ],
+                    system: vec![machine_bundle],
+                },
                 user: Registration::ManifestDir(root.join("NativeMessagingHosts")),
                 system,
                 pointer: system_pointer.map(|system| Scoped {
@@ -692,15 +704,15 @@ pub fn entry(os: Os, dirs: &BaseDirs, browser: Browser) -> BrowserEntry {
         }
         Os::Linux => {
             let root = dirs.config_home().join(linux_vendor_dir(browser));
-            let mut presence = vec![root.clone()];
-            presence.extend(
-                linux_install_dirs(browser)
-                    .iter()
-                    .map(|dir| dirs.system_root.join(dir)),
-            );
             BrowserEntry {
                 browser,
-                presence,
+                presence: Scoped {
+                    user: vec![root.clone()],
+                    system: linux_install_dirs(browser)
+                        .iter()
+                        .map(|dir| dirs.system_root.join(dir))
+                        .collect(),
+                },
                 user: Registration::ManifestDir(root.join("NativeMessagingHosts")),
                 system,
                 pointer: None,
@@ -708,9 +720,13 @@ pub fn entry(os: Os, dirs: &BaseDirs, browser: Browser) -> BrowserEntry {
         }
         Os::Windows => {
             let (user, user_pointer) = windows_slot(os, dirs, Scope::User, browser);
+            let profile = windows_profile_dir(dirs, browser);
             BrowserEntry {
                 browser,
-                presence: vec![windows_profile_dir(dirs, browser)],
+                presence: Scoped {
+                    user: vec![profile.clone()],
+                    system: vec![profile],
+                },
                 user,
                 system,
                 pointer: system_pointer.map(|system| Scoped {
@@ -770,13 +786,17 @@ mod tests {
                 "/fix/home/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
             )
         );
-        // App-presence candidates: the two standard install roots, and never the config root.
+        // App-presence candidates: the two standard install roots per user, the machine's alone for
+        // --system, and never the config root.
         assert_eq!(
             e.presence,
-            vec![
-                PathBuf::from("/fix/sys/Applications/Brave Browser.app"),
-                PathBuf::from("/fix/home/Applications/Brave Browser.app"),
-            ]
+            Scoped {
+                user: vec![
+                    PathBuf::from("/fix/sys/Applications/Brave Browser.app"),
+                    PathBuf::from("/fix/home/Applications/Brave Browser.app"),
+                ],
+                system: vec![PathBuf::from("/fix/sys/Applications/Brave Browser.app")],
+            }
         );
         // The per-user pointer file sits beside the manifest dir, under the same user data root; the
         // machine-wide one is Chromium's single hardcoded directory, Chrome's name included.
@@ -805,6 +825,7 @@ mod tests {
             .starts_with("/fix/home/Library/Application Support/com.operasoftware.Opera"));
         assert!(opera
             .presence
+            .user
             .contains(&PathBuf::from("/fix/sys/Applications/Opera.app")));
     }
 
@@ -945,20 +966,20 @@ mod tests {
         );
         // No pointer on Linux: Chrome would install from it without asking.
         assert_eq!(e.pointer, None);
-        // Presence: the account's config root, or the vendor package's install dir.
+        // Presence: the account's config root per user, the vendor package's install dir for --system.
         assert_eq!(
             e.presence,
-            vec![
-                PathBuf::from("/fix/home/.config/google-chrome"),
-                PathBuf::from("/fix/sys/opt/google/chrome"),
-            ]
+            Scoped {
+                user: vec![PathBuf::from("/fix/home/.config/google-chrome")],
+                system: vec![PathBuf::from("/fix/sys/opt/google/chrome")],
+            }
         );
 
         let mut with_xdg = dirs();
         with_xdg.xdg_config_home = Some(PathBuf::from("/fix/xdg-config"));
         let e = entry(Os::Linux, &with_xdg, Browser::Edge);
         assert_eq!(
-            e.presence[0],
+            e.presence.user[0],
             PathBuf::from("/fix/xdg-config/microsoft-edge")
         );
     }
@@ -1018,13 +1039,14 @@ mod tests {
             })
         );
         assert_eq!(
-            e.presence,
+            e.presence.user,
             vec![PathBuf::from("/fix/local/Google/Chrome/User Data")]
         );
+        assert_eq!(e.presence.system, e.presence.user);
         // Opera detects under the roaming profile dir.
         let opera = entry(Os::Windows, &d, Browser::Opera);
         assert_eq!(
-            opera.presence,
+            opera.presence.user,
             vec![PathBuf::from("/fix/roaming/Opera Software")]
         );
     }
@@ -1083,20 +1105,27 @@ mod tests {
         std::fs::create_dir_all(app_support.join("Chromium")).unwrap();
         std::fs::create_dir_all(app_support.join("Vivaldi")).unwrap();
 
-        let detected = |os: Os| -> Vec<&str> {
+        let detected = |os: Os, scope: Scope| -> Vec<&str> {
             resolve(os, &d)
                 .iter()
-                .filter(|e| e.detected())
+                .filter(|e| e.detected(scope))
                 .map(|e| e.browser.key())
                 .collect()
         };
-        assert_eq!(detected(Os::MacOs), vec!["chrome", "brave"]);
+        assert_eq!(detected(Os::MacOs, Scope::User), vec!["chrome", "brave"]);
+        // A bundle in one account's home is not machine-wide.
+        assert_eq!(detected(Os::MacOs, Scope::System), vec!["chrome"]);
 
-        // Linux: the account's config root (chromium ran here) or the vendor package's install dir
-        // (Edge installed for every account, never run by this one, as the .deb's post-install sees it).
-        std::fs::create_dir_all(d.home.join(".config/chromium")).unwrap();
+        // Linux: the vendor package's install dir (Edge installed for every account, as the .deb's
+        // post-install sees it from root) is a --system signal alone, so an account that ran no browser
+        // (the registration smoke's isolated XDG roots on a runner that ships Chrome under /opt) detects
+        // nothing per user; its own config root (chromium ran here) is the per-user signal.
         std::fs::create_dir_all(root.join("sys/opt/microsoft/msedge")).unwrap();
-        assert_eq!(detected(Os::Linux), vec!["chromium", "edge"]);
+        assert_eq!(detected(Os::Linux, Scope::User), Vec::<&str>::new());
+        assert_eq!(detected(Os::Linux, Scope::System), vec!["edge"]);
+        std::fs::create_dir_all(d.home.join(".config/chromium")).unwrap();
+        assert_eq!(detected(Os::Linux, Scope::User), vec!["chromium"]);
+        assert_eq!(detected(Os::Linux, Scope::System), vec!["edge"]);
 
         std::fs::remove_dir_all(&root).unwrap();
     }
