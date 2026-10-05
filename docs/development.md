@@ -109,8 +109,8 @@ cargo nextest run
 cargo fmt --check && cargo clippy --all-targets -- -D warnings
 uv run --no-project --isolated tests/protocol/e2e.py
 bun install
-bunx tsc -p src/apps/extension        # one TS project; `moon run typecheck` covers them all
-bunx biome ci . --error-on-warnings   # lint + format check, warnings fail (biome.jsonc)
+bun run tsc -p src/apps/extension        # one TS project; `moon run typecheck` covers them all
+bun run biome ci . --error-on-warnings   # lint + format check, warnings fail (biome.jsonc)
 bun run --cwd src/apps/extension build
 ```
 
