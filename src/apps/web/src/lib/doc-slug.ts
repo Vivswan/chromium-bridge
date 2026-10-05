@@ -9,8 +9,6 @@
 // root doc means adding it here, deliberately.
 export const ROOT_DOCS = new Set([
   "README.md",
-  "README.zh_CN.md",
-  "README.zh_TW.md",
   "CHANGELOG.md",
   "CONTRIBUTING.md",
   ".github/SECURITY.md",

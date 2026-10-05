@@ -23,8 +23,6 @@ describe("checkCjk", () => {
     const dir = repo({
       [CONTROL_FILE]: `title: ${HAN}\n`,
       "README.md": `# Title\n\nprobe ${HAN} line\n`,
-      "README.zh_CN.md": `${HAN}\n`,
-      "docs/sub/probe.zh_CN.md": `${HAN}\n`,
     });
     expect(checkCjk(dir, gitEnv())).toEqual({
       status: "hits",
@@ -32,11 +30,10 @@ describe("checkCjk", () => {
     });
   });
 
-  test("a tree whose CJK sits only in allowed files, nested translated docs included, is clean", () => {
+  test("a tree whose CJK sits only in allowed files is clean", () => {
     const dir = repo({
       [CONTROL_FILE]: `title: ${HAN}\n`,
       "README.md": "# Title\n",
-      "docs/sub/probe.zh_CN.md": `${HAN}\n`,
       "src/apps/extension/src/lib/native-language-names.ts": `export const zh = "${HAN}";\n`,
     });
     expect(checkCjk(dir, gitEnv())).toEqual({ status: "clean" });

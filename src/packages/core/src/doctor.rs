@@ -236,7 +236,7 @@ fn render(r: &Report) -> String {
             .push_str("ENGAGED - all bridge activity is refused until `chromium-bridge unkill`\n"),
         Err(e) => out.push_str(&format!(
             "state UNREADABLE ({e}) - every enforcement point is failing closed;\n  \
-             see docs/operations.md for recovery\n"
+             see docs/troubleshooting.md for recovery\n"
         )),
     }
 
@@ -269,7 +269,7 @@ fn render(r: &Report) -> String {
             }
         }
         PolicyStatusReport::Error { detail, .. } => out.push_str(&format!(
-            "present but UNREADABLE ({detail}) - failing closed; see docs/operations.md\n",
+            "present but UNREADABLE ({detail}) - failing closed; see docs/troubleshooting.md\n",
         )),
     }
 
@@ -324,13 +324,13 @@ fn summary(r: &Report) -> &'static str {
         return "kill switch ENGAGED - release it with `chromium-bridge unkill`";
     }
     if r.kill.is_err() {
-        return "kill state unreadable - failing closed; see docs/operations.md";
+        return "kill state unreadable - failing closed; see docs/troubleshooting.md";
     }
     // A present-but-unreadable policy store fails closed like the kill record.
     // A missing baseline (`none`) is the healthy pre-cutover state and must
     // NOT flip the verdict.
     if r.policy.store() == PolicyStoreState::Error {
-        return "policy store present but unreadable - failing closed; see docs/operations.md";
+        return "policy store present but unreadable - failing closed; see docs/troubleshooting.md";
     }
     match &r.lock {
         LockState::Unreadable { .. } => {

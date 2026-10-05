@@ -134,7 +134,7 @@ pub fn run_kill() -> i32 {
             eprintln!("kill: could not write the trust record: {e}");
             eprintln!(
                 "note: an unreadable record already fails every enforcement point closed, \
-                 so bridge activity is refused either way; see docs/operations.md to recover"
+                 so bridge activity is refused either way; see docs/troubleshooting.md to recover"
             );
             1
         }
@@ -175,7 +175,7 @@ pub fn run_unkill() -> i32 {
             eprintln!("unkill: refusing - the trust record could not be read: {e}");
             eprintln!(
                 "releasing the kill switch from an unknown state would fail open; \
-                 see docs/operations.md for the recovery path"
+                 see docs/troubleshooting.md for the recovery path"
             );
             1
         }

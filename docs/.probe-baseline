@@ -4,8 +4,6 @@
 .github/SECURITY.md b63617fd  # paragraph: The core is built with panics
 CONTRIBUTING.md 3ca2c172  # path: .worktrees/
 README.md 9ddf5673  # path: extension/dist/
-README.zh_CN.md 9ddf5673  # path: extension/dist/
-README.zh_TW.md 9ddf5673  # path: extension/dist/
 docs/architecture.md fea6743a  # list item: No handshake and no session state:
 docs/architecture.md e8b742d2  # list item: server/discover replaces the handshake. Its result
 docs/architecture.md 5f140de1  # path: src/entrypoints/background.ts
@@ -20,13 +18,9 @@ docs/architecture.md 2647e3e4  # list item: Tool catalogue (src/packages/core/sr
 docs/architecture.md da60846f  # list item: Enclave signing contract (src/packages/core/src/enclave/: challenge.rs for
 docs/architecture.md 4d57bb96  # path: tests/background/enclave-golden.test.ts
 docs/architecture.md 0310ff87  # list item: Policy document and directions (src/packages/core/src/policy/): the
-docs/architecture.md b82ebef9  # paragraph: At the tool-call boundary, Rust's typed
+docs/architecture.md 5a71f1d5  # paragraph: At the tool-call boundary, Rust's typed
 docs/architecture.md 76067303  # list item: policy_get {} (extension -> host): on-demand
 docs/architecture.md cb8f7ca3  # paragraph: The host also enforces its own
-docs/chrome-web-store.md 801f61b5  # paragraph: This doc is a decision checklist,
-docs/chrome-web-store.md 0c28ee30  # path: src/apps/extension/src/public/icons/icon128.png
-docs/chrome-web-store.md dea86cd0  # path: dist/
-docs/compatibility.md 6730188f  # paragraph: Honest statement of the current state:
 docs/development.md 0cef9bb1  # path: node_modules/
 docs/development.md 18c5d7e6  # paragraph: Rust dependencies are gated by automated
 docs/development.md 3b02bf2b  # paragraph: The root package.json scripts are thin
@@ -35,14 +29,7 @@ docs/development.md 7254609c  # path: .moon/cache/
 docs/development.md befb1d3a  # path: build/extension/chrome-mv3/content-scripts/content.js
 docs/development.md 35c08f85  # path: build/
 docs/development.md 4340cb2f  # path: target/
-docs/operations.md fba4fe5b  # paragraph: chromium-bridge doctor (alias status) is a
-docs/operations.md 91891371  # paragraph: Every enforcement point reads that record
-docs/operations.md 3ec1f561  # list item: present but UNREADABLE means the store
-docs/operations.md 9842d25e  # paragraph: Request/response state (pending calls, their pairing
 docs/quickstart.md 03c4d19c  # list item: On macOS, pair. Run chromium-bridge pair
-docs/quickstart.zh_CN.md 9ddf5673  # path: extension/dist/
-docs/quickstart.zh_TW.md 9ddf5673  # path: extension/dist/
-docs/security/enrollment-manual-test.md 49965e93  # paragraph: The presence-gated parts of the enrollment
 docs/security/incident-response.md 66fc9762  # list item: Disable a single tool: add the
 docs/security/threat-model.md d929582c  # list item: Prompt injection: page content tricks the
 docs/security/threat-model.md ffaccbd5  # list item: Another local process hijacks the bridge

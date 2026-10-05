@@ -14,7 +14,7 @@
 //     (src/packages/shared/src/settings.ts) for the browser-owned keys.
 //   - SECURITY.md: the fail-safe-defaults table's Default cells are diffed
 //     against the same two canonical sources.
-//   - The "N tools" headline in all three READMEs and docs/architecture.md is
+//   - The "N tools" headline in README.md and docs/architecture.md is
 //     diffed against the catalogue's tool count.
 //
 // Without this gate the audit's finding stands: add, rename, or re-risk a
@@ -256,12 +256,8 @@ export function toolCountViolations(
   texts: Readonly<Record<string, string>>,
   count: number = OP_NAMES.length,
 ): string[] {
-  // The zh claims are matched via \u escapes ("N ge gongju" in simplified and
-  // traditional forms) so this file stays CJK-free for the check-cjk gate.
   const claims: Array<[doc: string, pattern: RegExp]> = [
     ["README.md", /## What you can do: (\d+) tools/],
-    ["README.zh_CN.md", /## .+: (\d+) \u4E2A\u5DE5\u5177/],
-    ["README.zh_TW.md", /## .+: (\d+) \u500B\u5DE5\u5177/],
     ["docs/architecture.md", /\((\d+) tools;/],
   ];
   const out: string[] = [];
@@ -296,8 +292,6 @@ if (import.meta.main) {
     ...securityDefaultsViolations(securityMd),
     ...toolCountViolations({
       "README.md": read("README.md"),
-      "README.zh_CN.md": read("README.zh_CN.md"),
-      "README.zh_TW.md": read("README.zh_TW.md"),
       "docs/architecture.md": read("docs/architecture.md"),
     }),
   ];

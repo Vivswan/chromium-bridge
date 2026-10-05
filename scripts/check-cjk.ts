@@ -18,16 +18,12 @@ export const CJK_CLASS =
 export const CONTROL_FILE = "src/apps/extension/src/locales/zh_CN.yml";
 
 /** Git pathspecs for the files allowed to carry CJK: the zh locale bundles, the language picker's native
- * names, the i18n fixtures, and translated docs (a `*` in a pathspec crosses `/`, so nested docs match). */
+ * names, and the i18n fixtures. */
 export const ALLOWED_PATHSPECS = [
   CONTROL_FILE,
   "src/apps/extension/src/locales/zh_TW.yml",
   "src/apps/extension/src/lib/native-language-names.ts",
   "src/apps/extension/tests/lib/i18n.test.ts",
-  "docs/*.zh_CN.md",
-  "docs/*.zh_TW.md",
-  "README.zh_CN.md",
-  "README.zh_TW.md",
 ];
 
 /** Tried in order when the inherited ctype locale is not UTF-8. C.UTF-8 is absent on macOS 14 and older,
@@ -90,9 +86,9 @@ if (import.meta.main) {
     console.error(report.hits);
     console.error(
       "\ncheck-cjk: CJK text outside the zh locale files; canonical strings are English, so move it " +
-        "into src/apps/extension/src/locales/*.yml or a *.zh_CN.md / *.zh_TW.md translated doc",
+        "into src/apps/extension/src/locales/*.yml",
     );
     process.exit(1);
   }
-  console.log("check-cjk: no CJK outside the zh locale files and translated docs");
+  console.log("check-cjk: no CJK outside the zh locale files");
 }
