@@ -9,6 +9,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  assertHostIsolated,
   isolatedBrowser,
   ranMarkerBody,
   runtimeDirIsolated,
@@ -220,5 +221,50 @@ describe("runtimeDirIsolated", () => {
     },
   ])("$name", ({ lock, isolated }) => {
     expect(runtimeDirIsolated(lock, work)).toBe(isolated);
+  });
+});
+
+describe("assertHostIsolated", () => {
+  // The read-back a real-host suite refuses on: the binary's own `doctor --paths` report, which must name
+  // exactly one run.lock, inside the throwaway dir. Each case runs a stub binary printing one such report.
+  const dir = scratchDir("bb-host-isolated-");
+  const work = join(dir, "work");
+  const stubBinary = (name: string, report: string): string => {
+    const bin = join(dir, name);
+    writeFileSync(`${bin}.report`, `${report}\n`);
+    writeFileSync(bin, `#!/bin/sh\ncat "${bin}.report"\n`, { mode: 0o755 });
+    return bin;
+  };
+  const inside = join(work, "runtime", "chromium-bridge", "run.lock");
+  const outside = join("/home/user", ".local", "chromium-bridge", "run.lock");
+
+  test("a lock inside the throwaway dir is returned", () => {
+    const bin = stubBinary("inside", `runtime dir: x\nlock file: ${inside}`);
+    expect(assertHostIsolated(bin, {}, work)).toBe(inside);
+  });
+  test.each([
+    {
+      name: "a lock outside the throwaway dir is refused, naming it",
+      report: `lock file: ${outside}`,
+      reason: outside,
+    },
+    {
+      name: "a report naming no lock is refused",
+      report: "runtime dir: x",
+      reason: "exactly one run.lock",
+    },
+    {
+      name: "a report naming two locks is refused",
+      report: `lock file: ${inside}\nlock file: ${inside}`,
+      reason: "exactly one run.lock",
+    },
+    {
+      name: "a lock that is not run.lock is refused",
+      report: `lock file: ${join(work, "other.lock")}`,
+      reason: "exactly one run.lock",
+    },
+  ])("$name", ({ name, report, reason }) => {
+    const bin = stubBinary(name.replaceAll(" ", "-"), report);
+    expect(() => assertHostIsolated(bin, {}, work)).toThrow(reason);
   });
 });

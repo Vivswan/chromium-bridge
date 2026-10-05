@@ -143,22 +143,26 @@ impl Trust {
         self.enrollments.push(enrollment);
     }
 
-    /// Record the sign counter an accepted assertion carried, only forward: a counter another host already
-    /// moved past `sign_count` stays, and the caller learns the assertion was stale.
-    pub(crate) fn advance_sign_count(
-        &mut self,
-        id: &CredentialId,
-        sign_count: u32,
-    ) -> CounterAdvance {
-        let Some(e) = self.enrollments.iter_mut().find(|e| &e.credential.id == id) else {
+    /// Whether the sign counter an accepted assertion carried may land: the credential must be enrolled and
+    /// `sign_count` must move its stored counter forward. A counter another host already moved past is stale.
+    /// The writer decides under the lock, against the record as it stands then.
+    pub(crate) fn counter_advance(&self, id: &CredentialId, sign_count: u32) -> CounterAdvance {
+        let Some(e) = self.enrollments.iter().find(|e| &e.credential.id == id) else {
             return CounterAdvance::NotEnrolled;
         };
         let stored = e.credential.sign_count;
-        if !crate::webauthn::counter_advances(stored, sign_count) {
-            return CounterAdvance::Stale { stored };
+        if crate::webauthn::counter_advances(stored, sign_count) {
+            CounterAdvance::Advanced
+        } else {
+            CounterAdvance::Stale { stored }
         }
-        e.credential.sign_count = sign_count;
-        CounterAdvance::Advanced
+    }
+
+    /// Land the counter [`counter_advance`](Self::counter_advance) accepted.
+    pub(crate) fn set_sign_count(&mut self, id: &CredentialId, sign_count: u32) {
+        if let Some(e) = self.enrollments.iter_mut().find(|e| &e.credential.id == id) {
+            e.credential.sign_count = sign_count;
+        }
     }
 
     /// Add `entry`, replacing a same-named one so a re-pair does not accumulate stale anchors.
@@ -202,7 +206,7 @@ impl Trust {
     }
 }
 
-/// The verdict of [`Trust::advance_sign_count`].
+/// The verdict of [`Trust::counter_advance`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CounterAdvance {
     Advanced,

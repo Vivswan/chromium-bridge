@@ -82,12 +82,8 @@ export function installConfirmationProvider(p: ConfirmationProvider): void {
   defaultProvider.value = p;
 }
 
-// The presence provider slot (empty today). Whether a confirmation routes to it
-// travels IN the request (presenceRouting above), decided from the caller's
-// per-request policy snapshot: providerFor never re-reads live policy, so a
-// push landing between decision and presentation cannot re-route an in-flight
-// confirmation. A missing provider routes to the window (still a real
-// confirmation), never to "no confirmation".
+// The presence provider slot. Whether a confirmation routes to it is the request's own
+// presenceRouting field (ConfirmRequestBase); providerFor never re-reads live policy.
 const presence = inLife<ConfirmationProvider | null>(() => null);
 
 export function installPresenceProvider(p: ConfirmationProvider): void {

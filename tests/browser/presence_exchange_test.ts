@@ -34,6 +34,7 @@ import * as path from "node:path";
 import { NATIVE_HOST_ID } from "@chromium-bridge/shared/identity.gen";
 import puppeteer, { type Browser, type Page, type Target } from "puppeteer-core";
 import {
+  assertHostIsolated,
   assertIsolatedBrowserOrSkip,
   extensionDir,
   finishSuite,
@@ -263,6 +264,14 @@ async function main(): Promise<void> {
   try {
     fs.mkdirSync(userDataDir);
     const env = throwawayHostEnv(work);
+    // The binary's own word on where its lock resolves under this environment: outside the throwaway dir is
+    // the user's live runtime dir, and the run refuses before the binary writes anything.
+    try {
+      assertHostIsolated(BIN, env, work);
+    } catch (e) {
+      console.error(`REFUSING TO RUN: ${e instanceof Error ? e.message : String(e)}`);
+      process.exit(1);
+    }
     // The kill switch first: a killed host serves only the control plane (the WebAuthn frames among them) and
     // never dials a broker, so the exchange is the whole conversation.
     execFileSync(BIN, ["kill"], { env, stdio: "pipe", timeout: 15000 });

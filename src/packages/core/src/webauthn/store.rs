@@ -112,13 +112,17 @@ pub fn counter_advances(stored: u32, received: u32) -> bool {
 }
 
 /// Persist the sign counter an accepted assertion carried, so the next assertion from `id` must exceed it.
-/// Decided against the stored counter under the lock, so a write never moves a counter backwards.
+/// Decided against the stored counter under the lock, so a write never moves a counter backwards, and a
+/// refusal writes nothing: a stale or unenrolled assertion moves neither the record's bytes nor its epoch.
 pub fn advance_sign_count(id: &CredentialId, sign_count: u32) -> Result<(), CounterError> {
-    let mut outcome = CounterAdvance::NotEnrolled;
-    ipc::with_runtime_lock(|lock| {
-        Trust::mutate_locked(lock, Scope::Enrollments, |t| {
-            outcome = t.advance_sign_count(id, sign_count);
-        })
+    let outcome = ipc::with_runtime_lock(|lock| {
+        let verdict = TrustState::current()?.counter_advance(id, sign_count);
+        if matches!(verdict, CounterAdvance::Advanced) {
+            Trust::mutate_locked(lock, Scope::Enrollments, |t| {
+                t.set_sign_count(id, sign_count)
+            })?;
+        }
+        Ok(verdict)
     })
     .map_err(CounterError::Io)?;
     match outcome {

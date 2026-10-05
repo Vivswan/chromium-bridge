@@ -44,9 +44,9 @@ import {
 } from "@chromium-bridge/shared/protocol.gen";
 import puppeteer from "puppeteer-core";
 import {
+  assertHostIsolated,
   assertIsolatedBrowserOrSkip,
   extensionDir,
-  runtimeDirIsolated,
   throwawayHostEnv,
   writeHostWrapper,
 } from "./browser-safety";
@@ -64,21 +64,6 @@ const HOST_NAME = "com.vivswan.chromium_bridge.host";
 const REG_KEY = `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${HOST_NAME}`;
 const REG_KEY_MACHINE = `HKLM\\Software\\Google\\Chrome\\NativeMessagingHosts\\${HOST_NAME}`;
 
-/** Where the binary resolves its lock under `env`, read off `doctor --paths`, which touches nothing. Exactly
- * one "lock file:" line naming a run.lock is accepted; anything else is a probe the suite cannot trust. */
-function binaryLockPath(env: Record<string, string>): string {
-  const report = execFileSync(BIN, ["doctor", "--paths"], {
-    env,
-    encoding: "utf8",
-    timeout: 15000,
-  });
-  const lines = report.split("\n").filter((line) => line.startsWith("lock file:"));
-  const lock = lines.length === 1 ? (lines[0] ?? "").slice("lock file:".length).trim() : "";
-  if (lines.length !== 1 || path.basename(lock) !== "run.lock") {
-    throw new Error(`doctor --paths did not name exactly one run.lock:\n${report}`);
-  }
-  return lock;
-}
 const FIXTURE = pathToFileURL(path.join(REPO, "tests", "fixtures", "page.html")).href;
 
 // ── preflight (opt-in) ─────────────────────────────────────────────────────
@@ -179,9 +164,21 @@ async function main(): Promise<void> {
   // removes its throwaway dirs. The profile and the processes are registered as they come to exist.
   const throwaway: string[] = [work];
   const children: Array<{ kill(signal?: NodeJS.Signals): unknown } | null> = [];
+  // The registration this run wrote, if it got that far: the only one the cleanup may remove, and only while
+  // it still holds this run's value. The key goes because this run created it; a value that changed meanwhile
+  // arrived from elsewhere and stays.
+  let wroteRegistration: string | null = null;
+  const removeOwnRegistration = (): void => {
+    if (!IS_WINDOWS || wroteRegistration === null) return;
+    const now = readWindowsRegistration(REG_KEY, "64");
+    if (now.state === "present" && now.path === wroteRegistration) removeWindowsRegistration();
+    else console.warn("[e2e] the host registration changed under the run; leaving it in place");
+    wroteRegistration = null;
+  };
   process.on("exit", () => {
     for (const child of children) child?.kill("SIGKILL");
     for (const dir of throwaway) fs.rmSync(dir, { recursive: true, force: true });
+    removeOwnRegistration();
   });
   process.on("SIGINT", () => process.exit(130));
   const env = throwawayHostEnv(work);
@@ -190,13 +187,9 @@ async function main(): Promise<void> {
   // A probe that cannot be read refuses the same way.
   let LOCK: string;
   try {
-    LOCK = binaryLockPath(env);
+    LOCK = assertHostIsolated(BIN, env, work);
   } catch (e) {
     console.error(`REFUSING TO RUN: ${e instanceof Error ? e.message : String(e)}`);
-    process.exit(1);
-  }
-  if (!runtimeDirIsolated(LOCK, work)) {
-    console.error(`REFUSING TO RUN: the binary resolves its lock to ${LOCK}, outside ${work}`);
     process.exit(1);
   }
   fs.cpSync(DIST, path.join(work, "ext"), { recursive: true });
@@ -296,8 +289,6 @@ async function main(): Promise<void> {
   }
 
   let browser: Awaited<ReturnType<typeof puppeteer.launch>> | null = null;
-  // The registration this run wrote, if it got that far: the only one the cleanup may remove.
-  let wroteRegistration: string | null = null;
   try {
     for (let i = 0; i < 100; i++) {
       if (fs.existsSync(LOCK)) break;
@@ -484,12 +475,7 @@ async function main(): Promise<void> {
       console.warn(`[e2e] the MCP server did not exit; leaving ${work} and ${profile} in place`);
       throwaway.length = 0;
     }
-    if (IS_WINDOWS && wroteRegistration !== null) {
-      // Remove exactly the value this run wrote; anything else arrived from elsewhere meanwhile and stays.
-      const now = readWindowsRegistration(REG_KEY, "64");
-      if (now.state === "present" && now.path === wroteRegistration) removeWindowsRegistration();
-      else console.warn("[e2e] the host registration changed under the run; leaving it in place");
-    }
+    removeOwnRegistration();
   }
 
   console.log(`\n${"=".repeat(40)}\n${Pass} passed, ${Fail} failed`);

@@ -15,9 +15,9 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     field_differs, fold, restrict, restricts_or_equal, set_signed, FieldKind, PolicyDoc,
-    PolicyField, PolicyHistory, PolicyOverlay, PolicyStore, PolicyValues,
+    PolicyField, PolicyHistory, PolicyOverlay, PolicyStore, PolicyValues, PolicyWriteError,
 };
-use crate::audit::Surface;
+use crate::audit::{AuditKind, AuditRecord, Surface};
 use crate::cli::PolicyCommand;
 use crate::enclave::base64_decode;
 use crate::presence::{self, TerminalStdin};
@@ -326,12 +326,27 @@ fn render_history(r: &PolicyHistoryReport) -> String {
 
 // ---- The signature-only grant gate -------------------------------------------
 
-/// The CLI's presence prompt for a grant: the terminal witness, then the typed phrase. `set_signed` runs it
-/// after validation, so a piped stdin is refused at the prompt and a malformed request never reaches it.
+/// The CLI's presence prompt for a grant: the typed phrase on the terminal the witness proved. The witness is
+/// taken by the lane before `set_signed` runs, so a piped stdin is refused before the host key is looked up
+/// (a credential store may raise its unlock dialog on the lookup); `set_signed` runs the prompt after
+/// validation, so a malformed request never reaches it.
 fn cli_attest(
     reason: &'static str,
+    terminal: TerminalStdin,
 ) -> impl FnOnce() -> Result<presence::PresenceAttestation, presence::PresenceError> {
-    move || TerminalStdin::require().and_then(|terminal| presence::tty_confirm(reason, terminal))
+    move || presence::tty_confirm(reason, terminal)
+}
+
+/// The grant lane's trail for a witness refused before `set_signed` ran: the record a refusal inside it
+/// writes, so every refused grant leaves one. Returns the refusal as the lane reports it.
+fn refused_grant(touched: &[PolicyField], e: &presence::PresenceError) -> String {
+    crate::audit::record(
+        AuditRecord::new(AuditKind::PolicyWrite)
+            .surface(Surface::Cli)
+            .outcome("refused")
+            .detail(&format!("presence: {e}; touched={}", wire_names(touched))),
+    );
+    PolicyWriteError::Refused(e.to_string()).to_string()
 }
 
 // ---- Rollback planning (pure) -----------------------------------------------
@@ -513,10 +528,10 @@ fn run_history(json: bool) -> i32 {
     }
 }
 
-/// `policy set <field flags> [--json]`: the GRANT lane; `set_signed` refuses a keyless machine before any
-/// prompt and audits the refusal. Untouched fields carry the current BASELINE values, so the edits fold over
-/// the baseline, never the effective policy. Under `--json`, success prints the post-write status report and
-/// any refusal the versioned error object.
+/// `policy set <field flags> [--json]`: the GRANT lane; the terminal witness comes first, then `set_signed`
+/// refuses a keyless machine before any prompt and audits the refusal. Untouched fields carry the current
+/// BASELINE values, so the edits fold over the baseline, never the effective policy. Under `--json`, success
+/// prints the post-write status report and any refusal the versioned error object.
 fn run_set(overlay: PolicyOverlay, json: bool) -> i32 {
     match do_set(overlay) {
         Ok(rung) => {
@@ -535,7 +550,7 @@ fn run_set(overlay: PolicyOverlay, json: bool) -> i32 {
 }
 
 /// The set lane's work, output-free so the prose and `--json` renderings
-/// share one path: gate, fold over the baseline, sign. The touched set is the
+/// share one path: witness, fold over the baseline, sign. The touched set is the
 /// fields the overlay names, in catalogue order (order carries no meaning in
 /// the signed document).
 fn do_set(overlay: PolicyOverlay) -> Result<crate::presence::PresencePath, String> {
@@ -544,6 +559,7 @@ fn do_set(overlay: PolicyOverlay) -> Result<crate::presence::PresencePath, Strin
         .copied()
         .filter(|field| overlay.has(*field))
         .collect();
+    let terminal = TerminalStdin::require().map_err(|e| refused_grant(&touched, &e))?;
     let base = match PolicyStore::load() {
         Ok(Some(store)) => store
             .baseline_doc()
@@ -557,7 +573,10 @@ fn do_set(overlay: PolicyOverlay) -> Result<crate::presence::PresencePath, Strin
         values,
         touched,
         Surface::Cli,
-        cli_attest("This policy grant relaxes what the extension lets the bridge do."),
+        cli_attest(
+            "This policy grant relaxes what the extension lets the bridge do.",
+            terminal,
+        ),
     )
     .map_err(|e| e.to_string())
 }
@@ -627,6 +646,12 @@ fn run_rollback(revision: u64, json: bool) -> i32 {
             touched,
             fields,
         } => {
+            let terminal = match TerminalStdin::require() {
+                Ok(terminal) => terminal,
+                Err(e) => {
+                    return refuse_write("policy rollback", json, refused_grant(&touched, &e))
+                }
+            };
             if !json {
                 println!(
                     "rolling back to revision {revision}: this relaxes the effective policy \
@@ -639,7 +664,7 @@ fn run_rollback(revision: u64, json: bool) -> i32 {
                 values,
                 touched,
                 Surface::Cli,
-                cli_attest("This rollback relaxes the effective policy."),
+                cli_attest("This rollback relaxes the effective policy.", terminal),
             ) {
                 Ok(rung) => {
                     if json {

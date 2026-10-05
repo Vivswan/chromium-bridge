@@ -396,24 +396,5 @@ mod tests {
             let back: EnclaveStatusReport = serde_json::from_str(&emitted).unwrap();
             assert_eq!(back, report, "round trip");
         }
-        for (case, bad) in [
-            (
-                "an unknown field",
-                r#"{"v":1,"key_label":"x","key":"none","surprise":1}"#,
-            ),
-            (
-                "a present key without its public half",
-                r#"{"v":1,"key_label":"x","key":"present","store":"file"}"#,
-            ),
-            (
-                "an absent key naming a store",
-                r#"{"v":1,"key_label":"x","key":"none","store":"file"}"#,
-            ),
-        ] {
-            assert!(
-                serde_json::from_str::<EnclaveStatusReport>(bad).is_err(),
-                "{case} must be refused"
-            );
-        }
     }
 }

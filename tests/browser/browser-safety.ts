@@ -17,7 +17,7 @@
 
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ISOLATED_VERSION = /Chrome for Testing|HeadlessShell/;
@@ -109,6 +109,27 @@ export function writeHostWrapper(
 export function runtimeDirIsolated(lockPath: string, work: string): boolean {
   const rel = relative(resolve(work), resolve(lockPath));
   return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
+
+/** The lock `bin` resolves under `env`, read off `doctor --paths` (which touches nothing) and required to sit
+ * inside the suite's throwaway `work` dir. Throws the reason a real-host suite refuses to run on: a probe
+ * naming anything but exactly one run.lock, or a lock outside `work`, the user's live runtime dir. Every
+ * suite that runs the real binary calls this before the binary's first write. */
+export function assertHostIsolated(bin: string, env: Record<string, string>, work: string): string {
+  const report = execFileSync(bin, ["doctor", "--paths"], {
+    env,
+    encoding: "utf8",
+    timeout: 15000,
+  });
+  const lines = report.split("\n").filter((line) => line.startsWith("lock file:"));
+  const lock = lines.length === 1 ? (lines[0] ?? "").slice("lock file:".length).trim() : "";
+  if (lines.length !== 1 || basename(lock) !== "run.lock") {
+    throw new Error(`doctor --paths did not name exactly one run.lock:\n${report}`);
+  }
+  if (!runtimeDirIsolated(lock, work)) {
+    throw new Error(`the binary resolves its lock to ${lock}, outside ${work}`);
+  }
+  return lock;
 }
 
 /** Returns the isolated browser path, or null if CHROME_BIN is unset or does

@@ -182,11 +182,7 @@ export async function preflightPageOp(
         tabTitle: tab.title || "",
         detail: code,
         timeoutMs: policy.evalToastTimeoutMs,
-        // The policy's routing verdict is part of THIS decision's snapshot:
-        // read here and carried in the request, so a policy push landing
-        // while the confirmation waits in the queue cannot re-route it at
-        // presentation time. It routes to a presence provider only where one
-        // is installed; today none is, and the window confirms.
+        // From this decision's policy snapshot (ConfirmRequestBase.presenceRouting).
         presenceRouting: policy.touchIdConfirm,
         panicEpoch,
       });

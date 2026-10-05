@@ -75,8 +75,7 @@ export async function pageUpload(
     tabTitle: tab.title || "",
     detail: `${path}\n(input: ${selector})`,
     timeoutMs: policy.clickToastTimeoutMs,
-    // The policy's routing verdict is part of THIS decision's snapshot (see
-    // confirm/gate.ts): read here and carried in the request.
+    // From this decision's policy snapshot (ConfirmRequestBase.presenceRouting).
     presenceRouting: policy.touchIdConfirm,
     panicEpoch,
   });

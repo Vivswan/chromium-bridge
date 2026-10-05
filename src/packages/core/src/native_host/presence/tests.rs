@@ -549,15 +549,23 @@ fn a_credential_moved_to_another_browser_cannot_answer_the_first_browsers_reques
 
 /// The counter write is decided against the stored counter under the lock, not the caller's snapshot: a
 /// value another host already moved past is refused as stale, a forward value lands, and a credential that
-/// was never enrolled is named as such.
+/// was never enrolled is named as such. A refusal writes nothing: the record's bytes and its epoch are as
+/// they were, so a replayed assertion does not stamp the trail every watcher re-reads on.
 #[test]
-fn the_counter_write_refuses_a_stale_value_under_the_lock() {
+fn the_counter_write_refuses_a_stale_value_under_the_lock_and_writes_nothing() {
     let _dir = scratch_runtime_dir();
     let mut brave = Exchange::new(label("brave"));
     let own = Authenticator::new(0x11);
     enroll_tofu(&mut brave, &own);
     let id = CredentialId::parse(own.id.clone()).unwrap();
     webauthn::advance_sign_count(&id, 5).unwrap();
+    let record = || {
+        (
+            std::fs::read(crate::trust::Trust::path().unwrap()).unwrap(),
+            TrustState::current().unwrap().epoch(),
+        )
+    };
+    let before = record();
     assert!(matches!(
         webauthn::advance_sign_count(&id, 3),
         Err(webauthn::CounterError::Stale { stored: 5 })
@@ -566,6 +574,11 @@ fn the_counter_write_refuses_a_stale_value_under_the_lock() {
         webauthn::advance_sign_count(&id, 5),
         Err(webauthn::CounterError::Stale { stored: 5 })
     ));
+    assert_eq!(
+        record(),
+        before,
+        "a stale value leaves the record untouched"
+    );
     webauthn::advance_sign_count(&id, 6).unwrap();
     assert_eq!(
         TrustState::current().unwrap().enrollments()[0]
@@ -573,11 +586,17 @@ fn the_counter_write_refuses_a_stale_value_under_the_lock() {
             .sign_count,
         6
     );
+    let before = record();
     let stranger = CredentialId::parse(vec![0x33; 32]).unwrap();
     assert!(matches!(
         webauthn::advance_sign_count(&stranger, 1),
         Err(webauthn::CounterError::NotEnrolled)
     ));
+    assert_eq!(
+        record(),
+        before,
+        "an unenrolled credential leaves the record untouched"
+    );
 }
 
 /// A browser with no credential of its own answers with the window, even on a machine where another browser
