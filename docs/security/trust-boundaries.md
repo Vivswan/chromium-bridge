@@ -42,7 +42,7 @@ The one hop defended against local peers: any process that could try to reach th
 | macOS | the peer's kernel audit token (`LOCAL_PEERTOKEN`), validated with `SecCodeCheckValidity`, compared by `cdhash` | the running image, which closes the path re-open TOCTOU and the pid-reuse race; only `ENOPROTOOPT` (older systems) falls back to a pid-identified `SecCode`, where the narrow pid-reuse race remains, and any other error fails closed |
 | Windows | the pid the kernel recorded for the pipe's other end, then the SHA-256 of the image file that pid runs | the file path, re-opened; the residual below |
 
-- **HMAC challenge-response:** the server sends a fresh random nonce, the host replies with `HMAC-SHA256(secret, nonce)`, verified in constant time. The per-run secret lives in a 0600 lock file and never travels on the wire; the per-connection nonce defeats replay.
+- **HMAC challenge-response:** the server sends a fresh random nonce, the host replies with `HMAC-SHA256(secret, nonce)`, verified in constant time. The per-run secret lives in the lock file, private per [the owner-only rule](#the-trust-record), and never travels on the wire; the per-connection nonce defeats replay.
 - **Attach frame:** immediately after the handshake every peer sends one role-declaring frame (browser, or relay client), read fail-closed; a relay's carries its attested harness identity for the boundary 1 decision. A browser reconnect under the same label replaces that label's previous writer.
 - **Bounds:** at most 16 distinct browser labels and 8 harness clients, at most 32 connections mid-handshake, a 10 s handshake-plus-attach read timeout cleared for admitted idle connections, and a per-relay token bucket (burst 128, refill 128/s) that drops a flooding relay. Each connection is size-checked NDJSON.
 - **Kill switch:** while the latch is set, the broker's watcher severs every live browser connection within its one-second tick, draining in-flight calls into typed failures, and browser attaches are refused at admission. An unreadable trust record gets the same treatment. Relays stay attached; their calls are refused typed at boundary 1.
@@ -73,10 +73,11 @@ Chrome spawns the host per the host manifest, whose `allowed_origins` pins the e
 | audit | `audit_event` (fire-and-forget) | - |
 
 - **`audit_event`** is kind-whitelisted (the extension-owned confirmation and enrollment kinds only) and the host stamps the surface itself, so the browser leg cannot forge a host-side event into the trail.
-- **The audit trail:** every security decision (admissions, refusals, confirmations shown, allowed, and denied, revocations per surface, kill transitions, policy writes, tool calls) is recorded to stderr and to a 0600 `audit.log` with size-capped rotation, read by `chromium-bridge audit`. The [CLI page](../cli.md#logging-and-audit-bb_log--bb_log_format) owns the format; the extension mirrors its own events into a bounded ring (200 entries) behind the confined storage at boundary 4, read by the read-only options panel.
+- **The audit trail:** security decisions (admissions, refusals, confirmations shown, allowed, and denied, revocations per surface, kill transitions, policy writes, tool calls) are recorded to stderr and to a private `audit.log` with size-capped rotation, read by `chromium-bridge audit`. The [CLI page](../cli.md#logging-and-audit-bb_log--bb_log_format) owns the format; the extension mirrors its own events into a bounded ring (200 entries) behind the confined storage at boundary 4, read by the read-only options panel.
+  - **Not every decision reaches the host's trail:** the two extension-local kinds, `policy_refused` and `policy_compromised`, stay in the ring by design, and a failed storage write drops the record (the compromise-mark entry in the [policy ledger](#host-owned-policy-residual-ledger)).
 - **Killed mode:** while the latch is set, or the trust record is unreadable, the host runs control-plane only. It never dials the broker, drops bridge frames, and keeps the control frames working so status, engage, and the policy pull stay reachable. The brake (`kill_engage`) is one frame with no gate; the release opens the presence exchange below.
 
-**Host identity.** The extension pins the host's P-256 public key, which `chromium-bridge pair` mints behind a confirmation typed on a real terminal into the OS credential store through `keyring` (the Keychain, the Credential Manager, or the Secret Service), or with `--file-store` into a 0600 file in the runtime directory. The file's presence is that choice; a store failure is reported, never redirected to the file.
+**Host identity.** The extension pins the host's P-256 public key, which `chromium-bridge pair` mints behind a confirmation typed on a real terminal into the OS credential store through `keyring` (the Keychain, the Credential Manager, or the Secret Service), or with `--file-store` into a file in the runtime directory, private per [the owner-only rule](#the-trust-record). The file's presence is that choice; a store failure is reported, never redirected to the file.
 
 - **The pin:** the user compares the fingerprint `pair` printed with the one the extension shows, which defeats a host sitting between them. A host that cannot read its key fails the pin closed; `revoke` deletes the key and pushes a host-originated revocation, so a pinned extension fails closed without waiting for a reverify.
 - **The key's one job:** identifying the installation to the extension, and signing the policy baseline. Signing is not presence-gated; presence is the browser's authenticator, below.
@@ -154,7 +155,11 @@ Residuals at this hop:
 
 ## The trust record
 
-`trust.json` in the runtime directory, next to the lock file: 0600, written atomically under the runtime lock, parsed fail-closed (`deny_unknown_fields`, a version check, a 256 KiB size cap). Every enforcement point reads enrollments, the kill latch, and the client allowlist from the same snapshot.
+`trust.json` in the runtime directory, next to the lock file: owner-only, written atomically under the runtime lock, parsed fail-closed (`deny_unknown_fields`, a version check, a 256 KiB size cap). Every enforcement point reads enrollments, the kill latch, and the client allowlist from the same snapshot.
+
+**Owner-only means Unix.** Every private file the host writes (`trust.json`, the lock file, `audit.log`, the `--file-store` key) is created with mode 0600 under Unix: a record written atomically is created 0600 and renamed over its destination, and a file opened in place is re-tightened on the open handle, so a pre-planted looser file cannot keep its bits.
+
+On Windows there is no mode branch: the file inherits the per-user runtime directory's ACL, the residual boundary 2 names.
 
 | Field | Meaning | Writers |
 | --- | --- | --- |
