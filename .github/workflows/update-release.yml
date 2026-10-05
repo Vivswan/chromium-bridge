@@ -99,7 +99,7 @@ jobs:
       - id: pin
         if: matrix.platform == 'linux'
         run: bun scripts/pin.ts cargo-deb --output deb
-      - uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
+      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
         if: matrix.platform == 'linux'
         with:
           tool: cargo-deb@${{ steps.pin.outputs.deb }}
