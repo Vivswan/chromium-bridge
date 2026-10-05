@@ -8,7 +8,7 @@
 
 ## CLI (macOS、Linux、Windows)
 
-CLI 只需要二进制本身, 在桌面机、无头机器和 CI 上都一样。今天唯一的例外是 macOS 上的配对 (第 5 步), 它需要一个以应用标识符代码签名的构建。
+CLI 只需要二进制本身, 在桌面机、无头机器和 CI 上都一样。
 
 1. **安装。** 从[最新发布](https://github.com/Vivswan/chromium-bridge/releases/latest)中任选一种; 若想先校验下载文件, 命令见 [SECURITY.md](../../.github/SECURITY.md#release-artifact-integrity)。
 
@@ -37,11 +37,11 @@ CLI 只需要二进制本身, 在桌面机、无头机器和 CI 上都一样。�
 
    条目上线后, [cli.md 的指针表](./cli.md#doctor---fix--uninstall-原生消息注册) 会说明哪些浏览器会根据第 3 步留下的指针提供该扩展, 以及哪些浏览器不会写入指针。
 
-5. **在 macOS 上, 配对。** 运行 `chromium-bridge pair` (Touch ID 会提示, 并打印出密钥指纹), 然后在扩展的选项页上批准该指纹。在 macOS 上, 扩展无条件要求这次登记 (旧的 `requireEnrollment` 退出选项已废弃), 在固定就位之前拒绝执行任何操作。
+5. **配对。** 运行 `chromium-bridge pair`: 它要求你在终端上键入一段确认, 铸造主机密钥, 并打印出密钥指纹。在扩展的选项页上批准该指纹; 在固定就位之前, 扩展在每个平台上都拒绝执行任何操作 ([cli.md](./cli.md#登记-pair--revoke--enclave-status) 负责说明这一仪式及其参数)。
 
-   配对今天需要一个以应用标识符代码签名的构建: 普通的发布二进制无法铸造 Enclave 密钥。后续的一项改动会把用户在场迁移到 WebAuthn 并移除这一要求; 它尚未实现。Linux 和 Windows 没有 Secure Enclave, 跳过此步。
+6. **登记 (推荐)。** 在选项页的身份区域登记你浏览器的认证器。机器上的第一次登记是首次使用即信任; 之后的每一次都需要一个已登记认证器的触碰。
 
-6. **连接你的 MCP 客户端**到二进制的绝对路径。对 Claude Code:
+7. **连接你的 MCP 客户端**到二进制的绝对路径。对 Claude Code:
 
    ```sh
    claude mcp add chromium-bridge -- /absolute/path/to/chromium-bridge
@@ -55,11 +55,11 @@ CLI 只需要二进制本身, 在桌面机、无头机器和 CI 上都一样。�
 
 - `chromium-bridge doctor` 报告你浏览器的注册为 `ok`, 并在你的 MCP 客户端打开会话后报告服务器可达。
 - 扩展的工具栏图标显示连接状态。
-- 对新站点的第一次工具调用会在浏览器中弹出批准提示; 高风险操作会弹出确认窗口; 在已登记的 Mac 上, `page_eval` 与 `page_upload` 会触发 Touch ID。
+- 对新站点的第一次工具调用会在浏览器中弹出批准提示; 高风险操作会弹出确认窗口。
 
 ## 推荐的加固
 
-配对 (第 5 步) 在 macOS 上是必需的, 也正是它把风险最高的确认升级为硬件 Touch ID。还有一个可选的仪式用来绑定 MCP 客户端一侧:
+配对 (第 5 步) 在每个平台上都是必需的。登记 (第 6 步) 是推荐项: 没有已登记认证器的浏览器会在确认窗口中回答在场请求 (例如解除紧急开关), 而不是用触碰回答。还有一个可选的仪式用来绑定 MCP 客户端一侧:
 
 - `chromium-bridge pair-client` 创建受信任客户端白名单。它一旦存在, 只有代码身份经证明且获你批准的 MCP 客户端才会得到服务, 并且任何一个界面都能随时吊销其中一个。
 

@@ -20,11 +20,12 @@ chromium-bridge 操作的是一个真实的、已通过身份验证的浏览器�
 
 - **批准每一个站点。** 新的源 (origin) 会触发提示; 未经你批准的站点上什么都不会运行。
 - **确认高风险操作。** 提交点击、按键、关闭标签页、文件上传, 以及每一次 `page_eval`, 都要在一个由扩展拥有、页面既看不到也点不到的窗口上确认。`page_eval` 和 `page_upload` 每次调用都重新确认。同一用户下的程序围绕这个窗口仍能做什么, 见[信任边界台账](./docs/zh-cn/security/trust-boundaries.md#边界-4-扩展---网页-chrome-api--内容脚本--dom)。
+- **用 WebAuthn 证明在场。** 解除紧急开关 (kill switch) 需要在该浏览器下登记的认证器上轻触一次, 登记另一个浏览器则需要在本机已登记的任一认证器上轻触一次; 两者都由主机验证。只有在没有任何已登记的认证器能够应答时, 确认窗口才会顶替上场。
 - **门禁默认开启。** 每一道门禁都是有文档记录的设置, 放宽任何一道都是一次明确、知情的选择 ([SECURITY.md](./.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe))。
 - **凭据只读。** Cookie 和存储可以读取 (始终脱敏: JWT、长十六进制串、长数字串), 但永远不能写入。按设计就没有 `cookie_set` 或 `storage_set`。
 - **经过身份验证与证明的桥接。** 在 macOS 和 Linux 上, 主机进程之间通过一个私有的 Unix 域套接字通信 (没有监听端口)。每个连接都必须通过内核对端 UID 检查、由内核证明的可执行文件身份, 以及基于每次运行密钥的 HMAC 质询。
 - **受信任客户端白名单。** MCP 客户端按一份以经证明的代码身份为键的白名单准入, 任何一方都可以随时吊销信任。
-- **全局紧急开关 (kill switch)。** 在 CLI 或扩展中执行一次操作即可中止一切, 直到你以在场证明解除为止。每一个安全决策都会落入磁盘上的审计日志。
+- **全局紧急开关。** 在 CLI 或扩展中执行一次操作即可中止一切, 直到你以在场证明解除为止 (轻触一次认证器; 在该浏览器未登记任何认证器时, 用确认窗口; 或在终端上键入指定短语)。每一个安全决策都会落入磁盘上的审计日志。
 
 **平台如实说明。** 桥接的保证在 macOS、Linux 和 Windows 上都成立; 各系统背后的机制各不相同 ([SECURITY.md](./.github/SECURITY.md#platform-support))。
 
@@ -37,31 +38,24 @@ chromium-bridge 操作的是一个真实的、已通过身份验证的浏览器�
 
 ## 使用 CLI 快速入门 (macOS、Linux、Windows)
 
-CLI 除了二进制本身不需要任何东西, 在桌面机、无头机器和 CI 上都一样。今天唯一的例外是 macOS 上的配对, 它需要一个带应用标识符代码签名的构建; WebAuthn 在场方案将移除这一要求。
+CLI 除了二进制本身不需要任何东西, 在桌面机、无头机器和 CI 上都一样。完整步骤, 连同各个安装渠道以及每种渠道替你做了什么, 见 [docs/quickstart.md](./docs/zh-cn/quickstart.md); 简版如下:
 
-1. 从[最新发布](https://github.com/Vivswan/chromium-bridge/releases/latest)下载你平台对应的压缩包并解压。可以先校验一下; 在 macOS/Linux 上 (Windows 压缩包是 `.zip`, 用你自己的 sha256 工具检查):
+1. 从[最新发布](https://github.com/Vivswan/chromium-bridge/releases/latest)安装: `.pkg`、`.msi`、`.deb`、Homebrew 或压缩包。要先校验下载文件, 相关命令见 [SECURITY.md](./.github/SECURITY.md#release-artifact-integrity)。
 
-   ```sh
-   shasum -a 256 -c chromium-bridge-<tag>-<platform>-<arch>.tar.gz.sha256
-   gh attestation verify chromium-bridge-<tag>-<platform>-<arch>.tar.gz --repo Vivswan/chromium-bridge
-   ```
-
-   完整的校验说明见 [SECURITY.md](./.github/SECURITY.md#release-artifact-integrity)。
-
-2. 把解压出的二进制注册到你的浏览器。注册是幂等的, 所以同一条命令既是全新安装, 也是修复, 也是移动二进制后的重新注册:
+2. 把二进制注册到你的浏览器, 除非安装程序已经做了 (`.pkg`、`.msi` 和 Homebrew 会做)。注册是幂等的, 所以同一条命令既是全新安装, 也是修复, 也是移动二进制后的重新注册:
 
    ```sh
-   ./chromium-bridge doctor --fix          # every detected browser
-   ./chromium-bridge doctor --fix --browser chrome,brave
+   chromium-bridge doctor --fix          # every detected browser
+   chromium-bridge doctor --fix --browser chrome,brave
    ```
 
-   把二进制放在一个稳定的路径上 (它是就地注册的)。在 Linux 上, `~/.local/lib/chromium-bridge/` 是个不错的位置。`chromium-bridge uninstall` 会精确撤销所注册的内容。
+   从压缩包安装时, 以 `./` 前缀运行解压出的二进制, 并把它放在一个稳定的路径上 (它是就地注册的)。`chromium-bridge uninstall` 会精确撤销所注册的内容。
 
 3. 加载扩展: 在 `chrome://extensions` 开启开发者模式, 点「加载已解压的扩展程序」, 选择压缩包里的 `extension/dist` 目录。然后重启浏览器。扩展需要 Chrome 134 或更新版本; 更旧的浏览器会拒绝加载它。
 
-4. 在 macOS 上进行配对: 运行 `chromium-bridge pair` (Touch ID), 然后在扩展的选项页上批准指纹; 扩展默认要求在那里完成登记。Linux 和 Windows 跳过这一步。
+4. 配对与登记: `chromium-bridge pair` 会打印主机密钥的指纹; 在扩展的选项页上批准它, 然后在同一页面登记你浏览器的认证器 ([docs/cli.md](./docs/zh-cn/cli.md#登记-pair--revoke--enclave-status))。
 
-5. 按下文所述, 把你的 MCP 客户端连接到解压出的二进制 (绝对路径)。
+5. 按下文所述, 把你的 MCP 客户端连接到二进制的绝对路径。
 
 改为从源码构建: `cargo build --release`, 然后对 `target/release/chromium-bridge` 运行同样的 `doctor --fix` (见 [docs/development.md](./docs/zh-cn/development.md))。
 
@@ -74,7 +68,7 @@ CLI 除了二进制本身不需要任何东西, 在桌面机、无头机器和 C
 Claude Code:
 
 ```sh
-claude mcp add chromium-bridge -- "$HOME/.local/bin/chromium-bridge"
+claude mcp add chromium-bridge -- /absolute/path/to/chromium-bridge
 ```
 
 Claude Desktop 以及其他使用 `mcpServers` JSON 的客户端:
@@ -161,7 +155,7 @@ args = []
 
 | 工具 | 作用 | 风险 |
 |------|------|------|
-| `page_eval` | 执行任意 JS。每次调用都要确认并显示完整代码; 已登记的 Mac 上需要 Touch ID。返回值默认脱敏。优先使用上面的工具。 | 严重 |
+| `page_eval` | 执行任意 JS。默认关闭; 每次调用都要确认并显示完整代码。返回值默认脱敏。优先使用上面的工具。 | 严重 |
 | `page_upload` | 把指定的本地文件附加到文件输入框 (默认关闭; 每次调用都带路径确认) | 严重 |
 
 ### 读取凭据 (只读, 始终脱敏)
@@ -206,7 +200,7 @@ MCP client B --stdio--> chromium-bridge ----attach----^   |
 
 | | 支持情况 |
 |---|---|
-| macOS | Apple Silicon (arm64) 预构建; Touch ID 门禁在这里。Intel 从源码构建。 |
+| macOS | Apple Silicon (arm64) 预构建; Intel 从源码构建。 |
 | Linux | x64 预构建; 任何基于 Chromium 的浏览器; CLI 管理界面。 |
 | Windows | x64 预构建 (原生, 无需管理员权限)。桥接是带双向证明的用户专属命名管道; 见 [SECURITY.md](./.github/SECURITY.md#platform-support)。 |
 | 浏览器 | 任何基于 Chromium 的浏览器, Manifest V3 |
@@ -263,8 +257,7 @@ chromium-bridge doctor    # or: chromium-bridge status
 | 套件 | 位置 | 作用 |
 |---|---|---|
 | 协议 | `tests/protocol/e2e.py` (加上 `adversarial.py` 和 `chaos.py`) | 通过真实的线上协议驱动真实的二进制 |
-| DOM | `tests/browser/dom_test.ts` | 通过 CDP 把真实的内容脚本注入隔离的 Chrome, 对真实 DOM 逐个运行每种操作 |
-| 冒烟 | `tests/browser/ext_test.ts` | 用构建好的扩展启动一个隔离的 Chrome |
+| 浏览器 | `tests/browser/run_all.ts`: DOM、冒烟、安全、WebAuthn 和取消套件 | 仅限隔离的 Chrome: 通过 CDP 测试内容脚本、构建好的扩展的 Service Worker、浏览器侧的安全证明、WebAuthn 客户端、取消帧 |
 | 真实集成 (可选启用) | `tests/browser/integration_e2e.ts` 配合 `BB_REAL_E2E=1` | 对真实环境做端到端测试 |
 
 布局:
