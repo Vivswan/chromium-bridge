@@ -43,7 +43,6 @@ export const TOOLCHAIN_CARGO_VERBS = new Set([
   "tree",
 ]);
 
-// `bun x` is bunx by another spelling, so the rule sees one form.
 const unalias = (words: string[]): string[] =>
   words[0] === "bun" && words[1] === "x" ? ["bunx", ...words.slice(2)] : words;
 
@@ -86,7 +85,6 @@ export function auditGraph(graph: TaskGraph): string[] {
   for (const [project, tasks] of Object.entries(graph)) {
     for (const [id, task] of Object.entries(tasks)) {
       const target = `${project}:${id}`;
-      // bunx answers from bun's global cache by bare name when node_modules is absent; `bun run <bin>` does not.
       if (simpleCommands(task).some(([word]) => word === "bunx")) {
         findings.push(`${target}: runs bunx (bun's global cache stands in for a missing package)`);
       }

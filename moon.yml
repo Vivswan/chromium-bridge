@@ -4,8 +4,9 @@
 #
 # These rules govern every `moon run`, whatever targets the caller names together, so no caller has to; the
 # first three are read back from the resolved graph by scripts/check-moon-edges.ts, the last two are not:
-#   runs a package binary                               -> `bun run <bin>` (node_modules/.bin only); never bunx, which
-#                                                          answers from bun's global cache when node_modules is absent
+#   runs a package binary                               -> `bun run <bin>` (node_modules/.bin, then PATH; never bun's
+#                                                          global cache, which is where bunx finds a bare name when
+#                                                          node_modules is absent)
 #   reachable from `gate` (the pre-commit hook's task)  -> only bun, the toolchain's cargo verbs, the shell's set, and
 #                                                          moon's noop, never a bun install; a tool another runtime or
 #                                                          a separate install provides runs in `ci`
