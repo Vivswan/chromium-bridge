@@ -35,7 +35,7 @@ The CLI needs nothing but the binary, on desktops, headless machines, and CI ali
 
 4. **Load the extension.** The extension's Web Store listing is not published yet ([chrome-web-store.md](./chrome-web-store.md)): load `extension/dist` from the release archive via `chrome://extensions`, Developer mode, "Load unpacked" (in a source checkout, build it first and load `build/extension/chrome-mv3`). Restart the browser.
 
-   Once the listing exists, the pointer step 3 left does the rest; [cli.md's pointer table](./cli.md#doctor---fix--uninstall-native-messaging-registration) says what each browser does with it.
+   Once the listing exists, [cli.md's pointer table](./cli.md#doctor---fix--uninstall-native-messaging-registration) says which browsers then offer the extension from the pointer step 3 left, and where none is written.
 
 5. **On macOS, pair.** Run `chromium-bridge pair` (Touch ID prompts and the key's fingerprint is printed), then approve that fingerprint on the extension's options page. On macOS the extension requires this enrollment unconditionally (the old `requireEnrollment` opt-out was retired) and refuses to act until the pin is in place.
 
