@@ -8,7 +8,13 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isolatedBrowser, ranMarkerBody, suiteExitCode, writeRanMarker } from "./browser-safety";
+import {
+  isolatedBrowser,
+  ranMarkerBody,
+  runtimeDirIsolated,
+  suiteExitCode,
+  writeRanMarker,
+} from "./browser-safety";
 
 // Removed in afterAll so a failing test leaves nothing in the OS temp dir.
 const scratchDirs: string[] = [];
@@ -182,5 +188,37 @@ describe("guard skip vs canary (real subprocess)", () => {
     );
     // Only the marker and the stub itself live in the dir - nothing else.
     expect(readdirSync(dir).sort()).toEqual(["finish_only", "finish_only.ts"]);
+  });
+});
+
+describe("runtimeDirIsolated", () => {
+  // The safety fact a real-host suite rests on: the binary resolves its lock from the environment it is
+  // given (XDG_RUNTIME_DIR, HOME, LOCALAPPDATA), and a lock that resolves anywhere but inside the suite's
+  // throwaway dir means the suite would run against the user's LIVE runtime dir, where the host unlinks the
+  // existing socket before binding. The guard judges the path the binary reports, never the platform.
+  const work = join(tmpdir(), "bb-isolation-work");
+  test.each([
+    {
+      name: "the lock inside the throwaway dir is isolated",
+      lock: join(work, "runtime", "chromium-bridge", "run.lock"),
+      isolated: true,
+    },
+    {
+      name: "the user's macOS runtime dir is refused",
+      lock: join("/home/user", "Library/Application Support/chromium-bridge/run.lock"),
+      isolated: false,
+    },
+    {
+      name: "a sibling dir named like the throwaway dir is refused",
+      lock: join(`${work}-other`, "chromium-bridge", "run.lock"),
+      isolated: false,
+    },
+    {
+      name: "a path that climbs out of the throwaway dir is refused",
+      lock: join(work, "..", "chromium-bridge", "run.lock"),
+      isolated: false,
+    },
+  ])("$name", ({ lock, isolated }) => {
+    expect(runtimeDirIsolated(lock, work)).toBe(isolated);
   });
 });

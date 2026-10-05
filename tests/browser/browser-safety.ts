@@ -17,7 +17,8 @@
 
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const ISOLATED_VERSION = /Chrome for Testing|HeadlessShell/;
 
@@ -34,10 +35,9 @@ const CONTAINER_VERSION = /^Chromium\b/;
  * build output) applies to every suite at once instead of whichever files
  * happened to keep their copy current. */
 export function extensionDir(): string {
-  return (
-    process.env.BB_EXT_DIR ||
-    join(resolve(import.meta.dir, "../.."), "build", "extension", "chrome-mv3")
-  );
+  // import.meta.url rather than import.meta.dir: the real-E2E suite documents Node as a runner too.
+  const here = dirname(fileURLToPath(import.meta.url));
+  return process.env.BB_EXT_DIR || join(resolve(here, "../.."), "build", "extension", "chrome-mv3");
 }
 
 /** The isolation verdict for one binary, by its own --version. */
@@ -54,6 +54,14 @@ export function isolatedBrowser(
   if (ISOLATED_VERSION.test(version)) return bin;
   const inContainer = containerMarkers.some((marker) => existsSync(marker));
   return inContainer && CONTAINER_VERSION.test(version) ? bin : null;
+}
+
+/** Whether `lockPath`, the lock the binary says it resolves under a suite's environment, sits inside the
+ * suite's throwaway `work` dir. A real-host suite refuses to run otherwise: outside that dir the binary
+ * would run in the user's live runtime dir, where the host unlinks the existing socket before binding. */
+export function runtimeDirIsolated(lockPath: string, work: string): boolean {
+  const rel = relative(resolve(work), resolve(lockPath));
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
 /** Returns the isolated browser path, or null if CHROME_BIN is unset or does

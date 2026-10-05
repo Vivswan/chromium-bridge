@@ -86,7 +86,6 @@ impl Exchange {
     /// `enroll_begin`: the first credential on a fresh machine is trust on first use; every later one needs
     /// an assertion from an enrolled authenticator first, after which the same request is made again.
     pub(super) fn enroll_begin(&mut self) -> Vec<HostReply> {
-        // Whatever was pending is over: a live approval is consumed below, anything else is superseded.
         let approval = match self.pending.take() {
             Some(Pending::EnrollmentApproved { auth, since })
                 if since.elapsed() <= APPROVAL_TTL =>
@@ -104,8 +103,6 @@ impl Exchange {
             Ok(enrolled) => enrolled,
             Err(e) => return vec![enroll_refused(format!("store_error: {e}"))],
         };
-        // An empty store is first use whatever was approved: the approval presupposed an enrollment that is
-        // gone, and the first-use rule is the one re-checked under the lock at the write.
         if enrolled.is_empty() {
             return self.start_enrollment(&enrolled, EnrollmentAuthority::FirstUse);
         }
@@ -125,7 +122,6 @@ impl Exchange {
     /// `kill_release`: restoring capability, so presence first. The request names only this browser's
     /// credentials; a browser with none can answer with its software confirmation.
     pub(super) fn kill_release(&mut self) -> Vec<HostReply> {
-        // Whatever was pending (an approval included) is superseded, even if this request fails below.
         self.pending = None;
         // A refusal before the request exists is audited like one at the gate, so every release attempt
         // leaves a trail entry.

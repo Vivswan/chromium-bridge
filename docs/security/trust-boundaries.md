@@ -50,7 +50,7 @@ MCP client --(1)-> Rust MCP server --(2)-> native host --(3)-> extension --(4)->
 - **Killed mode**: while the latch is set the host runs control-plane-only: it never dials the broker, drops bridge frames, and keeps exactly these control frames working so status, engage, and the policy pull stay reachable.
 - **Host identity**: the extension pins the host's P-256 public key, which `chromium-bridge pair` mints behind a typed terminal confirmation into the OS credential store through `keyring` (the Keychain, the Credential Manager, or the Secret Service), or with `--file-store` into a 0600 file in the runtime directory. A host that cannot read that key fails the pin closed, and `revoke` deletes it and pushes `enclave_revoked`.
 - **Residual (the host key is a software key)**: the key is readable by the same user and the manifest lives in a user-writable directory, so a same-user attacker can repoint the manifest's `path` at a binary that reads the key and speaks native messaging straight to the extension, bypassing the authenticated socket at boundary 2. That is threat #4's same-user class, the [threat model](threat-model.md)'s accepted narrowing.
-- **What that binary cannot mint**: user presence, which comes from the browser's authenticator (`presence_request`) or the user's terminal.
+- **What that binary cannot forge**: a WebAuthn assertion from the browser's authenticator (`presence_request`); the window and terminal floors stay the software residuals named above.
 
 ## Boundary 4: Extension <-> web page  (Chrome API / content script / DOM)
 
