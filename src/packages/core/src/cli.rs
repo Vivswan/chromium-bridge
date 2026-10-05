@@ -71,7 +71,7 @@ pub enum Command {
     Policy(PolicyCommand),
 }
 
-/// `doctor` / `status` as exactly one of its three forms, so a contradictory
+/// `doctor` / `status` as exactly one of its four forms, so a contradictory
 /// invocation cannot be represented past this boundary.
 #[derive(Debug, PartialEq, Eq)]
 pub enum DoctorCommand {
@@ -79,6 +79,9 @@ pub enum DoctorCommand {
     Report { json: bool },
     /// `--list`: detection and registration state, nothing changed.
     List,
+    /// `--paths`: the runtime dir and lock path this environment resolves
+    /// to, with neither created nor probed.
+    Paths,
     /// `--fix`: (re-)register the targeted browsers. Idempotent, so this is
     /// also the fresh-machine registration path.
     Fix(FixTargets),
@@ -104,11 +107,14 @@ pub enum FixTargets {
 #[command(group(ArgGroup::new("target").multiple(false).requires("fix")))]
 struct DoctorFlags {
     /// Repair (or first-register) the native-messaging manifests
-    #[arg(long, conflicts_with_all = ["list", "json"])]
+    #[arg(long, conflicts_with_all = ["list", "paths", "json"])]
     fix: bool,
     /// List known browsers and their registration state; changes nothing
-    #[arg(long, conflicts_with = "json")]
+    #[arg(long, conflicts_with_all = ["paths", "json"])]
     list: bool,
+    /// Print the runtime dir and lock path this environment resolves to; creates neither
+    #[arg(long, conflicts_with = "json")]
+    paths: bool,
     /// Print the report as one JSON object
     #[arg(long)]
     json: bool,
@@ -134,6 +140,9 @@ impl From<DoctorFlags> for DoctorCommand {
     fn from(flags: DoctorFlags) -> Self {
         if flags.list {
             return DoctorCommand::List;
+        }
+        if flags.paths {
+            return DoctorCommand::Paths;
         }
         if !flags.fix {
             return DoctorCommand::Report { json: flags.json };
@@ -560,6 +569,10 @@ mod tests {
                 Command::Doctor(DoctorCommand::List),
             ),
             (
+                vec!["doctor", "--paths"],
+                Command::Doctor(DoctorCommand::Paths),
+            ),
+            (
                 vec!["doctor", "--fix"],
                 Command::Doctor(DoctorCommand::Fix(FixTargets::Detected)),
             ),
@@ -713,6 +726,9 @@ mod tests {
             (&["doctor", "--list", "--fix"], ArgumentConflict),
             (&["doctor", "--json", "--list"], ArgumentConflict),
             (&["doctor", "--json", "--fix"], ArgumentConflict),
+            (&["doctor", "--paths", "--fix"], ArgumentConflict),
+            (&["doctor", "--paths", "--list"], ArgumentConflict),
+            (&["doctor", "--paths", "--json"], ArgumentConflict),
             (&["doctor", "--fix", "--browser"], InvalidValue),
             (&["doctor", "--fix", "--browser", ""], ValueValidation),
             (
