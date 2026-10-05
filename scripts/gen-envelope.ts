@@ -37,6 +37,10 @@
 //   A2  a `generated-schema` entry replacing an object node is cross-checked against the schema it names: same
 //       field inventory, same base type per field, and strict where the Rust node refuses unknown fields (two
 //       Rust emitters, held equal here)
+//   A3  an `ok-split` entry (at `$`) names a required boolean discriminant and one arm per value; each arm's
+//       required and forbidden fields exist on the frame, and the reader is emitted as a z.discriminatedUnion
+//       whose arms require and refuse exactly those fields, so a frame the typed producer cannot emit (ok with
+//       an error, a refusal without its reason) fails the reader rather than a consumer's re-check
 
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -401,6 +405,10 @@ export function prepare(node: unknown, path: string): unknown {
 const LOOSE = "$loose";
 const GENERATED = "$generated";
 const GENERATED_FROM = "$from";
+/** An ok-split's union node: the discriminant key; emitted as z.discriminatedUnion over `anyOf`. */
+const DISCRIMINANT = "$discriminant";
+/** A field an ok-split arm forbids: emitted as z.undefined(), so a present value (null included) fails the arm. */
+const FORBIDDEN = "$forbidden";
 
 /** A `generated-schema` replacement the pass performed, kept for the A2 cross-check in main. */
 export interface GeneratedReplacement {
@@ -491,7 +499,54 @@ function applyChange(node: JsonObject, change: Change, path: string): JsonObject
     }
     case "generated-schema":
       return { [GENERATED]: change.symbol, [GENERATED_FROM]: change.from };
+    case "ok-split":
+      // Exhaustiveness only: the pass applies an ok-split after the field changes (applyOkSplit), never here.
+      throw new Error(`gen-envelope: ${path}: an ok-split is applied after the field changes (A3)`);
   }
+}
+
+function applyOkSplit(
+  node: JsonObject,
+  change: Extract<Change, { change: "ok-split" }>,
+  path: string,
+): JsonObject {
+  const refuse = (why: string): never => {
+    throw new Error(`gen-envelope: ${path}: ${why}, so the ok-split cannot apply (A3)`);
+  };
+  if (path !== "$") refuse("an ok-split names a whole frame, not a field");
+  const properties = node.properties;
+  if (node.type !== "object" || !isObject(properties)) refuse("the frame is not an object node");
+  const props = properties as JsonObject;
+  const required = new Set(Array.isArray(node.required) ? (node.required as string[]) : []);
+  const discriminant = props[change.discriminant];
+  if (
+    !isObject(discriminant) ||
+    discriminant.type !== "boolean" ||
+    !required.has(change.discriminant)
+  ) {
+    refuse(`${change.discriminant} is not a required boolean field`);
+  }
+  const values = change.arms.map((arm) => arm.when).sort();
+  if (values.join() !== "false,true") refuse("the arms do not cover true and false exactly once");
+  const arms = change.arms.map((arm) => {
+    const armProps: JsonObject = {
+      ...props,
+      [change.discriminant]: { type: "boolean", const: arm.when },
+    };
+    const armRequired = new Set(required);
+    for (const field of arm.required) {
+      if (!Object.hasOwn(props, field)) refuse(`required field ${field} is not on the frame`);
+      armRequired.add(field);
+    }
+    for (const field of arm.forbidden) {
+      if (!Object.hasOwn(props, field)) refuse(`forbidden field ${field} is not on the frame`);
+      if (armRequired.has(field))
+        refuse(`${field} is both required and forbidden on the ok: ${arm.when} arm`);
+      armProps[field] = { [FORBIDDEN]: true };
+    }
+    return { ...node, properties: armProps, required: [...armRequired] };
+  });
+  return { [DISCRIMINANT]: change.discriminant, anyOf: arms };
 }
 
 /** Apply the reader rules and this kind's asymmetry entries to a prepared schema (A1). `loose` is the
@@ -510,7 +565,15 @@ export function applyAsymmetries(
     const entry = entries[path];
     if (entry !== undefined) {
       consumed.add(path);
+      const kinds = new Set(entry.changes.map((change) => change.change));
+      if (kinds.has("ok-split") && kinds.has("generated-schema")) {
+        throw new Error(
+          `gen-envelope: ${path}: a generated-schema replacement has no arms to split, so it cannot pair ` +
+            "with an ok-split (A3)",
+        );
+      }
       for (const change of entry.changes) {
+        if (change.change === "ok-split") continue;
         if (GENERATED in out) {
           throw new Error(`gen-envelope: ${path} is already a generated-schema replacement (A1)`);
         }
@@ -535,6 +598,9 @@ export function applyAsymmetries(
     if (isObject(out.items)) out = { ...out, items: visit(out.items, `${path}.items`) };
     if (Array.isArray(out.anyOf)) {
       out = { ...out, anyOf: out.anyOf.map((b, i) => visit(b, `${path}.anyOf[${i}]`)) };
+    }
+    for (const change of entry?.changes ?? []) {
+      if (change.change === "ok-split") out = applyOkSplit(out, change, path);
     }
     return out;
   };
@@ -561,6 +627,11 @@ function emitZod(node: unknown, override?: (node: unknown) => string | undefined
     throw new Error(`gen-envelope: emitter reached an unprepared node: ${show(node)}`);
   }
   if (typeof node[GENERATED] === "string") return node[GENERATED];
+  if (node[FORBIDDEN] === true) return "z.undefined()";
+  if (typeof node[DISCRIMINANT] === "string" && Array.isArray(node.anyOf)) {
+    const arms = node.anyOf.map((arm) => emitZod(arm, override));
+    return `z.discriminatedUnion(${JSON.stringify(node[DISCRIMINANT])}, [${arms.join(", ")}])`;
+  }
   if (Array.isArray(node.anyOf)) {
     // A non-empty, pure combinator; a one-branch union is the branch itself.
     if (node.anyOf.length === 1) return emitZod(node.anyOf[0], override);
@@ -652,8 +723,8 @@ export function convert(
 // ---- the frame plan (G7) ---------------------------------------------------------
 
 // The control-frame groups, keyed by the emit_envelope_schema output field that carries each Rust enum
-// (EnclaveControl / AdminControl / PolicyControl).
-export const GROUPS = ["enclave", "admin", "policy"] as const;
+// (EnclaveControl / AdminControl / PolicyControl / WebAuthnControl).
+export const GROUPS = ["enclave", "admin", "policy", "webauthn"] as const;
 export type Group = (typeof GROUPS)[number];
 
 /** The host->extension frames the extension validates: the export names of the faithful base and of the
@@ -678,10 +749,14 @@ export const READER_FRAMES: Record<
     kill_status_result: { wire: "KillStatusResultWireSchema", enforced: "KillStatusResultSchema" },
   },
   policy: {
-    // The enforced policy_current validator is the generated shape plus the hand-written ok-split
-    // refinement in enclave.ts (PolicyCurrentFrameSchema), pinned by scripts/check-envelope.ts.
-    policy_current: { wire: "PolicyCurrentWireSchema", enforced: "PolicyCurrentFrameShapeSchema" },
+    policy_current: { wire: "PolicyCurrentWireSchema", enforced: "PolicyCurrentFrameSchema" },
     lang_current: { wire: "LangCurrentWireSchema", enforced: "LangCurrentFrameSchema" },
+  },
+  webauthn: {
+    enroll_options: { wire: "EnrollOptionsWireSchema", enforced: "EnrollOptionsFrameSchema" },
+    enroll_result: { wire: "EnrollResultWireSchema", enforced: "EnrollResultFrameSchema" },
+    presence_request: { wire: "PresenceRequestWireSchema", enforced: "PresenceRequestFrameSchema" },
+    presence_result: { wire: "PresenceResultWireSchema", enforced: "PresenceResultFrameSchema" },
   },
 };
 
@@ -691,6 +766,7 @@ export const BARE_TAG_FRAMES: Record<Group, readonly string[]> = {
   enclave: ["enclave_revoked"],
   admin: [],
   policy: [],
+  webauthn: [],
 };
 
 /** The extension->host frames the extension CONSTRUCTS; the Rust serde parser is the enforcing reader, so these
@@ -714,6 +790,11 @@ export const WRITER_FRAMES: Record<Group, Readonly<Record<string, string>>> = {
     policy_get: "PolicyGetWireSchema",
     lang_set: "LangSetWireSchema",
     lang_get: "LangGetWireSchema",
+  },
+  webauthn: {
+    enroll_begin: "EnrollBeginWireSchema",
+    enroll_finish: "EnrollFinishWireSchema",
+    presence_assert: "PresenceAssertWireSchema",
   },
 };
 
@@ -830,12 +911,14 @@ async function main(): Promise<void> {
     enclave: unknown;
     admin: unknown;
     policy: unknown;
+    webauthn: unknown;
   };
 
   const variants = {
     enclave: splitTaggedUnionSchema(fromRust.enclave),
     admin: splitTaggedUnionSchema(fromRust.admin),
     policy: splitTaggedUnionSchema(fromRust.policy),
+    webauthn: splitTaggedUnionSchema(fromRust.webauthn),
   };
   for (const group of GROUPS) assertFramePlan(group, variants[group]);
 
@@ -1006,16 +1089,16 @@ async function main(): Promise<void> {
 
   const out = `// GENERATED from the Rust core wire types (src/packages/core/src/protocol.rs and
 // protocol/control.rs; AdminControl embeds allowlist::ClientEntry, PolicyControl embeds
-// policy::PolicyOverlay) by scripts/gen-envelope.ts - DO NOT EDIT. Edit the Rust types or
+// policy::PolicyOverlay, WebAuthnControl carries the WebAuthn ceremonies) by scripts/gen-envelope.ts -
+// DO NOT EDIT. Edit the Rust types or
 // src/packages/shared/src/envelope-asymmetries.ts, then run \`moon run gen\`.
 //
 // Per envelope and per host->extension control frame: the FAITHFUL base (*WireSchema: strict objects,
 // required fields required, no defaults; rules G1-G7 in scripts/gen-envelope.ts) and the ENFORCED validator
 // the extension runs, which is the base plus exactly the asymmetry table (direction and reason per entry in
 // envelope-asymmetries.ts; proved per entry by scripts/check-envelope.ts, \`moon run check-envelope\`). The
-// policy_current reader is completed by the ok-split refinement in enclave.ts. The extension->host writer
-// schemas exist for their inferred types only (constructor-site \`satisfies\`); the enforcing reader for those
-// frames is the Rust serde parser.
+// extension->host writer schemas exist for their inferred types only (constructor-site \`satisfies\`); the
+// enforcing reader for those frames is the Rust serde parser.
 
 import { z } from "zod";
 ${importLines.join("\n")}

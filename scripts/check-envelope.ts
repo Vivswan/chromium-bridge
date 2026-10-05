@@ -12,7 +12,8 @@
 //   both reader rules                        -> null at every Option field refused (optional-only); an added field
 //                                              admitted on every control frame and refused on the envelopes
 //                                              (loose-frames)
-//   the inbound classifiers (enclave.ts)     -> equal to the generated reader plan plus the pinned outbound tags
+//   the inbound classifiers (enclave.ts,     -> equal to the generated reader plan plus the pinned outbound tags
+//   webauthn.ts)
 //   refinements, in no derived schema        -> pinned in FRAME_REFINEMENTS by count and by probe
 //   the approved asymmetries                 -> printed as a table (scope, direction, reason, proof) for the reviewer
 //
@@ -24,7 +25,6 @@ import {
   ADMIN_RESULT_FRAME_TYPES,
   ENCLAVE_FRAME_TYPES,
   POLICY_FRAME_TYPES,
-  PolicyCurrentFrameSchema,
   PRESENCE_FRAME_TYPES,
 } from "../src/packages/shared/src/enclave";
 import * as generated from "../src/packages/shared/src/envelope.gen";
@@ -33,6 +33,7 @@ import {
   type Asymmetry,
   READER_RULES,
 } from "../src/packages/shared/src/envelope-asymmetries";
+import { WEBAUTHN_FRAME_TYPES } from "../src/packages/shared/src/webauthn";
 import { BARE_TAG_FRAMES, GROUPS, type Group, READER_FRAMES, WRITER_FRAMES } from "./gen-envelope";
 
 type Frame = Record<string, unknown>;
@@ -42,8 +43,6 @@ type Frame = Record<string, unknown>;
 /** The valid frame arms of one reader: at least one, so a reader can never prove vacuously. */
 export type FrameArms = readonly [Frame, ...Frame[]];
 
-/** One reader kind: its base, its enforced validator (the generated one, or the hand-written refinement over
- * it for policy_current), its valid frame arms to place probes in, and whether the loose-frames rule applies. */
 export interface ReaderPair {
   base: z.ZodType;
   enforced: z.ZodType;
@@ -60,7 +59,7 @@ function exported(name: string): z.ZodType {
 }
 
 // Hand-written minimal valid frames, one list per reader: the first is the primary arm the entry probes mutate;
-// the rest are the other arms a refinement splits the frame into (policy_current ok:false), so the Option
+// the rest are the other arms an ok-split divides the frame into (policy_current ok:false), so the Option
 // inventory below reaches fields the primary arm can never carry.
 const FRAMES: Readonly<Record<string, FrameArms>> = {
   request: [{ id: 1, op: "tab_list", browser: "brave", args: {} }],
@@ -110,6 +109,33 @@ const FRAMES: Readonly<Record<string, FrameArms>> = {
     { type: "policy_current", ok: false, error: "no policy baseline" },
   ],
   lang_current: [{ type: "lang_current", value: "en", seq: 3 }],
+  enroll_options: [
+    {
+      type: "enroll_options",
+      challenge: "Y2hhbGxlbmdl",
+      nonce: "nonce-0001",
+      user_id: "dXNlci1pZA",
+      user_name: "brave",
+      exclude_credential_ids: ["Y3JlZC1h"],
+    },
+  ],
+  enroll_result: [
+    { type: "enroll_result", ok: true, credential_id: "Y3JlZC1h" },
+    { type: "enroll_result", ok: false, reason: "attestation_format" },
+  ],
+  presence_request: [
+    {
+      type: "presence_request",
+      challenge: "cHJlc2VuY2U",
+      nonce: "nonce-0002",
+      action: "pair_client:codex",
+      allowed_credential_ids: ["Y3JlZC1h"],
+    },
+  ],
+  presence_result: [
+    { type: "presence_result", ok: true },
+    { type: "presence_result", ok: false, reason: "sign_count_not_increased" },
+  ],
 };
 
 /** Every reader the gate proves, keyed like the asymmetry table. */
@@ -135,8 +161,7 @@ export function readerPairs(): Readonly<Record<string, ReaderPair>> {
         throw new Error(`check-envelope: no representative frame for ${tag}`);
       pairs[tag] = {
         base: exported(names.wire),
-        // The one hand-written layer over a generated reader: the policy_current ok-split (enclave.ts).
-        enforced: tag === "policy_current" ? PolicyCurrentFrameSchema : exported(names.enforced),
+        enforced: exported(names.enforced),
         frames,
         loose: true,
       };
@@ -148,9 +173,15 @@ export function readerPairs(): Readonly<Record<string, ReaderPair>> {
 // ---- the asymmetry-table rule ------------------------------------------------------
 
 // Place `value` at a table path ("$.properties.a.items.properties.b") inside a copy of `frame`: a property
-// segment selects the key, an items segment the first element. Returns undefined when the path does not
-// resolve in this frame (an arm that lacks the field).
+// segment selects the key, an items segment the first element, and the bare `$` is the whole frame (an
+// ok-split's probes are whole frames). Returns undefined when the path does not resolve in this frame (an arm
+// that lacks the field, or a whole-frame value that is not an object).
 export function placeAt(frame: Frame, path: string, value: unknown): Frame | undefined {
+  if (path === "$") {
+    return typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Frame)
+      : undefined;
+  }
   const copy = structuredClone(frame);
   const segments = path.split(".").slice(1);
   let cursor: unknown = copy;
@@ -207,8 +238,8 @@ export function asymmetryProblems(
   path: string,
 ): string[] {
   const problems: string[] = [];
-  // The arm must CARRY the field, not merely admit its insertion: on an arm that cannot carry it, a refinement
-  // (the ok-split) would refuse the inserted field and stand in for the constraint under proof.
+  // The arm must CARRY the field, not merely admit its insertion: on an arm that cannot carry it, the ok-split
+  // would refuse the inserted field and stand in for the constraint under proof.
   const frame = pair.frames.find((candidate) => valueAt(candidate, path) !== undefined);
   if (frame === undefined) return [`${scope}: no representative frame carries the path`];
   const at = (value: unknown) => placeAt(frame, path, value) as Frame;
@@ -352,6 +383,7 @@ export const CLASSIFIED_TAGS: Record<Group, ReadonlySet<string>> = {
   enclave: new Set([...ENCLAVE_FRAME_TYPES, ...PRESENCE_FRAME_TYPES]),
   admin: new Set([...ADMIN_RESULT_FRAME_TYPES, "kill_status_result"]),
   policy: new Set(POLICY_FRAME_TYPES),
+  webauthn: new Set(WEBAUTHN_FRAME_TYPES),
 };
 
 // Ceremony tags classified WITHOUT a reader, deliberately: these are extension->host (writer) frames, and
@@ -363,6 +395,7 @@ const CLASSIFIED_OUTBOUND_TAGS: Record<Group, ReadonlySet<string>> = {
   enclave: new Set(["enclave_challenge", "enclave_revoke"]),
   admin: new Set(),
   policy: new Set(),
+  webauthn: new Set(),
 };
 
 /** The classifier-coverage rule: pure over its inputs so the test file can prove the refusals fire; the running
@@ -422,27 +455,9 @@ export type RefinementPin = {
 };
 
 export const FRAME_REFINEMENTS: Readonly<Partial<Record<string, readonly RefinementPin[]>>> = {
-  // The policy_current ok-split (enclave.ts): PolicyStatus::into_frame (protocol/control.rs) emits exactly two
-  // flat shapes, so a field of one arm must never be able to ride a frame of the other.
-  //   ok: true   -> requires `baseline`, never carries `error`
-  //   ok: false  -> requires `error`, never carries `baseline`, `sig`, or `overlay`
-  policy_current: [
-    {
-      name: "ok-split",
-      refuses: [
-        { type: "policy_current", ok: true, baseline: "e30=", error: "boom" },
-        { type: "policy_current", ok: true },
-        { type: "policy_current", ok: false, baseline: "e30=", error: "boom" },
-        { type: "policy_current", ok: false, sig: "c2ln", error: "boom" },
-        { type: "policy_current", ok: false, overlay: {}, error: "boom" },
-        { type: "policy_current", ok: false },
-      ],
-      accepts: [
-        { type: "policy_current", ok: true, baseline: "e30=", sig: "c2ln", overlay: {} },
-        { type: "policy_current", ok: false, error: "no policy baseline" },
-      ],
-    },
-  ],
+  // No enforced reader carries a hand-written refinement (the ok-splits are `ok-split` entries of the
+  // asymmetry table, emitted by the generator); every reader is held to zero refinements until one is pinned
+  // here.
 };
 
 /** Count the custom checks (refinements) in a Zod schema, recursively, so a .refine buried on a nested property

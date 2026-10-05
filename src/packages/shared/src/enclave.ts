@@ -1,6 +1,5 @@
-// The control-frame side the generator cannot own: the inbound classifiers the extension routes on, the one
-// hand-written refinement over a generated reader (the policy_current ok-split), and the records the extension
-// persists in chrome.storage.local. The frame validators themselves are generated (envelope.gen.ts: the Rust
+// The control-frame side the generator cannot own: the inbound classifiers the extension routes on, and the
+// records the extension persists in chrome.storage.local. The frame validators themselves are generated (envelope.gen.ts: the Rust
 // control-frame enums plus the asymmetry table in envelope-asymmetries.ts).
 //
 // Storage records are strict: a record with unexpected fields is treated as absent, which fails closed at the
@@ -9,7 +8,7 @@
 import { z } from "zod";
 import { AUDIT_FORWARDED_KINDS } from "./audit.gen";
 import { ENCLAVE_FIXTURE_KEY_ID } from "./enclave.gen";
-import { KillStatusResultSchema, PolicyCurrentFrameShapeSchema } from "./envelope.gen";
+import { KillStatusResultSchema } from "./envelope.gen";
 import { POLICY_REVISION_MAX, PolicyValuesSchema } from "./policy.gen";
 
 // ---- inbound classifiers ------------------------------------------------------
@@ -73,42 +72,6 @@ export const PolicyInboundFrameSchema = z.looseObject({
 });
 
 export type PolicyInboundFrame = z.infer<typeof PolicyInboundFrameSchema>;
-
-// ---- the one hand-written refinement over a generated reader -------------------
-
-// The policy state push. The generated shape covers ONLY the frame envelope: `baseline` stays an opaque base64
-// string, because the consumer verifies the signature over the decoded bytes against its pinned key FIRST and
-// strict-parses those same bytes with the generated PolicyDocSchema only after the signature holds. Never
-// parse the document here.
-//
-// The ok-split: on the wire every field is an Option, so the shape validates per field and would pass frames
-// PolicyStatus::into_frame (protocol/control.rs) can never emit. A refinement never shows up in a derived
-// schema, so scripts/check-envelope.ts pins it in FRAME_REFINEMENTS by count and by probe.
-//   ok: true   -> REQUIRES baseline (sig/overlay optional); never error
-//   ok: false  -> REQUIRES error; never baseline, sig, or overlay
-export const PolicyCurrentFrameSchema = PolicyCurrentFrameShapeSchema.superRefine((frame, ctx) => {
-  const [required, forbidden] = frame.ok
-    ? (["baseline", ["error"]] as const)
-    : (["error", ["baseline", "sig", "overlay"]] as const);
-  if (frame[required] === undefined) {
-    ctx.addIssue({
-      code: "custom",
-      path: [required],
-      message: `policy_current ok:${frame.ok} always carries ${required} (ok-split)`,
-    });
-  }
-  for (const field of forbidden) {
-    if (frame[field] !== undefined) {
-      ctx.addIssue({
-        code: "custom",
-        path: [field],
-        message: `policy_current ok:${frame.ok} never carries ${field} (ok-split)`,
-      });
-    }
-  }
-});
-
-export type PolicyCurrentFrame = z.infer<typeof PolicyCurrentFrameSchema>;
 
 // ---- stored trust records --------------------------------------------------------
 

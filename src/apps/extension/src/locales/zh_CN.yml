@@ -144,6 +144,10 @@ settings:
   add_site_format: "格式应为 https://host/*"
   add_site_parse_failed: "无法解析该 URL"
 
+presence:
+  surface_platform_authenticator: "硬件验证: 由本设备的验证器 (Touch ID、Windows Hello) 为每次批准签名。"
+  surface_security_key: "安全密钥: 由 FIDO2 密钥为每次批准签名, 未在本设备检测到内置验证器。"
+  surface_software_confirmation: "软件确认: 此浏览器无法运行 WebAuthn 流程, 批准只是一次点击, 不是硬件验证。"
 enroll:
   loading: "加载中..."
   na_title: "此平台没有 Secure Enclave, 无法配对 (仅限 macOS)。"

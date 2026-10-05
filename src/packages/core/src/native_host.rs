@@ -23,8 +23,9 @@ use std::time::Duration;
 use crate::enclave::EnrollmentKey;
 use crate::ipc;
 use crate::protocol::control::{
-    classify_nm_frame, host_control_type, AdminControl, EnclaveControl, FrameDisposition,
-    HostRequest, KillStatus, MalformedReply, PolicyControl, PolicyStatus,
+    classify_nm_frame, host_control_type, AdminControl, EnclaveControl, EnrollOutcome,
+    FrameDisposition, HostRequest, KillStatus, MalformedReply, PolicyControl, PolicyStatus,
+    PresenceOutcome,
 };
 use crate::protocol::{bridge_read, bridge_write, nm_read_frame, nm_write_frame};
 use crate::runtime_record::RuntimeRecord as _;
@@ -648,6 +649,22 @@ fn handle_request(request: HostRequest, out: &Arc<Mutex<BufWriter<io::Stdout>>>)
             log_info!("native-host", "answering presence challenge locally");
             handle_presence_challenge(nonce, context, out)
         }
+        // The WebAuthn ceremonies have no enrollment store yet, so the host refuses them with a typed
+        // result instead of leaving the extension's exchange to time out.
+        HostRequest::EnrollBegin {} | HostRequest::EnrollFinish { .. } => write_control_reply(
+            out,
+            &EnrollOutcome::Refused {
+                reason: "enrollment_unavailable".into(),
+            }
+            .into_frame(),
+        ),
+        HostRequest::PresenceAssert { .. } => write_control_reply(
+            out,
+            &PresenceOutcome::Refused {
+                reason: "no_request_outstanding".into(),
+            }
+            .into_frame(),
+        ),
         HostRequest::EnclaveRevoke {} => write_control_reply(out, &revoke_host_key()),
         HostRequest::ClientList {} => write_control_reply(out, &admin_client_list()),
         HostRequest::ClientRevoke { name } => write_control_reply(out, &admin_client_revoke(&name)),

@@ -44,8 +44,8 @@ wildcards = "deny"
 # own gate is `moon run check-gen-isolation`, a cargo tree walk: cargo-deny
 # cannot see that graph in the root workspace, where the core's self
 # dev-dependency switches the envelope-schema feature on workspace-wide).
+# p256 is shipped, not gen-only (docs/security/rationale.md).
 deny = [
-  { crate = "p256", reason = "a software P-256 stack never signs for the bridge; the host uses the Secure Enclave" },
   { crate = "schemars", wrappers = ["rmcp"], reason = "runtime tool schemas come from rmcp only" },
 ]
 # The fuzz crate's core dependency is `path = ".."` with no version, and

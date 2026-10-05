@@ -447,8 +447,8 @@ tasks:
 
   check-gen-isolation:
     # Only `cargo tree -e normal` sees the shipped graph (scripts/check-gen-isolation.ts says why cargo-deny
-    # cannot): p256 and ts-rs are refused anywhere in it, schemars only through rmcp.
-    description: 'Gen-only tooling (p256, ts-rs; schemars outside rmcp) stays out of the shipped binary dependency graph'
+    # cannot): ts-rs is refused anywhere in it, schemars only through rmcp.
+    description: 'Gen-only tooling (ts-rs; schemars outside rmcp) stays out of the shipped binary dependency graph'
     deps: ['~:install-deps']
     script: |
       set -e

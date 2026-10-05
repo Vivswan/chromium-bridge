@@ -497,6 +497,89 @@ describe("applyAsymmetries", () => {
     ).toThrow(message);
   });
 
+  test("an ok-split emits a discriminated union whose arms require and refuse exactly the declared fields (A3)", () => {
+    // The field-level change (min 1 on label) is applied before the split, so both arms inherit it.
+    const verdict = strictObject(
+      {
+        ok: { type: "boolean" },
+        label: { type: ["string", "null"] },
+        error: { type: ["string", "null"] },
+      },
+      ["ok"],
+    );
+    const split = (arms: unknown) => entry([{ change: "ok-split", discriminant: "ok", arms }]);
+    const { schema } = applyAsymmetries(
+      verdict,
+      "t",
+      {
+        $: split([
+          { when: true, required: ["label"], forbidden: ["error"] },
+          { when: false, required: ["error"], forbidden: ["label"] },
+        ]),
+        "$.properties.label": entry([{ change: "string", minLength: 1 }]),
+      },
+      true,
+    );
+    expect(convert(schema, "t")).toBe(
+      'z.discriminatedUnion("ok", [' +
+        'z.object({ "ok": z.literal(true), "label": z.string().min(1), "error": z.undefined().optional() }).catchall(z.unknown()), ' +
+        'z.object({ "ok": z.literal(false), "label": z.undefined().optional(), "error": z.string() }).catchall(z.unknown())])',
+    );
+    for (const [why, arms] of [
+      ["one arm only", [{ when: true, required: [], forbidden: [] }]],
+      [
+        "a field the frame lacks",
+        [
+          { when: true, required: ["missing"], forbidden: [] },
+          { when: false, required: [], forbidden: [] },
+        ],
+      ],
+      [
+        "a field both required and forbidden",
+        [
+          { when: true, required: ["label"], forbidden: ["label"] },
+          { when: false, required: [], forbidden: [] },
+        ],
+      ],
+    ] as const) {
+      expect(() => applyAsymmetries(verdict, "t", { $: split(arms) }, true), why).toThrow("(A3)");
+    }
+    // Paired with a generated-schema replacement the frame has no arms to split, and the replacement's early
+    // return would otherwise skip the split and every refusal above.
+    expect(() =>
+      applyAsymmetries(
+        verdict,
+        "t",
+        {
+          $: entry([
+            { change: "generated-schema", symbol: "VerdictSchema", from: "./verdict.gen" },
+            {
+              change: "ok-split",
+              discriminant: "ok",
+              arms: [{ when: true, required: ["missing"], forbidden: ["missing"] }],
+            },
+          ]),
+        },
+        true,
+      ),
+    ).toThrow("(A3)");
+    // The discriminant must be a required boolean: a string `ok`, or an optional one, is refused.
+    const stringOk = strictObject({ ok: { type: "string" } }, ["ok"]);
+    expect(() =>
+      applyAsymmetries(
+        stringOk,
+        "t",
+        {
+          $: split([
+            { when: true, required: [], forbidden: [] },
+            { when: false, required: [], forbidden: [] },
+          ]),
+        },
+        true,
+      ),
+    ).toThrow("(A3)");
+  });
+
   test("a tag union whose variants disagree on the content field is refused", () => {
     const mismatched = strictObject(
       {

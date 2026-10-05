@@ -7,8 +7,13 @@
 import { z } from "zod";
 import { ConfirmPayloadSchema } from "./confirm";
 import { AuditEntrySchema, KillMirrorSchema } from "./enclave";
-import { TrustedClientSchema } from "./envelope.gen";
+import {
+  EnrollOptionsFrameSchema,
+  PresenceRequestFrameSchema,
+  TrustedClientSchema,
+} from "./envelope.gen";
 import { UI_LANGUAGES } from "./settings";
+import { PresenceAnswerSchema, RegistrationResponseSchema } from "./webauthn";
 
 /** The answer to a message the sender was not allowed to issue, a message the
  * router could not parse, or a handler that failed: the one failure shape. */
@@ -229,6 +234,36 @@ export const RUNTIME_CONTRACT = contract({
     gate: "confirm-window",
     req: z.strictObject({ type: z.literal("confirm_deny_kill") }),
     res: KillViewSchema,
+  },
+  // The WebAuthn ceremonies run in the options page (a service worker has no navigator.credentials); the
+  // worker relays the host's frames. begin returns the creation options the page hands the authenticator,
+  // pending returns the host-pushed request awaiting a tap (null when none), and the two response
+  // messages carry the authenticator's answer back for the worker to post.
+  webauthn_enroll_begin: {
+    gate: "extension-page",
+    req: z.strictObject({ type: z.literal("webauthn_enroll_begin") }),
+    res: z.object({ ok: z.literal(true), options: EnrollOptionsFrameSchema }),
+  },
+  webauthn_enroll_finish: {
+    gate: "extension-page",
+    req: z.strictObject({
+      type: z.literal("webauthn_enroll_finish"),
+      ...RegistrationResponseSchema.shape,
+    }),
+    res: z.object({ ok: z.literal(true), credentialId: z.string().min(1) }),
+  },
+  webauthn_presence_pending: {
+    gate: "extension-page",
+    req: z.strictObject({ type: z.literal("webauthn_presence_pending") }),
+    res: z.object({ ok: z.literal(true), request: PresenceRequestFrameSchema.nullable() }),
+  },
+  webauthn_presence_assert: {
+    gate: "extension-page",
+    req: z.strictObject({
+      type: z.literal("webauthn_presence_assert"),
+      ...PresenceAnswerSchema.shape,
+    }),
+    res: Acknowledged,
   },
   // Enum-pinned here, at the trust boundary, so the relay can never put an
   // out-of-enum string on the wire.

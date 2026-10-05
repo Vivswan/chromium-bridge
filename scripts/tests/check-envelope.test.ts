@@ -6,13 +6,12 @@
 
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
-import { PolicyCurrentFrameShapeSchema } from "../../src/packages/shared/src/envelope.gen";
 import { ASYMMETRIES, type Asymmetry } from "../../src/packages/shared/src/envelope-asymmetries";
+import { PolicyOverlaySchema } from "../../src/packages/shared/src/policy.gen";
 import {
   asymmetryProblems,
   CLASSIFIED_TAGS,
   classifierCoverageProblems,
-  FRAME_REFINEMENTS,
   optionPaths,
   placeAt,
   type ReaderPair,
@@ -314,22 +313,26 @@ describe("refinementProblems", () => {
     },
   );
 
+  // The real table pins nothing, so the two-way binding is proven on a pin and schema written here.
+  const splitPin = {
+    name: "ok-split",
+    refuses: [{ type: "verdict", ok: true, error: "boom" }],
+    accepts: [{ type: "verdict", ok: true }],
+  };
+
   test("a pinned refinement that vanished is refused (pins bind both ways)", () => {
-    const unrefined = z.looseObject({ type: z.literal("policy_current"), ok: z.boolean() });
-    const pins = FRAME_REFINEMENTS.policy_current ?? [];
-    expect(pins.length).toBeGreaterThan(0);
-    const problems = refinementProblems("policy_current", unrefined, pins);
+    const unrefined = z.looseObject({ type: z.literal("verdict"), ok: z.boolean() });
+    const problems = refinementProblems("verdict", unrefined, [splitPin]);
     expect(problems.join("\n")).toContain("pins 1");
-    // Without the refinement, the mixture probes parse: each is reported.
+    // Without the refinement, the mixture probe parses: it is reported.
     expect(problems.join("\n")).toContain("no longer refuses");
   });
 
   test("a pinned refinement that stopped firing is refused even at the right count", () => {
     const inert = z
-      .looseObject({ type: z.literal("policy_current"), ok: z.boolean() })
+      .looseObject({ type: z.literal("verdict"), ok: z.boolean() })
       .superRefine(() => {});
-    const pins = FRAME_REFINEMENTS.policy_current ?? [];
-    const problems = refinementProblems("policy_current", inert, pins);
+    const problems = refinementProblems("verdict", inert, [splitPin]);
     // The count matches, so every problem is a probe the no-op let through.
     expect(problems.length).toBeGreaterThan(0);
     for (const problem of problems) {
@@ -395,11 +398,19 @@ describe("probe arms must carry the field they prove", () => {
     // ok-split would refuse an inserted null for its own reason. The enforced validator is the real generated
     // shape with one regrown null arm on error.
     const policy = pairs.policy_current as ReaderPair;
-    const enforced = PolicyCurrentFrameShapeSchema.extend({
-      error: z.string().nullable().optional(),
-    }).superRefine((frame, ctx) => {
-      if (frame.ok && frame.error !== undefined) ctx.addIssue({ code: "custom", message: "split" });
-    });
+    const enforced = z
+      .looseObject({
+        type: z.literal("policy_current"),
+        ok: z.boolean(),
+        baseline: z.string().min(1).optional(),
+        sig: z.string().min(1).optional(),
+        overlay: PolicyOverlaySchema.optional(),
+        error: z.string().nullable().optional(),
+      })
+      .superRefine((frame, ctx) => {
+        if (frame.ok && frame.error !== undefined)
+          ctx.addIssue({ code: "custom", message: "split" });
+      });
     const okTrueOnly: ReaderPair = { ...policy, enforced, frames: [policy.frames[0]] };
     expect(readerRuleProblems("policy_current", okTrueOnly)).toEqual([
       "policy_current: optional-only: no representative frame carries $.properties.error",

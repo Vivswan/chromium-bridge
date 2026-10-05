@@ -42,16 +42,15 @@ describe("isolationProblems", () => {
     ).toEqual([]);
   });
 
-  test("every refused crate in the graph is named, wherever it sits", () => {
-    const tree = `${clean}\n    ├── p256 v0.13.2\n└── ts-rs v10.1.0`;
+  test("a refused crate in the graph is named, wherever it sits", () => {
+    const tree = `${clean}\n    ├── p256 v0.14.0\n└── ts-rs v10.1.0`;
     expect(isolationProblems(tree, () => viaRmcp)).toEqual([
-      "p256 leaked into the chromium-bridge binary dependency graph",
       "ts-rs leaked into the chromium-bridge binary dependency graph",
     ]);
   });
 
   test("a crate whose name merely ends in a refused name is not a leak", () => {
-    expect(isolationProblems(`${clean}\n└── ecdsa-p256 v0.1.0`, () => viaRmcp)).toEqual([]);
+    expect(isolationProblems(`${clean}\n└── my-ts-rs v0.1.0`, () => viaRmcp)).toEqual([]);
   });
 
   // The inverse tree's rows: depth digit glued to the name, so depth 10 starts with "10".

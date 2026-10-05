@@ -60,11 +60,18 @@ futures = "0.3"
 # (no `fork`/`timeout`/`regex-syntax` features) so it spawns no processes and
 # its dependency tree stays within the licenses allowed by `deny.toml`.
 proptest = { version = "1", default-features = false, features = ["std"] }
-# Software P-256 for the enclave golden-vector fixture (the emit_enclave_contract
-# example, `moon run gen`): RFC 6979 deterministic signing, so regenerating the
-# checked-in fixture is byte-identical. Dev-only - the shipped host signs with
-# the Secure Enclave via security-framework, never with a software key.
+# P-256 ECDSA for the WebAuthn assertion verifier (src/packages/core/src/webauthn).
+# The shipped host only VERIFIES: it holds no private key, so the signing half the
+# `ecdsa` feature also compiles (ecdsa 0.17 gates VerifyingKey and SigningKey on the
+# same feature) has nothing to sign with. Tests and the emit_enclave_contract example
+# sign with it (RFC 6979 deterministic, so the checked-in fixture regenerates
+# byte-identical).
 p256 = { version = "0.14", default-features = false, features = ["ecdsa", "std"] }
+# COSE key parsing for WebAuthn registration (the credential public key inside
+# attestedCredentialData): coset gives the typed EC2 labels, ciborium the CBOR
+# decoder underneath it and the attestationObject map. Both over a hand parser.
+coset = "0.4"
+ciborium = "0.2"
 # The runtime-record matrix test (src/packages/core/src/runtime_record.rs) parses the crate's own record
 # modules for serde attributes and inherent items; `span-locations` gives the refusal its line. Dev-only:
 # a dev-dependency never enters the shipped graph.

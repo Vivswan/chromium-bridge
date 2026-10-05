@@ -146,6 +146,10 @@ settings:
   add_site_format: "Format should be https://host/*"
   add_site_parse_failed: "Could not parse the URL"
 
+presence:
+  surface_platform_authenticator: "Hardware tap: this device's authenticator (Touch ID, Windows Hello) signs each approval."
+  surface_security_key: "Security key: a FIDO2 key signs each approval; no built-in authenticator was detected on this device."
+  surface_software_confirmation: "Software confirmation: this browser cannot run the WebAuthn ceremony, so approvals are a click, not a hardware tap."
 enroll:
   loading: "Loading..."
   na_title: "This platform has no Secure Enclave; pairing is unavailable (macOS only)."

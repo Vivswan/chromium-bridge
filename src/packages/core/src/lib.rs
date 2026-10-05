@@ -55,3 +55,4 @@ pub(crate) mod sys;
 pub(crate) mod test_support;
 pub mod tools;
 pub mod trust;
+pub mod webauthn;
