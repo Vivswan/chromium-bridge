@@ -6,6 +6,7 @@
 import { WEBAUTHN_ENROLLMENT_KEY } from "@chromium-bridge/shared/runtime-msg";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
+import { HOST_REPLY_TIMEOUT_MS } from "@/lib/background/exchange";
 import {
   assertPresence,
   beginEnrollment,
@@ -17,7 +18,6 @@ import {
   pendingPresenceRequest,
   recordedEnrollment,
   resetWebAuthnForTests,
-  WEBAUTHN_EXCHANGE_TIMEOUT_MS,
 } from "@/lib/webauthn/exchange";
 import { attach } from "../background/fake-connection";
 
@@ -179,7 +179,7 @@ describe("kill release", () => {
     await p;
     const answered = assertPresence(answer);
     handleWebAuthnFrame({ type: "presence_result", ok: true });
-    await vi.advanceTimersByTimeAsync(WEBAUTHN_EXCHANGE_TIMEOUT_MS + 1);
+    await vi.advanceTimersByTimeAsync(HOST_REPLY_TIMEOUT_MS + 1);
     await expect(answered).resolves.toEqual({
       ok: false,
       error: "no reply from the native host (timed out)",
@@ -338,7 +338,7 @@ describe("fail-closed plumbing", () => {
   test("an unanswered exchange times out to a refusal, never a hang", async () => {
     vi.useFakeTimers();
     const p = beginEnrollment();
-    vi.advanceTimersByTime(WEBAUTHN_EXCHANGE_TIMEOUT_MS + 1);
+    vi.advanceTimersByTime(HOST_REPLY_TIMEOUT_MS + 1);
     await expect(p).resolves.toEqual({
       ok: false,
       error: "no reply from the native host (timed out)",

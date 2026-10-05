@@ -100,6 +100,30 @@ describe("kill mirror updates from host frames only", () => {
     expect((await getKillMirror())?.state).toBe("alive");
   });
 
+  test("the frame lane holds until the settled request has read its view, so a queued frame cannot overtake it", async () => {
+    // A request's view is the host's answer to THAT request. The lane releasing before the view's storage read
+    // let the next frame's write land first, and the view reported the later push's state (alive) instead.
+    attach(collaborator);
+    const view = requestKillStatus();
+    const original = fakeBrowser.storage.local.get.bind(fakeBrowser.storage.local);
+    let mirrorReads = 0;
+    vi.spyOn(fakeBrowser.storage.local, "get").mockImplementation(async (...args) => {
+      // Mirror reads only (the audit ring reads between them): the first is the frame's own write, the
+      // second is the settled view's, the third is the next frame's write. Defer the view's past a macrotask.
+      if (args[0] === "bridgeKillMirror" && ++mirrorReads === 2) {
+        await new Promise((r) => setTimeout(r, 0));
+      }
+      return original(...(args as Parameters<typeof original>));
+    });
+    const p1 = handleKillFrame({ type: "kill_status_result", ok: true, killed: true });
+    const p2 = handleKillFrame({ type: "kill_status_result", ok: true, killed: false });
+    await Promise.all([p1, p2]);
+    vi.restoreAllMocks();
+    expect(mirrorReads).toBe(3);
+    await expect(view).resolves.toMatchObject({ ok: true, sent: true, state: "killed" });
+    expect((await getKillMirror())?.state).toBe("alive");
+  });
+
   test("an ok:false result becomes unknown (refused), whatever it claims", async () => {
     // Even a malicious ok:false frame that smuggles killed:false must not
     // produce a permissive mirror.

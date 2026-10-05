@@ -221,7 +221,7 @@ Built on WXT (which generates the manifest, including the pinned key) with React
 | `src/apps/extension/src/entrypoints/content.ts` | Content-script entry: injection guard, op dispatch into the shared DOM layer |
 | `src/apps/extension/src/entrypoints/confirm/` | The confirmation window: an extension-owned `chrome-extension://` document the page cannot read, overlay, or click |
 | `src/apps/extension/src/entrypoints/options/`, `src/apps/extension/src/entrypoints/popup/` | Settings (Zod-validated, versioned, migrated), the host-admin panels, and the authorization/status popup |
-| `src/apps/extension/src/lib/background/` | Dispatch, allowlist store, tabs/CDP backends, cookies, egress masking, kill mirror, enrollment, policy sync |
+| `src/apps/extension/src/lib/background/` | Dispatch, allowlist store, tabs/CDP backends, cookies, egress masking, kill mirror, enrollment, policy sync, and `exchange.ts`: the one single-flight host round trip (claim, deadline, post-undo, reply route, fail on detach) that the client-admin, kill, host-admin and WebAuthn exchanges ride |
 | `src/apps/extension/src/lib/webauthn/` | The background half of the presence exchange: the frame exchange with the host (the ceremony itself is under `lib/shared/`) |
 | `src/apps/extension/src/lib/dom/` | The one shared DOM implementation (snapshot/refs/actions); the CDP backend ships its stringified source so the two page backends cannot diverge |
 | `src/apps/extension/src/lib/shared/` | Settings schema, message protocol types, allowlist matching, and the page half of the presence exchange: the WebAuthn ceremony against the browser's authenticator in `webauthn-ceremony.ts` |
