@@ -132,5 +132,5 @@ The review will focus on four points, each needing a written justification:
 | --- | --- |
 | `page_eval` executes arbitrary JS (the highest rejection risk) | a developer tool that confirms every call in an extension-owned window; consider shipping the store build with the tool disabled by default |
 | `chrome.debugger`, used by `page_snapshot_precise` | a sensitive permission that needs its own explanation |
-| broad host and optional permissions plus native messaging | the bridge is localhost-only behind a per-run secret, sites are authorized one by one; link the [threat model](./security/threat-model.md) |
+| broad host and optional permissions plus native messaging | the bridge is localhost-only behind a per-run secret, sites are authorized one by one; link the [security page](./security.md) |
 | "does it use remote code" | `page_eval` runs user-supplied JS, never remotely fetched code; word the form precisely |

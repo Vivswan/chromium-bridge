@@ -10,7 +10,7 @@ Because it operates the browser you are already signed into, an agent can do wha
 
 That power is also the risk. Read [Security first](#security-first) before you install.
 
-The bar this project holds itself to: a program you installed cannot use your browser without you noticing, held today on macOS, Linux, and Windows ([the security bar](./docs/security/security-bar.md) states it, and where it stops).
+The bar this project holds itself to: a program you installed cannot use your browser without you noticing, held today on macOS, Linux, and Windows ([the security page](./docs/security.md) states it, and where it stops).
 
 ## Security first
 
@@ -31,7 +31,7 @@ chromium-bridge drives a real, authenticated browser. It can read page content, 
 | macOS, Linux | private Unix-domain socket, no listening port | peer-UID check, kernel attestation, HMAC challenge |
 | Windows | named pipe only your user can open, no listening port | the pipe's descriptor (kernel-enforced), mutual attestation, HMAC challenge |
 
-Full details: [SECURITY.md](./.github/SECURITY.md), [threat model](./docs/security/threat-model.md), [trust boundaries](./docs/security/trust-boundaries.md), [per-tool risk matrix](./docs/security/tool-risk-matrix.md).
+Full details: [SECURITY.md](./.github/SECURITY.md), [security page](./docs/security.md), [trust boundaries](./docs/security/trust-boundaries.md), [per-tool risk matrix](./docs/security/tool-risk-matrix.md).
 
 ## Quickstart with the CLI (macOS, Linux, Windows)
 

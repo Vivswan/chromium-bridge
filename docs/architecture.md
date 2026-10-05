@@ -484,8 +484,8 @@ The `chrome.debugger` API is SW-only, cannot attach to `chrome://` or Web Store 
 
 1. **Snapshot accuracy**: the content-script a11y tree is an approximation (shadow DOM, complex ARIA); `page_snapshot_precise` is the authoritative fallback.
 2. **Cross-origin iframes**: the content script cannot read them.
-3. **Windows image measurement by path**: the pipe peer's image is hashed from its file path, a residual the [threat model](./security/threat-model.md#residual-risks-accepted-tracked) owns; the gates themselves (user-only pipe, mutual attestation, HMAC, harness admission) hold there as on Unix. See [SECURITY.md](../.github/SECURITY.md#platform-support).
-4. **Same-user attacker running our own binary**: kernel attestation distinguishes binaries, not intentions; see the [threat model](./security/threat-model.md) residuals.
+3. **Windows image measurement by path**: the pipe peer's image is hashed from its file path, a residual the [trust boundaries ledger](./security/trust-boundaries.md#boundary-2-rust-mcp-server---native-host--bridge-socket-ndjson) owns; the gates themselves (user-only pipe, mutual attestation, HMAC, harness admission) hold there as on Unix. See [SECURITY.md](../.github/SECURITY.md#platform-support).
+4. **Same-user attacker running our own binary**: kernel attestation distinguishes binaries, not intentions; see the [trust boundaries](./security/trust-boundaries.md) residuals.
 5. **Revocation latency to the extension**: the socket leg is immediate; the extension's reflection of a host-key revoke is bounded to the next service-worker wake.
 
 ## 10. Extension points

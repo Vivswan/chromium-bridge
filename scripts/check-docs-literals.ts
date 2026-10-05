@@ -353,7 +353,7 @@ if (import.meta.main) {
     ["docs/troubleshooting.md", LOCK_FILENAME, "lock filename"],
     ["docs/release.md", `date string \`${MCP_PROTOCOL_VERSION}\``, "MCP protocol version row"],
     ["docs/release.md", `currently \`${bridgeVersion}\``, "bridge protocol version row"],
-    ["docs/security/threat-model.md", CLIENT_NAME_ENV, "client-name env var"],
+    ["docs/security/trust-boundaries.md", CLIENT_NAME_ENV, "client-name env var"],
     ["README.md", MCP_PROTOCOL_VERSION, "MCP protocol version"],
     ["docs/development.md", LOG_LEVEL_ENV, "log env var name"],
     // Since --help interpolates these consts, docs/cli.md holds the only

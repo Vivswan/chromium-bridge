@@ -1,10 +1,10 @@
 # Tool risk matrix
 
-Every tool chromium-bridge exposes, with its risk level, what it can read/change, whether it touches credentials, the Chrome permission it needs, and how the user is protected. This is the reference for security review: **adding or changing a tool means updating this table** (see [SECURITY.md](../../.github/SECURITY.md)).
+Every tool the bridge exposes, with its risk level, what it reads and changes, whether it touches credentials, the Chrome permission it needs, and how the user is protected. This is the reference for security review: adding or changing a tool means updating this table, and the [review bar](../../.github/SECURITY.md#security-relevant-changes-review-bar) says what else the change carries.
 
-Risk levels: **Low** (read-only, no sensitive data), **Medium** (reads page content or navigates), **High** (writes to the page, or reads credentials), **Critical** (arbitrary code / maximal blast radius).
+Risk levels: **Low** (read-only, no sensitive data), **Medium** (reads page content or navigates), **High** (writes to the page, or reads credentials), **Critical** (arbitrary code or maximal blast radius).
 
-The protections listed are the defaults. The confirmation gates are host-owned policy fields (`confirmHighRiskClick`, `confirmTabClose`, `confirmPageEval`, `touchIdConfirm`, `confirmGraceMs`), edited with `chromium-bridge policy` (`set` signs a grant, `restrict` is free), never from the extension; relaxing one is an explicit, signed choice with the residual risks tabulated in [SECURITY.md](../../.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe).
+The protections listed are the defaults. The confirmation gates are host-owned policy fields (`confirmHighRiskClick`, `confirmTabClose`, `confirmPageEval`, `touchIdConfirm`, `confirmGraceMs`), edited with `chromium-bridge policy` (`set` signs a grant, `restrict` is free); the extension's options page can only tighten them. Relaxing one is an explicit, signed choice whose residual is tabulated in the [defaults table](../../.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe).
 
 | Tool | Risk | Reads | Writes / effect | Credentials? | Chrome perm | User protection |
 |------|------|-------|-----------------|--------------|-------------|-----------------|
@@ -17,20 +17,20 @@ The protections listed are the defaults. The confirmation gates are host-owned p
 | `page_click` | High [1] | element under ref | clicks (may submit/navigate) | no | `scripting` | extension-window confirm for submit/link |
 | `page_fill` | High | - | types into a field | possibly (into password fields) | `scripting` | password value masked in the echo |
 | `page_text` | Medium | visible page text | - | masked | `scripting` | passwords + long digit runs masked |
-| `page_screenshot` | Medium | viewport pixels | - | possibly (whatever's on screen) | `tabs` | - |
+| `page_screenshot` | Medium | viewport pixels | - | possibly (whatever is on screen) | `tabs` | - |
 | `page_scroll` | Low | scroll position | scrolls | no | `scripting` | - |
 | `page_wait_for` | Low | selector/text presence | - | no | `scripting` | - |
 | `page_navigate` | Medium | - | loads an http(s) URL in the active tab | no | `tabs` | allowlist-gated on the destination origin |
-| `page_back` | Low | - | steps the active tab back in history | no | `tabs` | allowlist-gated on the current origin (not the destination, see residual) |
-| `page_forward` | Low | - | steps the active tab forward in history | no | `tabs` | allowlist-gated on the current origin (not the destination, see residual) |
+| `page_back` | Low | - | steps the active tab back in history | no | `tabs` | allowlist-gated on the current origin, not the destination ([residual](trust-boundaries.md#boundary-4-extension---web-page--chrome-api--content-script--dom)) |
+| `page_forward` | Low | - | steps the active tab forward in history | no | `tabs` | allowlist-gated on the current origin, not the destination (the same residual) |
 | `page_reload` | Low | - | reloads the active tab | no | `tabs` | allowlist-gated on the current origin |
-| `page_press` | High | - | sends a synthetic key or combo to the page (may submit/navigate) | no | `scripting` | extension-window confirm |
+| `page_press` | High | - | sends a synthetic key or combo to the page (may submit/navigate) | no | `scripting` | extension-window confirm, every call |
 | `page_hover` | Low | - | moves the pointer over an element | no | `scripting` | allowlist-gated |
-| `page_select` | High | - | chooses an option in a `<select>` | no | `scripting` | extension-window confirm |
+| `page_select` | High | - | chooses an option in a `<select>` | no | `scripting` | extension-window confirm, every call |
 | `console_get` | Medium | recent console output incl. network errors | - | masked | `debugger` | allowlist-gated; output masked; "debugging" banner |
 | `page_handle_dialog` | High | - | **accepts or dismisses** a JS dialog (alert/confirm/prompt) | no | `debugger` | **off by default** (opt-in); allowlist-gated; "debugging" banner |
-| `page_upload` | **Critical** | the named local file's bytes | **attaches a local file** to a file input | possibly (any readable file) | `debugger` | **off by default** (opt-in); allowlist-gated; every-call confirm showing the path; on an enrolled Mac the confirm is a Secure Enclave Touch ID approval (`touchIdConfirm`); see residual |
-| `page_eval` | **Critical** | anything the page can | **arbitrary JS** in the page | yes (can read tokens/cookies) | `scripting` (host) | **off by default** under host-owned policy (`pageEvalEnabled`, granted with `policy set`); **every-call** confirm showing the full code; on an enrolled Mac the confirm is a Secure Enclave Touch ID approval no page can forge (`touchIdConfirm`; opt-out falls back to the off-DOM window; what a same-user program can still do around the tap is in the [threat model's residuals](./threat-model.md#residual-risks-accepted-tracked)); result masked; the options page engages the kill switch, and only `chromium-bridge unkill` releases it |
+| `page_upload` | **Critical** | the named local file's bytes | **attaches a local file** to a file input | possibly (any readable file) | `debugger` | **off by default** (opt-in); allowlist-gated; every-call extension-window confirm showing the exact path; the origin is rechecked after the confirm and the attach bound to the document node resolved then; see residual |
+| `page_eval` | **Critical** | anything the page can | **arbitrary JS** in the page | yes (can read tokens/cookies) | `scripting` (host) | **off by default** under host-owned policy (`pageEvalEnabled`, granted with `policy set`); **every-call** extension-window confirm showing the full code; result masked; refused first while the kill switch is engaged |
 | `page_snapshot_precise` | Medium | authoritative a11y tree (CDP) | - | no | `debugger` | pre-warn toast; "debugging" infobar flashes |
 | `cookie_get` | High | cookies incl. **httpOnly** | - (read-only) | **yes** | `cookies` | allowlist-scoped; values masked; no `cookie_set` by design |
 | `storage_get` | High | local/sessionStorage | - (read-only) | **yes** (tokens) | `scripting` | same-origin; values **always** masked |
@@ -39,13 +39,14 @@ The protections listed are the defaults. The confirmation gates are host-owned p
 
 ## Cross-cutting protections
 
-- **Browser routing never guesses**: with several browsers connected, a tool call must name one via its `browser` argument or it fails (`BROWSER_AMBIGUOUS`); an unknown label fails (`BROWSER_NOT_FOUND`). Each browser's connection is independently authenticated, and a connection that answers another browser's request is dropped.
-- **Allowlist**: page-level ops only run on origins the user approved (per-site prompt + `chrome.permissions.request`). `allowAllSites` is an explicit opt-in.
-- **Masking**: `page_text`, `cookie_get`, `storage_get`, and `page_eval` output run through the mask (JWT / long hex / long digit runs / token-like strings). `storage_get` masking is not user-toggleable.
-- **Confirmation grace window**: after a user allows a high-risk click, the same tab, same origin, and same action kind (submit or link) skip re-prompting for 60 s (`confirmGraceMs`); another tab on the same origin confirms again. `page_eval` is **excluded** from this window. It reconfirms on every call, so an earlier approval never lets later, unrelated code run.
-- **Read-only by design**: no `cookie_set` / `storage_set` (writing httpOnly cookies is a session-fixation risk).
-- **CDP mode (opt-in, off by default)**: the `cdpMode` policy field reroutes **every** page-level op through `chrome.debugger` (CDP) in the page's MAIN world instead of a content script. It does **not** change any tool's contract, permission, confirmation, or masking - the same allowlist / confirmation / mask protections above still apply. Its two security tradeoffs: it **bypasses page CSP** (so `page_eval` runs on strict-CSP sites like Bing), and it holds a **persistent debugger attach** for the tab, so the "Started debugging this browser" banner stays up the whole time it's on.
+- **Browser routing never guesses:** with several browsers connected, a tool call must name one via its `browser` argument or it fails (`BROWSER_AMBIGUOUS`); an unknown label fails (`BROWSER_NOT_FOUND`). Each browser's connection is independently authenticated, and a connection that answers another browser's request is dropped.
+- **Allowlist:** page-level tools run only on origins the user approved (a per-site prompt plus `chrome.permissions.request`). `allowAllSites` is an explicit opt-in.
+- **Masking:** `page_text`, `cookie_get`, `storage_get`, and `page_eval` output run through the mask (JWTs, long hex, long digit runs, token-like strings). `storage_get` masking is not user-toggleable.
+- **Confirmation grace window:** after a user allows a high-risk click, the same origin and action kind (submit or link) skip re-prompting for 60 s by default. `page_eval` is excluded: it reconfirms on every call, so an earlier approval never lets later, unrelated code run.
+- **Read-only by design:** no `cookie_set` or `storage_set` (writing httpOnly cookies is a session-fixation risk).
+- **CDP mode (opt-in, off by default):** the `cdpMode` policy field reroutes every page-level tool through `chrome.debugger` in the page's MAIN world instead of a content script. No tool's contract, permission, confirmation, or masking changes; the protections above still apply.
+  - **Its two costs:** it bypasses page CSP, so `page_eval` runs on strict-CSP sites, and it holds a persistent debugger attach for the tab, so the "Started debugging this browser" banner stays up the whole time it is on.
 
 ## When you add or change a tool
 
-Update this table **and** run the security-change checklist in [SECURITY.md](../../.github/SECURITY.md). A change that raises a tool's blast radius (new permission, new sensitive read, new write, weaker confirmation, wider masking bypass) requires a threat-model update and a security-labeled review.
+Update this table and follow the [review bar](../../.github/SECURITY.md#security-relevant-changes-review-bar). A change that raises a tool's blast radius (a new permission, a new sensitive read, a new write, a weaker confirmation, a wider masking bypass) also updates the [trust boundaries ledger](trust-boundaries.md) and takes a security-labeled review.

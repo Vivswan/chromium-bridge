@@ -3,23 +3,3 @@
 CONTRIBUTING.md 3ca2c172  # path: .worktrees/
 README.md 9ddf5673  # path: extension/dist/
 docs/quickstart.md 03c4d19c  # list item: On macOS, pair. Run chromium-bridge pair
-docs/security/incident-response.md 66fc9762  # list item: Disable a single tool: add the
-docs/security/threat-model.md d929582c  # list item: Prompt injection: page content tricks the
-docs/security/threat-model.md 15cd8f0d  # list item: Another local process hijacks the bridge
-docs/security/threat-model.md c4648599  # list item: Read exfiltration on approved origins (accepted).
-docs/security/threat-model.md 76cfc69e  # paragraph: The host-owned policy work moved the
-docs/security/threat-model.md 91ecb695  # list item: One microtask window in the same-key
-docs/security/threat-model.md fd20942a  # list item: One-push disagreement, and requests racing a
-docs/security/threat-model.md 7f3e8453  # list item: A hostile unpinned host can occupy
-docs/security/threat-model.md 698a0843  # list item: An explicit "en" choice re-offers first-pairing
-docs/security/threat-model.md de38565a  # list item: A corrupted compromise mark reads as
-docs/security/threat-model.md 8478b550  # list item: The trusted-storage cold-start window now also
-docs/security/threat-model.md a3cd55d4  # list item: A decision racing a cdpMode revocation
-docs/security/threat-model.md fa5dccfc  # list item: A pin revoke leaves live CDP
-docs/security/threat-model.md c009d551  # list item: Harness -> MCP server stdio admission
-docs/security/threat-model.md 6ad05930  # list item: The ref-counted broker (delivered). The first
-docs/security/threat-model.md 3db78f9c  # list item: Host-allowlist writers (delivered). The trusted-client set
-docs/security/tool-risk-matrix.md af83909f  # list item: CDP mode (opt-in, off by default):
-docs/security/trust-boundaries.md 002decba  # list item: Ownership: the server end of this
-docs/security/trust-boundaries.md 513ae646  # list item: Residual risk: neither a hash nor
-docs/security/trust-boundaries.md ad8c4e44  # list item: Kill-switch mirror and audit ring: the

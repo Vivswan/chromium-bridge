@@ -61,7 +61,7 @@ Pairing (step 5) is required on macOS and is what upgrades the highest-risk conf
 
 - `chromium-bridge pair-client` creates the trusted-client allowlist. Once it exists, only MCP clients whose attested code identity you approved are served, and any surface can revoke one at any time.
 
-Both are described in [cli.md](./cli.md) and the [threat model](./security/threat-model.md).
+Both are described in [cli.md](./cli.md) and the [security page](./security.md).
 
 ## Uninstalling
 

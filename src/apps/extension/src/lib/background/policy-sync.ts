@@ -641,7 +641,7 @@ const pendingApproval = inLife<{
 
 /** Route one inbound policy/lang frame. The attachment is captured synchronously so the verified mark lands on
  * exactly the connection the frame arrived on. port.ts void-routes these frames, so requests already past the gate
- * can dispatch while a bad-signature push is still verifying (docs/security/threat-model.md, "Host-owned policy
+ * can dispatch while a bad-signature push is still verifying (docs/security/trust-boundaries.md, "Host-owned policy
  * residual ledger"):
  *   bad push arrives -> requests past the gate run under the stored effective -> signature fails -> latch set synchronously */
 export function handlePolicyFrame(msg: unknown): Promise<void> {
@@ -687,7 +687,7 @@ function refuse(why: string, opts: { audit?: boolean } = {}): void {
 }
 
 /** A signature failed against the pin: host-substitution evidence, never ordinary skew. compromisedThisLife owns
- * the latch's ordering; the in-memory residual is recorded in docs/security/threat-model.md, "Host-owned policy
+ * the latch's ordering; the in-memory residual is recorded in docs/security/trust-boundaries.md, "Host-owned policy
  * residual ledger". */
 async function markPolicyCompromised(
   attachment: LiveConnection | null,

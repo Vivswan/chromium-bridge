@@ -29,7 +29,7 @@ masking, bridge auth, or `page_eval` (see [SECURITY.md](./SECURITY.md)):
 
 - [ ] Not security-relevant
 - [ ] Updated the [tool risk matrix](../docs/security/tool-risk-matrix.md)
-- [ ] Updated the [threat model](../docs/security/threat-model.md) (if a trust boundary moved)
+- [ ] Updated the [trust boundaries ledger](../docs/security/trust-boundaries.md) (if a trust boundary moved)
 - [ ] Added a **negative** test
 
 ## Housekeeping

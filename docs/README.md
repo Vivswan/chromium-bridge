@@ -15,7 +15,7 @@ Chromium Bridge lets an MCP client drive the Chromium browser you are already si
 | Read the logs and the audit trail | [CLI: logging and audit](cli.md#logging-and-audit-bb_log--bb_log_format) |
 | Read a `doctor` row you did not expect, or recover an unreadable kill record | [Troubleshooting](troubleshooting.md) |
 | Use the bridge from WSL | [Troubleshooting: running under WSL](troubleshooting.md#running-under-wsl) |
-| Know what the bridge promises an attacker cannot do, and where that stops | [The security bar](security/security-bar.md#the-bar-in-one-line) |
+| Know what the bridge promises an attacker cannot do, and where that stops | [Security: the bar](security.md#the-bar-in-one-line) |
 | See what each tool can reach and which confirmation it triggers | [Tool risk matrix](security/tool-risk-matrix.md) |
 | Report a security issue | [Incident response: reporting](security/incident-response.md#reporting-channel) |
 | Understand why a security decision was taken before changing it | [Security rationale](security/rationale.md) |
@@ -41,21 +41,20 @@ Chromium Bridge lets an MCP client drive the Chromium browser you are already si
 
 ### Security
 
-5. [Security bar](security/security-bar.md): the one-line promise, the attackers it answers, where it stops, per OS.
-6. [Threat model](security/threat-model.md): assets, actors, threats, mitigations, residual risks.
-7. [Trust boundaries](security/trust-boundaries.md): each protocol hop and the mechanism that enforces it.
-8. [Tool risk matrix](security/tool-risk-matrix.md): every tool's blast radius and protections.
-9. [Incident response](security/incident-response.md): reporting, triage, mitigation, disclosure.
-10. [Security rationale](security/rationale.md): why each decision was taken and what it rejected.
-11. [Review bar](../.github/SECURITY.md): the surfaces that get extra review, the defaults that fail safe, and what to read before a security-relevant change.
+5. [Security](security.md): the one-line promise, what is at stake and who is trusted, the four hops and what gates each, what you confirm, where it stops, per OS.
+6. [Trust boundaries](security/trust-boundaries.md): the reviewer's ledger, per hop: the mechanism in detail, every accepted residual, the policy ledger, the invariants.
+7. [Tool risk matrix](security/tool-risk-matrix.md): every tool's blast radius and protections.
+8. [Incident response](security/incident-response.md): reporting, triage, mitigation, disclosure.
+9. [Security rationale](security/rationale.md): why each decision was taken and what it rejected.
+10. [Review bar](../.github/SECURITY.md): the surfaces that get extra review, the defaults that fail safe, and what to read before a security-relevant change.
 
 ### Reference
 
-12. [Architecture](architecture.md): components, protocols, data flows, the security model, key constraints, technology choices, and the contracts the Rust core generates.
+11. [Architecture](architecture.md): components, protocols, data flows, the security model, key constraints, technology choices, and the contracts the Rust core generates.
 
 ### Contributing
 
-13. [Development](development.md): toolchain, layout, moon tasks, testing, the container, fuzzing.
-14. [Releasing](release.md): the release-please pipeline, prebuilt archives with checksums and provenance, SBOM, which version moves when, and the Chrome Web Store decision.
-15. [CONTRIBUTING](../CONTRIBUTING.md): the development process, from branch, commit, and sync rules to the squash-merge.
-16. [Tests](../tests/README.md): the suites, and the rule that browser tests run only against an isolated Chrome, never your daily browser.
+12. [Development](development.md): toolchain, layout, moon tasks, testing, the container, fuzzing.
+13. [Releasing](release.md): the release-please pipeline, prebuilt archives with checksums and provenance, SBOM, which version moves when, and the Chrome Web Store decision.
+14. [CONTRIBUTING](../CONTRIBUTING.md): the development process, from branch, commit, and sync rules to the squash-merge.
+15. [Tests](../tests/README.md): the suites, and the rule that browser tests run only against an isolated Chrome, never your daily browser.

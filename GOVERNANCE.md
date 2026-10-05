@@ -43,7 +43,7 @@ A change is done when:
 If a change touches permissions, credential access, confirmation, allowlist, masking, bridge auth, the lock file/secret, or widens `page_eval` (full list in [SECURITY.md](.github/SECURITY.md)):
 
 - use the [security-change issue/PR checklist](.github/ISSUE_TEMPLATE/security-change.yml);
-- update the [tool risk matrix](docs/security/tool-risk-matrix.md) and, if a trust boundary moves, the [threat model](docs/security/threat-model.md);
+- update the [tool risk matrix](docs/security/tool-risk-matrix.md) and, if a trust boundary moves, the [trust boundaries ledger](docs/security/trust-boundaries.md);
 - add a negative test proving the boundary still holds.
 
 ## Decisions and RFCs
