@@ -1,7 +1,9 @@
-// Temp dirs this process owns. Each records the owning pid, every one still owned is removed on
-// SIGTERM/SIGINT/SIGHUP (a `finally` never runs on those), and a startup sweep clears the dirs a run
-// killed outright left behind. Node builtins only, like the driver that imports it.
+// Temp dirs and child processes this process owns. Each dir records the owning pid; on
+// SIGTERM/SIGINT/SIGHUP (a `finally` never runs on those) every owned child is stopped and every owned
+// dir removed, and a startup sweep clears the dirs a run killed outright left behind. Node builtins
+// only, like the driver that imports it.
 
+import type { ChildProcess } from "node:child_process";
 import { lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -112,13 +114,28 @@ export function sweepStaleDirs(prefixes: readonly string[], root: string): strin
   return removed;
 }
 
-/** Remove every owned dir when a terminating signal arrives, then exit by that signal so the parent sees it. */
-export function removeOwnedDirsOnSignals(): void {
+/** Stop every owned child still running, then remove every owned dir, when a terminating signal arrives; then exit by that signal so the parent sees it. */
+export function teardownOnSignals(): void {
   for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
     // A once-listener is gone by the time the signal is re-sent, so the default action takes it.
     process.once(signal, () => {
+      killOwnedChildren();
       removeAllOwnedDirs();
       process.kill(process.pid, signal);
     });
   }
+}
+
+const children = new Set<ChildProcess>();
+
+/** Register a child this process spawned, so a terminating signal stops it before the dirs it uses go. */
+export function ownedChild(child: ChildProcess): ChildProcess {
+  children.add(child);
+  child.once("exit", () => children.delete(child));
+  return child;
+}
+
+function killOwnedChildren(): void {
+  for (const child of children) child.kill("SIGKILL");
+  children.clear();
 }

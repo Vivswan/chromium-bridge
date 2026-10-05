@@ -48,11 +48,12 @@ import {
   type RecordedRequest,
 } from "./fake-llm";
 import {
+  ownedChild,
   ownedTempDir,
   removeAllOwnedDirs,
   removeOwnedDir,
-  removeOwnedDirsOnSignals,
   sweepStaleDirs,
+  teardownOnSignals,
 } from "./owned-dirs";
 
 const usage = "usage: bun tests/harness/run.ts [--mint-seeds <dir>] [--require-any]";
@@ -329,9 +330,9 @@ async function startFakeLlm(logPath: string): Promise<FakeLlm> {
   const dir = ownedTempDir(FAKE_LLM_PREFIX);
   const portfile = join(dir, "port");
   const log = openSync(logPath, "a");
-  const child = spawn(process.execPath, [FAKE_LLM, "--portfile", portfile], {
-    stdio: ["ignore", log, log],
-  });
+  const child = ownedChild(
+    spawn(process.execPath, [FAKE_LLM, "--portfile", portfile], { stdio: ["ignore", log, log] }),
+  );
   // A spawn-level failure (ENOMEM and friends) is an EventEmitter error
   // event, which would throw uncaught without a listener; surface it
   // through the poll loop instead.
@@ -1004,7 +1005,7 @@ async function main(): Promise<number> {
     return 0;
   }
   sweepStaleDirs([SCRATCH_PREFIX, RUNTIME_PREFIX, FAKE_LLM_PREFIX], tmpdir());
-  removeOwnedDirsOnSignals();
+  teardownOnSignals();
   ensureBinary();
   rmSync(CAPTURE_DIR, { recursive: true, force: true });
   mkdirSync(CAPTURE_DIR, { recursive: true });
