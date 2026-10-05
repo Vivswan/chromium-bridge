@@ -979,9 +979,16 @@ fn symlinked_install_dir_is_refused() {
     let target = macos_target(&tree);
     let err = reg.register(&target).unwrap_err();
     assert!(err.contains("symlink"), "{err}");
-    // Nothing was written through the link, and no pointer either.
+    // Nothing was written through the link, no pointer either, and no browser directory was made on the
+    // way: an empty config root left behind would make an absent browser read as detected.
     assert!(fs::read_dir(&real).unwrap().next().is_none());
     assert!(!pointer_path(&target).exists());
+    let manifest_dir = target.registration.manifest_path();
+    assert!(
+        !manifest_dir.parent().unwrap().exists(),
+        "a refused registration created {}",
+        manifest_dir.parent().unwrap().display()
+    );
 }
 
 #[test]

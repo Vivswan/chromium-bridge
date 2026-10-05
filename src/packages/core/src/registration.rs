@@ -589,7 +589,9 @@ impl Registrar {
         }
 
         // Every directory before any file, so a refusal (a system directory other accounts cannot
-        // traverse) leaves nothing written.
+        // traverse) leaves nothing written; our own install dir first, so its refusal (a symlink leaf)
+        // leaves no browser directory behind that would make an absent browser read as detected.
+        self.ensure_install_dir()?;
         if let Registration::ManifestDir(dir) = &target.registration {
             self.create_dir(dir)
                 .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
@@ -601,7 +603,6 @@ impl Registrar {
             self.create_dir(dir)
                 .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
         }
-        self.ensure_install_dir()?;
 
         let mut lines = Vec::new();
         let launch_path = match &target.registration {
