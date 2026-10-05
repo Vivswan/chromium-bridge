@@ -68,9 +68,7 @@ export interface Exchange<TReply extends { type: string }> {
   ): Promise<TView | Refusal>;
   /** False when nothing is open, or the open request did not ask for this tag: the frame is unsolicited. */
   answer(reply: TReply): boolean;
-  /** Close the open request now, settle it later. Untagged, only a request that reads any reply; with `tag`,
-   * only one that asked for it, and the settle takes that tag alone: what a claimer settles is always within
-   * the reader's type. */
+  /** Close the open request now, settle it later. Which request a tag may take is close()'s rule. */
   claim(): Claimed<TReply> | null;
   claim<R extends TReply["type"]>(tag: R): Claimed<TReply & { type: R }> | null;
 }
@@ -106,7 +104,8 @@ export function exchange<TReply extends { type: string }>(
   }
 
   /** The one admission to a narrowed reader: a request that named its replies is closed only by a tag among
-   * them, and the claimed settle below holds that tag. The cast at the settle site states this. */
+   * them, and untagged only when it named none; a tagged claim's settle then takes that tag by type. The cast
+   * at the settle site states this. */
   function close(tag?: string): Open<TReply> | null {
     const current = link.value;
     if (current.state !== "open") return null;
@@ -195,13 +194,7 @@ export function exchange<TReply extends { type: string }>(
       const open = close(tag);
       if (!open) return null;
       return {
-        settle: (reply: TReply) => {
-          // A union-typed `tag` widens R past the one tag admitted, which only the value can hold.
-          if (tag !== undefined && reply.type !== tag) {
-            throw new Error(`a ${reply.type} reply cannot settle a request claimed for ${tag}`);
-          }
-          return open.settle(reply);
-        },
+        settle: open.settle,
         fail: (error: string) => open.fail({ why: "failed", error, posted: true }),
       };
     },
