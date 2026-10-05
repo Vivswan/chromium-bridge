@@ -112,6 +112,8 @@ pub enum PresenceError {
     WrongBrowser { enrolled_under: BrowserLabel },
     /// The browser has an enrolled credential, so the window may not vouch in its place.
     SoftwareConfirmationNotAllowed,
+    /// The window's confirmation names a request that is not the outstanding one (a superseded nonce).
+    RequestMismatch,
     /// The enrollment record could not be read or the sign counter could not be persisted.
     Store(io::Error),
 }
@@ -127,6 +129,7 @@ impl PresenceError {
             PresenceError::CredentialNotEnrolled => "credential_not_enrolled",
             PresenceError::WrongBrowser { .. } => "wrong_browser_label",
             PresenceError::SoftwareConfirmationNotAllowed => "software_confirmation_not_allowed",
+            PresenceError::RequestMismatch => "request_mismatch",
             PresenceError::Store(_) => "store_error",
         }
     }
@@ -158,6 +161,10 @@ impl fmt::Display for PresenceError {
             PresenceError::SoftwareConfirmationNotAllowed => write!(
                 f,
                 "this browser has an enrolled authenticator; a window confirmation cannot stand in for it"
+            ),
+            PresenceError::RequestMismatch => write!(
+                f,
+                "the confirmation names a request that is not the outstanding one"
             ),
             PresenceError::Store(e) => write!(f, "enrollment store: {e}"),
         }

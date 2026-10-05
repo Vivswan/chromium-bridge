@@ -17,9 +17,9 @@ use crate::presence::{self, TerminalStdin};
 /// ```text
 /// a key already exists   -> `mint` refuses under its lock without --reset; `pair` never adopts a key it did not
 ///                           mint in this run, since a same-user process can plant one
-/// --reset                -> disposes first; a store that does not answer stops a store pairing here and only
-///                           warns a file pairing (that is what `--file-store` is for)
-/// phrase declined        -> nothing minted, the old key (if --reset) already gone: the machine is unenrolled
+/// --reset                -> after the phrase, disposes before minting; a store that does not answer stops a store
+///                           pairing here and only warns a file pairing (that is what `--file-store` is for)
+/// phrase declined        -> nothing disposed, nothing minted: the machine is exactly as it was
 /// ```
 pub fn run_pair(reset: bool, file_store: bool) -> i32 {
     let store = if file_store {
@@ -31,6 +31,18 @@ pub fn run_pair(reset: bool, file_store: bool) -> i32 {
         Ok(terminal) => terminal,
         Err(e) => {
             println!("pair: refused - {e}");
+            return 1;
+        }
+    };
+
+    let auth = match presence::tty_confirm(
+        "Pairing mints the identity key the extension will pin; every policy grant this host signs \
+         will be verified against it.",
+        terminal,
+    ) {
+        Ok(auth) => auth,
+        Err(e) => {
+            println!("pairing was not approved ({e}); nothing was changed.");
             return 1;
         }
     };
@@ -59,18 +71,6 @@ pub fn run_pair(reset: bool, file_store: bool) -> i32 {
             }
         }
     }
-
-    let auth = match presence::tty_confirm(
-        "Pairing mints the identity key the extension will pin; every policy grant this host signs \
-         will be verified against it.",
-        terminal,
-    ) {
-        Ok(auth) => auth,
-        Err(e) => {
-            println!("pairing was not approved ({e}); nothing was minted.");
-            return 1;
-        }
-    };
 
     let presence = auth.path().wire_name();
     let key = match crate::ipc::with_runtime_lock(|lock| Ok(EnrollmentKey::mint(lock, store, auth)))

@@ -1,13 +1,13 @@
 #![no_main]
-//! Fuzz the challenge-message builders over the extension-relayed nonce and
-//! context fields. Two oracles beyond no-panic: the enrollment and presence
-//! builders share one validation matrix (they must agree on Ok/Err), and on
-//! success their messages must differ - the domain separation that keeps an
-//! enrollment proof from ever replaying as a presence approval.
+//! Fuzz the host-key challenge-message builder over the extension-relayed nonce and context fields. Two
+//! oracles beyond no-panic: the builder accepts exactly the documented field matrix, and an accepted message
+//! is injective in its fields: it opens with the domain and splits back into the same nonce and context.
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 
-use chromium_bridge_core::enclave::{challenge_message, presence_message};
+use chromium_bridge_core::enclave::{
+    challenge_message, CHALLENGE_DOMAIN, MAX_CONTEXT_LEN, MAX_NONCE_LEN,
+};
 
 #[derive(Arbitrary, Debug)]
 struct Input {
@@ -16,14 +16,19 @@ struct Input {
 }
 
 fuzz_target!(|input: Input| {
-    let enroll = challenge_message(&input.nonce, input.context.as_deref());
-    let presence = presence_message(&input.nonce, input.context.as_deref());
-    assert_eq!(
-        enroll.is_ok(),
-        presence.is_ok(),
-        "builders disagree on field validity"
-    );
-    if let (Ok(enroll), Ok(presence)) = (enroll, presence) {
-        assert_ne!(enroll, presence, "domain separation must hold");
+    let context = input.context.as_deref();
+    let nonce_ok =
+        !input.nonce.is_empty() && input.nonce.len() <= MAX_NONCE_LEN && !input.nonce.contains('\0');
+    let context_ok = context.is_none_or(|c| c.len() <= MAX_CONTEXT_LEN && !c.contains('\0'));
+    match challenge_message(&input.nonce, context) {
+        Ok(message) => {
+            assert!(nonce_ok && context_ok, "builder accepted a field outside the matrix");
+            let mut parts = message.split(|b| *b == 0);
+            assert_eq!(parts.next(), Some(CHALLENGE_DOMAIN.as_bytes()));
+            assert_eq!(parts.next(), Some(input.nonce.as_bytes()));
+            assert_eq!(parts.next(), Some(context.unwrap_or("").as_bytes()));
+            assert!(parts.next().is_none(), "a NUL-free field pair splits into exactly three parts");
+        }
+        Err(_) => assert!(!(nonce_ok && context_ok), "builder refused a field inside the matrix"),
     }
 });

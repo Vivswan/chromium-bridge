@@ -10,12 +10,14 @@
 //!                      assertion the switch is released and kill_status_result follows presence_result
 //! presence_assert   -> verified against the outstanding request, the sign counter persisted, then the pending
 //!                      act runs; every refusal is one presence_result code
+//! presence_confirm  -> the window's answer to the outstanding request, named by its nonce; accepted only when the
+//!                      request admits no enrolled credential, so an enrolled browser is never demoted to a click
 //! ```
 
 use crate::audit::{self, AuditKind, AuditRecord, Surface};
 use crate::ipc::BrowserLabel;
 use crate::presence::request::PresenceRequest;
-use crate::presence::{PresenceError, PresencePath};
+use crate::presence::{PresenceAttestation, PresenceError, PresencePath};
 use crate::protocol::control::{
     EnrollOutcome, HostReply, KillStatus, PresenceOutcome, WebAuthnControl,
 };
@@ -129,6 +131,32 @@ impl Exchange {
                 let enrolled = enrollments().map_err(PresenceError::Store)?;
                 request.assert(&enrolled, &id, &assertion)
             });
+        self.settle(act, outcome)
+    }
+
+    /// `presence_confirm`: the window answered the outstanding request. The nonce names the request so a
+    /// confirmation for a superseded one cannot ride a newer request (`request_mismatch`); the window rule
+    /// itself is the request's.
+    pub(super) fn presence_confirm(&mut self, nonce: &str) -> Vec<HostReply> {
+        let Some(Pending::Presence { request, act }) = self.pending.take() else {
+            return vec![presence_refused("no_request_outstanding".into())];
+        };
+        let outcome = if request.nonce().as_str() == nonce {
+            enrollments()
+                .map_err(PresenceError::Store)
+                .and_then(|enrolled| request.confirm_window(&enrolled))
+        } else {
+            Err(PresenceError::RequestMismatch)
+        };
+        self.settle(act, outcome)
+    }
+
+    /// Close the request with its verdict: audit it, and on an attestation run the act it was minted for.
+    fn settle(
+        &mut self,
+        act: PendingAct,
+        outcome: Result<PresenceAttestation, PresenceError>,
+    ) -> Vec<HostReply> {
         let auth = match outcome {
             Ok(auth) => auth,
             Err(e) => {

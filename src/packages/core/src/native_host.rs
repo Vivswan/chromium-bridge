@@ -591,13 +591,6 @@ fn handle_request(
             let reply = crate::enclave::respond_to_challenge(&nonce, context.as_deref());
             write_control_reply(out, &reply)
         }
-        // The host no longer signs per-action presence; the extension's own WebAuthn ceremony replaced it.
-        HostRequest::PresenceChallenge { .. } => write_control_reply(
-            out,
-            &EnclaveControl::PresenceError {
-                reason: "not_enrolled".into(),
-            },
-        ),
         HostRequest::EnrollBegin {} => write_replies(out, exchange.enroll_begin()),
         HostRequest::EnrollFinish {
             attestation_object,
@@ -615,6 +608,9 @@ fn handle_request(
             let assertion =
                 Assertion::from_base64url(&authenticator_data, &client_data_json, &signature);
             write_replies(out, exchange.presence_assert(&credential_id, assertion))
+        }
+        HostRequest::PresenceConfirm { nonce } => {
+            write_replies(out, exchange.presence_confirm(&nonce))
         }
         HostRequest::EnclaveRevoke {} => write_control_reply(out, &revoke_host_key()),
         HostRequest::ClientList {} => write_control_reply(out, &admin_client_list()),

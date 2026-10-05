@@ -12,7 +12,7 @@
 //! ENCLAVE_FIXTURE_KEY_ID  -> extension side
 //! ```
 //!
-//! Every vector goes through the production code (`challenge_message`/`presence_message`, `EnclavePublicKey`,
+//! Every vector goes through the production code (`challenge_message`, `EnclavePublicKey`,
 //! the raw `r || s` form the host's own signer emits) and the extension's tests replay it through WebCrypto, so
 //! either side drifting from the byte contract breaks a gate.
 //!
@@ -22,30 +22,15 @@
 //! ```
 
 use chromium_bridge_core::enclave::{
-    challenge_message, policy_message, presence_message, EnclavePublicKey, CHALLENGE_DOMAIN,
-    FIXTURE_KEY_BYTES, FIXTURE_KEY_ID, MAX_CONTEXT_LEN, MAX_NONCE_LEN, POLICY_DOMAIN,
-    PRESENCE_DOMAIN, PUBKEY_LEN, REASON_CODES, SIG_LEN,
+    challenge_message, policy_message, EnclavePublicKey, CHALLENGE_DOMAIN, FIXTURE_KEY_BYTES,
+    FIXTURE_KEY_ID, MAX_CONTEXT_LEN, MAX_NONCE_LEN, POLICY_DOMAIN, PUBKEY_LEN, REASON_CODES,
+    SIG_LEN,
 };
 use chromium_bridge_core::identity::PINNED_EXTENSION_ID;
 use chromium_bridge_core::policy::{Ms, PolicyDoc, PolicyField};
 use p256::ecdsa::signature::Signer;
 use p256::ecdsa::{Signature, SigningKey};
 use serde_json::{json, Value};
-
-#[derive(Clone, Copy)]
-enum Domain {
-    Challenge,
-    Presence,
-}
-
-impl Domain {
-    fn as_str(self) -> &'static str {
-        match self {
-            Domain::Challenge => "challenge",
-            Domain::Presence => "presence",
-        }
-    }
-}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let signing_key = SigningKey::from_slice(&FIXTURE_KEY_BYTES)
@@ -58,44 +43,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("FIXTURE_KEY_ID does not match the key FIXTURE_KEY_BYTES derives".into());
     }
 
-    // The vector matrix: both domains, None-vs-empty context, realistic
-    // ceremony pairs, a multi-byte UTF-8 pair (the bounds are BYTE lengths,
-    // pinning Rust's str::len against JS TextEncoder), and both bounds at
-    // their maximum. The extension ids in the contexts are FOREIGN on purpose,
-    // so no checked-in signature ever covers bytes our real ceremony can
-    // construct; the check in the loop enforces it.
+    // The vector matrix: None-vs-empty context, the realistic ceremony pair, a multi-byte UTF-8 pair (the
+    // bounds are BYTE lengths, pinning Rust's str::len against JS TextEncoder), and both bounds at their
+    // maximum. The extension id in the context is FOREIGN on purpose, so no checked-in signature ever covers
+    // bytes our real ceremony can construct; the check in the loop enforces it.
     let max_nonce = "n".repeat(MAX_NONCE_LEN);
     let max_context = "c".repeat(MAX_CONTEXT_LEN);
     let hex_nonce = "9f".repeat(32); // shape of generateNonce(): 64 lowercase hex chars
-    let presence_context = format!(
-        "ext:gijmanfkddbcbmkfmplnjcbmpnjmocpk:presence:eval:{}",
-        "ab".repeat(32)
-    );
-    let vectors: &[(Domain, &str, Option<&str>)] = &[
-        (Domain::Challenge, "abc", Some("ctx")),
-        (Domain::Challenge, "abc", None),
-        (Domain::Challenge, "abc", Some("")),
-        (Domain::Presence, "abc", Some("ctx")),
+    let vectors: &[(&str, Option<&str>)] = &[
+        ("abc", Some("ctx")),
+        ("abc", None),
+        ("abc", Some("")),
         (
-            Domain::Challenge,
             &hex_nonce,
             Some("ext:gijmanfkddbcbmkfmplnjcbmpnjmocpk:pair"),
         ),
-        // The production presence context shape (confirm/presence.ts):
-        // ext:<id>:presence:<kind>:<sha256hex>, kind in ConfirmPayload's
-        // vocabulary ("eval" / "upload").
-        (Domain::Presence, &hex_nonce, Some(&presence_context)),
         // Multi-byte UTF-8 in both fields (2-, 3-, and 4-byte sequences).
-        (
-            Domain::Challenge,
-            "utf8-\u{e9}-nonce",
-            Some("ctx-\u{4e2d}\u{6587}-\u{1f512}"),
-        ),
-        (Domain::Challenge, &max_nonce, Some(&max_context)),
+        ("utf8-\u{e9}-nonce", Some("ctx-\u{4e2d}\u{6587}-\u{1f512}")),
+        (&max_nonce, Some(&max_context)),
     ];
 
     let mut vector_values: Vec<Value> = Vec::with_capacity(vectors.len());
-    for &(domain, nonce, context) in vectors {
+    for &(nonce, context) in vectors {
         if let Some(ctx) = context {
             if ctx.contains(PINNED_EXTENSION_ID) {
                 return Err(
@@ -106,14 +75,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
         }
-        let message = match domain {
-            Domain::Challenge => challenge_message(nonce, context),
-            Domain::Presence => presence_message(nonce, context),
-        }?;
+        let message = challenge_message(nonce, context)?;
         let sig: Signature = signing_key.sign(&message);
         let raw: [u8; SIG_LEN] = sig.to_bytes().into();
         vector_values.push(json!({
-            "domain": domain.as_str(),
             "nonce": nonce,
             "context": context,
             "messageHex": hex::encode(&message),
@@ -158,7 +123,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let out = json!({
         "challengeDomain": CHALLENGE_DOMAIN,
-        "presenceDomain": PRESENCE_DOMAIN,
         "maxNonceLen": MAX_NONCE_LEN,
         "maxContextLen": MAX_CONTEXT_LEN,
         "pubkeyLen": PUBKEY_LEN,

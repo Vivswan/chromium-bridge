@@ -238,7 +238,7 @@ The isolation guard's container exception is stated once, in the Safety section 
 | `nm_frame`, `mcp_jsonrpc`, `handshake`, `attach` | the wire-frame decoders | decode -> encode -> decode is identity |
 | `bridge_envelope` | the internal bridge envelope reader, as a raw value and as both typed frames | none (reject-or-decode, three times) |
 | `handshake_verify` | the MAC verifier and the server accept path | a correctly computed MAC verifies |
-| `enclave_challenge` | the challenge-message builders | enrollment and presence messages stay domain-separated |
+| `enclave_challenge` | the host-key challenge-message builder | exactly the documented field matrix is accepted, and an accepted message splits back into its fields |
 | `classify_frame` | the control-frame router | a frame's `type` is exactly the tag it was read as |
 | `registration_manifest` | the ours/foreign manifest and extension-pointer decisions | anything not provably ours is `Foreign` |
 | `policy_doc` | the policy store parse surface | serde round trip, the comparison lattice partitions every pair |

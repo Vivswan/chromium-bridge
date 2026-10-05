@@ -136,6 +136,13 @@ fn presence_request(reply: &HostReply) -> (String, Vec<String>) {
     (challenge.clone(), allowed_credential_ids.clone())
 }
 
+fn presence_nonce(reply: &HostReply) -> String {
+    let WebAuthnControl::PresenceRequest { nonce, .. } = unwrap_webauthn(reply) else {
+        panic!("expected presence_request, got {reply:?}")
+    };
+    nonce.clone()
+}
+
 fn presence_reason(reply: &HostReply) -> Option<String> {
     let WebAuthnControl::PresenceResult { ok: false, reason } = unwrap_webauthn(reply) else {
         panic!("expected a refused presence_result, got {reply:?}")
@@ -548,4 +555,84 @@ fn the_counter_write_refuses_a_stale_value_under_the_lock() {
         webauthn::advance_sign_count(&stranger, 1),
         Err(webauthn::CounterError::NotEnrolled)
     ));
+}
+
+/// A browser with no credential of its own answers with the window, even on a machine where another browser
+/// is enrolled: the rule is per browser label, the release lands, and the trail names the software path.
+#[test]
+fn a_browser_with_no_credential_releases_by_window_and_the_trail_names_the_software_path() {
+    let _dir = scratch_runtime_dir("exchange-window-release");
+    let mut chrome = Exchange::new(label("chrome"));
+    enroll_tofu(&mut chrome, &Authenticator::new(0x22));
+    let mut brave = Exchange::new(label("brave"));
+    crate::kill::engage(Surface::Cli).unwrap();
+
+    let replies = brave.kill_release();
+    let (_, allowed) = presence_request(&replies[0]);
+    assert!(
+        allowed.is_empty(),
+        "brave has no credential to hint: {allowed:?}"
+    );
+    let nonce = presence_nonce(&replies[0]);
+    let replies = brave.presence_confirm(&nonce);
+    assert_eq!(replies.len(), 2, "{replies:?}");
+    assert_approved(&replies[0]);
+    assert!(
+        matches!(
+            &replies[1],
+            HostReply::Admin(AdminControl::KillStatusResult {
+                ok: true,
+                killed: Some(false),
+                error: None,
+            })
+        ),
+        "{replies:?}"
+    );
+    assert!(!crate::kill::is_killed().unwrap());
+    let releases = audit_records(AuditKind::KillRelease);
+    assert_eq!(releases.len(), 1, "{releases:?}");
+    assert_eq!(releases[0].outcome.as_deref(), Some("ok"));
+    assert_eq!(releases[0].detail.as_deref(), Some("auth=confirm_window"));
+}
+
+/// An enrolled browser's window answer is the downgrade the ladder forbids: refused by code, the switch stays
+/// engaged, and the refusal is in the trail. An answer to nothing and a superseded request's nonce are the
+/// other two refusals a confirmation can earn.
+#[test]
+fn an_enrolled_browsers_window_answer_is_refused_and_the_switch_stays_engaged() {
+    let _dir = scratch_runtime_dir("exchange-window-refused");
+    let mut brave = Exchange::new(label("brave"));
+    enroll_tofu(&mut brave, &Authenticator::new(0x11));
+    crate::kill::engage(Surface::Cli).unwrap();
+
+    let replies = brave.kill_release();
+    let nonce = presence_nonce(&replies[0]);
+    let replies = brave.presence_confirm(&nonce);
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    assert_eq!(
+        presence_reason(&replies[0]).as_deref(),
+        Some("software_confirmation_not_allowed")
+    );
+    assert!(crate::kill::is_killed().unwrap());
+    let releases = audit_records(AuditKind::KillRelease);
+    assert_eq!(releases.len(), 1, "{releases:?}");
+    assert_eq!(releases[0].outcome.as_deref(), Some("refused"));
+
+    // The refusal consumed the request: nothing is outstanding.
+    let replies = brave.presence_confirm(&nonce);
+    assert_eq!(
+        presence_reason(&replies[0]).as_deref(),
+        Some("no_request_outstanding")
+    );
+
+    // A confirmation naming a superseded request's nonce does not ride the newer request.
+    let stale = nonce;
+    let replies = brave.kill_release();
+    assert_ne!(stale, presence_nonce(&replies[0]));
+    let replies = brave.presence_confirm(&stale);
+    assert_eq!(
+        presence_reason(&replies[0]).as_deref(),
+        Some("request_mismatch")
+    );
+    assert!(crate::kill::is_killed().unwrap());
 }

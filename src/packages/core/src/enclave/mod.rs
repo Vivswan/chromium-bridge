@@ -21,8 +21,8 @@ mod record;
 mod store;
 
 pub use challenge::{
-    challenge_message, policy_message, presence_message, CHALLENGE_DOMAIN, MAX_CONTEXT_LEN,
-    MAX_NONCE_LEN, POLICY_DOMAIN, PRESENCE_DOMAIN,
+    challenge_message, policy_message, CHALLENGE_DOMAIN, MAX_CONTEXT_LEN, MAX_NONCE_LEN,
+    POLICY_DOMAIN,
 };
 pub use cli::{
     audit_host_key_revoke, dispose_enrollment_and_policy_baseline, run_pair, run_revoke,

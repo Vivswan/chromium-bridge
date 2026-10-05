@@ -218,25 +218,6 @@ fn classification_matrix() {
             Malformed(Tag::EnclaveRevoke),
         ),
         (
-            json!({ "type": "presence_challenge", "nonce": "n", "context": "c" }),
-            Handle(HostRequest::PresenceChallenge {
-                nonce: "n".into(),
-                context: Some("c".into()),
-            }),
-        ),
-        (
-            json!({ "type": "presence_challenge" }),
-            Malformed(Tag::PresenceChallenge),
-        ),
-        (
-            json!({ "type": "presence_challenge", "nonce": 5 }),
-            Malformed(Tag::PresenceChallenge),
-        ),
-        (
-            json!({ "type": "presence_challenge", "nonce": "n", "extra": 1 }),
-            Malformed(Tag::PresenceChallenge),
-        ),
-        (
             json!({ "type": "client_list" }),
             Handle(HostRequest::ClientList {}),
         ),
@@ -408,6 +389,18 @@ fn classification_matrix() {
             }),
         ),
         (
+            json!({ "type": "presence_confirm", "nonce": "n" }),
+            Handle(HostRequest::PresenceConfirm { nonce: "n".into() }),
+        ),
+        (
+            json!({ "type": "presence_confirm" }),
+            Malformed(Tag::PresenceConfirm),
+        ),
+        (
+            json!({ "type": "presence_confirm", "nonce": "n", "extra": 1 }),
+            Malformed(Tag::PresenceConfirm),
+        ),
+        (
             json!({ "type": "presence_assert", "credential_id": "Y3JlZA", "signature": 5 }),
             Malformed(Tag::PresenceAssert),
         ),
@@ -423,14 +416,6 @@ fn classification_matrix() {
         (
             json!({ "type": "enclave_revoked" }),
             Malformed(Tag::EnclaveRevoked),
-        ),
-        (
-            json!({ "type": "presence_proof", "sig": "s" }),
-            Malformed(Tag::PresenceProof),
-        ),
-        (
-            json!({ "type": "presence_error", "reason": "r" }),
-            Malformed(Tag::PresenceError),
         ),
         (
             json!({ "type": "client_list_result", "ok": true }),
@@ -511,10 +496,6 @@ fn malformed_replies_match_the_request_type() {
             Frame(json!({ "type": "enclave_error", "reason": "invalid_challenge" })),
         ),
         (
-            Tag::PresenceChallenge,
-            Frame(json!({ "type": "presence_error", "reason": "invalid_challenge" })),
-        ),
-        (
             Tag::ClientList,
             Frame(
                 json!({ "type": "client_list_result", "ok": false, "enrolled": false,
@@ -580,6 +561,11 @@ fn malformed_replies_match_the_request_type() {
             Frame(json!({ "type": "presence_result", "ok": false,
                           "reason": "malformed presence_assert frame" })),
         ),
+        (
+            Tag::PresenceConfirm,
+            Frame(json!({ "type": "presence_result", "ok": false,
+                          "reason": "malformed presence_confirm frame" })),
+        ),
         (Tag::EnrollOptions, Nothing),
         (Tag::EnrollResult, Nothing),
         (Tag::PresenceRequest, Nothing),
@@ -589,8 +575,6 @@ fn malformed_replies_match_the_request_type() {
         (Tag::EnclaveProof, Nothing),
         (Tag::EnclaveError, Nothing),
         (Tag::EnclaveRevoked, Nothing),
-        (Tag::PresenceProof, Nothing),
-        (Tag::PresenceError, Nothing),
         (Tag::ClientListResult, Nothing),
         (Tag::ClientRevokeResult, Nothing),
         (Tag::KillStatusResult, Nothing),
