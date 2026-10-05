@@ -2,7 +2,7 @@
 // SIGTERM/SIGINT/SIGHUP (a `finally` never runs on those), and a startup sweep clears the dirs a run
 // killed outright left behind. Node builtins only, like the driver that imports it.
 
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -54,11 +54,18 @@ const PID_MAX = 2 ** 31 - 1;
 
 /** The pid recorded in `dir`, or undefined when there is no record. A record that cannot be read, or does not spell one positive pid, throws: the sweep must not mistake it for an absent owner. */
 function recordedOwner(dir: string): number | undefined {
+  const record = join(dir, OWNER_FILE);
   let text: string;
   try {
-    text = readFileSync(join(dir, OWNER_FILE), "utf8");
+    text = readFileSync(record, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    // A dangling symlink also reads ENOENT; an entry that exists is an unreadable record, not a missing one.
+    if (
+      (error as NodeJS.ErrnoException).code === "ENOENT" &&
+      lstatSync(record, { throwIfNoEntry: false }) === undefined
+    ) {
+      return undefined;
+    }
     throw error;
   }
   const digits = /^[1-9][0-9]*$/.exec(text.trim());

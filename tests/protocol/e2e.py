@@ -455,6 +455,7 @@ class Isolation(unittest.TestCase):
         child = subprocess.Popen(
             [sys.executable, "-c", SIGTERM_CHILD, root],
             stdout=subprocess.PIPE, text=True, cwd=os.path.dirname(os.path.abspath(h.__file__)))
+        h.CHILDREN.append(child)
         self.addCleanup(h.kill, child)
         rundir = child.stdout.readline().strip()
         self.assertTrue(os.path.isfile(os.path.join(rundir, h.OWNER_FILE)), "the child owns its dir")
