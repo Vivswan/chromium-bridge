@@ -35,7 +35,6 @@ const CONTAINER_VERSION = /^Chromium\b/;
  * build output) applies to every suite at once instead of whichever files
  * happened to keep their copy current. */
 export function extensionDir(): string {
-  // import.meta.url rather than import.meta.dir: the real-E2E suite documents Node as a runner too.
   const here = dirname(fileURLToPath(import.meta.url));
   return process.env.BB_EXT_DIR || join(resolve(here, "../.."), "build", "extension", "chrome-mv3");
 }
@@ -54,6 +53,54 @@ export function isolatedBrowser(
   if (ISOLATED_VERSION.test(version)) return bin;
   const inContainer = containerMarkers.some((marker) => existsSync(marker));
   return inContainer && CONTAINER_VERSION.test(version) ? bin : null;
+}
+
+/** The environment a real-host suite runs the binary under: a throwaway runtime dir, config dir and HOME
+ * under `work` (LOCALAPPDATA is what the binary reads on Windows), created here, plus the log settings the
+ * suites parse (an inherited BB_LOG=warn would hide the Info-level session lines). */
+export function throwawayHostEnv(work: string): Record<string, string> {
+  const dirs = {
+    XDG_RUNTIME_DIR: join(work, "runtime"),
+    XDG_CONFIG_HOME: join(work, "config"),
+    HOME: join(work, "home"),
+    LOCALAPPDATA: join(work, "localappdata"),
+  };
+  for (const dir of Object.values(dirs)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+  return { ...process.env, ...dirs, BB_LOG: "info", BB_LOG_FORMAT: "text" } as Record<
+    string,
+    string
+  >;
+}
+
+/** Write the native-messaging host wrapper for `bin` into `dir` and return its path. Chrome passes a host no
+ * arguments and its own environment, so the wrapper sets the throwaway dirs from `env` itself: whichever
+ * Chrome spawns it runs the binary there. A shell script on Unix, a .cmd on Windows (Chrome runs both). */
+export function writeHostWrapper(
+  dir: string,
+  bin: string,
+  args: readonly string[],
+  env: Record<string, string>,
+): string {
+  const names = [
+    "XDG_RUNTIME_DIR",
+    "XDG_CONFIG_HOME",
+    "HOME",
+    "LOCALAPPDATA",
+    "BB_LOG",
+    "BB_LOG_FORMAT",
+  ];
+  if (process.platform === "win32") {
+    const wrapper = join(dir, "run-host.cmd");
+    const sets = names.map((name) => `set "${name}=${env[name]}"`).join("\r\n");
+    writeFileSync(wrapper, `@echo off\r\n${sets}\r\n"${bin}" ${args.join(" ")}\r\n`);
+    return wrapper;
+  }
+  const wrapper = join(dir, "run-host.sh");
+  const exports = names.map((name) => `export ${name}="${env[name]}"`).join("\n");
+  writeFileSync(wrapper, `#!/bin/sh\n${exports}\nexec "${bin}" ${args.join(" ")}\n`, {
+    mode: 0o755,
+  });
+  return wrapper;
 }
 
 /** Whether `lockPath`, the lock the binary says it resolves under a suite's environment, sits inside the

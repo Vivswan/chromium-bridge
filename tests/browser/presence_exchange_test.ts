@@ -33,7 +33,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { NATIVE_HOST_ID } from "@chromium-bridge/shared/identity.gen";
 import puppeteer, { type Browser, type Page, type Target } from "puppeteer-core";
-import { assertIsolatedBrowserOrSkip, extensionDir, finishSuite } from "./browser-safety";
+import {
+  assertIsolatedBrowserOrSkip,
+  extensionDir,
+  finishSuite,
+  throwawayHostEnv,
+  writeHostWrapper,
+} from "./browser-safety";
 
 const EXTENSION_DIR = extensionDir();
 const CHROME = process.env.CHROME_BIN ?? "";
@@ -72,29 +78,15 @@ async function waitForExtension(browser: Browser): Promise<void> {
   throw new Error("extension service worker not found");
 }
 
-/** The isolated environment the host and the CLI run under: a throwaway runtime dir and HOME. */
-function hostEnv(work: string): Record<string, string> {
-  return {
-    ...process.env,
-    XDG_RUNTIME_DIR: path.join(work, "runtime"),
-    XDG_CONFIG_HOME: path.join(work, "config"),
-    HOME: path.join(work, "home"),
-  } as Record<string, string>;
-}
-
-/** Register the real host in the throwaway profile through a wrapper that exports the isolated runtime dir
- * (Chrome passes the host no arguments and no environment of ours). Profile-scoped: Chrome resolves user-level
- * manifests under <user-data-dir>/NativeMessagingHosts on macOS and Linux, so no real registration is touched. */
-function registerHost(userDataDir: string, work: string): void {
-  const env = hostEnv(work);
-  const wrapper = path.join(userDataDir, "host");
-  const exports = ["XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "HOME"]
-    .map((name) => `export ${name}="${env[name]}"`)
-    .join("\n");
-  fs.writeFileSync(
-    wrapper,
-    `#!/bin/sh\n${exports}\nexec "${BIN}" --native-host --label ${BROWSER_LABEL}\n`,
-    { mode: 0o755 },
+/** Register the real host in the throwaway profile through the wrapper that sets the isolated runtime dir.
+ * Profile-scoped: Chrome resolves user-level manifests under <user-data-dir>/NativeMessagingHosts on macOS
+ * and Linux, so no real registration is touched. */
+function registerHost(userDataDir: string, env: Record<string, string>): void {
+  const wrapper = writeHostWrapper(
+    userDataDir,
+    BIN,
+    ["--native-host", "--label", BROWSER_LABEL],
+    env,
   );
   const dir = path.join(userDataDir, "NativeMessagingHosts");
   fs.mkdirSync(dir, { recursive: true });
@@ -262,19 +254,25 @@ async function main(): Promise<void> {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), "bb-presence-"));
   const userDataDir = path.join(work, "profile");
   let browser: Browser | null = null;
+  // Every exit path (a crash, Ctrl-C, the normal finish) ends the Chrome this run started and removes its dir.
+  process.on("exit", () => {
+    browser?.process()?.kill("SIGKILL");
+    fs.rmSync(work, { recursive: true, force: true });
+  });
+  process.on("SIGINT", () => process.exit(130));
   try {
     fs.mkdirSync(userDataDir);
-    for (const sub of ["runtime", "config", "home"]) {
-      fs.mkdirSync(path.join(work, sub), { mode: 0o700 });
-    }
+    const env = throwawayHostEnv(work);
     // The kill switch first: a killed host serves only the control plane (the WebAuthn frames among them) and
     // never dials a broker, so the exchange is the whole conversation.
-    execFileSync(BIN, ["kill"], { env: hostEnv(work), stdio: "pipe", timeout: 15000 });
-    registerHost(userDataDir, work);
+    execFileSync(BIN, ["kill"], { env, stdio: "pipe", timeout: 15000 });
+    registerHost(userDataDir, env);
 
     browser = await puppeteer.launch({
       executablePath: CHROME,
       headless: false,
+      // Ctrl-C routes through the exit hook above rather than puppeteer's own handler.
+      handleSIGINT: false,
       userDataDir,
       ignoreDefaultArgs: [
         "--disable-extensions",
@@ -496,7 +494,6 @@ async function main(): Promise<void> {
     );
   } finally {
     if (browser) await browser.close().catch(() => {});
-    fs.rmSync(work, { recursive: true, force: true });
   }
   finishSuite("presence_exchange_test", Pass, Fail);
 }

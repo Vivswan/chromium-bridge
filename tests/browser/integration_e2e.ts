@@ -37,14 +37,19 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
-// The generated protocol constants, named by their own module.
 import {
   MCP_META_CLIENT_CAPABILITIES,
   MCP_META_PROTOCOL_VERSION,
   MCP_PROTOCOL_VERSION,
 } from "@chromium-bridge/shared/protocol.gen";
 import puppeteer from "puppeteer-core";
-import { assertIsolatedBrowserOrSkip, extensionDir, runtimeDirIsolated } from "./browser-safety";
+import {
+  assertIsolatedBrowserOrSkip,
+  extensionDir,
+  runtimeDirIsolated,
+  throwawayHostEnv,
+  writeHostWrapper,
+} from "./browser-safety";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../..");
@@ -57,20 +62,7 @@ const DIST = extensionDir();
 const CHROME = process.env.CHROME_BIN ?? "";
 const HOST_NAME = "com.vivswan.chromium_bridge.host";
 const REG_KEY = `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${HOST_NAME}`;
-// Chrome reads HKCU before HKLM, so a per-user test value would shadow a machine-wide install's host.
 const REG_KEY_MACHINE = `HKLM\\Software\\Google\\Chrome\\NativeMessagingHosts\\${HOST_NAME}`;
-
-/** The isolated environment the MCP server and the host run under: a throwaway runtime dir and HOME,
- * and on Windows the LOCALAPPDATA the binary honors there. */
-function hostEnv(work: string): Record<string, string> {
-  return {
-    ...process.env,
-    XDG_RUNTIME_DIR: path.join(work, "runtime"),
-    XDG_CONFIG_HOME: path.join(work, "config"),
-    HOME: path.join(work, "home"),
-    LOCALAPPDATA: path.join(work, "localappdata"),
-  } as Record<string, string>;
-}
 
 /** Where the binary resolves its lock under `env`, read off `doctor --paths`, which touches nothing. Exactly
  * one "lock file:" line naming a run.lock is accepted; anything else is a probe the suite cannot trust. */
@@ -149,10 +141,10 @@ type Registration =
   | { state: "present"; path: string }
   | { state: "unreadable"; reason: string };
 
-function readWindowsRegistration(key: string): Registration {
+function readWindowsRegistration(key: string, view: "32" | "64"): Registration {
   let out: string;
   try {
-    out = execFileSync("reg.exe", ["query", key, "/ve"], {
+    out = execFileSync("reg.exe", ["query", key, "/ve", `/reg:${view}`], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -183,16 +175,16 @@ function removeWindowsRegistration(): void {
 async function main(): Promise<void> {
   // Use a throwaway copy/profile so the test never operates on the real session.
   const work = fs.mkdtempSync(path.join(os.tmpdir(), "bb-e2e-"));
-  // Every exit path removes the throwaway dirs: a refusal, a crash before the browser launch, or the
-  // normal finish. The profile is created later and joins the same hook.
+  // Every exit path (a refusal, a crash, Ctrl-C, the normal finish) ends the children this run started and
+  // removes its throwaway dirs. The profile and the processes are registered as they come to exist.
   const throwaway: string[] = [work];
+  const children: Array<{ kill(signal?: NodeJS.Signals): unknown } | null> = [];
   process.on("exit", () => {
+    for (const child of children) child?.kill("SIGKILL");
     for (const dir of throwaway) fs.rmSync(dir, { recursive: true, force: true });
   });
-  for (const sub of ["runtime", "config", "home", "localappdata"]) {
-    fs.mkdirSync(path.join(work, sub), { mode: 0o700 });
-  }
-  const env = hostEnv(work);
+  process.on("SIGINT", () => process.exit(130));
+  const env = throwawayHostEnv(work);
   // The binary's own word on where it would put the lock under this environment: anywhere outside the
   // throwaway dir is the user's live runtime dir, and the run refuses (fail closed, not a platform guess).
   // A probe that cannot be read refuses the same way.
@@ -212,36 +204,25 @@ async function main(): Promise<void> {
   const extId = extIdFromPath(extDir);
   console.log("[e2e] extension id:", extId);
 
-  // The host is registered through a wrapper that exports the throwaway environment itself, so whichever
-  // Chrome spawns it (Puppeteer's, or on Windows any Chrome of the account that reads the shared registry
-  // value) runs it in the throwaway runtime dir, never the live one.
-  const envNames = ["XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "HOME", "LOCALAPPDATA"] as const;
-  let hostPath: string;
-  if (IS_WINDOWS) {
-    hostPath = path.join(work, "run-host.cmd");
-    const sets = envNames.map((name) => `set "${name}=${env[name]}"`).join("\r\n");
-    fs.writeFileSync(hostPath, `@echo off\r\n${sets}\r\n"${BIN}" --native-host\r\n`);
-  } else {
-    hostPath = path.join(work, "run-host.sh");
-    const exports = envNames.map((name) => `export ${name}="${env[name]}"`).join("\n");
-    fs.writeFileSync(hostPath, `#!/bin/sh\n${exports}\nexec "${BIN}" --native-host\n`);
-    fs.chmodSync(hostPath, 0o755);
-  }
+  const hostPath = writeHostWrapper(work, BIN, ["--native-host"], env);
 
   // Windows only: the HKCU registration is shared by every Chrome of this account, so a real install's
   // Chrome would be pointed at the test host for the duration of the run. The suite runs only where no
   // registration exists, and refuses when it cannot tell. (On macOS the manifest lives inside the throwaway
   // profile, so a real registration is never touched.)
+  // Chrome reads HKCU before HKLM and both the 32- and 64-bit registry views, so all four are checked.
   if (IS_WINDOWS) {
     for (const key of [REG_KEY, REG_KEY_MACHINE]) {
-      const existing = readWindowsRegistration(key);
-      if (existing.state === "absent") continue;
-      const why =
-        existing.state === "present"
-          ? `a host registration exists at ${key} (${existing.path}); a real install's Chrome would be pointed at the test host`
-          : `the host registration at ${key} could not be read (${existing.reason})`;
-      console.error(`REFUSING TO RUN: ${why}`);
-      process.exit(1);
+      for (const view of ["32", "64"] as const) {
+        const existing = readWindowsRegistration(key, view);
+        if (existing.state === "absent") continue;
+        const why =
+          existing.state === "present"
+            ? `a host registration exists at ${key} (/reg:${view}, ${existing.path}); a real install's Chrome would be pointed at the test host`
+            : `the host registration at ${key} (/reg:${view}) could not be read (${existing.reason})`;
+        console.error(`REFUSING TO RUN: ${why}`);
+        process.exit(1);
+      }
     }
   }
   // Everything that can throw before the try below is done before the server exists, so a server never
@@ -250,6 +231,7 @@ async function main(): Promise<void> {
   throwaway.push(profile);
 
   const mcp = spawn(BIN, [], { stdio: ["pipe", "pipe", "pipe"], env });
+  children.push(mcp);
   // The server's diagnostics, kept for the failure report: a reply that never comes is explained there.
   // The session lines also carry the browser leg's state ("native host 'default' connected and
   // authenticated (generation N)" / "disconnected (generation N)"), which is how the suite knows a host is
@@ -352,9 +334,10 @@ async function main(): Promise<void> {
       executablePath: CHROME,
       headless: false,
       dumpio: process.env.BB_REAL_E2E_DEBUG === "1",
-      // Chrome spawns the host with ITS environment; the wrapper sets the throwaway dirs itself, and this is
-      // the belt beside it.
       env,
+      // Ctrl-C: puppeteer's own handler would exit without this file's cleanup; the SIGINT handler below
+      // routes through the exit hook instead.
+      handleSIGINT: false,
       userDataDir: profile,
       ignoreDefaultArgs: [
         "--disable-extensions",
@@ -369,6 +352,7 @@ async function main(): Promise<void> {
       ],
       defaultViewport: null,
     });
+    children.push(browser.process());
     const page = await browser.newPage();
     await page.goto(FIXTURE).catch(() => {});
     await sleep(1000);
@@ -502,11 +486,10 @@ async function main(): Promise<void> {
     }
     if (IS_WINDOWS && wroteRegistration !== null) {
       // Remove exactly the value this run wrote; anything else arrived from elsewhere meanwhile and stays.
-      const now = readWindowsRegistration(REG_KEY);
+      const now = readWindowsRegistration(REG_KEY, "64");
       if (now.state === "present" && now.path === wroteRegistration) removeWindowsRegistration();
       else console.warn("[e2e] the host registration changed under the run; leaving it in place");
     }
-    // The throwaway dirs (the manifest lives inside `profile`) go in the exit hook above.
   }
 
   console.log(`\n${"=".repeat(40)}\n${Pass} passed, ${Fail} failed`);
