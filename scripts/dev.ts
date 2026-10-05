@@ -2,7 +2,7 @@
 // Dev orchestrator for `moon run dev`: every dev surface at once, one terminal.
 //
 //   - extension (WXT):        FOREGROUND - real terminal output + live stdin
-//   - docs site (Astro):      background, output prefixed [web]
+//   - the landing page (Astro):      background, output prefixed [web]
 //   - dev browser:            background, output prefixed [browser]
 //
 // Why not `bun run --filter '*' dev`? The filter runner closes each child's
@@ -154,7 +154,7 @@ const spawnFailed = (name: string) => (error: Error) => {
   console.error(`[dev] failed to start ${name}: ${error.message}`);
   shutdown();
 };
-web.on("error", spawnFailed("the docs site"));
+web.on("error", spawnFailed("the landing page"));
 wxt.on("error", (error: Error) => {
   // A wxt spawn failure never emits "exit", so the exit handler below cannot
   // finish the job - clean up and leave directly.

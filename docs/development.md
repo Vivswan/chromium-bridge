@@ -25,7 +25,7 @@ Four tools have no first-party proto plugin and are installed once by hand: `car
 | [moon](https://moonrepo.dev) | task runner | the canonical command interface: every dev task is a moon task. `moon run help` lists them; `moon run <task>` runs one |
 | Rust (cargo) | the `chromium-bridge` binary | pinned by `rust-toolchain.toml` (the authoritative pin; rustup and IDEs read it); `rustfmt` + `clippy` components, `cargo-nextest` as the test runner |
 | bun | everything TypeScript | package manager, script runner, extension bundling, TS test suites. Pinned in `.prototools` (and mirrored in `package.json` `packageManager`) |
-| node | the vitest suites (`extension:test`, `web:test`) | pinned only in `.prototools`; proto provisions it, so no job or image installs its own |
+| node | the vitest suites (`extension:test`) | pinned only in `.prototools`; proto provisions it, so no job or image installs its own |
 | [`uv`](https://docs.astral.sh/uv/) | protocol e2e tests | provisions the exact Python pinned in the repo-root `.python-version`, so local runs and CI use the same interpreter. uv itself is pinned only in `.prototools`. The suites are stdlib-only |
 | Chrome | DOM + smoke tests | `CHROME_BIN` overrides the path |
 | [`typos`](https://github.com/crate-ci/typos) + [`cargo-machete`](https://github.com/bnjbvr/cargo-machete) | spelling + unused-dependency gates | `moon run typos` / `moon run machete`; CI gates typos in the managed ci.yml and machete in checks.yml |
@@ -40,8 +40,8 @@ The TypeScript side is one bun workspace rooted at the repo top level (`package.
 ```text
 src/apps/host/           Rust binary "chromium-bridge" (thin argv dispatch over the library)
 src/apps/extension/      MV3 extension (WXT); builds to build/extension (gitignored)
-src/apps/web/            minimal Astro site rendering the repo's markdown docs (bun workspace member;
-                         moon run web:build; not part of `moon run ci`)
+src/apps/web/            the Astro landing page (bun workspace member; moon run web:build; not part
+                         of `moon run ci`); the docs site is the fleet's render of docs/
 src/packages/core/       Rust library "chromium-bridge-core": MCP server + native-host bridge
 src/packages/core/fuzz/  cargo-fuzz workspace: wire parsers + semantic validators
                          (nightly + libFuzzer; see the Fuzzing section below)
@@ -69,7 +69,7 @@ moon is the canonical command interface: every dev task is a moon task, and `moo
 
 ```sh
 moon run build     # build everything (see below)
-moon run dev       # dev everything: extension (WXT) + docs site (Astro) + a dev browser
+moon run dev       # dev everything: extension (WXT) + the landing page (Astro) + a dev browser
 moon run test      # rust tests (nextest + doctests) + protocol e2e
 moon run ci        # THE GATE: the cross-platform CI steps (see below for what CI adds)
 moon run release   # pre-release gate: version checks + full ci
@@ -79,7 +79,7 @@ moon run fmt       # format everything: cargo fmt + biome format
 moon run fix       # auto-fix everything: biome check --write + cargo fmt
 ```
 
-`moon run build` builds the entire repo in one command: it typechecks `src/packages/shared`, bundles the extension (rendering its icons first), builds the docs site, typechecks `scripts/`, and runs `cargo build --workspace`. Use it to prove the whole graph still compiles after a cross-cutting change.
+`moon run build` builds the entire repo in one command: it typechecks `src/packages/shared`, bundles the extension (rendering its icons first), builds the landing page, typechecks `scripts/`, and runs `cargo build --workspace`. Use it to prove the whole graph still compiles after a cross-cutting change.
 
 `moon run ci` runs the cross-platform gate steps, in the order its `deps` list declares:
 
@@ -125,7 +125,7 @@ The full task menu, by area:
 | Dev loops | `dev`, `dev-web`, `extension:dev` |
 | Rust | `core:fmt-check` (= `core:fmt-check-workspace` + `core:fmt-check-fuzz`), `core:lint` (= `core:lint-workspace` + `core:lint-fuzz`), `test-rust` (= `core:test` + `core:test-doc` + `core:test-loom`, the broker ref-count model check under the core's `loom` feature), `doc`, `build-release`, `build-repro`, `typos`, `machete`, `audit` |
 | Fuzz workspace | `fuzz-seeds`, `fuzz-smoke`, `check-fuzz-smoke`, `test-fuzz` (clippy and fmt over it are `core:lint-fuzz` and `core:fmt-check-fuzz`) |
-| TypeScript | `typecheck`, `test-ts` (= `shared:test` + `extension:test` + `web:test` + `check-harness-driver`), `lint-ts`, `check-ts`, `fmt-ts`, `fmt-check-ts`, `extension:build`, `web:build` |
+| TypeScript | `typecheck`, `test-ts` (= `shared:test` + `extension:test` + `check-harness-driver`), `lint-ts`, `check-ts`, `fmt-ts`, `fmt-check-ts`, `extension:build`, `web:build` |
 | Contract codegen | `gen` (= `gen-shared`), `gen-icons`, `gen-architecture-map`, `check-gen`, `check-envelope`, `check-gen-isolation` |
 | Protocol suites | `test-e2e`, `test-adversarial`, `test-chaos`, `check-uv` |
 | Interop suites | `test-interop` (official MCP SDK v2 client against the release binary), `harness-smoke` (real harness CLIs, isolated config dirs; the legacy-era opening-method canary) |
@@ -205,7 +205,7 @@ The workflow-level `CI_IMAGE_TAG` is the one switch: an empty value runs every j
 | `contract` | `check-gen` alone first (it rewrites the generated modules), then `check-envelope`, `check-gen-isolation`, `check-refresh-lockfiles` | image |
 | `hygiene` | `moon run hygiene` | image |
 | `tooling` | `machete`, with cargo-machete at the `Containerfile` pin | image |
-| `web` | `web:build`, `web:test` | image |
+| `web` | `web:build` | image |
 | `linux-install` | downloads the `build-release` binary, then `scripts/linux-registration.ts`: `doctor --fix`, re-register, multi-browser, `uninstall` under isolated HOME and XDG directories | bare runner: it needs only that binary and a bun for the scenario driver |
 | `protocol` | the `e2e`, `adversarial`, and `chaos` suites against the downloaded binary | image |
 | `interop` | the official MCP SDK client against the downloaded binary | image |

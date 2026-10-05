@@ -13,8 +13,8 @@ export const SITE_ORIGIN = (process.env.ASTRO_SITE ?? "https://vivswan.github.io
 );
 
 /** Base path, normalized to exactly one leading and one trailing slash (the
- *  domain root becomes "/"). mdLinksPlugin and every page join it as
- *  `base + relative`, so the slashes must be exact. */
+ *  domain root becomes "/"). Every page joins it as `base + relative`, so the
+ *  slashes must be exact. */
 const RAW_BASE = process.env.ASTRO_BASE ?? "/chromium-bridge/";
 const CORE_BASE = RAW_BASE.replace(/^\/+|\/+$/g, "");
 export const SITE_BASE = CORE_BASE === "" ? "/" : `/${CORE_BASE}/`;

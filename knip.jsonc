@@ -53,7 +53,7 @@
       "project": ["**/*.ts"]
     },
     "src/apps/web": {
-      "project": ["src/**/*.{ts,mjs,astro}", "tests/**/*.ts"]
+      "project": ["src/**/*.{ts,mjs,astro}"]
     }
   }
 }

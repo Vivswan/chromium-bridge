@@ -2,15 +2,13 @@
   "name": "chromium-bridge-web",
   "private": true,
   "type": "module",
-  "description": "Astro site: the Chromium Bridge landing page plus the repository docs, rendered straight from markdown.",
+  "description": "Astro site: the Chromium Bridge landing page. The docs are the fleet site leg's, rendered from docs/ beside it.",
   "scripts": {
     "dev": "astro dev stop; ASTRO_DEV_BACKGROUND=1 astro dev",
     "build": "astro build",
-    "preview": "astro preview",
-    "test": "bun test"
+    "preview": "astro preview"
   },
   "dependencies": {
-    "@astrojs/markdown-satteri": "^0.3.4",
     "@fontsource/inter": "^5.3.0",
     "@fontsource/jetbrains-mono": "^5.3.0",
     "astro": "^7.1.3",

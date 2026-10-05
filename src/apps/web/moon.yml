@@ -15,17 +15,14 @@ layer: 'application'
 
 tasks:
   build:
-    description: "Build the web app (src/apps/web: Astro over the repo's markdown docs)"
+    description: "Build the web app (src/apps/web: the Astro landing page)"
     command: 'bun run build'
     inputs:
-      # The site renders the repo's own markdown (src/lib/docs.ts globs the
-      # root and docs/ trees), imports the workspace version from the root
-      # Cargo.toml (src/pages/index.astro), and takes site identity from
-      # these env vars (src/lib/site-identity.ts).
+      # The landing page imports the workspace version from the root Cargo.toml
+      # (src/pages/index.astro) and takes site identity from these env vars
+      # (src/lib/site-identity.ts).
       - '**/*'
       - '!**/node_modules/**'
-      - '/*.md'
-      - '/docs/**/*'
       - '/Cargo.toml'
       - '/package.json'
       - '/bun.lock'
@@ -35,15 +32,6 @@ tasks:
       - '/build/web'
     options:
       cache: true
-
-  test:
-    description: "Unit-test src/apps/web: the markdown link rewriter's classification"
-    command: 'bun run test'
-    inputs:
-      - '**/*'
-      - '!**/node_modules/**'
-      - '/package.json'
-      - '/bun.lock'
 
   lint:
     description: "Biome lint for the web app workspace"
