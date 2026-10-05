@@ -35,7 +35,6 @@
   --focus: #3fe081;
   --primary-hover: #ffffff;
   --show-light-label: inline; --show-dark-label: none;
-  --in-dark: block; --in-light: none;
 }
 
 /* ---- LIGHT: forced, or toggle flips an OS-dark page ---- */
@@ -60,7 +59,6 @@
   --focus: #0f7a3e;
   --primary-hover: #05090e;
   --show-light-label: none; --show-dark-label: inline;
-  --in-dark: none; --in-light: block;
 }
 @media (prefers-color-scheme: light) {
   :root:not(.force-dark):not(.force-light) {
@@ -84,7 +82,6 @@
     --focus: #0f7a3e;
     --primary-hover: #05090e;
     --show-light-label: none; --show-dark-label: inline;
-    --in-dark: none; --in-light: block;
   }
   :root:not(.force-dark):not(.force-light):has(#theme-flip:checked) {
     color-scheme: dark;
@@ -107,7 +104,6 @@
     --focus: #3fe081;
     --primary-hover: #ffffff;
     --show-light-label: inline; --show-dark-label: none;
-    --in-dark: block; --in-light: none;
   }
 }
 
@@ -128,8 +124,6 @@ svg { display: block; }
 img { display: block; max-width: 100%; height: auto; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .mono { font-family: var(--mono); }
-.shot-dark { display: var(--in-dark); }
-.shot-light { display: var(--in-light); }
 
 .wrap { max-width: 1080px; margin: 0 auto; padding: 0 32px; }
 
@@ -151,6 +145,7 @@ img { display: block; max-width: 100%; height: auto; }
   text-wrap: balance;
 }
 .sec-sub { font-size: 16px; color: var(--text-2); max-width: 620px; }
+.sec-sub + .sec-sub { margin-top: 14px; }
 
 /* deck divider: solid deck, chevron, dormant dots */
 .deck-divider {
@@ -316,18 +311,8 @@ img { display: block; max-width: 100%; height: auto; }
   .link-label { text-align: left; }
 }
 
-/* ---- screenshots: flat hairline frames, no glass, no drop shadows ---- */
-.shots { padding: 32px 32px 96px; }
-.shot { margin-top: 40px; width: fit-content; }
-.shot img {
-  border: 1px solid var(--edge-strong);
-  border-radius: var(--r-lg);
-  background: var(--surface-0);
-}
-.shot figcaption {
-  font-size: 13px; line-height: 1.55; color: var(--text-2);
-  margin-top: 12px; contain: inline-size;
-}
+/* ---- confirmation ---- */
+.confirmation { padding: 32px 32px 96px; }
 
 /* ---- guarantees ---- */
 .guarantees { padding: 96px 32px; }

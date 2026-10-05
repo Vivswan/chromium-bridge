@@ -60,24 +60,20 @@ function paletteBlocks(css: string): Array<{ scheme: string; palette: Record<str
 }
 
 // Custom properties that exist only on the landing page (theme-flip labels,
-// per-scheme screenshot swaps, the hero button hover) - not app tokens, so
-// they have no extension counterpart to compare against. Their expected
-// per-scheme values are pinned here instead, so a dropped or drifted flip
-// token fails like any palette token would.
+// the hero button hover) - not app tokens, so they have no extension
+// counterpart to compare against. Their expected per-scheme values are
+// pinned here instead, so a dropped or drifted flip token fails like any
+// palette token would.
 const LANDING_ONLY: Record<"light" | "dark", Record<string, string>> = {
   dark: {
     "--primary-hover": "#ffffff",
     "--show-light-label": "inline",
     "--show-dark-label": "none",
-    "--in-dark": "block",
-    "--in-light": "none",
   },
   light: {
     "--primary-hover": "#05090e",
     "--show-light-label": "none",
     "--show-dark-label": "inline",
-    "--in-dark": "none",
-    "--in-light": "block",
   },
 };
 

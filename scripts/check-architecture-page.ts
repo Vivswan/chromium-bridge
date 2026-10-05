@@ -27,7 +27,7 @@ const exportedNamesByFile = new Map<string, ReadonlySet<string>>();
 
 /**
  * A declared or re-exported name as written, a default export as `default`, `export * as ns` as
- * `ns`. `export * from` is not followed: biome.json's noReExportAll forbids it in this repository,
+ * `ns`. `export * from` is not followed: biome.jsonc's noReExportAll forbids it in this repository,
  * so no box can name a symbol that reaches its file only through a star.
  */
 export function exportedNames(file: string): ReadonlySet<string> {
