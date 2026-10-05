@@ -38,10 +38,7 @@ use serde_json::Value;
 /// Serialize a host-handled control frame and write it to Chrome via the shared stdout writer. `nm_write_frame` flushes per frame, so
 /// taking the lock per frame keeps replies atomic with respect to the
 /// socket->stdout pump.
-fn write_control_reply<T: Serialize>(
-    out: &Mutex<BufWriter<io::Stdout>>,
-    reply: &T,
-) -> io::Result<()> {
+fn write_control_reply<W: Write, T: Serialize>(out: &Mutex<W>, reply: &T) -> io::Result<()> {
     let value = serde_json::to_value(reply)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("encode reply: {e}")))?;
     let mut out = out
@@ -339,7 +336,7 @@ fn handle_lang_set(value: String) -> Option<PolicyControl> {
 
 /// Push the current `policy_current` to the extension. Best-effort: a failed write only delays the state to the
 /// extension's own `policy_get`.
-fn push_policy_current(out: &Mutex<BufWriter<io::Stdout>>) {
+fn push_policy_current<W: Write>(out: &Mutex<W>) {
     if let Err(e) = write_control_reply(out, &policy_current_reply()) {
         log_warn!("native-host", "could not push policy_current: {e}");
     }
@@ -347,7 +344,7 @@ fn push_policy_current(out: &Mutex<BufWriter<io::Stdout>>) {
 
 /// Push the current `lang_current` to the extension. Best-effort, and skipped entirely when the store is
 /// unreadable (already logged).
-fn push_lang_current(out: &Mutex<BufWriter<io::Stdout>>) {
+fn push_lang_current<W: Write>(out: &Mutex<W>) {
     if let Some(frame) = lang_current_frame() {
         if let Err(e) = write_control_reply(out, &frame) {
             log_warn!("native-host", "could not push lang_current: {e}");
@@ -364,7 +361,7 @@ fn enrollment_key_is_gone() -> bool {
 
 /// Push the host-originated `enclave_revoked` frame: the extension flips its pinned state to compromised
 /// without waiting for an opt-in reverify. Harmless toward an unpinned extension (it ignores the frame).
-fn push_revoked(out: &Mutex<BufWriter<io::Stdout>>) {
+fn push_revoked<W: Write>(out: &Mutex<W>) {
     log_info!(
         "native-host",
         "host key is revoked; notifying the extension (enclave_revoked)"
@@ -379,7 +376,7 @@ fn push_revoked(out: &Mutex<BufWriter<io::Stdout>>) {
 /// anyway (that query is what clears a stale killed mirror after a CLI unkill); the policy and language pushes DO fire
 /// at every connect, since the extension never speaks first on those frames and its dispatch barrier waits for the
 /// policy push.
-fn push_kill_status(out: &Mutex<BufWriter<io::Stdout>>) {
+fn push_kill_status<W: Write>(out: &Mutex<W>) {
     if let Err(e) = write_control_reply(out, &kill_status_reply()) {
         log_warn!("native-host", "could not push kill_status_result: {e}");
     }
@@ -469,10 +466,10 @@ fn spawn_trust_watch(
 ///                                   unreadable record is deleting it, which reads as the released bootstrap)
 /// kill marker moved, not killed  -> the release handoff, after the push so the mirror is not left engaged
 /// ```
-fn watch_tick(
+fn watch_tick<W: Write>(
     last: Option<Watched>,
     read: io::Result<TrustState>,
-    out: &Mutex<BufWriter<io::Stdout>>,
+    out: &Mutex<W>,
     unkill_observed: Option<&AtomicBool>,
 ) -> Option<Watched> {
     let trust = match read {
@@ -528,8 +525,8 @@ fn watch_tick(
     Some(cur)
 }
 
-fn write_replies(
-    out: &Mutex<BufWriter<io::Stdout>>,
+fn write_replies<W: Write>(
+    out: &Mutex<W>,
     replies: Vec<crate::protocol::control::HostReply>,
 ) -> io::Result<()> {
     replies
@@ -549,9 +546,9 @@ enum Inbound {
 /// Handle one frame from Chrome against the host-handled control surface. Shared by the normal
 /// stdin->socket pump and the control-plane-only loop, so the two modes cannot drift in what they answer.
 /// An `Err` means a control REPLY could not be written (stdout gone), which ends the calling loop.
-fn handle_control_frame(
+fn handle_control_frame<W: Write>(
     frame: Value,
-    out: &Arc<Mutex<BufWriter<io::Stdout>>>,
+    out: &Mutex<W>,
     exchange: &mut Exchange,
 ) -> io::Result<Inbound> {
     match classify_nm_frame(&frame) {
@@ -580,9 +577,9 @@ fn handle_control_frame(
 /// not compile, so no inbound frame type can ship unhandled. The WebAuthn arms hand the exchange its frame
 /// and write every reply it returns, in order; the exchange is owned by the one thread that dispatches
 /// frames in either mode.
-fn handle_request(
+fn handle_request<W: Write>(
     request: HostRequest,
-    out: &Arc<Mutex<BufWriter<io::Stdout>>>,
+    out: &Mutex<W>,
     exchange: &mut Exchange,
 ) -> io::Result<()> {
     match request {

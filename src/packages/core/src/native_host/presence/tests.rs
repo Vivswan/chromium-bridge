@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use super::*;
 use crate::audit::AuditRecord;
 use crate::protocol::control::{AdminControl, WebAuthnControl};
+use crate::runtime_record::RuntimeRecord;
 use crate::test_support::scratch_runtime_dir;
 use crate::webauthn::{encode, Assertion};
 
@@ -583,7 +584,7 @@ fn the_counter_write_refuses_a_stale_value_under_the_lock() {
 /// is enrolled: the rule is per browser label, the release lands, and the trail names the software path.
 #[test]
 fn a_browser_with_no_credential_releases_by_window_and_the_trail_names_the_software_path() {
-    let _dir = scratch_runtime_dir("exchange-window-release");
+    let _dir = scratch_runtime_dir();
     let mut chrome = Exchange::new(label("chrome"));
     enroll_tofu(&mut chrome, &Authenticator::new(0x22));
     let mut brave = Exchange::new(label("brave"));
@@ -622,7 +623,7 @@ fn a_browser_with_no_credential_releases_by_window_and_the_trail_names_the_softw
 /// other two refusals a confirmation can earn.
 #[test]
 fn an_enrolled_browsers_window_answer_is_refused_and_the_switch_stays_engaged() {
-    let _dir = scratch_runtime_dir("exchange-window-refused");
+    let _dir = scratch_runtime_dir();
     let mut brave = Exchange::new(label("brave"));
     enroll_tofu(&mut brave, &Authenticator::new(0x11));
     crate::kill::engage(Surface::Cli).unwrap();
@@ -664,7 +665,7 @@ fn an_enrolled_browsers_window_answer_is_refused_and_the_switch_stays_engaged() 
 /// under a stale approval is refused once another credential landed first.
 #[test]
 fn an_enrollment_approval_expires_and_does_not_outlive_the_enrollments_it_presupposed() {
-    let _dir = scratch_runtime_dir("exchange-approval-lifetime");
+    let _dir = scratch_runtime_dir();
     let mut brave = Exchange::new(label("brave"));
     let mut first = Authenticator::new(0x11);
     enroll_tofu(&mut brave, &first);
@@ -684,7 +685,7 @@ fn an_enrollment_approval_expires_and_does_not_outlive_the_enrollments_it_presup
     // and a concurrent first-use enrollment landing first makes this one's write refuse.
     let (challenge, _) = presence_request(&replies[0]);
     assert_approved(&brave.presence_assert(&first.id_b64(), Ok(first.assert(&challenge)))[0]);
-    std::fs::remove_file(crate::ipc::runtime_dir().join("trust.json")).unwrap();
+    std::fs::remove_file(crate::trust::Trust::path().unwrap()).unwrap();
     let replies = brave.enroll_begin();
     assert_eq!(replies.len(), 1, "{replies:?}");
     let (challenge, _) = enroll_options(&replies[0]);

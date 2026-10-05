@@ -143,7 +143,7 @@ fn policy_frames_from_the_browser_are_answered_or_dropped() {
     // arriving FROM the browser are malformed under their tag with nothing owed. All are Handled, never
     // forwarded. A scratch runtime dir isolates the store reads/writes the answers do.
     let _dir = scratch_runtime_dir();
-    let out = Arc::new(Mutex::new(BufWriter::new(io::stdout())));
+    let out = Mutex::new(Vec::new());
     for (frame, is_push) in [
         (serde_json::json!({ "type": "policy_get" }), false),
         (serde_json::json!({ "type": "lang_get" }), false),
@@ -527,7 +527,7 @@ fn audit_events_with_host_side_kinds_are_dropped() {
     // The forgery gate lives in the parse (protocol/control.rs: a host-owned kind is not an
     // ExtensionAuditKind); this exercises the host wiring: the frame is Handled (never forwarded), no
     // reply is written, and nothing recordable is ever constructed.
-    let out = Arc::new(Mutex::new(BufWriter::new(io::stdout())));
+    let out = Mutex::new(Vec::new());
     for kind in ["kill_engage", "harness_admit"] {
         let verdict = handle_control_frame(
             serde_json::json!({ "type": "audit_event", "kind": kind }),
@@ -666,7 +666,7 @@ fn the_loop_handles_buffered_frames_before_exiting_on_unkill() {
 fn a_released_record_recovered_after_an_unreadable_gap_hands_the_release_to_the_loop() {
     // The push helpers read the policy, language and trust stores from the runtime dir.
     let _dir = scratch_runtime_dir();
-    let out = Mutex::new(BufWriter::new(io::stdout()));
+    let out = Mutex::new(Vec::new());
     let released = || Ok(TrustState::from(Trust::default()));
     let killed = || {
         Ok(TrustState::from(Trust::fixture(
