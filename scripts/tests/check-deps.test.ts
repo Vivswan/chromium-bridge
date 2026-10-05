@@ -269,7 +269,7 @@ test("a checkout under another checkout: the parent's node_modules never stands 
 // moon sees only the exit status, and the developer only stderr: a drift that exited 0, or a verdict on stdout,
 // would let the dependent task run or hide the steps to take; what setup cannot fix (a lockfile behind its manifest,
 // an inherited toolchain override) must be named before it.
-test("as a process: installed is silent and exits 0; a fresh clone, a manifest drift, and a toolchain override exit 1 with the steps on stderr", () => {
+test("as a process: installed is silent and exits 0; a fresh clone, a manifest drift, and a toolchain override (installed or not) exit 1 with the steps on stderr", () => {
   const installed = installedRoot();
   const cold = installedRoot();
   rmSync(join(cold, "node_modules"), { recursive: true });
@@ -285,6 +285,10 @@ test("as a process: installed is silent and exits 0; a fresh clone, a manifest d
     }),
   );
   const overridden = cargoRoot("", "", "1.97.0");
+  const uninstalledOverride = cargoRoot(
+    "--version",
+    "toolchain '1.80.0-aarch64-apple-darwin' is not installed",
+  );
   const run = (mode: string, root: string, env: Record<string, string> = {}) => {
     const proc = Bun.spawnSync(
       [process.execPath, join(import.meta.dir, "..", "check-deps.ts"), mode, root],
@@ -304,6 +308,10 @@ test("as a process: installed is silent and exits 0; a fresh clone, a manifest d
     overridden: run("cargo", overridden.root, {
       PATH: join(overridden.root, "bin"),
       RUSTUP_TOOLCHAIN: "stable",
+    }),
+    uninstalledOverride: run("cargo", uninstalledOverride.root, {
+      PATH: join(uninstalledOverride.root, "bin"),
+      RUSTUP_TOOLCHAIN: "1.80.0",
     }),
   }).toEqual({
     installed: { status: 0, stdout: "", stderr: "" },
@@ -331,6 +339,15 @@ test("as a process: installed is silent and exits 0; a fresh clone, a manifest d
       stderr: stderr([
         "error: the checkout is missing what `moon run setup` installs:",
         "  rust toolchain: RUSTUP_TOOLCHAIN=stable overrides rust-toolchain.toml's 1.96.1 (unset RUSTUP_TOOLCHAIN)",
+        "first unset RUSTUP_TOOLCHAIN, then run `moon run setup` once; this check installs and fetches nothing",
+      ]),
+    },
+    uninstalledOverride: {
+      status: 1,
+      stdout: "",
+      stderr: stderr([
+        "error: the checkout is missing what `moon run setup` installs:",
+        "  rust toolchain: RUSTUP_TOOLCHAIN=1.80.0 overrides rust-toolchain.toml's 1.96.1 (error: toolchain '1.80.0-aarch64-apple-darwin' is not installed) (unset RUSTUP_TOOLCHAIN)",
         "first unset RUSTUP_TOOLCHAIN, then run `moon run setup` once; this check installs and fetches nothing",
       ]),
     },

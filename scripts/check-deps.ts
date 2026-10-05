@@ -33,8 +33,7 @@ const declarationKinds = [
 ] as const;
 type Declarations = Partial<Record<(typeof declarationKinds)[number], Record<string, string>>>;
 
-/** The bun text lockfile, the fields read here. Workspace keys are member paths relative to the root ("" is the root). */
-type Lockfile = BunLockFile;
+// In bun.lock, workspace keys are member paths relative to the root ("" is the root).
 
 // An npm entry carries its info third ([pkg, registry, info, integrity]); a git, tarball, or folder entry second; a
 // workspace entry carries none.
@@ -106,7 +105,7 @@ function outsideRoot(root: string, path: string): boolean {
 // bun keys a package by the hoisting path that leads to it: `<dependent names>/<name>`, shortened as far as
 // hoisting allowed. The entry a dependent sees is the deepest key under its own path.
 function locked(
-  packages: Lockfile["packages"],
+  packages: BunLockFile["packages"],
   path: string[],
   dep: string,
 ): { entry: BunLockFilePackageArray; path: string[] } | undefined {
@@ -163,7 +162,7 @@ function judge(root: string, from: string, dep: string, resolution: string): Jud
 export function auditWorkspace(checkout: string): string[] {
   // The inside-the-repository test compares real paths, so the root is one too (macOS puts tmp under a symlink).
   const root = realpathSync(checkout);
-  const lock = Bun.JSONC.parse(readFileSync(join(root, "bun.lock"), "utf8")) as Lockfile;
+  const lock = Bun.JSONC.parse(readFileSync(join(root, "bun.lock"), "utf8")) as BunLockFile;
   if (!existsSync(join(root, "node_modules"))) return ["node_modules/ is absent"];
   const rootManifest = readManifest(root);
   if (rootManifest === undefined) return [".: has no readable package.json"];
@@ -269,18 +268,25 @@ export function auditCrates(
     const lines = (run.stderr?.toString() ?? "").trim().split("\n");
     return lines.find((line) => line.startsWith("error")) ?? lines[0] ?? `exit ${run.exitCode}`;
   };
-  const toolchain = cargo("--version");
-  if (toolchain !== undefined) return [`rust toolchain: ${toolchain}`];
-  // An inherited RUSTUP_TOOLCHAIN overrides rust-toolchain.toml, so the active cargo is held to the pin when
-  // the pin is a version (a channel name such as `stable` cannot be compared).
   const pin = (
     Bun.TOML.parse(readFileSync(join(root, "rust-toolchain.toml"), "utf8")) as {
       toolchain?: { channel?: unknown };
     }
   ).toolchain?.channel;
+  // setup unsets RUSTUP_TOOLCHAIN only in its own shell, so an inherited override, installed or not, is the
+  // developer's to clear.
+  const override = env.RUSTUP_TOOLCHAIN;
+  const toolchain = cargo("--version");
+  if (toolchain !== undefined) {
+    return override
+      ? [
+          `rust toolchain: RUSTUP_TOOLCHAIN=${override} overrides rust-toolchain.toml's ${String(pin)} (${toolchain}) ${unsetOverride}`,
+        ]
+      : [`rust toolchain: ${toolchain}`];
+  }
+  // An inherited RUSTUP_TOOLCHAIN overrides rust-toolchain.toml, so the active cargo is held to the pin when
+  // the pin is a version (a channel name such as `stable` cannot be compared).
   if (typeof pin === "string" && /^\d/.test(pin) && !active.includes(` ${pin} `)) {
-    // setup unsets the variable only in its own shell, so an inherited override is the developer's to clear.
-    const override = env.RUSTUP_TOOLCHAIN;
     return override
       ? [
           `rust toolchain: RUSTUP_TOOLCHAIN=${override} overrides rust-toolchain.toml's ${pin} ${unsetOverride}`,
