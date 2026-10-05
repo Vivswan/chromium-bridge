@@ -1,6 +1,6 @@
 # Releasing: the release-please pipeline
 
-> This doc explains how chromium-bridge is released: merging the release PR cuts a draft release and, in the same CI run, builds prebuilt artifacts, installers, checksums, provenance attestations, and an SBOM onto the draft, then publishes it and opens the Homebrew tap's bump pull request. Which version number moves for which change is in [Versions](#versions) below; on-disk registration paths are in [architecture.md section 4.3](./architecture.md#43-on-disk-artifacts).
+> Merging the release PR cuts a draft release and, in the same CI run, builds prebuilt artifacts, installers, checksums, provenance attestations, and an SBOM onto the draft, then publishes it and opens the Homebrew tap's bump pull request. Which version number moves for which change is in [Versions](#versions) below; on-disk registration paths are in [architecture.md section 4.3](./architecture.md#43-on-disk-artifacts); the toolchain behind the jobs is [development.md](./development.md).
 
 ## Trigger: merge the release PR
 
@@ -19,6 +19,8 @@ The machinery is the managed `.github/workflows/ci.yml`, downstream of the all-g
 - **`publish-release`** calls the fleet's `fleet-release-publish.yml`: attest, then publish.
 - **`site`** deploys the site after the publish, in the same run.
 - **`update-release-pr`** calls the repo-owned `update-release-pr.yml` hook whenever release-please creates or refreshes the release PR.
+
+Inside `update-release.yml`, a last job, `release-ready`, fails unless every packaging job succeeded: a skipped or cancelled job blocks the publish, while the `continue-on-error` jobs (SBOM, Homebrew) read as success there. The managed publish stage sees only the hook's aggregate result, so this job is what keeps an unexpected skip from reaching publication.
 
 When the bump changes a lockfile, the release PR carries one commit beyond release-please's own: the `update-release-pr` hook re-locks `Cargo.lock`, `src/packages/core/fuzz/Cargo.lock`, and `bun.lock` for the bumped version and pushes that commit to the PR branch, because release-please bumps the manifests alone and every `--locked` step refuses a lagging lockfile.
 
@@ -132,8 +134,3 @@ The review will focus on four points, each needing a written justification:
 | `chrome.debugger`, used by `page_snapshot_precise` | a sensitive permission that needs its own explanation |
 | broad host and optional permissions plus native messaging | the bridge is localhost-only behind a per-run secret, sites are authorized one by one; link the [threat model](./security/threat-model.md) |
 | "does it use remote code" | `page_eval` runs user-supplied JS, never remotely fetched code; word the form precisely |
-
-## Related
-
-- Symptoms and recovery: [troubleshooting.md](./troubleshooting.md).
-- CI and toolchain: [development.md](./development.md).

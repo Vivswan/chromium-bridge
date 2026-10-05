@@ -1,6 +1,6 @@
 # Privacy Policy: Chromium Bridge
 
-_Last updated: 2026-07-17_
+_Last updated: 2026-10-04_
 
 Chromium Bridge is an open-source browser extension that connects an MCP client (such as Claude Code, Claude Desktop, or Codex) to your local Chromium browser through a native-messaging host that runs on your own computer. This policy explains what the extension accesses and what it does, and does not, do with that data.
 
@@ -15,10 +15,13 @@ To let an approved AI agent operate the pages you are already signed into, the e
 - Read the content of the current page (DOM, text, form fields).
 - Read cookies for the active site, including `httpOnly` cookies.
 - Read web storage (`localStorage` / `sessionStorage`).
-- Execute JavaScript in the page.
+- Attach Chrome's debugger to the page (the `debugger` permission) to read its accessibility tree, read its console, attach a file, or answer a dialog; with the CDP mode setting on, page operations run through it too.
+- Execute JavaScript in the page (off by default).
 - Attach a local file to a page's file input (off by default; every use shows the exact path for confirmation).
 
-Independent of site approval, it can read the list of open tabs (titles and URLs) and open, focus, or close tabs; closing a tab asks for confirmation.
+Independent of site approval, it can read the list of open tabs (titles and URLs) and focus a tab. Opening a tab needs an approved site, like any page action; closing one asks for confirmation and, while that confirmation is on, needs an approved site as well.
+
+Unless you turn the tab-grouping setting off, the tabs it opens are gathered into a tab group of their own in each window, so you can tell them apart from yours.
 
 Credential-bearing values (cookies and web storage) are **read-only** (the extension has no API to write or modify cookies or storage by design) and are **masked** (JWTs, long hex strings, and long digit runs are redacted) before being returned.
 
@@ -30,7 +33,7 @@ Credential-bearing values (cookies and web storage) are **read-only** (the exten
 ## Consent and control
 
 - **Per-site approval.** A site's pages cannot be read or acted on until you approve its origin in a prompt.
-- **Per-action confirmation.** High-risk actions (form submissions, key presses, tab close, file uploads, and every JavaScript evaluation) ask for confirmation in an extension-owned window that web pages cannot see or interact with. On a Mac enrolled with Touch ID, the highest-risk actions require a Touch ID approval. These confirmations are on by default; each is a setting you control.
+- **Per-action confirmation.** High-risk actions (form submissions, key presses, tab close, file uploads, and, unless you turn that confirmation off, every JavaScript evaluation) ask for confirmation in an extension-owned window that web pages cannot see or interact with. On a Mac enrolled with Touch ID, the highest-risk actions require a Touch ID approval. These confirmations are on by default; each is a setting you control.
 - **A kill switch.** You can halt all bridge activity at any time from the extension's options page or the command line; releasing it requires your explicit, present approval.
 
 ## What the extension stores locally
@@ -38,7 +41,8 @@ Credential-bearing values (cookies and web storage) are **read-only** (the exten
 The extension stores a small amount of configuration in the browser's local extension storage on your device only:
 
 - Your list of approved sites (the allowlist).
-- Your extension settings/preferences.
+- Your extension settings/preferences, including the display language.
+- The security policy in force for this extension, as received from the native host (verified against the host's signature once you have enrolled), and whether the kill switch is engaged.
 - If you enroll, the public-key fingerprint used to verify your own computer's security hardware (never a private key: that stays in the Secure Enclave).
 - A bounded, local log of recent security decisions (confirmations, revocations), viewable on the options page.
 
