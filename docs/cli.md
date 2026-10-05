@@ -164,13 +164,13 @@ Nothing releases the switch on its own. Release is a CLI act, `chromium-bridge u
 
 Every release attempt is audited with the auth path that decided it (`auth=touch_id`, `auth=cli_confirm`), whether it was granted, refused at the presence gate, or refused by an unwritable record after presence passed.
 
-If either command reports that the trust record is unreadable, see the recovery section in [operations.md](./operations.md#kill-switch-state-and-recovering-an-unreadable-record); until then, everything keeps failing closed.
+If either command reports that the trust record is unreadable, see [the recovery steps](./troubleshooting.md#doctor-says-the-kill-state-or-the-trust-record-is-unreadable); until then, everything keeps failing closed.
 
 `doctor` prints the kill state and exits non-zero while the switch is engaged or its state is unreadable.
 
 ## Host-owned policy (policy)
 
-`chromium-bridge policy` is the host-owned policy surface. The concepts (the signed baseline, the unsigned restriction overlay, the extension-side ratchet) are in [architecture.md section 11.3](./architecture.md#113-host-owned-policy-and-language-sync); the doctor rows are in [operations.md](./operations.md#host-owned-policy-the-doctor-rows).
+`chromium-bridge policy` is the host-owned policy surface. The concepts (the signed baseline, the unsigned restriction overlay, the extension-side ratchet) are in [architecture.md section 11.3](./architecture.md#113-host-owned-policy-and-language-sync); the `policy baseline:` doctor row is read on the [troubleshooting page](./troubleshooting.md#doctor-reports-policy-baseline-none-yet).
 
 ```text
 chromium-bridge policy show [--json]              # read-only: store state + effective policy
@@ -220,6 +220,10 @@ Diagnostics in both modes go to **stderr** (stdout carries protocol frames). Two
 **Audit events (stderr)**: every security decision emits one audit line: tool calls (with `req`, `tool`, `outcome`, and on error the stable `code` from [`ERROR_SPECS`](../src/packages/core/src/error.rs), plus `dur_ms`), harness admissions and refusals, client pairing and revocation, host-key revocations, kill-switch transitions, and the extension's confirmation and enrollment decisions (forwarded over the port).
 
 The same events are appended as strict JSON records to a durable, size-capped `audit.log` (0600, in the runtime directory next to the lock file), which survives the short-lived processes that write it. Each record names its event in `event_kind`; the JSON stderr form wraps the record in a `"kind":"audit"` envelope, so a collector keys on `kind` and reads the event from `event_kind`.
+
+- **No sensitive content is recorded:** no page text, cookie or storage values, eval return values, or form fill values; masking happens on the extension side ([threat model](./security/threat-model.md)).
+- **Correlation:** a tool-call line carries its request id (`req`) and the generation of the browser connection the call was routed to (`conn`); the generation increments on every re-attach, so a reconnect starts a new `conn`.
+- **Two extension-local kinds never reach `audit.log`:** `policy_refused` and `policy_compromised` stay in the extension's own audit ring by design, outside the forwarding whitelist; the host records every policy transition as `policy_write`.
 
 ```text
 # BB_LOG_FORMAT default (text)

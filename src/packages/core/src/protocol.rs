@@ -268,7 +268,7 @@ pub const MCP_META_SERVER_INFO: &str = "io.modelcontextprotocol/serverInfo";
 /// when the bridge wire contract ([`BridgeReq`]/[`BridgeResp`] shape, hello handshake, op/capability semantics)
 /// changes incompatibly. Not the MCP JSON-RPC revision ([`MCP_PROTOCOL_VERSION`]) and not the release version
 /// (Cargo). No connection-time check compares it yet: `PROTOCOL_MISMATCH` (`error::ERROR_SPECS`) awaits the
-/// version/capability handshake wiring (docs/compatibility.md).
+/// version/capability handshake wiring (docs/architecture.md section 11.2).
 pub const BRIDGE_PROTOCOL_VERSION: u32 = 1;
 
 /// The bridge authentication handshake, exchanged as two NDJSON frames right

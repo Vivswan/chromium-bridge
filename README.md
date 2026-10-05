@@ -12,8 +12,6 @@ That power is also the risk. Read [Security first](#security-first) before you i
 
 The bar this project holds itself to: a program you installed cannot use your browser without you noticing, held today on macOS, Linux, and Windows ([the security bar](./docs/security/security-bar.md) states it, and where it stops).
 
-Translations: [Simplified Chinese](./README.zh_CN.md), [Traditional Chinese](./README.zh_TW.md).
-
 ## Security first
 
 chromium-bridge drives a real, authenticated browser. It can read page content, cookies (including `httpOnly`), and web storage, and can run JavaScript in your pages. The guardrails:
@@ -100,7 +98,7 @@ args = []
 
 Several clients can be connected at once: the first server instance becomes a broker and later instances attach to it, each one attested and individually revocable.
 
-On WSL, install where the browser runs ([WSL guide](./docs/wsl.md)):
+On WSL, install where the browser runs ([running under WSL](./docs/troubleshooting.md#running-under-wsl)):
 
 - Windows Chrome as your everyday browser: install on Windows and point the WSL client at the `.exe` via `/mnt/c`; do not install a Linux host.
 - Chrome under WSLg: install natively in Linux.
@@ -215,7 +213,7 @@ Deep dive: [docs/architecture.md](./docs/architecture.md).
 
 Known browsers (`--browser` keys): `chrome`, `chromium`, `brave`, `edge`, `vivaldi`, `opera`. Every Chromium browser reads the same native-messaging manifest; only the per-user `NativeMessagingHosts` location differs, and the shared resolver in the core knows them all.
 
-For a Chromium variant not in that list, `doctor --fix --manifest-dir <dir>` targets its directory explicitly (macOS/Linux; on Windows registration is an HKCU registry key). See [docs/compatibility.md](./docs/compatibility.md) and [docs/cli.md](./docs/cli.md).
+For a Chromium variant not in that list, `doctor --fix --manifest-dir <dir>` targets its directory explicitly (macOS/Linux; on Windows registration is an HKCU registry key). See [docs/cli.md](./docs/cli.md).
 
 ## Configuration
 
@@ -241,20 +239,18 @@ It reports whether the server is reachable, the lock-file state, the kill switch
 - your MCP client's server UI (reconnect via `/mcp` in Claude Code);
 - the extension's service-worker console at `chrome://extensions` (look for `[bb]` logs).
 
-Full runbook: [docs/cli.md](./docs/cli.md) and [docs/operations.md](./docs/operations.md).
+Full runbook: [docs/cli.md](./docs/cli.md) and [docs/troubleshooting.md](./docs/troubleshooting.md).
 
 ## Docs map
 
 | Doc | What's in it |
 |-----|--------------|
-| [docs/quickstart.md](./docs/quickstart.md) | Install and first use (also in [Simplified](./docs/quickstart.zh_CN.md) and [Traditional Chinese](./docs/quickstart.zh_TW.md)) |
+| [docs/quickstart.md](./docs/quickstart.md) | Install and first use |
 | [docs/architecture.md](./docs/architecture.md) | Components, data flow, protocols, security model, key constraints |
 | [docs/security/](./docs/security/) | Threat model, trust boundaries, tool risk matrix, incident response |
 | [docs/cli.md](./docs/cli.md) | The full CLI: doctor/--fix, uninstall, pairing, revocation, kill switch, audit |
-| [docs/operations.md](./docs/operations.md) | The binary modes, logging/audit, the runtime directory, reconnect |
-| [docs/compatibility.md](./docs/compatibility.md) | Version discipline and the capability/protocol handshake |
-| [docs/release.md](./docs/release.md) | Release-please releases, prebuilt archives + checksums, SBOM |
-| [docs/wsl.md](./docs/wsl.md) | The two WSL modes: Windows Chrome interop and WSLg |
+| [docs/troubleshooting.md](./docs/troubleshooting.md) | Symptom by symptom: doctor rows, kill-record recovery, version skew, the two WSL modes |
+| [docs/release.md](./docs/release.md) | Release-please releases, prebuilt archives + checksums, SBOM, which version moves when |
 | [docs/security/rationale.md](./docs/security/rationale.md) | Why each security decision was taken, and what was rejected |
 
 <details>

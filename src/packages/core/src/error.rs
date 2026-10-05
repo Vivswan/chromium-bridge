@@ -87,7 +87,7 @@ pub enum CallError {
     /// error.
     #[error(
         "the bridge kill state could not be read ({0}); failing closed - \
-         see `chromium-bridge doctor` and docs/operations.md for recovery"
+         see `chromium-bridge doctor` and docs/troubleshooting.md for recovery"
     )]
     KillStateUnknown(String),
 
@@ -240,7 +240,7 @@ macro_rules! error_taxonomy {
         /// ```text
         /// Rust side          -> assigns codes today (CallError::code, including the host policy gate's TOOL_DISABLED)
         /// extension          -> reports free-form strings, surfaced as EXECUTION_FAILED
-        /// PROTOCOL_MISMATCH  -> unassigned until the version/capability handshake is wired (docs/compatibility.md)
+        /// PROTOCOL_MISMATCH  -> unassigned until the version/capability handshake is wired (docs/architecture.md section 11.2)
         /// ```
         pub const ERROR_SPECS: &[ErrorSpec] = &[$(specs::$name),*];
     };

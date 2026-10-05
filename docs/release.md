@@ -1,6 +1,6 @@
 # Releasing: the release-please pipeline
 
-> This doc explains how chromium-bridge is released: merging the release PR cuts a draft release and, in the same CI run, builds prebuilt artifacts, installers, checksums, provenance attestations, and an SBOM onto the draft, then publishes it and opens the Homebrew tap's bump pull request. Version discipline is in [compatibility.md](./compatibility.md); on-disk registration paths are in [architecture.md section 4.3](./architecture.md#43-on-disk-artifacts).
+> This doc explains how chromium-bridge is released: merging the release PR cuts a draft release and, in the same CI run, builds prebuilt artifacts, installers, checksums, provenance attestations, and an SBOM onto the draft, then publishes it and opens the Homebrew tap's bump pull request. Which version number moves for which change is in [Versions](#versions) below; on-disk registration paths are in [architecture.md section 4.3](./architecture.md#43-on-disk-artifacts).
 
 ## Trigger: merge the release PR
 
@@ -85,21 +85,55 @@ An SBOM tooling failure still **never blocks** a binary release: the job is `con
 - **An attestation outage costs the SBOM asset the same way.** The attest step runs before the upload, because an asset nobody can verify must not ship.
 - **The loss is permanent for that tag.** The published release is immutable, so the SBOM cannot be attached afterwards. The next release carries one again.
 
+## Versions
+
+Three numbers carry the word "version"; each has one source and one meaning.
+
+| Version | Value | Single source | What a change means |
+|------|------|------|----------|
+| MCP JSON-RPC version | date string `2026-07-28` | `MCP_PROTOCOL_VERSION` in [`src/packages/core/src/protocol.rs`](../src/packages/core/src/protocol.rs) | The external protocol between the MCP client and the MCP server; stateless, gated per request, with temporary legacy-era support for harnesses on the previous revision |
+| Internal bridge protocol version | monotonic integer (currently `1`) | `BRIDGE_PROTOCOL_VERSION` in [`src/packages/core/src/protocol.rs`](../src/packages/core/src/protocol.rs) | The wire contract between the MCP server, native host, and extension |
+| Extension/binary release version | SemVer (such as `0.1.0`) | `Cargo.toml` | The version of release artifacts, moved by the SemVer rules below |
+
+The internal bridge protocol version moves only when the bridge wire contract (the `BridgeReq`/`BridgeResp` shapes, the authentication handshake, op and capability semantics) changes incompatibly. New optional fields, new tools, new capabilities, and additive host-handled control frames do not bump it; under SemVer they land in the minor of the release version. How the two sides behave when their versions differ is on the [troubleshooting page](./troubleshooting.md#the-extension-and-the-host-are-different-versions).
+
+One platform break landed without a bump: retiring the `requireEnrollment` opt-out, which left a Mac without a Secure Enclave unable to enroll. The wire contract did not move, so the number did not either.
+
 ## SemVer rules
 
 Compatibility discipline holds before 1.0 too; `0.x` is not treated as a license to break compatibility at will:
 
 - **Patch**: bug fixes, internal refactors, logging improvements; no changes to tool parameters or security semantics.
 - **Minor**: new tools, new optional fields, new capabilities, new configuration; backward compatible.
-- **Major**: removing/renaming tools, changing field meanings, changing default permissions, loosening a security boundary, or an incompatible Bridge protocol or extension version (corresponding to an internal bridge protocol version bump, see [compatibility.md](./compatibility.md)).
+- **Major**: removing/renaming tools, changing field meanings, changing default permissions, loosening a security boundary, or an incompatible Bridge protocol or extension version (corresponding to an internal bridge protocol version bump, see [Versions](#versions)).
 
 ## Not yet in place (honest statement)
 
 - macOS **real integration tests in the release gate**: they need a real browser and are not part of the release gate yet.
 - **The Web Store listing** the pointer names: its status is [quickstart.md](./quickstart.md#the-cli-macos-linux-windows) step 4's.
 
+## Publishing to the Chrome Web Store
+
+Not done, and not decided. Publishing would remove the biggest adoption hurdle (loading an unpacked extension), but it touches distribution and the security boundary, so under [GOVERNANCE](../GOVERNANCE.md) it is an RFC-level decision: open an issue first, never a quick PR. The facts that decision needs:
+
+- **The pinned-ID trap.** Every install depends on one fixed extension ID, `mkjjlmjbcljpcfkfadfmhblmmddkdihf`, derived from the pinned manifest key in [`src/packages/core/src/identity.rs`](../src/packages/core/src/identity.rs) and written by the registration engine into the host manifest's `allowed_origins`. The store assigns its own ID on first upload and ignores the manifest `key`, so a store build cannot connect to a host that trusts only the pinned ID.
+- **The mitigation to plan.** Trust both IDs, the store's for store users and the pinned one for unpacked loads. `PINNED_EXTENSION_ID` is singular and the registration engine writes one `allowed_origins` entry from it, so the identity contract and the Registrar model plural IDs first, and `moon run gen` carries the result to every generated copy. Backfilling the store's public key into the manifest `key` is optional and changes today's pinned ID.
+- **What it solves, and what it does not.** No more developer mode and "Load unpacked"; one click that survives Chrome restarts and suits managed Chrome. The host install stays: the store distributes the extension only, and `chromium-bridge doctor --fix` is still the native host's registration.
+- **Prerequisites.** A developer account (a one-time fee, registered by the owner), a privacy policy URL ([the privacy policy](./privacy-policy.md) qualifies), and listing assets: one to five screenshots (1280x800 or 640x400), the 128px `icon128.png` that `moon run gen-icons` renders into the extension's public icons folder from the SVG sources in `assets/icon/`, short and detailed descriptions, a category, and support and homepage URLs.
+- **Packaging.** The release pipeline already emits `chromium-bridge-extension-<tag>.zip`; confirm it is the uploadable bundle. `scripts/check-version.ts` already enforces that the manifest version equals Cargo's. Decide whether the `key` field stays (a consistent unpacked ID) or goes to the store.
+- **Submission.** Upload, fill in the data-use disclosure and the privacy policy, and submit. Review takes days to weeks, and every later update goes through review too.
+- **After publishing.** Wire the store ID into `allowed_origins` through `identity.rs`; turn the README's "Load the extension" into "Add from the Chrome Web Store" with unpacked as the developer path; update the docs; record the decision in the landing PR, since distribution changes are major under GOVERNANCE; optionally automate the upload in CI.
+
+The review will focus on four points, each needing a written justification:
+
+| Review point | The honest answer |
+| --- | --- |
+| `page_eval` executes arbitrary JS (the highest rejection risk) | a developer tool that confirms every call in an extension-owned window; consider shipping the store build with the tool disabled by default |
+| `chrome.debugger`, used by `page_snapshot_precise` | a sensitive permission that needs its own explanation |
+| broad host and optional permissions plus native messaging | the bridge is localhost-only behind a per-run secret, sites are authorized one by one; link the [threat model](./security/threat-model.md) |
+| "does it use remote code" | `page_eval` runs user-supplied JS, never remotely fetched code; word the form precisely |
+
 ## Related
 
-- Operations and diagnostics: [operations.md](./operations.md).
-- Versions and the handshake: [compatibility.md](./compatibility.md).
+- Symptoms and recovery: [troubleshooting.md](./troubleshooting.md).
 - CI and toolchain: [development.md](./development.md).

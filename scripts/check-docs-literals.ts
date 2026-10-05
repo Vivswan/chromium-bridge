@@ -343,20 +343,15 @@ if (import.meta.main) {
     [".github/SECURITY.md", KEYCHAIN_LABEL, "enclave keychain label"],
     [".github/SECURITY.md", PINNED_EXTENSION_ID, "pinned extension id"],
     [".github/SECURITY.md", CHALLENGE_DOMAIN, "enclave challenge domain"],
-    ["docs/chrome-web-store.md", PINNED_EXTENSION_ID, "pinned extension id"],
+    ["docs/release.md", PINNED_EXTENSION_ID, "pinned extension id"],
     ["docs/architecture.md", NATIVE_HOST_ID, "native host id"],
     ["docs/architecture.md", KEYCHAIN_LABEL, "enclave keychain label"],
     ["docs/architecture.md", LOCK_FILENAME, "lock filename"],
     ["docs/architecture.md", MCP_PROTOCOL_VERSION, "MCP protocol version"],
-    ["docs/operations.md", LOCK_FILENAME, "lock filename"],
-    ["docs/wsl.md", NATIVE_HOST_ID, "native host id"],
-    ["docs/wsl.md", LOCK_FILENAME, "lock filename"],
-    [
-      "docs/compatibility.md",
-      `date string \`${MCP_PROTOCOL_VERSION}\``,
-      "MCP protocol version row",
-    ],
-    ["docs/compatibility.md", `currently \`${bridgeVersion}\``, "bridge protocol version row"],
+    ["docs/troubleshooting.md", NATIVE_HOST_ID, "native host id"],
+    ["docs/troubleshooting.md", LOCK_FILENAME, "lock filename"],
+    ["docs/release.md", `date string \`${MCP_PROTOCOL_VERSION}\``, "MCP protocol version row"],
+    ["docs/release.md", `currently \`${bridgeVersion}\``, "bridge protocol version row"],
     ["docs/security/threat-model.md", CLIENT_NAME_ENV, "client-name env var"],
     ["README.md", MCP_PROTOCOL_VERSION, "MCP protocol version"],
     ["docs/development.md", LOG_LEVEL_ENV, "log env var name"],
@@ -395,7 +390,7 @@ if (import.meta.main) {
   );
 
   // The env-var reference tables must enumerate the full accepted value sets.
-  for (const doc of ["README.md", "docs/operations.md", "docs/cli.md"]) {
+  for (const doc of ["README.md", "docs/cli.md"]) {
     const text = readDoc(doc);
     violations.push(...envTableViolations(doc, text, LOG_LEVEL_ENV, LOG_LEVELS));
     violations.push(...envTableViolations(doc, text, LOG_FORMAT_ENV, LOG_FORMATS));

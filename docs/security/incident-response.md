@@ -34,7 +34,7 @@ Users can take these actions themselves to **shrink the blast radius** before a 
 
 - **Disable a single tool**: add the affected tool to the host policy's `disabledTools` with `chromium-bridge policy restrict --disabled-tools <list>` (the flag states the full comma-separated disabled list, so keep any tools already in it; the write is free, no Touch ID prompt, because a restriction only removes capability - see [cli.md](../cli.md#host-owned-policy-policy)). The host's dispatch gate then refuses the op with the stable `TOOL_DISABLED` code from [`ERROR_SPECS`](../../src/packages/core/src/error.rs) before any bridge traffic, and the extension enforces the pushed policy at its own boundary. A high-risk tool such as `page_eval` should be disabled first. Re-enabling it later is a relaxation and costs one signed, Touch ID-gated policy write - by design.
 - **Revoke the allowlist / turn off all-sites**: in Options / the popup, remove the authorization for the affected origins, and confirm `allowAllSites` is off. Removing an authorization also revokes that origin's host permission.
-- **Kill switch**: disable or remove the Chromium Bridge extension at `chrome://extensions`. Once the extension stops, the native host gets EOF on stdin and exits, which severs the bridge. If needed, also end the MCP client session so the MCP server process exits (confirm not reachable with `doctor`, see [operations.md](../operations.md)).
+- **Kill switch**: disable or remove the Chromium Bridge extension at `chrome://extensions`. Once the extension stops, the native host gets EOF on stdin and exits, which severs the bridge. If needed, also end the MCP client session so the MCP server process exits (confirm not reachable with `doctor`, see [the CLI page](../cli.md#doctor--status-read-only-self-check)).
 - **Uninstall the host manifest**: after deleting the native messaging host manifest, Chrome can no longer spawn the host (paths in [architecture.md section 4.3](../architecture.md#43-on-disk-artifacts)).
 
 > Mitigation order, from light to heavy: disable the high-risk tools first, then revoke the allowlist, then disable the extension, then uninstall the manifest.
@@ -56,4 +56,4 @@ Users can take these actions themselves to **shrink the blast radius** before a 
 - Reporting channel and review bar: [SECURITY.md](../../.github/SECURITY.md).
 - Assets, actors, non-goals: [threat-model.md](threat-model.md).
 - Boundaries and invariants: [trust-boundaries.md](trust-boundaries.md).
-- Running and diagnostics: [operations.md](../operations.md).
+- Symptoms and recovery: [troubleshooting.md](../troubleshooting.md).

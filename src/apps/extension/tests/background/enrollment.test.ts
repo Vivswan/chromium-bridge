@@ -59,8 +59,8 @@ void enrollmentStatusTypePins;
 // The ceremony state machine, driven end to end with a mocked chrome and a
 // WebCrypto key standing in for the host's Secure Enclave key. What CANNOT be
 // tested here: the real native host, the keychain, and the Touch ID prompt;
-// those have a manual script on the host side
-// (docs/security/enrollment-manual-test.md).
+// those are exercised by hand on a Mac (a Secure Enclave, a codesigned binary,
+// and a human at the keyboard).
 
 // ---- browser mock -------------------------------------------------------------
 

@@ -66,6 +66,6 @@ Chromium Bridge: Authenticated MCP bridge to your real Chromium browsers (Brave,
 |------|-------|
 | Toolchain and releasing | `docs/development.md` |
 | Architecture and cross-process contracts | `docs/architecture.md` |
-| Operations and CLI | `docs/operations.md`, `docs/cli.md` |
+| CLI and troubleshooting | `docs/cli.md`, `docs/troubleshooting.md` |
 | Tests and browser safety | `tests/README.md` |
 | Security model and review bar | `.github/SECURITY.md` |

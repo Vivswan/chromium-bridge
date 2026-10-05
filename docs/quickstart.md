@@ -2,8 +2,6 @@
 
 This guide gets chromium-bridge from a download to a working "list my browser tabs" in an MCP client. The way in is the CLI (macOS, Linux, Windows).
 
-Translations: [Simplified Chinese](./quickstart.zh_CN.md), [Traditional Chinese](./quickstart.zh_TW.md).
-
 Before you start, read the security summary in the [README](../README.md#security-first): this tool drives the browser you are logged into, and the confirmations it shows you are the safety model, not friction.
 
 ## The CLI (macOS, Linux, Windows)
@@ -33,7 +31,7 @@ The CLI needs nothing but the binary, on desktops, headless machines, and CI ali
 
    Running it twice is harmless, `chromium-bridge doctor --list` shows the state read-only, and `chromium-bridge uninstall` reverses exactly what was written; [cli.md](./cli.md#doctor---fix--uninstall-native-messaging-registration) owns the details.
 
-4. **Load the extension.** The extension's Web Store listing is not published yet ([chrome-web-store.md](./chrome-web-store.md)): load `extension/dist` from the release archive via `chrome://extensions`, Developer mode, "Load unpacked" (in a source checkout, build it first and load `build/extension/chrome-mv3`). Restart the browser.
+4. **Load the extension.** The extension's Web Store listing is not published yet ([release.md's Web Store section](./release.md#publishing-to-the-chrome-web-store)): load `extension/dist` from the release archive via `chrome://extensions`, Developer mode, "Load unpacked" (in a source checkout, build it first and load `build/extension/chrome-mv3`). Restart the browser.
 
    Once the listing exists, [cli.md's pointer table](./cli.md#doctor---fix--uninstall-native-messaging-registration) says which browsers then offer the extension from the pointer step 3 left, and where none is written.
 
