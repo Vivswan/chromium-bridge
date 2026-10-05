@@ -251,11 +251,6 @@ impl BaseDirs {
             .clone()
             .unwrap_or_else(|| self.system_root.join("Program Files"))
     }
-
-    /// A machine-wide path, from its root-relative form.
-    fn system(&self, rel: &str) -> PathBuf {
-        self.system_root.join(rel)
-    }
 }
 
 /// How a browser picks up the native-messaging manifest on this OS.
@@ -296,9 +291,9 @@ impl Registration {
 /// How a browser finds the machine-wide manifest. Brave's main delegate points its system (and on macOS
 /// its user) native-messaging directory at Chrome's, and Opera's extension documentation names Chrome's
 /// locations alone, so those browsers read Chrome's system directory and have none of their own. One
-/// directory holds one manifest, launched by every browser reading it, so that manifest cannot carry a
-/// browser label: `doctor --fix --system --browser brave` registers Chrome's row, unlabeled, and `doctor`
-/// reports it under both. The entry's system pointer is the owner's too.
+/// directory holds one manifest: `doctor --fix --system --browser brave` registers Chrome's row and
+/// `doctor` reports it under both; the label rule for a shared manifest is `registration::Target`'s. The
+/// entry's system pointer is the owner's too.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SystemRegistration {
     Own {
@@ -541,9 +536,11 @@ fn windows_profile_dir(dirs: &BaseDirs, browser: Browser) -> PathBuf {
 pub fn install_dir(os: Os, dirs: &BaseDirs, scope: Scope) -> PathBuf {
     match (os, scope) {
         (Os::MacOs, Scope::User) => dirs.home.join(".chromium-bridge"),
-        (Os::MacOs, Scope::System) => dirs.system("Library/Application Support/chromium-bridge"),
+        (Os::MacOs, Scope::System) => dirs
+            .system_root
+            .join("Library/Application Support/chromium-bridge"),
         (Os::Linux, Scope::User) => dirs.data_home().join("chromium-bridge"),
-        (Os::Linux, Scope::System) => dirs.system("var/lib/chromium-bridge"),
+        (Os::Linux, Scope::System) => dirs.system_root.join("var/lib/chromium-bridge"),
         (Os::Windows, Scope::User) => dirs.local_app_data().join("chromium-bridge"),
         (Os::Windows, Scope::System) => dirs.program_files().join("chromium-bridge"),
     }
@@ -581,11 +578,13 @@ fn windows_slot(
 fn chrome_system_slot(os: Os, dirs: &BaseDirs) -> (Registration, Option<ExtensionPointer>) {
     match os {
         Os::MacOs => (
-            Registration::ManifestDir(dirs.system(MACOS_CHROME_SYSTEM_DIR)),
-            Some(pointer_file(dirs.system(MACOS_SYSTEM_POINTER_DIR))),
+            Registration::ManifestDir(dirs.system_root.join(MACOS_CHROME_SYSTEM_DIR)),
+            Some(pointer_file(
+                dirs.system_root.join(MACOS_SYSTEM_POINTER_DIR),
+            )),
         ),
         Os::Linux => (
-            Registration::ManifestDir(dirs.system(LINUX_CHROME_SYSTEM_DIR)),
+            Registration::ManifestDir(dirs.system_root.join(LINUX_CHROME_SYSTEM_DIR)),
             None,
         ),
         Os::Windows => {
@@ -601,9 +600,9 @@ fn chrome_system_slot(os: Os, dirs: &BaseDirs) -> (Registration, Option<Extensio
 fn own_system_registration(os: Os, dirs: &BaseDirs, browser: Browser) -> Option<Registration> {
     match os {
         Os::MacOs => macos_system_manifest_dir(browser)
-            .map(|dir| Registration::ManifestDir(dirs.system(dir))),
+            .map(|dir| Registration::ManifestDir(dirs.system_root.join(dir))),
         Os::Linux => linux_system_manifest_dir(browser)
-            .map(|dir| Registration::ManifestDir(dirs.system(dir))),
+            .map(|dir| Registration::ManifestDir(dirs.system_root.join(dir))),
         Os::Windows => match browser {
             Browser::Opera => None,
             Browser::Chrome
@@ -632,7 +631,9 @@ fn system_slot(
     match own_system_registration(os, dirs, browser) {
         Some(registration) => {
             let pointer = match os {
-                Os::MacOs => Some(pointer_file(dirs.system(MACOS_SYSTEM_POINTER_DIR))),
+                Os::MacOs => Some(pointer_file(
+                    dirs.system_root.join(MACOS_SYSTEM_POINTER_DIR),
+                )),
                 Os::Linux => None,
                 Os::Windows => Some(windows_slot(os, dirs, Scope::System, browser).1),
             };
@@ -678,7 +679,7 @@ pub fn entry(os: Os, dirs: &BaseDirs, browser: Browser) -> BrowserEntry {
             BrowserEntry {
                 browser,
                 presence: vec![
-                    dirs.system("Applications").join(bundle),
+                    dirs.system_root.join("Applications").join(bundle),
                     dirs.home.join("Applications").join(bundle),
                 ],
                 user: Registration::ManifestDir(root.join("NativeMessagingHosts")),
@@ -695,7 +696,7 @@ pub fn entry(os: Os, dirs: &BaseDirs, browser: Browser) -> BrowserEntry {
             presence.extend(
                 linux_install_dirs(browser)
                     .iter()
-                    .map(|dir| dirs.system(dir)),
+                    .map(|dir| dirs.system_root.join(dir)),
             );
             BrowserEntry {
                 browser,

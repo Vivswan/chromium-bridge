@@ -51,7 +51,7 @@ Each leg wraps its binary unchanged into the platform's installer. The post-inst
 | Leg | Asset | Installs to | Post-install |
 | --- | --- | --- | --- |
 | macos-arm64 | `chromium-bridge-<tag>-macos-arm64.pkg` | `/usr/local/bin/chromium-bridge` | `doctor --fix` as the user logged in at the console (the owner of `/dev/console`), under Installer.app and `sudo installer` alike; with nobody logged in it fails |
-| linux-x64 | `chromium-bridge-<tag>-linux-x64.deb` | `/usr/bin/chromium-bridge` | `doctor --fix --system` as root: the machine-wide registration every account's browser reads, detected by the vendor packages under `/opt`; with no browser yet it prints the hint and the install succeeds; `dpkg -r` runs `uninstall --system` first |
+| linux-x64 | `chromium-bridge-<tag>-linux-x64.deb` | `/usr/bin/chromium-bridge` | `doctor --fix --system` as root: the machine-wide registration every account's browser reads, detected by the vendor packages' install directories; with no browser yet it prints the hint and the install succeeds; `dpkg -r` runs `uninstall --system` first |
 | windows-x64 | `chromium-bridge-<tag>-windows-x64.msi` | `%LOCALAPPDATA%\Programs\chromium-bridge\` (per user, no elevation, on the user's PATH) | `doctor --fix` as the installing user; a first install that fails rolls its registrations back with `uninstall`, a failed upgrade restores the previous setup; uninstalling runs `chromium-bridge uninstall` |
 
 - **The .deb registers machine-wide** because a Debian maintainer script runs as root with no user context and must not write into home directories; the binary refuses the per-user scope as root ([cli.md](./cli.md#doctor---fix--uninstall-native-messaging-registration)).

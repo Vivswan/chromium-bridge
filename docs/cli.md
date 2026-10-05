@@ -91,7 +91,7 @@ Known browser keys: `chrome`, `chromium`, `brave`, `edge`, `vivaldi`, `opera`. "
 | Platform | The detection check | What it means |
 | --- | --- | --- |
 | macOS | the application bundle under `/Applications` or `~/Applications` | a leftover per-user config directory alone does not count (uninstalled browsers keep those forever, and some dev tools create them); a freshly installed browser counts before its first run |
-| Linux | the per-user config directory, or the vendor package's directory under `/opt` | a browser installed for every account counts before this account ever ran it, which is how the `.deb`'s post-install sees it from root |
+| Linux | the per-user config directory, or the vendor package's install directory (`/opt/google/chrome`, `/usr/lib/chromium`, and the like) | a browser installed for every account counts before this account ever ran it, which is how the `.deb`'s post-install sees it from root |
 | Windows | the per-user profile directory | the best cheap signal there |
 
 - **A non-standard install on macOS** reads as "not detected"; it can still be registered explicitly with `--browser <key>` or `--manifest-dir`.
@@ -100,7 +100,7 @@ Known browser keys: `chrome`, `chromium`, `brave`, `edge`, `vivaldi`, `opera`. "
 
 `chromium-bridge uninstall` reverses exactly what this project registers (via `--fix`) in one scope: the per-browser manifests, the extension pointers, and the wrapper scripts. Re-pass any `--manifest-dir` you registered, and `--system` (as root) for a machine-wide registration.
 
-Before deleting a manifest or pointer it verifies the content is ours (our host id and description marker; the Web Store update url alone). Anything else, or anything it cannot read, is reported and left in place; the other artifacts of ours beside it still go.
+Before deleting a manifest or pointer it verifies the content is ours (our host id and description marker; the Web Store update url alone). Anything else, or anything it cannot read, is reported and left in place as a warning, never a failure, so a package removal completes; the other artifacts of ours beside it still go, and only one of ours that cannot be removed fails the command.
 
 It never touches this binary or your browsers. A browser drops the extension it installed from the pointer on its next start; an unpacked extension is yours to remove.
 

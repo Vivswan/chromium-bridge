@@ -136,7 +136,7 @@ struct DoctorFlags {
     #[arg(long, group = "target", value_parser = absolute_dir, value_name = "DIR")]
     manifest_dir: Vec<PathBuf>,
     /// Register machine-wide, where every account's browser looks (root only; the .deb's post-install)
-    #[arg(long, requires = "fix", conflicts_with_all = ["list", "paths", "json"])]
+    #[arg(long, requires = "fix", conflicts_with_all = ["list", "paths", "json", "manifest_dir"])]
     system: bool,
 }
 
@@ -252,7 +252,7 @@ struct UninstallFlags {
     #[arg(long = "manifest-dir", value_parser = absolute_dir, value_name = "DIR")]
     manifest_dir: Vec<PathBuf>,
     /// Remove the machine-wide registrations instead of this account's (root only; the .deb's removal)
-    #[arg(long)]
+    #[arg(long, conflicts_with = "manifest_dir")]
     system: bool,
 }
 
@@ -768,6 +768,27 @@ mod tests {
         for (argv, expected) in &cases {
             let parsed = parse(&args(argv)).unwrap_or_else(|e| panic!("{argv:?}: {e}"));
             assert_eq!(&parsed, expected, "{argv:?}");
+        }
+    }
+
+    /// An explicit `--manifest-dir` is a per-user directory by construction, so pairing it with
+    /// `--system` would admit a root run that writes into a home; both commands refuse the pair at the
+    /// argv boundary (an absolute path is needed to reach the conflict check, hence not in the table).
+    #[test]
+    fn system_and_manifest_dir_conflict_in_both_commands() {
+        let dir = abs("a").to_string_lossy().into_owned();
+        for argv in [
+            vec![
+                "doctor",
+                "--fix",
+                "--system",
+                "--manifest-dir",
+                dir.as_str(),
+            ],
+            vec!["uninstall", "--system", "--manifest-dir", dir.as_str()],
+        ] {
+            let err = parse(&args(&argv)).expect_err(&format!("{argv:?} parsed"));
+            assert_eq!(err.kind(), ErrorKind::ArgumentConflict, "{argv:?}: {err}");
         }
     }
 

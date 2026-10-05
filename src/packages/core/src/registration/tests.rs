@@ -36,8 +36,7 @@ fn registrar(tree: &TempTree) -> Registrar {
     Registrar {
         host_exe: exe,
         install_dir: tree.path("install"),
-        scope: Scope::User,
-        system_root: tree.path("sys"),
+        scope: RegistrarScope::User,
         extension_id: PINNED_EXTENSION_ID.to_string(),
     }
 }
@@ -105,10 +104,16 @@ fn register_writes_the_pointer_chrome_reads_and_uninstall_removes_it_with_the_ma
     // Idempotent over our own pointer.
     reg.register(&target).unwrap();
 
-    let (lines, errors) = Registrar::uninstall(&target);
-    assert!(errors.is_empty(), "{errors:?}");
-    assert!(lines[0].contains("removed manifest"), "{lines:?}");
-    assert!(lines[1].contains("removed extension pointer"), "{lines:?}");
+    let removal = Registrar::uninstall(&target);
+    assert!(
+        removal.refused.is_empty() && removal.failed.is_empty(),
+        "{removal:?}"
+    );
+    assert!(removal.lines[0].contains("removed manifest"), "{removal:?}");
+    assert!(
+        removal.lines[1].contains("removed extension pointer"),
+        "{removal:?}"
+    );
     assert!(!pointer.exists());
     assert!(!target.registration.manifest_path().exists());
     assert_eq!(
@@ -118,7 +123,10 @@ fn register_writes_the_pointer_chrome_reads_and_uninstall_removes_it_with_the_ma
     // A second uninstall reports nothing to do, for both.
     assert_eq!(
         Registrar::uninstall(&target),
-        (vec!["chrome: not registered".to_string()], vec![])
+        Removal {
+            lines: vec!["chrome: not registered".to_string()],
+            ..Removal::default()
+        }
     );
 }
 
@@ -151,12 +159,13 @@ fn foreign_pointer_blocks_register_and_is_left_alone_by_uninstall() {
     fs::remove_file(&pointer).unwrap();
     reg.register(&target).unwrap();
     fs::write(&pointer, foreign).unwrap();
-    let (lines, errors) = Registrar::uninstall(&target);
-    assert!(lines[0].contains("removed manifest"), "{lines:?}");
+    let removal = Registrar::uninstall(&target);
+    assert!(removal.lines[0].contains("removed manifest"), "{removal:?}");
     assert!(
-        errors[0].contains("refusing to remove extension pointer"),
-        "{errors:?}"
+        removal.refused[0].contains("refusing to remove extension pointer"),
+        "{removal:?}"
     );
+    assert!(removal.failed.is_empty(), "{removal:?}");
     assert!(!target.registration.manifest_path().exists());
     assert_eq!(fs::read_to_string(&pointer).unwrap(), foreign);
 }
@@ -220,19 +229,28 @@ fn register_is_idempotent_and_uninstall_reverses_it() {
     reg.register(&target).unwrap();
     assert_eq!(assess(&target.registration), RegState::Ok);
 
-    let (lines, errors) = Registrar::uninstall(&target);
-    assert!(errors.is_empty(), "{errors:?}");
-    assert!(lines[0].contains("removed manifest"), "{lines:?}");
+    let removal = Registrar::uninstall(&target);
+    assert!(
+        removal.refused.is_empty() && removal.failed.is_empty(),
+        "{removal:?}"
+    );
+    assert!(removal.lines[0].contains("removed manifest"), "{removal:?}");
     assert!(!target.registration.manifest_path().exists());
     assert_eq!(assess(&target.registration), RegState::Missing);
     // Uninstall again: cleanly reports nothing to do.
-    let (lines, errors) = Registrar::uninstall(&target);
-    assert!(errors.is_empty(), "{errors:?}");
-    assert!(lines[0].contains("not registered"), "{lines:?}");
+    let removal = Registrar::uninstall(&target);
+    assert!(
+        removal.refused.is_empty() && removal.failed.is_empty(),
+        "{removal:?}"
+    );
+    assert!(removal.lines[0].contains("not registered"), "{removal:?}");
 
-    let (removed, errors) = remove_wrappers(&tree.path("install"));
-    assert_eq!(removed.len(), 1, "{removed:?}");
-    assert!(errors.is_empty(), "{errors:?}");
+    let wrappers = remove_wrappers(&tree.path("install"));
+    assert_eq!(wrappers.lines.len(), 1, "{wrappers:?}");
+    assert!(
+        wrappers.refused.is_empty() && wrappers.failed.is_empty(),
+        "{wrappers:?}"
+    );
     assert!(!tree.path("install/run-host-chrome.sh").exists());
     // The now-empty install dir is dropped too.
     assert!(!tree.path("install").exists());
@@ -286,9 +304,15 @@ fn foreign_manifest_is_never_overwritten_or_removed() {
 
     let err = reg.register(&target).unwrap_err();
     assert!(err.contains("refusing to overwrite"), "{err}");
-    let (lines, errors) = Registrar::uninstall(&target);
-    assert!(lines.is_empty(), "{lines:?}");
-    assert!(errors[0].contains("refusing to remove"), "{errors:?}");
+    let removal = Registrar::uninstall(&target);
+    assert!(removal.lines.is_empty(), "{removal:?}");
+    assert!(
+        removal.refused[0].contains("refusing to remove"),
+        "{removal:?}"
+    );
+    // A refusal is a warning: a package removal must complete over a manifest another tool wrote.
+    assert!(removal.failed.is_empty(), "{removal:?}");
+    assert_eq!(uninstall_exit_code(&[removal]), 0);
     // Fail closed: the file is byte-identical afterwards.
     assert_eq!(fs::read_to_string(&manifest_path).unwrap(), foreign);
     assert!(matches!(assess(&target.registration), RegState::Foreign(_)));
@@ -332,9 +356,12 @@ fn unreadable_manifest_path_fails_closed() {
 
         let err = reg.register(&target).unwrap_err();
         assert!(err.contains("cannot verify"), "{case}: {err}");
-        let (lines, errors) = Registrar::uninstall(&target);
-        assert!(lines.is_empty(), "{case}: {lines:?}");
-        assert!(errors[0].contains("left in place"), "{case}: {errors:?}");
+        let removal = Registrar::uninstall(&target);
+        assert!(removal.lines.is_empty(), "{case}: {removal:?}");
+        assert!(
+            removal.refused[0].contains("left in place"),
+            "{case}: {removal:?}"
+        );
         assert!(
             fs::symlink_metadata(&manifest).is_ok(),
             "{case}: entry gone"
@@ -444,9 +471,10 @@ fn foreign_wrapper_names_are_left_in_place() {
     let dir = tree.path("install");
     fs::create_dir_all(&dir).unwrap();
     fs::write(dir.join("run-host-chrome.sh"), "#!/bin/sh\nrm -rf /\n").unwrap();
-    let (removed, errors) = remove_wrappers(&dir);
-    assert!(removed.is_empty());
-    assert_eq!(errors.len(), 1);
+    let removal = remove_wrappers(&dir);
+    assert!(removal.lines.is_empty());
+    assert_eq!(removal.refused.len(), 1, "{removal:?}");
+    assert!(removal.failed.is_empty(), "{removal:?}");
     assert!(dir.join("run-host-chrome.sh").exists());
 }
 
@@ -537,7 +565,9 @@ fn system_scope_registers_into_the_system_roots_once_per_shared_directory() {
     );
 
     let reg = Registrar {
-        scope: Scope::System,
+        scope: RegistrarScope::System {
+            root: tree.path("sys"),
+        },
         install_dir: install_dir.clone(),
         ..registrar(&tree)
     };
@@ -548,8 +578,8 @@ fn system_scope_registers_into_the_system_roots_once_per_shared_directory() {
         .path("sys/etc/opt/chrome/native-messaging-hosts/com.vivswan.chromium_bridge.host.json");
     let parsed: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&manifest).unwrap()).unwrap();
-    // Chrome's directory is launched by Brave too, so its wrapper carries no label: a label would file
-    // Brave's connection in Chrome's slot. Vivaldi's own directory keeps its label.
+    // Chrome's directory has two readers, so its wrapper is unlabeled (the rule is `Target`'s); Vivaldi's
+    // own directory keeps its label.
     let wrapper = install_dir.join("run-host.sh");
     assert_eq!(parsed["path"], wrapper.to_string_lossy().as_ref());
     assert!(!fs::read_to_string(&wrapper).unwrap().contains("--label"));
@@ -644,12 +674,18 @@ fn system_scope_registers_into_the_system_roots_once_per_shared_directory() {
 
     // uninstall --system: every known browser's system target, once per directory, then the wrappers.
     for target in browser_targets(entries.iter(), Scope::System) {
-        let (_, errors) = Registrar::uninstall(&target);
-        assert!(errors.is_empty(), "{errors:?}");
+        let removal = Registrar::uninstall(&target);
+        assert!(
+            removal.refused.is_empty() && removal.failed.is_empty(),
+            "{removal:?}"
+        );
     }
-    let (removed, errors) = remove_wrappers(&install_dir);
-    assert_eq!(removed.len(), 2, "{removed:?}");
-    assert!(errors.is_empty(), "{errors:?}");
+    let wrappers = remove_wrappers(&install_dir);
+    assert_eq!(wrappers.lines.len(), 2, "{wrappers:?}");
+    assert!(
+        wrappers.refused.is_empty() && wrappers.failed.is_empty(),
+        "{wrappers:?}"
+    );
     assert!(!manifest.exists());
     assert!(!install_dir.exists());
 }
@@ -797,31 +833,6 @@ fn system_scope_refuses_a_binary_other_accounts_cannot_launch() {
     fs::set_permissions(root.join("home/user"), fs::Permissions::from_mode(0o755)).unwrap();
 }
 
-/// Fail closed both ways, the macOS .pkg's root refusal mirrored: a plain account cannot write the system
-/// roots, and root (HOME is `/root`, or a sudo caller's with root as the owner of what it writes) must not
-/// write a home. Windows elevation keeps the account, so it may write either.
-#[test]
-fn privilege_admits_exactly_the_scope_it_can_write_correctly() {
-    let cases: &[(Privilege, Scope, Result<(), &str>)] = &[
-        (Privilege::User, Scope::User, Ok(())),
-        (Privilege::User, Scope::System, Err("run it as root (sudo)")),
-        (Privilege::Root, Scope::System, Ok(())),
-        (Privilege::Root, Scope::User, Err("pass --system")),
-        (Privilege::Elevated, Scope::User, Ok(())),
-        (Privilege::Elevated, Scope::System, Ok(())),
-    ];
-    for (privilege, scope, expected) in cases {
-        let got = privilege.admit(*scope);
-        match expected {
-            Ok(()) => assert_eq!(got, Ok(()), "{privilege:?} {scope:?}"),
-            Err(hint) => {
-                let refusal = got.expect_err(&format!("{privilege:?} {scope:?} must refuse"));
-                assert!(refusal.contains(hint), "{privilege:?} {scope:?}: {refusal}");
-            }
-        }
-    }
-}
-
 /// The options page shows the host's reason as is, so it names what was looked for and the next step
 /// and carries no CLI flag.
 #[test]
@@ -855,6 +866,72 @@ fn nothing_detected_exits_three_and_every_other_refusal_exits_one() {
     }
 }
 
+/// packaging/deb/prerm runs `uninstall --system` on removal: a refusal (foreign or unverifiable, left in
+/// place) must not fail dpkg, while something of ours that could not be removed must, so the package
+/// is not reported gone with a live registration behind.
+#[cfg(unix)]
+#[test]
+fn only_an_unremovable_artifact_of_ours_fails_the_uninstall() {
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(
+        uninstall_exit_code(&[Removal {
+            refused: vec!["refusing to remove x".into()],
+            ..Removal::default()
+        }]),
+        0
+    );
+    assert_eq!(
+        uninstall_exit_code(&[
+            Removal::default(),
+            Removal {
+                failed: vec!["could not remove x".into()],
+                ..Removal::default()
+            }
+        ]),
+        1
+    );
+    // The unremovable case needs an account that a 0555 directory stops; root (the Linux CI container's
+    // user) removes through it, so the filesystem leg is skipped there.
+    if nix::unistd::geteuid().is_root() {
+        return;
+    }
+    let tree = TempTree::new("unremovable");
+    let reg = registrar(&tree);
+    let target = browser_target(&tree);
+    reg.register(&target).unwrap();
+    let dir = target
+        .registration
+        .manifest_path()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o555)).unwrap();
+    let removal = Registrar::uninstall(&target);
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(
+        removal.failed[0].contains("could not remove"),
+        "{removal:?}"
+    );
+    assert!(removal.refused.is_empty(), "{removal:?}");
+}
+
+/// Chromium's Windows lookup is the key's default value, read on its own: a missing or unreadable key or
+/// one with no default falls through to HKLM, while any default string, the empty one included (read,
+/// then rejected as a path, with no fall-through), stops the lookup there.
+#[test]
+fn registry_lookup_is_the_keys_default_value() {
+    type DefaultRead = Result<Option<String>, String>;
+    let cases: Vec<(&str, DefaultRead, bool)> = vec![
+        ("absent key", Ok(None), false),
+        ("unreadable key", Err("denied".into()), false),
+        ("empty default", Ok(Some(String::new())), true),
+        ("a default", Ok(Some(r"C:\m.json".into())), true),
+    ];
+    for (case, default, hit) in cases {
+        assert_eq!(registry_lookup_hit(&default), hit, "{case}");
+    }
+}
+
 /// The CLI (and the installer logs that capture it) gets the same reason with the flags a terminal
 /// can act on appended, and nothing else changes.
 #[test]
@@ -880,8 +957,7 @@ fn symlinked_install_dir_is_refused() {
     let reg = Registrar {
         host_exe: tree.path("bin/chromium-bridge"),
         install_dir: link,
-        scope: Scope::User,
-        system_root: tree.path("sys"),
+        scope: RegistrarScope::User,
         extension_id: PINNED_EXTENSION_ID.to_string(),
     };
     let target = macos_target(&tree);
@@ -916,9 +992,10 @@ fn registry_targets_fail_closed_off_windows() {
         assert!(!target.registration.manifest_path().exists());
         assert!(!tree.path("store").exists());
         // The file slot is plainly absent; the two registry slots cannot be read here.
-        let (lines, errors) = Registrar::uninstall(&target);
-        assert_eq!(lines, vec!["chrome: not registered".to_string()]);
-        assert_eq!(errors.len(), 2, "{errors:?}");
+        let removal = Registrar::uninstall(&target);
+        assert_eq!(removal.lines, vec!["chrome: not registered".to_string()]);
+        assert_eq!(removal.refused.len(), 2, "{removal:?}");
+        assert!(removal.failed.is_empty(), "{removal:?}");
         assert!(matches!(
             assess_pointer(target.pointer.as_ref().unwrap()),
             PointerState::Unreadable(_)

@@ -73,13 +73,18 @@ pub struct Registrar {
     /// Where wrapper scripts live (Unix). Same directory the shell installer
     /// used, so re-registering over a legacy `install.sh` install converges.
     pub install_dir: PathBuf,
-    /// Whose registrations these are; decides the install dir's mode (0700 per user, 0755 machine-wide).
-    pub scope: Scope,
-    /// Where a machine-wide reachability walk stops: the directory whose own reachability by every account
-    /// is taken as given (`/` on a real machine, the fixture root in tests). Unused per user.
-    pub system_root: PathBuf,
+    pub scope: RegistrarScope,
     /// The extension ID trusted in `allowed_origins`.
     pub extension_id: String,
+}
+
+/// Whose registrations a [`Registrar`] writes: an account's own (the install dir private, 0700) or every
+/// account's (0755, since other accounts' browsers traverse it), which alone needs the directory whose
+/// reachability by every account is taken as given: `/` on a real machine, the fixture root in tests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RegistrarScope {
+    User,
+    System { root: PathBuf },
 }
 
 /// One registration to write or remove. The label rides the wrapper as `--label` so the broker files the
@@ -589,12 +594,14 @@ impl Registrar {
     /// symlink refusal is `fsguard`'s either way.
     fn ensure_install_dir(&self) -> Result<(), String> {
         let create = || -> std::io::Result<()> {
-            if let (Scope::System, Some(parent)) = (self.scope, self.install_dir.parent()) {
-                create_traversable_dirs(parent, &self.system_root)?;
+            if let (RegistrarScope::System { root }, Some(parent)) =
+                (&self.scope, self.install_dir.parent())
+            {
+                create_traversable_dirs(parent, root)?;
             }
             crate::fsguard::ensure_private_dir(&self.install_dir)?;
             #[cfg(unix)]
-            if self.scope == Scope::System {
+            if matches!(self.scope, RegistrarScope::System { .. }) {
                 use std::os::unix::fs::PermissionsExt;
                 fs::set_permissions(&self.install_dir, fs::Permissions::from_mode(0o755))?;
             }
@@ -607,22 +614,20 @@ impl Registrar {
     /// machine-wide one is read by other accounts' browsers, so every directory made on the way is
     /// traversable whatever root's umask (a maintainer script may run under 077).
     fn create_dir(&self, dir: &Path) -> std::io::Result<()> {
-        match self.scope {
-            Scope::User => fs::create_dir_all(dir),
-            Scope::System => create_traversable_dirs(dir, &self.system_root),
+        match &self.scope {
+            RegistrarScope::User => fs::create_dir_all(dir),
+            RegistrarScope::System { root } => create_traversable_dirs(dir, root),
         }
     }
 
-    /// Reverse one registration: (report lines, refusals). Each slot (the
-    /// Windows key, the manifest file, the pointer) is verified and then
-    /// removed on its own, so a foreign or unreadable one is refused and left
-    /// while the others of ours still go; a refusal never leaves an artifact
-    /// of ours behind that the wrapper cleanup would then orphan. The browser
-    /// drops the extension the pointer installed on its next start; an
-    /// unpacked extension is untouched.
-    pub fn uninstall(target: &Target) -> (Vec<String>, Vec<String>) {
-        let mut lines = Vec::new();
-        let mut errors = Vec::new();
+    /// Reverse one registration. Each slot (the Windows key, the manifest
+    /// file, the pointer) is verified and then removed on its own, so a
+    /// foreign or unreadable one is refused and left while the others of ours
+    /// still go; a refusal never leaves an artifact of ours behind that the
+    /// wrapper cleanup would then orphan. The browser drops the extension the
+    /// pointer installed on its next start; an unpacked extension is untouched.
+    pub fn uninstall(target: &Target) -> Removal {
+        let mut removal = Removal::default();
         let manifest_path = target.registration.manifest_path();
         let slots = manifest_slots(&target.registration);
 
@@ -633,30 +638,31 @@ impl Registrar {
             },
         ) = (&slots.key, &target.registration)
         {
-            match key
-                .removable(&format!("registry key {hive}\\{name}"))
-                .and_then(|remove| {
-                    if remove {
-                        delete_registry_key(*hive, name)
-                    } else {
-                        Ok(())
+            match key.removable(&format!("registry key {hive}\\{name}")) {
+                Ok(true) => {
+                    if let Err(e) = delete_registry_key(*hive, name) {
+                        removal.failed.push(e);
                     }
-                }) {
-                Ok(()) => {}
-                Err(e) => errors.push(e),
+                }
+                Ok(false) => {}
+                Err(e) => removal.refused.push(e),
             }
         }
         match slots.file.removable(&manifest_path.display().to_string()) {
             Ok(true) => match fs::remove_file(&manifest_path) {
-                Ok(()) => lines.push(format!(
+                Ok(()) => removal.lines.push(format!(
                     "{}: removed manifest {}",
-                    target.name.clone(),
+                    target.name,
                     manifest_path.display()
                 )),
-                Err(e) => errors.push(format!("could not remove {}: {e}", manifest_path.display())),
+                Err(e) => removal
+                    .failed
+                    .push(format!("could not remove {}: {e}", manifest_path.display())),
             },
-            Ok(false) => lines.push(format!("{}: not registered", target.name.clone())),
-            Err(e) => errors.push(e),
+            Ok(false) => removal
+                .lines
+                .push(format!("{}: not registered", target.name)),
+            Err(e) => removal.refused.push(e),
         }
         if let Some(pointer) = &target.pointer {
             let what = format!("extension pointer {}", pointer.location());
@@ -669,14 +675,34 @@ impl Registrar {
                         ExtensionPointer::Registry { hive, key } => delete_registry_key(*hive, key),
                     };
                     match removed {
-                        Ok(()) => lines.push(format!("  removed {what}")),
-                        Err(e) => errors.push(e),
+                        Ok(()) => removal.lines.push(format!("  removed {what}")),
+                        Err(e) => removal.failed.push(e),
                     }
                 }
-                Err(e) => errors.push(e),
+                Err(e) => removal.refused.push(e),
             }
         }
-        (lines, errors)
+        removal
+    }
+}
+
+/// What one removal did and left. A refusal is an artifact not verified as ours (foreign, or unreadable
+/// to us), left in place as a warning: a package removal must complete over a manifest another tool
+/// wrote at our id. A failure is an artifact verified as ours that could not be removed.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Removal {
+    pub lines: Vec<String>,
+    pub refused: Vec<String>,
+    pub failed: Vec<String>,
+}
+
+/// `uninstall`'s exit code over everything it removed: 1 only when a verified artifact of ours could not
+/// be removed.
+fn uninstall_exit_code(removals: &[Removal]) -> i32 {
+    if removals.iter().any(|r| !r.failed.is_empty()) {
+        1
+    } else {
+        0
     }
 }
 
@@ -794,11 +820,9 @@ fn wrapper_is_ours(contents: &str) -> bool {
 }
 
 /// Remove the wrapper scripts this engine writes (exact, project-unique names
-/// only), each verified by [`wrapper_is_ours`] before deletion. Returns
-/// (report lines, errors).
-pub fn remove_wrappers(install_dir: &Path) -> (Vec<String>, Vec<String>) {
-    let mut removed = Vec::new();
-    let mut errors = Vec::new();
+/// only), each verified by [`wrapper_is_ours`] before deletion.
+pub fn remove_wrappers(install_dir: &Path) -> Removal {
+    let mut removal = Removal::default();
     let mut names = vec!["run-host.sh".to_string()];
     names.extend(
         Browser::ALL
@@ -810,7 +834,7 @@ pub fn remove_wrappers(install_dir: &Path) -> (Vec<String>, Vec<String>) {
         let contents = match fs::read_to_string(&path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(e) => {
-                errors.push(format!(
+                removal.refused.push(format!(
                     "could not read {}: {e} (left in place)",
                     path.display()
                 ));
@@ -820,11 +844,15 @@ pub fn remove_wrappers(install_dir: &Path) -> (Vec<String>, Vec<String>) {
         };
         if wrapper_is_ours(&contents) {
             match fs::remove_file(&path) {
-                Ok(()) => removed.push(format!("removed wrapper {}", path.display())),
-                Err(e) => errors.push(format!("could not remove {}: {e}", path.display())),
+                Ok(()) => removal
+                    .lines
+                    .push(format!("removed wrapper {}", path.display())),
+                Err(e) => removal
+                    .failed
+                    .push(format!("could not remove {}: {e}", path.display())),
             }
         } else {
-            errors.push(format!(
+            removal.refused.push(format!(
                 "refusing to remove {}: not a chromium-bridge wrapper (left in place)",
                 path.display()
             ));
@@ -832,7 +860,7 @@ pub fn remove_wrappers(install_dir: &Path) -> (Vec<String>, Vec<String>) {
     }
     // Drop the dir only when now empty; remove_dir never deletes contents.
     let _ = fs::remove_dir(install_dir);
-    (removed, errors)
+    removal
 }
 
 /// `doctor --fix`: [`fix`] with its report printed. Returns the process exit
@@ -978,8 +1006,12 @@ pub fn fix(targets: &FixTargets, scope: Scope) -> Result<Vec<TargetOutcome>, Fix
     let registrar = Registrar {
         host_exe,
         install_dir: browsers::install_dir(os, &dirs, scope),
-        scope,
-        system_root: dirs.system_root.clone(),
+        scope: match scope {
+            Scope::User => RegistrarScope::User,
+            Scope::System => RegistrarScope::System {
+                root: dirs.system_root.clone(),
+            },
+        },
         extension_id: PINNED_EXTENSION_ID.to_string(),
     };
     Ok(targets
@@ -1012,34 +1044,38 @@ pub fn run_uninstall(args: &UninstallArgs) -> i32 {
     }
 
     println!("chromium-bridge uninstall (host id {NATIVE_HOST_ID})");
-    let mut failed = false;
-    for target in &targets {
-        let (lines, errors) = Registrar::uninstall(target);
-        for line in lines {
-            println!("{line}");
-        }
-        for e in &errors {
-            log_error!("uninstall", "{}: {e}", target.name.clone());
-        }
-        failed = failed || !errors.is_empty();
-    }
-    let (removed, errors) = remove_wrappers(&browsers::install_dir(os, &dirs, args.scope));
-    for line in removed {
+    let mut removals: Vec<Removal> = targets
+        .iter()
+        .map(|target| {
+            let removal = Registrar::uninstall(target);
+            for line in &removal.lines {
+                println!("{line}");
+            }
+            for e in &removal.refused {
+                log_warn!("uninstall", "{}: {e}", target.name);
+            }
+            for e in &removal.failed {
+                log_error!("uninstall", "{}: {e}", target.name);
+            }
+            removal
+        })
+        .collect();
+    let wrappers = remove_wrappers(&browsers::install_dir(os, &dirs, args.scope));
+    for line in &wrappers.lines {
         println!("{line}");
     }
-    for e in &errors {
+    for e in &wrappers.refused {
+        log_warn!("uninstall", "{e}");
+    }
+    for e in &wrappers.failed {
         log_error!("uninstall", "{e}");
     }
-    failed = failed || !errors.is_empty();
+    removals.push(wrappers);
     println!(
         "left untouched: this binary and your browsers. A browser drops the extension its pointer\n\
          installed on its next start; remove an unpacked extension yourself via chrome://extensions."
     );
-    if failed {
-        1
-    } else {
-        0
-    }
+    uninstall_exit_code(&removals)
 }
 
 /// Shared CLI preamble: pick the OS layout and read the base dirs, failing
@@ -1106,14 +1142,24 @@ fn unix_mode(path: &Path) -> Result<u32, String> {
 }
 
 /// Whether Chromium's manifest lookup stops at this registration: on macOS and Linux an existence probe of
-/// the per-user file that follows symlinks (a dangling link is skipped, a directory is not), on Windows
-/// the key in any state. What `register` may write is a separate question ([`Slot`]): a dangling link
-/// is refused there and skipped here.
+/// the per-user file that follows symlinks (a dangling link is skipped, a directory is not), on Windows a
+/// string default value in the key ([`registry_lookup_hit`]). What `register` may write is a separate
+/// question ([`Slot`]): a dangling link is refused there and skipped here.
 pub fn lookup_hit(reg: &Registration) -> bool {
     match reg {
         Registration::ManifestDir(_) => reg.manifest_path().exists(),
-        Registration::Registry { .. } => assess(reg) != RegState::Missing,
+        Registration::Registry { hive, key, .. } => {
+            registry_lookup_hit(&registry_default_value(*hive, key))
+        }
     }
+}
+
+/// Chromium's Windows lookup reads the key's default value alone and stops there whatever it holds (an
+/// empty string is read, then rejected as a path, with no fall-through); it moves to the next hive only
+/// when the key is missing or unreadable or has no default. Other values and their types play no part,
+/// unlike in the ownership read ([`registry_key`]).
+fn registry_lookup_hit(default: &Result<Option<String>, String>) -> bool {
+    matches!(default, Ok(Some(_)))
 }
 
 /// Resolve and sanity-check the path registrations will launch. An ephemeral
@@ -1372,6 +1418,37 @@ fn registry_key(hive: Hive, key: &str) -> Result<Option<RegistryKey>, String> {
 
 #[cfg(not(windows))]
 fn registry_key(_hive: Hive, _key: &str) -> Result<Option<RegistryKey>, String> {
+    Err("registry access requires a Windows build of chromium-bridge".into())
+}
+
+/// The key's default value as the browser reads it: opened with the one right Chromium asks for
+/// (KEY_QUERY_VALUE, so an ACL that denies enumeration does not hide a value the browser can read), and
+/// `None` when the key or the value is absent or the value is of a type Chromium's string read refuses
+/// (anything but REG_SZ and REG_EXPAND_SZ, REG_MULTI_SZ included, which winreg's String read would accept).
+#[cfg(windows)]
+fn registry_default_value(hive: Hive, key: &str) -> Result<Option<String>, String> {
+    use winreg::enums::{RegType, KEY_QUERY_VALUE};
+    use winreg::types::FromRegValue;
+    let subkey = match hive_root(hive).open_subkey_with_flags(key, KEY_QUERY_VALUE) {
+        Ok(k) => k,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.to_string()),
+    };
+    let raw = match subkey.get_raw_value("") {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.to_string()),
+    };
+    if raw.vtype != RegType::REG_SZ && raw.vtype != RegType::REG_EXPAND_SZ {
+        return Ok(None);
+    }
+    String::from_reg_value(&raw)
+        .map(Some)
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(not(windows))]
+fn registry_default_value(_hive: Hive, _key: &str) -> Result<Option<String>, String> {
     Err("registry access requires a Windows build of chromium-bridge".into())
 }
 

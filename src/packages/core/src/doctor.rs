@@ -95,7 +95,8 @@ pub struct ManifestStatus {
     pub detected: bool,
     pub manifest: Scoped<SlotStatus>,
     /// The scope the browser's own lookup lands on (`registration::lookup_hit` on the per-user entry):
-    /// the per-user one when an entry exists there, whatever it holds, else the machine-wide one.
+    /// the per-user one when its probe finds an entry there (a file of any content on macOS and Linux, a
+    /// string default value in the key on Windows), else the machine-wide one.
     pub effective_scope: Scope,
     /// The browser's external-extension pointer per scope; `None` where the
     /// resolver defines none (Linux). It informs and never decides the
@@ -313,7 +314,7 @@ fn render(r: &Report) -> String {
         Ok(list) => {
             for m in list {
                 out.push_str(&format!(
-                    "  {:<9} {:<13} manifest {:<7} {:<10} {}\n",
+                    "  {:<9} {:<13} {:<7} manifest {:<10} {}\n",
                     m.key,
                     if m.detected {
                         "detected"
@@ -325,7 +326,7 @@ fn render(r: &Report) -> String {
                     m.manifest.user.describe_location(),
                 ));
                 out.push_str(&format!(
-                    "  {:<9} {:<13} manifest {:<7} {:<10} {}\n",
+                    "  {:<9} {:<13} {:<7} manifest {:<10} {}\n",
                     "",
                     "",
                     Scope::System.key(),
@@ -339,7 +340,7 @@ fn render(r: &Report) -> String {
                             (Scope::System, &pointer.system),
                         ] {
                             out.push_str(&format!(
-                                "  {:<9} {:<13} pointer  {:<7} {:<10} {}\n",
+                                "  {:<9} {:<13} {:<7} pointer  {:<10} {}\n",
                                 "",
                                 "",
                                 scope.key(),
@@ -349,7 +350,7 @@ fn render(r: &Report) -> String {
                         }
                     }
                     None => out.push_str(&format!(
-                        "  {:<9} {:<13} pointer  {:<7} {:<10} {NO_POINTER_ON_LINUX}\n",
+                        "  {:<9} {:<13} {:<7} pointer  {:<10} {NO_POINTER_ON_LINUX}\n",
                         "", "", "", "n/a",
                     )),
                 }
@@ -661,16 +662,16 @@ mod tests {
         // Per-browser manifest lines from the shared resolver.
         assert!(text.contains("host id com.vivswan.chromium_bridge.host"));
         // Both scopes per browser, and a shared system directory named after its owner.
-        assert!(text.contains("chrome    detected      manifest user    ok         /tmp/"));
-        assert!(text.contains("manifest system  missing    /Library/Google/Chrome/"));
+        assert!(text.contains("chrome    detected      user    manifest ok         /tmp/"));
+        assert!(text.contains("system  manifest missing    /Library/Google/Chrome/"));
         assert!(text.contains(
             "NativeMessagingHosts/com.vivswan.chromium_bridge.host.json (reads chrome's)"
         ));
         // The pointer rows beside each manifest: state and location per scope, or why Linux has none.
-        assert!(text.contains("pointer  user    ok         /tmp/External Extensions/"));
-        assert!(text.contains("pointer  system  missing    /Library/Application Support/Google/Chrome/External Extensions/"));
+        assert!(text.contains("user    pointer  ok         /tmp/External Extensions/"));
+        assert!(text.contains("system  pointer  missing    /Library/Application Support/Google/Chrome/External Extensions/"));
         assert!(text.contains(
-            "pointer          n/a        none on linux: Chrome would install the extension silently"
+            "        pointer  n/a        none on linux: Chrome would install the extension silently"
         ));
         // Honest note: green checks still don't prove the extension connected.
         assert!(text.contains("do NOT confirm the Chrome extension"));
@@ -778,7 +779,7 @@ mod tests {
                 ),
             ),
             (
-                "a dangling user link is skipped by the browser and does not shadow",
+                "an unreadable user slot the lookup probe passed over serves the system one",
                 RegState::Unreadable("a dangling symlink sits at this path".into()),
                 RegState::Ok,
                 Scope::System,
@@ -844,8 +845,8 @@ mod tests {
             policy: policy_report(PolicyStoreState::None),
         };
         let text = render(&r);
-        assert!(text.contains("manifest user    missing"));
-        assert!(text.contains("manifest system  missing"));
+        assert!(text.contains("user    manifest missing"));
+        assert!(text.contains("system  manifest missing"));
         assert!(text.contains("not probed (no lock file)"));
         assert!(text.contains("server not running"));
         assert_eq!(exit_code(&r), 1);
