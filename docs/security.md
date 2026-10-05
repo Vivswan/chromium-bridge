@@ -83,8 +83,8 @@ One record ties the hops together: `trust.json` in the runtime directory holds t
 
 **The confirmation window.** Submit and link clicks, `page_press`, `page_select`, `page_eval`, `tab_close`, and `page_upload` confirm on an extension-owned window in its own process, which the page cannot read, focus, overlay, auto-click, or auto-dismiss. A timeout, a closed window, or a missing provider all deny.
 
-- **Every `page_eval` call reconfirms,** showing the full code, the target origin, and the tab title. `page_upload` reconfirms every call, showing the exact file path.
-- **One approved click covers repeats.** After an approved submit or link click, the same origin and action kind skip the prompt for 60 s by default. `page_eval` is never in that window.
+- **Every `page_eval` and `page_upload` call reconfirms.** The [fail-safe defaults](../.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe) own what each confirmation shows and how long the grace window lasts.
+- **One approved click covers repeats** of the same origin and action kind for that window. `page_eval` is never in it.
 - **Low-risk tools run unprompted** on an approved origin: navigation, `page_text`, `tab_list`, masked cookie and storage reads.
 
 **Presence.** Removing capability is friction-free: `kill`, `revoke`, and `uninstall` need no proof, because fail-closed is the safe state. Granting or restoring capability demands one proof of a human present, consumed by exactly one act:

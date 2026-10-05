@@ -85,7 +85,7 @@ What differs on Windows:
 
 - **Every `page_eval` call reconfirms.** The confirmation shows the full code, the target origin, and the tab title on the extension-owned window.
 - **No silent-eval window.** `page_eval` is deliberately excluded from the same-origin grace window, so one approval never covers a later, different payload.
-- **The grace window is click-only.** `confirmGraceMs` (default 60000 ms) lets a repeated same-origin click or submit skip re-prompting within the window. Those clicks are lower-risk and observable in the UI.
+- **The grace window is click-only.** `confirmGraceMs` lets a repeated same-origin click or submit skip re-prompting within the window. Those clicks are lower-risk and observable in the UI.
 
 These are host-owned policy defaults: the table shows the signed policy contract's deny baseline, which governs once a host policy applies. A power user can still relax a field, and doing so is an explicit, informed choice:
 

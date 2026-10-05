@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! file absent                  -> the bootstrap: no client paired, kill off; `rm trust.json` is the conceded
-//!                                 same-user residual (threat-model.md names it)
+//!                                 same-user residual (trust-boundaries.md names it)
 //! clients: null                -> never paired: every harness admitted, logged at ERROR by the admitting surface
 //! clients: []                  -> every client revoked: nobody admitted
 //! enrollments: []              -> no browser enrolled an authenticator: the first enrollment is trust on first use,
