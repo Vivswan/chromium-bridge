@@ -5,8 +5,9 @@
 // installed binary's `--version` and `doctor --list`, so a reinstall by hand follows the same steps.
 // External quirks the checks encode: msiexec reports its reason only in a UTF-16LE log; `reg query` exits 1
 // both for a missing key and for a key it was not allowed to read, so only its not-found text counts as
-// absent; a `sudo installer` sets USER to root and names the caller in SUDO_USER (the pkg postinstall
-// resolves the same way).
+// absent; installd runs the pkg postinstall as root with neither USER nor SUDO_USER naming the caller, so the
+// postinstall registers the console session's owner, and the macOS arm prints that owner and the package's
+// install.log lines before judging, so a wrong account is a certain diagnosis and not another guess.
 
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -84,8 +85,11 @@ function macos(installer: string, steps: Steps, home: string): void {
   steps.ok("sudo", "installer", "-pkg", installer, "-target", "/");
   steps.version(binary);
   steps.ok("pkgutil", "--pkg-info", pkgIdentifier);
-  // The postinstall registered SUDO_USER, this account: its own doctor sees the registration, and then
-  // sees the manifest and pointer gone; the wrapper is outside doctor's view, so it is checked by path.
+  // Evidence first (logged, never judged): who owns the console, and what the postinstall printed.
+  steps.run("stat", "-f", "%Su", "/dev/console");
+  steps.run("sudo", "grep", "-F", "chromium-bridge", "/var/log/install.log");
+  // The postinstall registered the console owner, this account: its own doctor sees the registration,
+  // then sees the manifest and pointer gone; the wrapper is outside doctor's view, so it is checked by path.
   steps.outputMatches(chromeRegistered, binary, "doctor", "--list");
   steps.ok(binary, "uninstall");
   steps.outputMatches(chromeUnregistered, binary, "doctor", "--list");

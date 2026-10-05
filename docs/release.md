@@ -48,7 +48,7 @@ Each leg wraps its binary unchanged into the platform's installer. The post-inst
 
 | Leg | Asset | Installs to | Post-install |
 | --- | --- | --- | --- |
-| macos-arm64 | `chromium-bridge-<tag>-macos-arm64.pkg` | `/usr/local/bin/chromium-bridge` | `doctor --fix` as the account that opened the package (Installer's `USER`, or `SUDO_USER` under `sudo installer`) |
+| macos-arm64 | `chromium-bridge-<tag>-macos-arm64.pkg` | `/usr/local/bin/chromium-bridge` | `doctor --fix` as the user logged in at the console (the owner of `/dev/console`), under Installer.app and `sudo installer` alike; with nobody logged in it fails |
 | linux-x64 | `chromium-bridge-<tag>-linux-x64.deb` | `/usr/bin/chromium-bridge` | prints the one `chromium-bridge doctor --fix` line for the user to run |
 | windows-x64 | `chromium-bridge-<tag>-windows-x64.msi` | `%LOCALAPPDATA%\Programs\chromium-bridge\` (per user, no elevation, on the user's PATH) | `doctor --fix` as the installing user; a first install that fails rolls its registrations back with `uninstall`, a failed upgrade restores the previous setup; uninstalling runs `chromium-bridge uninstall` |
 

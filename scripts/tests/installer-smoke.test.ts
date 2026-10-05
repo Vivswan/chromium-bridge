@@ -69,6 +69,8 @@ describe("the command sequence per platform, against a conforming runner", () =>
         ["sudo", "installer", "-pkg", "cb.pkg", "-target", "/"],
         [macBin, "--version"],
         ["pkgutil", "--pkg-info", pkgIdentifier],
+        ["stat", "-f", "%Su", "/dev/console"],
+        ["sudo", "grep", "-F", "chromium-bridge", "/var/log/install.log"],
         [macBin, "doctor", "--list"],
         [macBin, "uninstall"],
         [macBin, "doctor", "--list"],
