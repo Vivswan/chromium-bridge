@@ -5,7 +5,7 @@
 //!
 //! ```text
 //! stderr via log::audit             -> hidden below BB_LOG=info; the FILE is the audit surface, not a diagnostic
-//! runtime_dir()/audit.log, 0600     -> one JSON line per record regardless of BB_LOG, rotated once to audit.log.1,
+//! <runtime dir>/audit.log, 0600     -> one JSON line per record regardless of BB_LOG, rotated once to audit.log.1,
 //!                                      read back by [`read`] (behind `chromium-bridge audit`)
 //! failed write                      -> bumps a process-local counter; the next written record carries dropped: n
 //! rotation                          -> its own NON-BLOCKING sidecar lock (audit.log.lock, see append_at), so it can

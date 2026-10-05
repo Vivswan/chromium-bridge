@@ -256,7 +256,7 @@ fn render(r: &Report) -> String {
             }
         }
         PolicyStatusReport::Error { detail, .. } => out.push_str(&format!(
-            "present but UNREADABLE ({detail}) - failing closed; see docs/troubleshooting.md\n",
+            "UNREADABLE ({detail}) - failing closed; see docs/troubleshooting.md\n",
         )),
     }
 
@@ -305,7 +305,6 @@ fn render(r: &Report) -> String {
     out
 }
 
-/// The lock file and MCP server lines of [`render`].
 fn render_lock(out: &mut String, lock: &LockReport) {
     out.push_str(&format!("lock file:       {}\n", lock.path.display()));
     match &lock.state {
@@ -344,6 +343,11 @@ fn render_lock(out: &mut String, lock: &LockReport) {
 
 /// One-line status summary and the derived exit code hint.
 fn summary(r: &Report) -> &'static str {
+    // A refused runtime dir is the one cause behind an unreadable kill state and policy store too, so it is
+    // named first.
+    let Ok(lock) = &r.lock else {
+        return "runtime dir refused - see the lock file line for the cause";
+    };
     if r.kill == Ok(true) {
         return "kill switch ENGAGED - release it with `chromium-bridge unkill`";
     }
@@ -356,9 +360,6 @@ fn summary(r: &Report) -> &'static str {
     if r.policy.store() == PolicyStoreState::Error {
         return "policy store present but unreadable - failing closed; see docs/troubleshooting.md";
     }
-    let Ok(lock) = &r.lock else {
-        return "runtime dir refused - its socket path is too long; see the lock file line";
-    };
     match &lock.state {
         LockState::Unreadable { .. } => {
             "lock file present but unreadable - try restarting your MCP client"
@@ -576,7 +577,7 @@ mod tests {
         let mut r = healthy_report();
         r.policy = policy_report(PolicyStoreState::Error);
         let text = render(&r);
-        assert!(text.contains("present but UNREADABLE"));
+        assert!(text.contains("UNREADABLE ("));
         assert!(text.contains("policy store present but unreadable - failing closed"));
         assert_eq!(exit_code(&r), 1);
     }
@@ -629,6 +630,40 @@ mod tests {
         let text = render(&r);
         assert!(text.contains("could not check: HOME"));
         // No verified manifest means not healthy.
+        assert_eq!(exit_code(&r), 1);
+    }
+
+    /// Regression: with the kill check first, a refused runtime dir read as "kill state unreadable", since the kill
+    /// record resolves the same dir. The verdict must name the one cause behind all three unreadable rows.
+    #[test]
+    fn a_refused_runtime_dir_is_the_verdict_not_an_unreadable_kill_state() {
+        let refused = "runtime dir refused: the bridge socket path /tmp/x/run.sock is 104 bytes, over the 103-byte sun_path limit; point XDG_RUNTIME_DIR at a shorter directory".to_string();
+        let mut r = healthy_report();
+        r.lock = Err(refused.clone());
+        r.kill = Err(refused.clone());
+        r.policy = PolicyStatusReport::Error {
+            v: 1,
+            detail: refused.clone(),
+        };
+        let text = render(&r);
+        assert!(
+            text.contains(&format!("lock file:       none ({refused})\n")),
+            "{text}"
+        );
+        assert!(
+            text.contains("mcp server:      not probed (no runtime dir)\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!(
+                "policy baseline: UNREADABLE ({refused}) - failing closed"
+            )),
+            "{text}"
+        );
+        assert!(
+            text.ends_with("\nruntime dir refused - see the lock file line for the cause\n"),
+            "{text}"
+        );
         assert_eq!(exit_code(&r), 1);
     }
 

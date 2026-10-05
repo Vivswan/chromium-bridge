@@ -44,13 +44,15 @@ impl RuntimeDir {
         Ok(RuntimeDir(dir))
     }
 
-    /// [`resolve`](Self::resolve), then created, 0700 on Unix so no other user can enter it.
+    /// [`resolve`](Self::resolve), then created, 0700 on Unix so no other user can enter it. A directory that
+    /// cannot be created or secured is refused: nothing is written beside a planted symlink or into a parent we
+    /// cannot own.
     pub(crate) fn ensure() -> io::Result<RuntimeDir> {
         let dir = Self::resolve()?;
         #[cfg(windows)]
-        let _ = std::fs::create_dir_all(&dir.0);
+        std::fs::create_dir_all(&dir.0)?;
         #[cfg(unix)]
-        harden(&dir.0);
+        crate::fsguard::ensure_private_dir(&dir.0)?;
         Ok(dir)
     }
 
@@ -58,12 +60,10 @@ impl RuntimeDir {
         &self.0
     }
 
-    /// A file's place inside the directory.
     pub(crate) fn join(&self, file: &str) -> PathBuf {
         self.0.join(file)
     }
 
-    /// The bridge socket's path, which [`resolve`](Self::resolve) proved fits `sun_path`.
     #[cfg(unix)]
     pub(crate) fn socket_path(&self) -> PathBuf {
         self.join(SOCKET_FILENAME)
@@ -124,22 +124,6 @@ fn refuse_unbindable_socket(dir: &Path) -> io::Result<()> {
         ));
     }
     Ok(())
-}
-
-/// Hardening does not fail [`RuntimeDir::ensure`]: a directory that cannot be created or secured (a pre-planted
-/// symlink at the leaf, an unwritable parent) is logged loudly and still used, losing only the directory-level
-/// 0700 tightening, because every security-bearing file inside guards its own creation (0600 + `O_NOFOLLOW`
-/// opens, exclusive creates, see [`crate::fsguard`]) and fails closed on its own error. Chmod through the
-/// symlink is NOT attempted: chmodding an attacker-chosen path is the primitive fsguard exists to remove.
-#[cfg(unix)]
-fn harden(dir: &Path) {
-    if let Err(e) = crate::fsguard::ensure_private_dir(dir) {
-        log_warn!(
-            "ipc",
-            "could not secure the runtime directory {}: {e}",
-            dir.display()
-        );
-    }
 }
 
 #[cfg(all(test, unix))]

@@ -60,7 +60,7 @@ def lock_path(rundir):
 
 
 def runtime_dir_var(platform=os.name):
-    """The variable the binary's runtime_dir() reads (lockfile.rs): LOCALAPPDATA
+    """The variable the binary resolves its runtime dir from (ipc/runtime_dir.rs): LOCALAPPDATA
     on Windows, where XDG_RUNTIME_DIR is ignored, so a child pointed only at
     XDG there would run against the real per-user dir."""
     return "LOCALAPPDATA" if platform == "nt" else "XDG_RUNTIME_DIR"
