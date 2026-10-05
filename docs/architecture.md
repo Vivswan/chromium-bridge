@@ -257,8 +257,12 @@ Extension onDisconnect -> scheduleReconnect(2s)
 connectNative() -> browser re-spawns the host -> host reads the lock file
   -> connects to the socket -> kernel checks + HMAC + attach(label)
 Broker accepts -> session re-attaches that label (generation-guarded:
-  pending calls of the old connection drain as Disconnected)
+  the superseded connection is severed, so a host still alive on it exits
+  and its worker life redials; pending calls of the old connection drain
+  as Disconnected)
 ```
+
+A same-label attach always wins and closes the connection it supersedes. While a browser keeps two worker lives of the extension alive at once, the two lives trade the slot about every 2 s, each redial closing the other, until one life ends.
 
 ### 5.3 A second MCP client attaches
 

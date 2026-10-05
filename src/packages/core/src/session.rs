@@ -5,22 +5,23 @@
 //! by the caller's deadline) for one to attach; the extension re-calls `connectNative` on its own.
 //!
 //! Connections are keyed by browser label (from the handshake `Response`, trusted only after the HMAC verifies;
-//! a missing label maps to [`DEFAULT_LABEL`]). A new dial-in under the SAME label replaces that connection;
-//! different labels coexist. [`resolve_target`] picks the connection for a request.
+//! a missing label maps to [`DEFAULT_LABEL`]). A new dial-in under the SAME label supersedes that connection:
+//! the registry severs the older socket, its host exits on the EOF, and that extension life redials on its own.
+//! Different labels coexist. [`resolve_target`] picks the connection for a request.
 //!
 //! Every connection carries a monotonic `generation` (global across labels), and a pending request is bound to
 //! the generation it was sent under at insert, under the registry lock, immediately before the write, so an
 //! unbound in-flight entry is unrepresentable. The pending entry is the one record of "no reply yet": the reader
 //! removes it when it delivers the reply, and the [`InFlight`] guard removes it on Drop, sending `cancel` through
-//! whatever connection holds the label by then. Nothing else removes an entry: a disconnect or the kill sweep only
-//! WAKES the caller ([`Delivery::Severed`]), so a request stranded by a host restart is still cancelled on the
-//! reconnected host, which reaches the same service worker.
+//! whatever connection holds the label by then. Nothing else removes an entry: a disconnect, a supersession, or
+//! the kill sweep only WAKES the caller ([`Delivery::Severed`]), so a request stranded by a host restart is still
+//! cancelled on the reconnected host, which reaches the same service worker.
 //!
 //! ```text
-//! reader for generation G exits  -> clears its label's slot ONLY if it still holds G; a newer host that attached
-//!                                   in the race window is left alone
-//! same reader                    -> wakes every caller whose request went out on G, so they fail fast with
-//!                                   `CallError::Disconnected` instead of waiting out their deadline
+//! reader for generation G exits         -> clears its label's slot ONLY if it still holds G; a newer host that
+//!                                          attached in the race window is left alone
+//! same reader                           -> wakes every caller whose request went out on G, so they fail fast with
+//!                                          `CallError::Disconnected` instead of waiting out their deadline
 //! ```
 
 use std::collections::HashMap;
@@ -79,9 +80,28 @@ impl std::fmt::Display for Generation {
 /// makes cleanup atomic under the registry mutex: a reader can compare its own
 /// generation against whatever currently occupies its label's slot before
 /// touching it.
+///
+/// Dropping a `Conn` severs its socket, and every path that takes one out of the registry (supersession, the
+/// owning reader's cleanup, the kill sweep) drops it once the lock is released, so no removed connection stays
+/// open. Dropping the writer alone would not sever it: the reader thread holds a cloned fd.
 struct Conn {
     generation: Generation,
     writer: BufWriter<ipc::BridgeStream>,
+}
+
+impl Drop for Conn {
+    fn drop(&mut self) {
+        // `NotConnected` is the peer already gone (the reader saw its EOF first): the same end state.
+        if let Err(e) = self.writer.get_ref().shutdown(std::net::Shutdown::Both) {
+            if e.kind() != std::io::ErrorKind::NotConnected {
+                log_warn!(
+                    "session",
+                    "shutdown of the socket for generation {} failed: {e}",
+                    self.generation
+                );
+            }
+        }
+    }
 }
 
 /// Pending request callbacks keyed by `BridgeReq.id`. Each entry carries the
@@ -256,11 +276,9 @@ impl Session {
     ) -> bool {
         // Atomic section: enforce the cap, allocate the generation, and install
         // the writer under a single lock acquisition. An existing same-label
-        // entry (older connection to the same browser) is replaced regardless
-        // of the cap; a new label beyond the cap is refused. Replacing here
-        // drops the old writer; its reader will observe the disconnect and,
-        // thanks to the generation guard below, leave THIS entry alone.
-        let my_gen = {
+        // entry (older connection to the same browser) is superseded regardless
+        // of the cap; a new label beyond the cap is refused.
+        let (my_gen, superseded) = {
             // A poisoned registry lock means a thread panicked mid-mutation;
             // refuse the new connection rather than install it into state we
             // cannot trust (the native host will redial).
@@ -293,19 +311,28 @@ impl Session {
                 return false;
             };
             let my_gen = Generation(nz);
-            guard.insert(
+            let superseded = guard.insert(
                 label.clone(),
                 Conn {
                     generation: my_gen,
                     writer,
                 },
             );
-            my_gen
+            (my_gen, superseded)
         };
         log_info!(
             "session",
             "native host '{label}' connected and authenticated (generation {my_gen})"
         );
+        if let Some(old) = superseded {
+            log_info!(
+                "session",
+                "native host '{label}' generation {} superseded by generation {my_gen}; closing it so its \
+                 extension life reconnects",
+                old.generation
+            );
+            drop(old);
+        }
 
         // Spawn the reader: each response routes to its pending sender. The
         // reader is bound to `my_gen`; on disconnect it only tears down the
@@ -401,7 +428,7 @@ impl Session {
             //                                                                    instead of waiting out their deadline,
             //                                                                    and their guards cancel through a
             //                                                                    replacement connection if one attached
-            {
+            let removed = {
                 // A poisoned lock here means another thread panicked while
                 // holding it; skip the half we cannot trust (and say so) --
                 // any caller whose entry survives fails via its timeout.
@@ -416,10 +443,11 @@ impl Session {
                         None
                     }
                 };
+                let mut removed = None;
                 if let Some(guard) = conns_guard.as_mut() {
                     let current = guard.get(&label).map(|c| c.generation);
                     if should_clear_conn(current, my_gen) {
-                        guard.remove(&label);
+                        removed = guard.remove(&label);
                     }
                 }
                 match pending.lock() {
@@ -434,7 +462,9 @@ impl Session {
                         );
                     }
                 }
-            }
+                removed
+            };
+            drop(removed);
         });
         true
     }
@@ -480,16 +510,6 @@ impl Session {
             .conns
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Sever first: the kernel-level cut in both directions (the peer sees
-        // EOF, inbound data is discarded) must not depend on the bookkeeping
-        // below. A failure here is unexpected on a registered socket; the
-        // removal and drain below still neutralize the connection (no caller
-        // is left for a late response to reach), so log rather than abort.
-        for (label, conn) in conns_guard.iter() {
-            if let Err(e) = conn.writer.get_ref().shutdown(std::net::Shutdown::Both) {
-                log_warn!("session", "kill sweep: shutdown of '{label}' failed: {e}");
-            }
-        }
         // Bookkeeping under the same conns -> pending lock order the readers
         // and `send` use, so the three paths serialize instead of racing.
         let severed: Vec<Conn> = conns_guard.drain().map(|(_, conn)| conn).collect();
@@ -502,7 +522,6 @@ impl Session {
         }
         drop(conns_guard);
         let count = severed.len();
-        // Locks released: dropping the writers closes our socket handles.
         drop(severed);
         count
     }
