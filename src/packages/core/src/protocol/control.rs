@@ -60,10 +60,15 @@ pub enum EnclaveControl {
 /// to the MCP server, and dropped if the server leg tries to inject one. They give the options UI the
 /// trusted-client allowlist, the global kill switch, the audit trail, and the host's own browser
 /// registrations, and arrive only from the extension Chrome connected to this host (`allowed_origins`).
-/// List/revoke and `kill_engage` only reduce capability; `kill_release` would RESTORE it, so the host refuses
-/// it but keeps it parsed, so a shipped extension gets an audited refusal, never a silent drop.
+///
+/// List/revoke and `kill_engage` only reduce capability; `kill_release` would RESTORE it, so the host answers
+/// it with a presence request instead of acting (the [`WebAuthnControl`] roster; `native_host/presence.rs` decides).
 ///
 /// ```text
+/// kill_release               -> presence_request naming this browser's credentials; an approved answer adds
+///                               kill_status_result to its presence_result, a refused one answers presence_result alone,
+///                               and a failure before the request exists (store, action, nonce) answers
+///                               kill_status_result { ok: false }, no request
 /// client_list                -> client_list_result { ok, enrolled, clients, error? }; a load failure (including
 ///                               the tamper case) is ok: false with the error text, the UI shows it and guesses nothing
 /// client_revoke              -> client_revoke_result { ok, error? }; the revocation-epoch bump shares the critical
@@ -110,10 +115,10 @@ pub enum AdminControl {
     KillEngage {},
     /// Extension -> host: release the global kill switch.
     KillRelease {},
-    /// Host -> extension: the kill-switch state. The reply to all three kill
-    /// frames, and pushed unsolicited on observed transitions. `killed` is
-    /// absent when `ok` is false (the state could not be read; the extension
-    /// fails closed on unknown).
+    /// Host -> extension: the kill-switch state. The reply to `kill_status` and `kill_engage`, pushed
+    /// unsolicited on observed transitions, and part of a `kill_release` answer only when the
+    /// [`AdminControl`] roster says so. `killed` is absent when `ok` is false (the state could not be
+    /// read; the extension fails closed on unknown).
     KillStatusResult {
         ok: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -805,8 +810,7 @@ pub enum HostRequest {
     },
     KillStatus {},
     KillEngage {},
-    /// Refused with an audited `kill_status_result { ok: false }`: release is `chromium-bridge unkill`
-    /// only, but a shipped extension gets a reply, never a silent drop.
+    /// Opens the presence exchange; the [`AdminControl`] roster states the replies.
     KillRelease {},
     /// Fire-and-forget: recorded with the surface stamped host-side, no reply.
     AuditEvent {

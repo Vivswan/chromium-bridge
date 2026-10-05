@@ -311,13 +311,15 @@ describe("confirm_deny_kill", () => {
 
   test("panic during a pending exchange answering alive: the stale killed mirror must not lift the latch", async () => {
     // The switch is engaged (mirror reads killed) and another exchange (a
-    // status query here; a host-side app/CLI release poses the identical race -
-    // the extension itself cannot emit kill_release, the host refuses it) is in
-    // flight. The panic lands: the mirror still reads the STALE killed while
-    // the host is about to answer that exchange with alive - and the panic's
-    // engage is queued BEHIND it on the pipe. Lifting from the mirror snapshot
-    // would open a window (exchange answered alive, engage not yet applied)
-    // where a fresh confirmation presents against an open gate.
+    // status query here; a release through the CLI or the WebAuthn exchange
+    // poses the identical race) is in flight. The panic lands: the mirror
+    // still reads the STALE killed while the host is about to answer that
+    // exchange with alive - and the panic's engage is queued BEHIND it on the
+    // pipe.
+    //
+    // Lifting from the mirror snapshot would open a window (exchange answered
+    // alive, engage not yet applied) where a fresh confirmation presents
+    // against an open gate.
     const presented = fakeProvider(installConfirmationProvider);
     const frames: Array<Record<string, unknown>> = [];
     attach(collaborator, (frame) => {
