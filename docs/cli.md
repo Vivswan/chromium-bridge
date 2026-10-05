@@ -109,7 +109,7 @@ Chrome's own locations come from its documentation. The other vendors are derive
 
 The pointer informs `doctor` and never decides its verdict: the bridge works with an unpacked extension and no pointer. It is written for the browsers `--fix` names or detects; a `--manifest-dir` registration gets none, since its browser cannot be named.
 
-**Not yet:** the listing the pointer names is unpublished, so until it exists the browser has nothing to offer and the extension is loaded unpacked; [quickstart.md](./quickstart.md#the-cli-macos-linux-windows) step 4 owns that caveat.
+Whether the listing exists yet, and what to load until it does, is [quickstart.md](./quickstart.md#the-cli-macos-linux-windows) step 4's.
 
 Platform notes:
 

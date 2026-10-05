@@ -96,7 +96,7 @@ Compatibility discipline holds before 1.0 too; `0.x` is not treated as a license
 ## Not yet in place (honest statement)
 
 - macOS **real integration tests in the release gate**: they need a real browser and are not part of the release gate yet.
-- **The Web Store listing**: the pointer the post-install writes names the extension's Web Store copy, which is not published yet ([chrome-web-store.md](./chrome-web-store.md)); until it is, the browser has nothing to offer and the extension is loaded unpacked.
+- **The Web Store listing** the pointer names: its status is [quickstart.md](./quickstart.md#the-cli-macos-linux-windows) step 4's.
 
 ## Related
 

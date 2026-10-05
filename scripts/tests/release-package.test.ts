@@ -232,6 +232,8 @@ describe("packageInstaller", () => {
           "light.exe",
           "-nologo",
           "-spdb",
+          "-ext",
+          "WixUtilExtension",
           "-out",
           "chromium-bridge-v1.2.3-rc.1-windows-x64.msi",
           "chromium-bridge.wixobj",

@@ -1,7 +1,7 @@
 #!/bin/bash
-# Installer hands this to installd, which runs it as root in its own environment: USER is root and the
-# caller's SUDO_USER is gone, so the account to register is read from the console session itself. Nobody
-# logged in means the owner is root, and the test line fails the install there rather than register root.
+# installd runs this as root in its own environment (USER is root, the caller's SUDO_USER is gone), so the
+# account to register is the console session's owner; root there means nobody is logged in, and the test
+# line fails the install rather than register root.
 set -eu
 user="$(stat -f %Su /dev/console)"
 test "$user" != root

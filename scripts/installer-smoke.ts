@@ -1,13 +1,9 @@
 #!/usr/bin/env bun
 
-// installers.yml's proof: install the installer this leg just built on the runner itself, drive the binary
-// where the package put it, and uninstall. The checks are the package manager's own commands plus the
-// installed binary's `--version` and `doctor --list`, so a reinstall by hand follows the same steps.
-// External quirks the checks encode: msiexec reports its reason only in a UTF-16LE log; `reg query` exits 1
-// both for a missing key and for a key it was not allowed to read, so only its not-found text counts as
-// absent; installd runs the pkg postinstall as root with neither USER nor SUDO_USER naming the caller, so the
-// postinstall registers the console session's owner, and the macOS arm prints that owner and the package's
-// install.log lines before judging, so a wrong account is a certain diagnosis and not another guess.
+// installers.yml's smoke: install this leg's installer on the runner, drive the installed binary, uninstall.
+// Platform facts the checks rest on: msiexec reports its reason only in a UTF-16LE log; `reg query` exits 1
+// both for a missing key and for one it was not allowed to read, so only its not-found text counts as
+// absent; the pkg postinstall's output lands in /var/log/install.log.
 
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -82,8 +78,7 @@ class Steps extends CommandChecks {
 
 function macos(installer: string, steps: Steps, home: string): void {
   const binary = "/usr/local/bin/chromium-bridge";
-  // Evidence before judgment, so a failed install still shows who owned the console and what the
-  // postinstall printed (logged, never judged).
+  // Logged before the install is judged, never judged themselves.
   const install = ["sudo", "installer", "-pkg", installer, "-target", "/"];
   const installed = steps.run(...install);
   steps.run("stat", "-f", "%Su", "/dev/console");
@@ -91,8 +86,7 @@ function macos(installer: string, steps: Steps, home: string): void {
   steps.exited0(install, installed);
   steps.version(binary);
   steps.ok("pkgutil", "--pkg-info", pkgIdentifier);
-  // The postinstall registered the console owner, this account: its own doctor sees the registration,
-  // then sees the manifest and pointer gone; the wrapper is outside doctor's view, so it is checked by path.
+  // The wrapper is outside doctor's view once the manifest is gone, so it is checked by path.
   steps.outputMatches(chromeRegistered, binary, "doctor", "--list");
   steps.ok(binary, "uninstall");
   steps.outputMatches(chromeUnregistered, binary, "doctor", "--list");

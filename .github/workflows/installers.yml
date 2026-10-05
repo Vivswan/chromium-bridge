@@ -1,12 +1,11 @@
-# The installers' proof on a pull request. update-release.yml builds the .pkg, .deb and .msi only when a
-# release is cut, so this workflow builds the same installers from the branch (the version Cargo.toml
-# carries, no tag) on the three runners and installs each one there, so a wxs or pkgbuild mistake fails
-# here and not on the release. The smoke (scripts/installer-smoke.ts) runs the package manager's own
-# commands and the installed binary; the Windows leg is the one place the HKCU registration runs for real.
+# The installers' proof before a release: the same .pkg, .deb and .msi update-release.yml builds at
+# release time, built from the branch and installed on their own runners. Callable, so checks.yml can
+# fold it into the all-green gate.
 
 name: Installers
 
 on:
+  workflow_call:
   pull_request:
     paths:
       - packaging/**

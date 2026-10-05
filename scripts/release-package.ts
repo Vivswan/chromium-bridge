@@ -228,7 +228,7 @@ export function installerPlan(release: ReleaseTag, platform: string, arch: strin
           object,
           "packaging/msi/chromium-bridge.wxs",
         ],
-        ["light.exe", "-nologo", "-spdb", "-out", installer, object],
+        ["light.exe", "-nologo", "-spdb", "-ext", "WixUtilExtension", "-out", installer, object],
       ],
     };
   }
