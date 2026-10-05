@@ -246,15 +246,6 @@ fn tty_verdict(
 mod tests {
     use super::*;
 
-    /// Under a test harness stdin is never a terminal, so the witness is unconstructible and no CLI prompt can
-    /// exist at all: the anti-tap-phishing precondition in its structural form.
-    #[test]
-    fn a_non_terminal_stdin_cannot_construct_the_witness() {
-        let err = TerminalStdin::require().unwrap_err();
-        assert!(matches!(err, PresenceError::NotInteractive));
-        assert_eq!(err.code(), "not_interactive");
-    }
-
     /// The verdict matrix: whitespace around the phrase is forgiven, nothing else is, EOF and a read error
     /// refuse, and a stdin that stopped being a terminal refuses WITHOUT reading (the read closure panicking
     /// is the assertion).
@@ -277,5 +268,6 @@ mod tests {
         ));
         let err = tty_verdict(false, || panic!("must not read a non-terminal stdin")).unwrap_err();
         assert!(matches!(err, PresenceError::NotInteractive));
+        assert_eq!(err.code(), "not_interactive");
     }
 }

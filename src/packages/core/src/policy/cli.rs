@@ -444,9 +444,11 @@ pub fn run_policy(command: PolicyCommand) -> i32 {
     match command {
         PolicyCommand::Show { json } => run_show(json),
         PolicyCommand::History { json } => run_history(json),
-        PolicyCommand::Set { overlay, json } => run_set(overlay, json),
+        PolicyCommand::Set { overlay, json } => run_set(overlay, json, TerminalStdin::require()),
         PolicyCommand::Restrict { overlay } => run_restrict(overlay),
-        PolicyCommand::Rollback { revision, json } => run_rollback(revision, json),
+        PolicyCommand::Rollback { revision, json } => {
+            run_rollback(revision, json, TerminalStdin::require())
+        }
     }
 }
 
@@ -532,8 +534,15 @@ fn run_history(json: bool) -> i32 {
 /// refuses a keyless machine before any prompt and audits the refusal. Untouched fields carry the current
 /// BASELINE values, so the edits fold over the baseline, never the effective policy. Under `--json`, success
 /// prints the post-write status report and any refusal the versioned error object.
-fn run_set(overlay: PolicyOverlay, json: bool) -> i32 {
-    match do_set(overlay) {
+///
+/// `terminal` is the witness, or the precondition failure that kept the dispatcher from constructing one (a
+/// piped stdin arrives as the `Err`), taken before anything else runs.
+fn run_set(
+    overlay: PolicyOverlay,
+    json: bool,
+    terminal: Result<TerminalStdin, presence::PresenceError>,
+) -> i32 {
+    match do_set(overlay, terminal) {
         Ok(rung) => {
             if json {
                 emit_status_json("policy set")
@@ -553,13 +562,16 @@ fn run_set(overlay: PolicyOverlay, json: bool) -> i32 {
 /// share one path: witness, fold over the baseline, sign. The touched set is the
 /// fields the overlay names, in catalogue order (order carries no meaning in
 /// the signed document).
-fn do_set(overlay: PolicyOverlay) -> Result<crate::presence::PresencePath, String> {
+fn do_set(
+    overlay: PolicyOverlay,
+    terminal: Result<TerminalStdin, presence::PresenceError>,
+) -> Result<crate::presence::PresencePath, String> {
     let touched: Vec<PolicyField> = PolicyField::ALL
         .iter()
         .copied()
         .filter(|field| overlay.has(*field))
         .collect();
-    let terminal = TerminalStdin::require().map_err(|e| refused_grant(&touched, &e))?;
+    let terminal = terminal.map_err(|e| refused_grant(&touched, &e))?;
     let base = match PolicyStore::load() {
         Ok(Some(store)) => store
             .baseline_doc()
@@ -603,8 +615,13 @@ fn run_restrict(overlay: PolicyOverlay) -> i32 {
 /// extension's ratchet. Under `--json` the planning prose is suppressed
 /// (stdout is the report, nothing else): success - a no-op included -
 /// prints the post-write status report, any refusal the versioned error
-/// object.
-fn run_rollback(revision: u64, json: bool) -> i32 {
+/// object. `terminal` is the witness (or the precondition failure that stands for it), taken by the
+/// dispatcher and consumed only by a relaxing plan.
+fn run_rollback(
+    revision: u64,
+    json: bool,
+    terminal: Result<TerminalStdin, presence::PresenceError>,
+) -> i32 {
     let inputs = match rollback_inputs(revision) {
         Ok(inputs) => inputs,
         Err(error) => return refuse_write("policy rollback", json, error),
@@ -646,7 +663,7 @@ fn run_rollback(revision: u64, json: bool) -> i32 {
             touched,
             fields,
         } => {
-            let terminal = match TerminalStdin::require() {
+            let terminal = match terminal {
                 Ok(terminal) => terminal,
                 Err(e) => {
                     return refuse_write("policy rollback", json, refused_grant(&touched, &e))

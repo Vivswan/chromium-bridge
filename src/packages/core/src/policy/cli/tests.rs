@@ -3,9 +3,9 @@ use crate::enclave::base64_encode;
 use crate::policy::Ms;
 use crate::test_support::scratch_runtime_dir;
 
-/// The grant lane's order: the terminal witness, then the host key. Under a piped stdin a keyless machine is
-/// refused as not interactive, never as keyless, so a background invocation cannot make the credential-store
-/// lookup raise its unlock dialog for a grant that is refused anyway. The test binary's stdin is no terminal.
+/// The grant lane's order: the terminal witness, then the host key. With the witness refused (a piped stdin)
+/// a keyless machine is refused as not interactive, never as keyless, so a background invocation cannot make
+/// the credential-store lookup raise its unlock dialog for a grant that is refused anyway.
 #[test]
 fn a_piped_stdin_is_refused_before_the_host_key_is_looked_up() {
     let _dir = scratch_runtime_dir();
@@ -13,7 +13,7 @@ fn a_piped_stdin_is_refused_before_the_host_key_is_looked_up() {
         page_eval_enabled: Some(true),
         ..PolicyOverlay::default()
     };
-    let err = do_set(overlay).unwrap_err();
+    let err = do_set(overlay, Err(crate::presence::PresenceError::NotInteractive)).unwrap_err();
     assert!(
         err.contains("stdin is not a terminal"),
         "refused by the witness, not the key: {err}"
