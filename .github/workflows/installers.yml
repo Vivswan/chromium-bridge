@@ -1,23 +1,10 @@
-# The same .pkg, .deb and .msi update-release.yml builds at release time, proved before one. Callable, so
-# checks.yml can fold it into the all-green gate, which a separate workflow never reaches.
+# The same .pkg, .deb and .msi update-release.yml builds at release time, proved before one. Called by
+# checks.yml, so the legs sit inside the all-green gate.
 
 name: Installers
 
 on:
   workflow_call:
-  pull_request:
-    paths:
-      - packaging/**
-      - scripts/release-package.ts
-      - scripts/installer-smoke.ts
-      - scripts/lib.ts
-      - src/packages/core/src/browsers.rs
-      - src/packages/core/src/doctor.rs
-      - src/packages/core/src/registration.rs
-      - src/packages/core/src/registration/**
-      - src/apps/host/Cargo.toml
-      - .github/workflows/installers.yml
-  workflow_dispatch:
 
 permissions: {}
 

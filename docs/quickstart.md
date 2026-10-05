@@ -20,7 +20,7 @@ The CLI needs nothing but the binary, on desktops, headless machines, and CI ali
    | Homebrew | `brew install vivswan/tap/chromium-bridge`, once the tap exists ([release.md](./release.md#homebrew-tap)) | installs the binary and runs step 3 for you |
    | archive | extract `chromium-bridge-<tag>-<platform>-<arch>.tar.gz` (`.zip` on Windows) | the binary and `extension/dist`; steps 2 and 3 are yours |
 
-   Or build from source with `cargo build --release`. Windows registration runs in CI's installers workflow on every change to the installers' sources and has not yet been tried on a user's machine ([cli.md's Windows note](./cli.md#doctor---fix--uninstall-native-messaging-registration)).
+   Or build from source with `cargo build --release`. Windows registration runs in CI's installers workflow on every pull request and has not yet been tried on a user's machine ([cli.md's Windows note](./cli.md#doctor---fix--uninstall-native-messaging-registration)).
 2. **Archive only: put it somewhere stable.** Registrations point at the binary in place, so pick a path that will not disappear: `~/.local/lib/chromium-bridge/` on Linux, anywhere under your home on macOS. An AppImage mount or a temp directory is not stable, and `doctor --fix` warns if you try.
 3. **Register it with your browsers.** The .pkg, the .msi and Homebrew did this already; the .deb and the archive need it (from the archive, run the binary from its extracted directory with a `./` prefix):
 
