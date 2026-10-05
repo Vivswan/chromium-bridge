@@ -12,11 +12,12 @@ afterEach(() => scratch.remove());
 
 const ENGLISH = { "docs/a.md": "# A\n", "docs/sec/b.md": "# B\n", "README.md": "# R\n" };
 const absent = (locale: LocaleReport["locale"]): LocaleReport => ({ locale, present: false });
-const full = (locale: LocaleReport["locale"]): LocaleReport => ({
+const full = (locale: LocaleReport["locale"]): Extract<LocaleReport, { present: true }> => ({
   locale,
   present: true,
   missing: [],
   extra: [],
+  generatedDrift: [],
   readmeMissing: false,
 });
 
@@ -47,6 +48,7 @@ describe("checkLocales", () => {
           present: true,
           missing: ["sec/b.md"],
           extra: ["extra.md"],
+          generatedDrift: [],
           readmeMissing: true,
         },
         absent("zh-tw"),
@@ -67,6 +69,7 @@ describe("checkLocales", () => {
           present: true,
           missing: ["a.md", "sec/b.md"],
           extra: [],
+          generatedDrift: [],
           readmeMissing: false,
         },
       ],
@@ -88,6 +91,27 @@ describe("checkLocales", () => {
       },
       [full("zh-cn"), full("zh-tw")],
       [],
+    ],
+    [
+      "a generated region in a translated page must equal the English one byte for byte; a translated page without the region, or with another name's region, is drift too",
+      {
+        "docs/a.md":
+          "# A\n<!-- BEGIN GENERATED: map (bun x) -->\ngraph TD\n<!-- END GENERATED: map -->\n",
+        "docs/sec/b.md": "# B\n",
+        "README.md": "# R\n",
+        "docs/zh-cn/a.md":
+          "# \u7532\n<!-- BEGIN GENERATED: map (bun x) -->\ngraph LR\n<!-- END GENERATED: map -->\n",
+        "docs/zh-cn/sec/b.md": "# \u4e59\n",
+        "README.zh-cn.md": "# R\n",
+        "docs/zh-tw/a.md":
+          "# \u7532\n<!-- BEGIN GENERATED: map (bun x) -->\ngraph TD\n<!-- END GENERATED: map -->\n",
+        "docs/zh-tw/sec/b.md": "# \u4e59\n",
+        "README.zh-tw.md": "# R\n",
+      },
+      [{ ...full("zh-cn"), generatedDrift: ["a.md: generated region map"] }, full("zh-tw")],
+      [
+        "docs/zh-cn/a.md: generated region map differs from the English page's; copy it byte for byte",
+      ],
     ],
   ];
 

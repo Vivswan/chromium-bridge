@@ -628,7 +628,6 @@ graph TD
   extension_popup --> extension_ui
   extension_ui --> shared
   extension_ui --> extension_lib
-  extension_ui --> extension_background
   extension_lib --> shared
   scripts --> shared
   scripts --> extension_lib

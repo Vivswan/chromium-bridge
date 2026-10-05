@@ -3,7 +3,7 @@
 // locales with a language switcher. A page in one language and not another is a dead switcher
 // entry, so a present locale is judged file-for-file against docs/.
 
-import { statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { parseArgs } from "node:util";
 
@@ -19,6 +19,8 @@ export type LocaleReport =
       readonly missing: readonly string[];
       /** Pages under docs/<locale>/ that mirror no English page. */
       readonly extra: readonly string[];
+      /** Mirrored pages whose generated region (`<!-- BEGIN GENERATED: name -->`) differs from the English one. */
+      readonly generatedDrift: readonly string[];
       readonly readmeMissing: boolean;
     };
 
@@ -35,6 +37,19 @@ const isDirectory = (path: string): boolean =>
   statSync(path, { throwIfNoEntry: false })?.isDirectory() ?? false;
 const isFile = (path: string): boolean =>
   statSync(path, { throwIfNoEntry: false })?.isFile() ?? false;
+
+// A generated region is rendered into the English page by a script that knows nothing of the locale
+// copies, so a translated page carries it byte for byte or it is stale: the renderer's own check reads
+// docs/architecture.md alone.
+const GENERATED =
+  /<!-- BEGIN GENERATED: (\S+?)(?: \([^)]*\))? -->\n[\s\S]*?<!-- END GENERATED: \1 -->/g;
+
+function generatedRegions(file: string): Map<string, string> {
+  const regions = new Map<string, string>();
+  for (const match of readFileSync(file, "utf8").matchAll(GENERATED))
+    regions.set(match[1] ?? "", match[0]);
+  return regions;
+}
 
 function pages(dir: string): string[] {
   if (!isDirectory(dir)) return [];
@@ -58,11 +73,20 @@ export function checkLocales(root: string): LocaleReport[] {
     if (!isDirectory(dir) && !isFile(readme)) return { locale, present: false };
     const mirrored = new Set(pages(dir));
     const wanted = new Set(english);
+    const generatedDrift = english
+      .filter((page) => mirrored.has(page))
+      .flatMap((page) => {
+        const theirs = generatedRegions(join(dir, page));
+        return [...generatedRegions(join(docs, page))]
+          .filter(([name, region]) => theirs.get(name) !== region)
+          .map(([name]) => `${page}: generated region ${name}`);
+      });
     return {
       locale,
       present: true,
       missing: english.filter((page) => !mirrored.has(page)),
       extra: [...mirrored].filter((page) => !wanted.has(page)),
+      generatedDrift,
       readmeMissing: !isFile(readme),
     };
   });
@@ -78,6 +102,9 @@ export function problemsOf(reports: readonly LocaleReport[]): string[] {
         (page) => `docs/${locale}/${page} is missing (docs/${page} has no mirror)`,
       ),
       ...report.extra.map((page) => `docs/${locale}/${page} mirrors nothing under docs/`),
+      ...report.generatedDrift.map(
+        (entry) => `docs/${locale}/${entry} differs from the English page's; copy it byte for byte`,
+      ),
     ];
   });
 }
@@ -85,7 +112,7 @@ export function problemsOf(reports: readonly LocaleReport[]): string[] {
 const USAGE = [
   "usage: check-docs-locales.ts [--root <dir>]",
   "  --root  the repository root (default: cwd)",
-  "exit 0: every present locale mirrors docs/ file-for-file (or no locale exists yet);" +
+  "exit 0: every present locale mirrors docs/ file-for-file with its generated regions byte-identical (or no locale exists yet);" +
     " 1: problems, each printed; 2: usage or no docs/ under the root",
 ].join("\n");
 
