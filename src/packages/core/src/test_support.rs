@@ -12,7 +12,7 @@
 //! ```
 
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use tempfile::TempDir;
@@ -50,8 +50,9 @@ pub(crate) fn scratch_runtime_dir() -> RuntimeDirGuard {
 
 impl RuntimeDirGuard {
     /// The scratch root, which [`point_at_absent`](Self::point_at_absent) leaves in place while it re-points the
-    /// variable beneath it.
-    pub(crate) fn root(&self) -> &Path {
+    /// variable beneath it. Unix only, like its one caller, the `sun_path` guard test in `ipc/runtime_dir.rs`.
+    #[cfg(unix)]
+    pub(crate) fn root(&self) -> &std::path::Path {
         self.dir.path()
     }
 
