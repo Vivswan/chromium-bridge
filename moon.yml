@@ -2,8 +2,8 @@
 # Touch ID runbooks. Unscoped task names resolve here via .moon/workspace.yml's defaultProject. Every task is
 # uncached by the workspace default (.moon/tasks/all.yml says why).
 #
-# These rules govern every `moon run`, whatever targets the caller names together, so no caller has to; all
-# but the mutex rule are read back from the resolved graph by scripts/check-moon-edges.ts:
+# These rules govern every `moon run`, whatever targets the caller names together, so no caller has to; the
+# first three are read back from the resolved graph by scripts/check-moon-edges.ts, the last two are not:
 #   runs bun or bunx                                    -> depends on check-deps (a tree not installed to bun.lock
 #                                                          fails naming `moon run setup`), and bunx takes --no-install
 #   reachable from `gate` (the pre-commit hook's task)  -> only bun, bunx, and the toolchain's cargo verbs; a tool
@@ -596,7 +596,7 @@ tasks:
     command: 'bun scripts/check-moon-hasher.ts'
 
   check-moon-edges:
-    description: "The header's rules but the mutex one, read from moon's resolved task graph: bun tasks depend on root:check-deps, and the gate's graph holds only own-toolchain commands (cargo verbs with the check-crates edge and --frozen); plus check-deps's own tests"
+    description: "The header's first three rules, read from moon's resolved task graph: bun tasks depend on root:check-deps, and the gate's graph holds only own-toolchain commands (cargo verbs with the check-crates edge and --frozen); plus check-deps's own tests"
     deps: ['~:check-deps']
     script: |
       set -e

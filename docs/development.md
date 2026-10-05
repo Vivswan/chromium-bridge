@@ -13,7 +13,7 @@ proto install    # provisions bun, moon, node, uv at the pinned versions (rustup
 moon run setup   # installs the bun workspace, the pinned Rust toolchain, and the crates; wires the git hooks (lefthook); the gate itself never installs
 ```
 
-Four gate tools have no first-party proto plugin and are installed once by hand: `cargo install cargo-nextest` and `brew install typos-cli cargo-machete actionlint` (typos and cargo-machete also come from `cargo install`). Where CI gets them:
+Four tools have no first-party proto plugin and are installed once by hand: `cargo install cargo-nextest` (the test runner `moon run gate` uses) and `brew install typos-cli cargo-machete actionlint` (tools only `moon run ci` runs; typos and cargo-machete also come from `cargo install`). Where CI gets them:
 
 - **The `Containerfile` pins all four plus cargo-deb** as `ARG <TOOL>_VERSION`. The CI image carries the four; cargo-deb is installed on the bare release and installer runners alone.
 - **A job that installs a tool itself reads the same pin** through `bun scripts/pin.ts <tool>`: checks.yml's tooling job for cargo-machete (inside the image, where that version is already present), `installers.yml` and `update-release.yml` for cargo-deb on their bare runners.
