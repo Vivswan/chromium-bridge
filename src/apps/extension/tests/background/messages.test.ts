@@ -76,6 +76,7 @@ const REQUESTS: { [K in RuntimeMsgType]: RuntimeRequest<K> } = {
     client_data_json: "Y2Rq",
     signature: "c2ln",
   },
+  webauthn_presence_confirm: { type: "webauthn_presence_confirm", nonce: "nonce-0002" },
   get_registration: { type: "get_registration" },
   repair_registration: { type: "repair_registration" },
   get_policy: { type: "get_policy" },

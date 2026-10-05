@@ -8,8 +8,8 @@
 // pageEvalEnabled via TOOL_GRANTS, confirmPageEval, evalToastTimeoutMs),
 // upload (fileUploadEnabled, clickToastTimeoutMs), dialog
 // (handleDialogEnabled), tabs (confirmTabClose, clickToastTimeoutMs),
-// precise (warnPreciseSnapshot), egress (evalMask), confirm/presence
-// (touchIdConfirm). enrollment's hostReverifyMs rides the ceremony harness
+// precise (warnPreciseSnapshot), egress (evalMask), the presence routing
+// verdict (touchIdConfirm). enrollment's hostReverifyMs rides the ceremony harness
 // in enrollment.test.ts instead.
 //
 // Plus the in-flight snapshot rule at vitest granularity: a policy swap
@@ -24,7 +24,6 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import { browser } from "wxt/browser";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 import { preflightPageOp, resetClickGraceWindow } from "@/lib/background/confirm/gate";
-import { presenceRoutingEnabled } from "@/lib/background/confirm/presence";
 import {
   currentPanicEpoch,
   installConfirmationProvider,
@@ -62,13 +61,9 @@ vi.mock("@/lib/background/page-backend", () => ({
   },
 }));
 
-// presenceCapable's device probes, mocked so the touchIdConfirm site is
-// testable in isolation: capability is a given; the policy field decides.
+// The pin store, mocked so the routing tests can stamp a pinned scope without a ceremony.
 const pinSeam = vi.hoisted(() => ({
   pin: null as null | { keyId: string; pubkeyB64: string; pinnedAt: number },
-}));
-vi.mock("@/lib/background/enrollment", () => ({
-  platformCanEnroll: () => Promise.resolve(true),
 }));
 vi.mock("@/lib/background/enclave-pin", () => ({
   getPin: () => Promise.resolve(pinSeam.pin),
@@ -588,7 +583,7 @@ describe("egress masking reads evalMask from the snapshot", () => {
   });
 });
 
-// ---- confirm/presence.ts ------------------------------------------------------------
+// ---- the presence routing verdict in the request ----------------------------------------
 
 describe("presence routing is decided from the per-request snapshot", () => {
   // A real 64-hex keyId: the stored record's scope must both satisfy the
@@ -626,7 +621,7 @@ describe("presence routing is decided from the per-request snapshot", () => {
     expect(asked[0] !== undefined && isHardwareGated(asked[0])).toBe(false);
   });
 
-  test("grant: policy touchIdConfirm=true routes to hardware", async () => {
+  test("grant: policy touchIdConfirm=true routes to the installed presence provider", async () => {
     pinSeam.pin = { keyId: KEY_ID, pubkeyB64: "p", pinnedAt: 1 };
     const hw = presenceStub();
     const asked = autoProvider(false);
@@ -644,16 +639,6 @@ describe("presence routing is decided from the per-request snapshot", () => {
     expect(asked.length).toBe(0);
     expect(hw.length).toBe(1);
     expect(hw[0] !== undefined && isHardwareGated(hw[0])).toBe(true);
-  });
-
-  test("the routing verdict itself reads the snapshot, not live storage", async () => {
-    pinSeam.pin = { keyId: KEY_ID, pubkeyB64: "p", pinnedAt: 1 };
-    await expect(presenceRoutingEnabled(policyValues({ touchIdConfirm: false }))).resolves.toBe(
-      false,
-    );
-    await expect(presenceRoutingEnabled(policyValues({ touchIdConfirm: true }))).resolves.toBe(
-      true,
-    );
   });
 });
 

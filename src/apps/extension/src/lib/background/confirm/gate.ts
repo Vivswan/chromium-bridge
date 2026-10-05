@@ -11,7 +11,6 @@ import { inLife } from "../../shared/in-life";
 import type { PageOp } from "../../shared/page-ops";
 import type { PageBackend } from "../page-backend";
 import type { ResolvedTab } from "../tabs";
-import { presenceRoutingEnabled } from "./presence";
 import { describeAction, describeTarget, isHighRiskClick } from "./risk";
 import { confirmWithUser } from "./service";
 
@@ -183,11 +182,12 @@ export async function preflightPageOp(
         tabTitle: tab.title || "",
         detail: code,
         timeoutMs: policy.evalToastTimeoutMs,
-        // The hardware-routing verdict is part of THIS decision's snapshot:
-        // computed here and carried in the request, so a policy push landing
+        // The policy's routing verdict is part of THIS decision's snapshot:
+        // read here and carried in the request, so a policy push landing
         // while the confirmation waits in the queue cannot re-route it at
-        // presentation time.
-        presenceRouting: await presenceRoutingEnabled(policy),
+        // presentation time. It routes to a presence provider only where one
+        // is installed; today none is, and the window confirms.
+        presenceRouting: policy.touchIdConfirm,
         panicEpoch,
       });
       if (!approved) throw new Error("user denied page_eval");

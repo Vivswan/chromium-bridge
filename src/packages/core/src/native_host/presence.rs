@@ -4,7 +4,12 @@
 //!
 //! ```text
 //! enroll_begin      -> no enrollment on the machine: trust on first use, enroll_options at once
-//!                      otherwise: presence_request any enrolled credential may answer, then enroll_options
+//!                      otherwise: presence_request any enrolled credential may answer, and the enroll_begin is
+//!                      answered enroll_result { presence_required }; once presence is attested the NEXT
+//!                      enroll_begin consumes the approval and gets enroll_options (one reply per request, so
+//!                      the extension's single-flight exchange never waits on a tap). The approval lives for
+//!                      APPROVAL_TTL or until the next WebAuthn request, whichever comes first, and only while
+//!                      the machine still has enrollments: an empty store is first use again
 //! enroll_finish     -> registration verified against the outstanding enrollment statement, stored, enroll_result
 //! kill_release      -> presence_request only credentials enrolled under THIS browser may answer; on an accepted
 //!                      assertion the switch is released and kill_status_result follows presence_result
@@ -13,6 +18,8 @@
 //! presence_confirm  -> the window's answer to the outstanding request, named by its nonce; accepted only when the
 //!                      request admits no enrolled credential, so an enrolled browser is never demoted to a click
 //! ```
+
+use std::time::{Duration, Instant};
 
 use crate::audit::{self, AuditKind, AuditRecord, Surface};
 use crate::ipc::BrowserLabel;
@@ -45,7 +52,18 @@ enum Pending {
         request: PresenceRequest,
         act: PendingAct,
     },
+    /// Presence was attested for enrolling another credential; the next `enroll_begin` consumes it. Any
+    /// other WebAuthn request supersedes it and [`APPROVAL_TTL`] bounds it, so an approval never outlives the
+    /// ceremony it was given for by more than the page needs to ask.
+    EnrollmentApproved {
+        auth: PresenceAttestation,
+        since: Instant,
+    },
 }
+
+/// How long an enrollment approval waits for the page's next `enroll_begin`. The page asks the moment the
+/// tap's verdict lands; a minute covers a slow worker wake, not an idle connection holding a user gesture.
+const APPROVAL_TTL: Duration = Duration::from_secs(60);
 
 /// What runs once presence is attested.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,17 +91,40 @@ impl Exchange {
     }
 
     /// `enroll_begin`: the first credential on a fresh machine is trust on first use; every later one needs
-    /// an assertion from an enrolled authenticator first.
+    /// an assertion from an enrolled authenticator first, after which the same request is made again.
     pub(super) fn enroll_begin(&mut self) -> Vec<HostReply> {
+        // Whatever was pending is over: a live approval is consumed below, anything else is superseded.
+        let approval = match self.pending.take() {
+            Some(Pending::EnrollmentApproved { auth, since })
+                if since.elapsed() <= APPROVAL_TTL =>
+            {
+                Some(auth)
+            }
+            Some(
+                Pending::EnrollmentApproved { .. }
+                | Pending::Enrollment { .. }
+                | Pending::Presence { .. },
+            )
+            | None => None,
+        };
         let enrolled = match enrollments() {
             Ok(enrolled) => enrolled,
             Err(e) => return vec![enroll_refused(format!("store_error: {e}"))],
         };
+        // An empty store is first use whatever was approved: the approval presupposed an enrollment that is
+        // gone, and the first-use rule is the one re-checked under the lock at the write.
         if enrolled.is_empty() {
             return self.start_enrollment(&enrolled, EnrollmentAuthority::FirstUse);
         }
+        if let Some(auth) = approval {
+            return self.start_enrollment(&enrolled, EnrollmentAuthority::Approved(auth));
+        }
         match PresenceRequest::for_enrollment(&self.label, &enrolled) {
-            Ok(request) => self.await_presence(request, PendingAct::EnrollBegin),
+            Ok(request) => {
+                let mut replies = self.await_presence(request, PendingAct::EnrollBegin);
+                replies.push(enroll_refused("presence_required".into()));
+                replies
+            }
             Err(e) => vec![enroll_refused(format!("nonce: {e}"))],
         }
     }
@@ -91,6 +132,8 @@ impl Exchange {
     /// `kill_release`: restoring capability, so presence first. The request names only this browser's
     /// credentials; a browser with none can answer with its software confirmation.
     pub(super) fn kill_release(&mut self) -> Vec<HostReply> {
+        // Whatever was pending (an approval included) is superseded, even if this request fails below.
+        self.pending = None;
         // A refusal before the request exists is audited like one at the gate, so every release attempt
         // leaves a trail entry.
         let refused_early = |e: std::io::Error| {
@@ -199,11 +242,12 @@ impl Exchange {
                 };
                 replies.push(status.into_frame().into());
             }
-            PendingAct::EnrollBegin => match enrollments() {
-                Ok(enrolled) => replies
-                    .extend(self.start_enrollment(&enrolled, EnrollmentAuthority::Approved(auth))),
-                Err(e) => replies.push(enroll_refused(format!("store_error: {e}"))),
-            },
+            PendingAct::EnrollBegin => {
+                self.pending = Some(Pending::EnrollmentApproved {
+                    auth,
+                    since: Instant::now(),
+                });
+            }
         }
         replies
     }
@@ -327,6 +371,18 @@ impl Exchange {
             authority,
         });
         vec![frame.into()]
+    }
+}
+
+impl Exchange {
+    /// Tests only: age the held approval past its lifetime.
+    #[cfg(test)]
+    pub(super) fn expire_approval_for_tests(&mut self) {
+        if let Some(Pending::EnrollmentApproved { since, .. }) = &mut self.pending {
+            *since = Instant::now()
+                .checked_sub(APPROVAL_TTL.saturating_add(Duration::from_secs(1)))
+                .unwrap_or_else(Instant::now);
+        }
     }
 }
 

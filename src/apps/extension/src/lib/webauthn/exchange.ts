@@ -3,10 +3,13 @@
 // (ceremony.ts): a service worker has no `navigator.credentials`. port.ts drives `collaborator`;
 // messages.ts routes the page's actions here. This module never imports port.ts, so there is no cycle.
 //
-//   enroll_begin      -> enroll_options (the page runs create) or enroll_result { ok: false }
+//   enroll_begin      -> enroll_options (the page runs create) or enroll_result { ok: false }; on a machine
+//                        with enrollments the host pushes presence_request and answers presence_required,
+//                        and the enroll_begin AFTER the approved presence_assert gets the options
 //   enroll_finish     -> enroll_result
 //   presence_request  -> held as the pending request; the page fetches it, runs get, answers
 //   presence_assert   -> presence_result
+//   presence_confirm  -> presence_result (the window's answer, for a browser with no enrolled credential)
 //
 // Fail closed: every exchange carries a deadline and resolves to a refusal, never a hang; a detach fails the
 // outstanding exchange and drops the pending request, since the host that asked is gone with the port.
@@ -18,6 +21,7 @@ import {
   EnrollOptionsFrameSchema,
   EnrollResultFrameSchema,
   type PresenceAssertWire,
+  type PresenceConfirmWire,
   type PresenceRequestFrame,
   PresenceRequestFrameSchema,
   PresenceResultFrameSchema,
@@ -97,7 +101,7 @@ function slotRefusal(): Refused | null {
 /** Post `frame` and await a reply wearing one of `replies`, interpreted by `onReply`. `onPosted` runs once
  * the frame is on the pipe, so state that must change only for a frame the host can see changes there. */
 function exchange<T>(
-  frame: EnrollBeginWire | EnrollFinishWire | PresenceAssertWire,
+  frame: EnrollBeginWire | EnrollFinishWire | PresenceAssertWire | PresenceConfirmWire,
   replies: readonly ReplyTag[],
   onReply: (frame: WebAuthnInboundFrame) => T | Refused,
   onPosted: () => void = () => {},
@@ -174,18 +178,37 @@ export function pendingPresenceRequest(): PresenceRequestFrame | null {
  * and the newer request stays pending for the page to read. The request is consumed only once the answer
  * is on the pipe, so neither a busy worker nor a failed post loses a tap the user already made. */
 export function assertPresence(answer: PresenceAnswer): Promise<PresenceAssertView> {
+  const { nonce, ...response } = answer;
+  return answerPending(nonce, {
+    type: "presence_assert",
+    ...response,
+  } satisfies PresenceAssertWire);
+}
+
+/** Answer the pending request with the window's confirmation instead of an assertion. Same nonce rule as
+ * assertPresence; the host decides whether this browser may answer in software at all. */
+export function confirmPresence(nonce: string): Promise<PresenceAssertView> {
+  return answerPending(nonce, { type: "presence_confirm", nonce } satisfies PresenceConfirmWire);
+}
+
+/** The one lifecycle of an answer to the pending request, whichever frame carries it: the answer must name the
+ * pending request's nonce (an answer to a superseded request answers nothing), and the request is consumed only
+ * once the answer is on the pipe. */
+function answerPending(
+  nonce: string,
+  frame: PresenceAssertWire | PresenceConfirmWire,
+): Promise<PresenceAssertView> {
   if (!pendingRequest.value) {
     return Promise.resolve({ ok: false, error: "no presence request is pending" });
   }
-  if (pendingRequest.value.nonce !== answer.nonce) {
+  if (pendingRequest.value.nonce !== nonce) {
     return Promise.resolve({ ok: false, error: "the presence request was superseded" });
   }
-  const { nonce: _answered, ...response } = answer;
   return exchange(
-    { type: "presence_assert", ...response } satisfies PresenceAssertWire,
+    frame,
     ["presence_result"],
-    (frame): PresenceAssertView => {
-      const result = PresenceResultFrameSchema.safeParse(frame);
+    (reply): PresenceAssertView => {
+      const result = PresenceResultFrameSchema.safeParse(reply);
       if (!result.success) return { ok: false, error: "malformed presence_result from host" };
       return result.data.ok ? { ok: true } : { ok: false, error: result.data.reason };
     },

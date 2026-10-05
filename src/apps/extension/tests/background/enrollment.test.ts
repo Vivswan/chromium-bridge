@@ -42,7 +42,7 @@ function inState<S extends EnrollmentStatus["state"]>(
 // response, consumed verbatim by the popup/options views): the invalid
 // combinations are unrepresentable, not merely unproduced.
 function enrollmentStatusTypePins(): EnrollmentStatus[] {
-  const base = { ok: true, platformSupported: true } as const;
+  const base = { ok: true } as const;
   return [
     // @ts-expect-error a pinned status is structurally never blocked
     { ...base, state: "pinned", blocked: true, keyId: "k", fingerprint: "f", pinnedAt: 1 },
@@ -68,7 +68,6 @@ void enrollmentStatusTypePins;
 // synchronously-writable backing store patched over storage.local: tests
 // mutate `store` directly (e.g. store.enclavePin = ...) and the very next
 // read must see it, which fakeBrowser's own async Map cannot guarantee.
-let mockOs = "mac";
 
 function installBrowserMock(): Record<string, unknown> {
   fakeBrowser.reset();
@@ -96,7 +95,6 @@ function installBrowserMock(): Record<string, unknown> {
     Promise.resolve();
   const runtime = fakeBrowser.runtime as unknown as Record<string, unknown>;
   runtime.id = "test-ext-id";
-  runtime.getPlatformInfo = () => Promise.resolve({ os: mockOs });
   (fakeBrowser as unknown as Record<string, unknown>).action = {
     setBadgeText: () => Promise.resolve(),
     setBadgeBackgroundColor: () => Promise.resolve(),
@@ -183,7 +181,6 @@ let store: Record<string, unknown>;
 let posted: Array<Record<string, unknown>>;
 
 beforeEach(() => {
-  mockOs = "mac";
   store = installBrowserMock();
   posted = [];
   collaborator.onDetach(); // clear any leftover outstanding challenge from a prior test
@@ -461,23 +458,6 @@ describe("ceremony state machine", () => {
     const st = await getEnrollmentStatus();
     expect(st.state).toBe("unpaired");
     expect(st.lastError).toContain("unknown_error");
-    expect((await enrollmentGate()).allowed).toBe(false);
-  });
-
-  test("a host claiming unsupported_platform on macOS stays blocked (no downgrade dodge)", async () => {
-    await onPortConnected();
-    await handleEnclaveFrame({ type: "enclave_error", reason: "unsupported_platform" });
-    const st = await getEnrollmentStatus();
-    expect(st.lastError).toContain("suspect");
-    expect((await enrollmentGate()).allowed).toBe(false);
-  });
-
-  test("unsupported_platform during verify fails closed (downgrade claim on a pinned machine)", async () => {
-    const key = await genKey();
-    await pairAndPin(key);
-    expect((await verifyPinnedNow()).ok).toBe(true);
-    await handleEnclaveFrame({ type: "enclave_error", reason: "unsupported_platform" });
-    expect((await getEnrollmentStatus()).state).toBe("compromised");
     expect((await enrollmentGate()).allowed).toBe(false);
   });
 
@@ -816,22 +796,23 @@ describe("ceremony state machine", () => {
     const key = await genKey();
     await pairAndPin(key);
 
-    // Stall the gate's platform probe: the first pass has already read
-    // compromised = null when the mark lands, so only the serialized re-check
-    // can honor it. The old, unserialized gate dispatched from the stale
-    // pre-mark answer.
-    const runtime = fakeBrowser.runtime as unknown as {
-      getPlatformInfo: () => Promise<{ os: string }>;
+    // Stall the gate's pin read (the read right after the compromised mark's): the first pass has already
+    // read compromised = null when the mark lands, so only the serialized re-check can honor it. The old,
+    // unserialized gate dispatched from the stale pre-mark answer.
+    const local = fakeBrowser.storage.local as unknown as {
+      get: (key: string) => Promise<Record<string, unknown>>;
     };
-    const realProbe = runtime.getPlatformInfo;
+    const realGet = local.get;
     let release!: () => void;
     const held = new Promise<void>((resolve) => (release = resolve));
     let signalParked!: () => void;
     const parked = new Promise<void>((resolve) => (signalParked = resolve));
-    runtime.getPlatformInfo = async () => {
-      signalParked(); // the gate is here, provably
-      await held;
-      return realProbe();
+    local.get = async (key) => {
+      if (key === "enclavePin") {
+        signalParked(); // the gate is here, provably
+        await held;
+      }
+      return realGet(key);
     };
 
     let dispatched = 0;
@@ -840,7 +821,7 @@ describe("ceremony state machine", () => {
     });
     await parked; // the gate has actually reached the stalled probe
     await pinStore.setCompromised({ reason: "marked mid-gate", at: Date.now() });
-    runtime.getPlatformInfo = realProbe;
+    local.get = realGet;
     release();
 
     const gate = await gateP;
@@ -857,24 +838,26 @@ describe("ceremony state machine", () => {
     // confirming read has started. The op is then ordered before the
     // transition by mechanism - its dispatch kickoff runs synchronously
     // inside the gate's critical section, so the queued revoke cannot apply
-    // first. Stall the confirming read's platform probe (the second probe
-    // call; the first pass takes the first) to queue the revoke mid-confirm.
-    const runtime = fakeBrowser.runtime as unknown as {
-      getPlatformInfo: () => Promise<{ os: string }>;
+    // first. Stall the confirming read's compromised-mark read (the second one; the first pass takes the
+    // first, and nothing else on the gate path reads that key) to queue the revoke mid-confirm.
+    const local = fakeBrowser.storage.local as unknown as {
+      get: (key: string) => Promise<Record<string, unknown>>;
     };
-    const realProbe = runtime.getPlatformInfo;
+    const realGet = local.get;
     let release!: () => void;
     const held = new Promise<void>((resolve) => (release = resolve));
     let signalParked!: () => void;
     const parked = new Promise<void>((resolve) => (signalParked = resolve));
-    let probeCalls = 0;
-    runtime.getPlatformInfo = async () => {
-      probeCalls += 1;
-      if (probeCalls === 2) {
-        signalParked(); // the confirming read is here, provably
-        await held; // park only the confirming read
+    let markReads = 0;
+    local.get = async (key) => {
+      if (key === "enclaveCompromised") {
+        markReads += 1;
+        if (markReads === 2) {
+          signalParked(); // the confirming read is here, provably
+          await held; // park only the confirming read
+        }
       }
-      return realProbe();
+      return realGet(key);
     };
 
     const events: string[] = [];
@@ -885,7 +868,7 @@ describe("ceremony state machine", () => {
     });
     await parked; // the confirming read has actually reached the parked probe
     const revokeP = revokePin(); // queued behind the running confirm
-    runtime.getPlatformInfo = realProbe;
+    local.get = realGet;
     release();
 
     const gate = await gateP;
@@ -996,51 +979,22 @@ describe("periodic re-verification (hostReverifyMs)", () => {
   });
 });
 
-describe("platform scoping (non-Enclave platforms)", () => {
-  test("on linux, enrollment is unavailable: gate open, no ceremony, honest status", async () => {
-    mockOs = "linux";
-    expect((await enrollmentGate()).allowed).toBe(true); // enrollment unavailable off-mac
-    await onPortConnected();
-    expect(posted.length).toBe(0); // no challenge ever issued
+describe("enrollment is required on every platform", () => {
+  test("a fresh, uncompromised, unpaired profile is refused and reported blocked", async () => {
+    // No platform probe exists any more: nothing but a pin opens the gate, wherever the browser runs.
+    const gate = await enrollmentGate();
+    expect(gate.allowed).toBe(false);
+    if (!gate.allowed) expect(gate.reason).toContain("enrollment required");
     const st = await getEnrollmentStatus();
-    expect(st.platformSupported).toBe(false);
     expect(st.state).toBe("unpaired");
-    expect(st.blocked).toBe(false);
+    expect(st.blocked).toBe(true);
   });
 
-  test("on windows, pairing and verify actions refuse rather than challenge", async () => {
-    mockOs = "win";
-    const pair = await startPairing();
-    expect(pair).toEqual({ ok: false, error: expect.stringContaining("unavailable") });
-    const verify = await verifyPinnedNow();
-    expect(verify.ok).toBe(false);
-    expect(posted.length).toBe(0);
-  });
-
-  test("only the browser's probe decides: the host's unsupported claim cannot open a mac gate", async () => {
-    // mockOs stays "mac". Even after the host answers unsupported_platform,
-    // the gate must keep blocking - otherwise a substituted host could dodge
-    // enrollment by lying about the platform.
-    await onPortConnected();
-    await handleEnclaveFrame({ type: "enclave_error", reason: "unsupported_platform" });
-    expect((await enrollmentGate()).allowed).toBe(false);
-    expect((await getEnrollmentStatus()).platformSupported).toBe(true);
-  });
-
-  test("a failing platform probe fails closed (gate still enforces)", async () => {
-    (
-      globalThis as unknown as { chrome: { runtime: { getPlatformInfo: () => Promise<never> } } }
-    ).chrome.runtime.getPlatformInfo = () => Promise.reject(new Error("probe failed"));
-    expect((await enrollmentGate()).allowed).toBe(false);
-    expect((await getEnrollmentStatus()).platformSupported).toBe(true);
-  });
-
-  test("a compromised mark still blocks regardless of platform", async () => {
-    mockOs = "linux";
+  test("a compromised mark blocks and the status reports it", async () => {
     store.enclaveCompromised = { reason: "test", at: Date.now() };
     expect((await enrollmentGate()).allowed).toBe(false);
     // The status must report the truth so the UI renders the compromised
-    // panel (with its revoke control), not the platform-N/A panel.
+    // panel (with its revoke control).
     const st = await getEnrollmentStatus();
     expect(st.state).toBe("compromised");
     expect(st.blocked).toBe(true);

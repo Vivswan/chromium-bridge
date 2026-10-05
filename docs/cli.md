@@ -153,7 +153,7 @@ Once the allowlist exists, anything unmatched fails closed, including an identit
 - Live browser connections are severed within about a second, and new ones are refused. In-flight tool calls fail fast with `CONNECTION_LOST`.
 - Every subsequent tool call, from every attached client, is refused with the stable `BRIDGE_KILLED` error code. Clients stay connected so they can show you the refusal instead of dying silently.
 - The state is persisted (in `trust.json`, next to the lock file) and survives restarts, reconnects, and reboots.
-- The extension's options page shows the state; engaging the switch works from any surface, but releasing it does not (a web page cannot see or touch any of it).
+- The extension's options page shows the state; engaging the switch works from any surface. Releasing it from the extension is answered by the host with a presence request (the WebAuthn tap, or the window on a browser with no enrolled credential); the options page does not offer that control yet, so today release is the CLI's (a web page cannot see or touch any of it).
 
 Nothing releases the switch on its own. Release demands proof of user presence on either surface:
 

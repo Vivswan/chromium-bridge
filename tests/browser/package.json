@@ -11,7 +11,8 @@
     "test:smoke": "bun ext_test.ts",
     "test:security": "bun security_browser_test.ts",
     "test:cancel": "bun cancel_test.ts",
-    "test:webauthn": "bun webauthn_test.ts"
+    "test:webauthn": "bun webauthn_test.ts",
+    "test:presence": "bun presence_exchange_test.ts"
   },
   "dependencies": {
     "@chromium-bridge/shared": "workspace:*",

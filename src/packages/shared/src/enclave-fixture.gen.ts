@@ -8,8 +8,6 @@
 // identity on both sides (ENCLAVE_FIXTURE_KEY_ID in enclave.gen.ts). Test-only: production code never imports this.
 
 export interface EnclaveGoldenVector {
-  /** Which domain-separation prefix the message was built under. */
-  domain: "challenge" | "presence";
   nonce: string;
   /** null = the Rust side signed with no context (None). */
   context: string | null;
@@ -33,7 +31,6 @@ export const ENCLAVE_GOLDEN_FIXTURE: EnclaveGoldenFixture = {
   keyIdHex: "4269889431e3131966fcaf6a457141943ed2c35b5b917ae62cb339546f523551",
   vectors: [
     {
-      domain: "challenge",
       nonce: "abc",
       context: "ctx",
       messageHex: "6368726f6d69756d2d6272696467652d656e636c6176652d76310061626300637478",
@@ -41,7 +38,6 @@ export const ENCLAVE_GOLDEN_FIXTURE: EnclaveGoldenFixture = {
         "xyQ35j0TNadoFZzCQQLv9NoNgjRsnphtK3qkRVuBBkch/1vIdEu77Qa+NYu58n43NdJTIIVIEPMTWrEi9iO4hw==",
     },
     {
-      domain: "challenge",
       nonce: "abc",
       context: null,
       messageHex: "6368726f6d69756d2d6272696467652d656e636c6176652d76310061626300",
@@ -49,7 +45,6 @@ export const ENCLAVE_GOLDEN_FIXTURE: EnclaveGoldenFixture = {
         "1FTnZYP8ayXs8vHxS8QOrh9LTyZM8I0sA7QRPEhLe5kFhT/af38YY7qEbmChmIzAorf6C/U8Jzzko2vnINqolw==",
     },
     {
-      domain: "challenge",
       nonce: "abc",
       context: "",
       messageHex: "6368726f6d69756d2d6272696467652d656e636c6176652d76310061626300",
@@ -57,15 +52,6 @@ export const ENCLAVE_GOLDEN_FIXTURE: EnclaveGoldenFixture = {
         "1FTnZYP8ayXs8vHxS8QOrh9LTyZM8I0sA7QRPEhLe5kFhT/af38YY7qEbmChmIzAorf6C/U8Jzzko2vnINqolw==",
     },
     {
-      domain: "presence",
-      nonce: "abc",
-      context: "ctx",
-      messageHex: "6368726f6d69756d2d6272696467652d70726573656e63652d76310061626300637478",
-      sigB64:
-        "iRaAp8mJBGtiTjRklLjupNSz859fZECt0+dix/9UQEm1iFR7jKg2id3WvASJdiH8ReqJLh3jx3wQ3oMOy8I70g==",
-    },
-    {
-      domain: "challenge",
       nonce: "9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f",
       context: "ext:gijmanfkddbcbmkfmplnjcbmpnjmocpk:pair",
       messageHex:
@@ -74,17 +60,6 @@ export const ENCLAVE_GOLDEN_FIXTURE: EnclaveGoldenFixture = {
         "L8H8CCDYwTExnARXR8n5YgpEKtFmjdIJFUfG2ta6N+7KLJ5LN0c+0yE2BBKRffmC5cCt2rjYz6mjfezc1vLTTg==",
     },
     {
-      domain: "presence",
-      nonce: "9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f",
-      context:
-        "ext:gijmanfkddbcbmkfmplnjcbmpnjmocpk:presence:eval:abababababababababababababababababababababababababababababababab",
-      messageHex:
-        "6368726f6d69756d2d6272696467652d70726573656e63652d76310039663966396639663966396639663966396639663966396639663966396639663966396639663966396639663966396639663966396639663966396639663966006578743a67696a6d616e666b64646263626d6b666d706c6e6a63626d706e6a6d6f63706b3a70726573656e63653a6576616c3a61626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162",
-      sigB64:
-        "ZUMgrjoAa4rHRyqkQH5yjTw/dUX/Tza+j23+NVPZmntGZor59N/yUDDV5SFHesUY4VjzRXbFIhsVg26sbyz1Tw==",
-    },
-    {
-      domain: "challenge",
       nonce: "utf8-\u00e9-nonce",
       context: "ctx-\u4e2d\u6587-\ud83d\udd12",
       messageHex:
@@ -93,7 +68,6 @@ export const ENCLAVE_GOLDEN_FIXTURE: EnclaveGoldenFixture = {
         "45fr04sd2hBIYY0iOJLSjCBeW1S+ESiohiUg08WkxQlVbaX6urGgBkVoFQQzM5SUMLX/xL9eG/gASh0Q5FFL6g==",
     },
     {
-      domain: "challenge",
       nonce:
         "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn",
       context:

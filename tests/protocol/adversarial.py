@@ -267,7 +267,6 @@ class Admission(AdversarialCase):
     def test_a14_non_allowlisted_harness_is_refused(self):
         """Once any client is paired, admission is enforced: a harness that is
         not on the allowlist never becomes the broker and exits 1."""
-        self.skip_if_enrolled()
         self.skip_unless_unix("harness attestation")
         h.reset_enrollment()
         self.addCleanup(h.reset_enrollment)
@@ -278,7 +277,6 @@ class Admission(AdversarialCase):
         """Authorization keys on the attested hash: claiming a paired client's
         NAME through the env var is refused, and the refusal audit line shows
         the spoofed name reached the server."""
-        self.skip_if_enrolled()
         self.skip_unless_unix("harness attestation")
         h.reset_enrollment()
         self.addCleanup(h.reset_enrollment)
@@ -318,7 +316,6 @@ class Revocation(AdversarialCase):
         """client_list and client_revoke are answered by the host; the revoke
         rewrites the allowlist, bumps the epoch, leaves the surviving client
         serving, and a ghost name is ok:false, never a guess."""
-        self.skip_if_enrolled()
         self.skip_unless_unix("harness attestation")
         h.reset_enrollment()
         self.addCleanup(h.reset_enrollment)
@@ -347,7 +344,6 @@ class Revocation(AdversarialCase):
         same-user revert to the open bootstrap: no user-space marker survives a
         writer who can delete any file we can write. The revert is ERROR-logged,
         never silent."""
-        self.skip_if_enrolled()
         self.skip_unless_unix("harness attestation")
         h.reset_enrollment()
         self.addCleanup(h.reset_enrollment)
@@ -401,7 +397,7 @@ class KillSwitch(AdversarialCase):
         errored = [rec for rec in h.audit_records()
                    if rec["event_kind"] == "kill_release" and rec.get("outcome") == "error"]
         self.assertEqual(len(errored), 1, "the errored release attempt is audited once")
-        self.assertIn("auth=cli_confirm", errored[0]["detail"])
+        self.assertIn("auth=tty", errored[0]["detail"])
         self.assertIn("write refused", errored[0]["detail"])
         doc = h.run_cli(["doctor"])
         self.assertEqual(doc.returncode, 1, doc.stdout)
@@ -411,7 +407,6 @@ class KillSwitch(AdversarialCase):
         """Releasing the kill switch needs the presence floor: a piped stdin and
         a wrong phrase are refused and audited with the presence reason; the
         phrase typed on a pty releases, audited with its rung."""
-        self.skip_if_enrolled()
         self.skip_unless_unix("the pty-driven confirmation")
         self.addCleanup(h.run_with_cli_presence, ["unkill"], check=False)
         h.remove_lock()
@@ -432,7 +427,7 @@ class KillSwitch(AdversarialCase):
         self.assertEqual([rec["outcome"] for rec in releases], ["refused", "refused", "ok"])
         for rec in releases[:2]:
             self.assertIn("presence", rec["detail"], "the refusal names the presence gate")
-        self.assertIn("auth=cli_confirm", releases[2]["detail"])
+        self.assertIn("auth=tty", releases[2]["detail"])
 
 
 class Versions(AdversarialCase):

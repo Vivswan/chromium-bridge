@@ -35,18 +35,6 @@ export const EnclaveInboundFrameSchema = z.looseObject({
 
 export type EnclaveInboundFrame = z.infer<typeof EnclaveInboundFrameSchema>;
 
-// The host's answers to a presence_challenge (the request is outbound only and never classifies inbound).
-// Distinct from the enrollment ceremony frames on purpose: they are correlated by the confirmation provider,
-// not the enrollment state machine, and the signature they carry covers the PRESENCE domain (PRESENCE_DOMAIN in
-// enclave.gen.ts), never the enrollment one.
-export const PRESENCE_FRAME_TYPES = ["presence_proof", "presence_error"] as const;
-
-export const PresenceInboundFrameSchema = z.looseObject({
-  type: z.enum(PRESENCE_FRAME_TYPES),
-});
-
-export type PresenceInboundFrame = z.infer<typeof PresenceInboundFrameSchema>;
-
 // The admin replies the host sends back. Requests (client_list / client_revoke) are outbound only and never
 // classify inbound; kill_status_result classifies by full parse (isKillStatusFrame).
 export const ADMIN_RESULT_FRAME_TYPES = ["client_list_result", "client_revoke_result"] as const;
@@ -85,7 +73,7 @@ export const KEY_ID_HEX = /^[0-9a-f]{64}$/;
 // record resolves to compromised and an absent one to awaitingBaseline, each a blocked posture carrying a
 // reason and no values, so no default is ever enforced in their place. Reading corrupt as absent would let an
 // older genuine baseline replay as first-ever, and per-field salvage would hand a corrupted store a relaxation
-// lever, so parseStoredPolicyValues returns null on any failure.
+// lever, so the stored-policy reader returns null on any failure.
 export const StoredPolicyStateSchema = z.strictObject({
   // The pinned enrollment keyId this ratchet state is bound to, or null for the unpinned lane. Every read
   // re-checks it against the CURRENT pin, so a record whose scope no longer matches is inert (deny baseline,

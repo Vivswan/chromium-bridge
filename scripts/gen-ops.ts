@@ -481,7 +481,6 @@ console.log("generated src/packages/shared/src/host.gen.ts from the Rust core");
 // Its own Rust emitter (examples/emit_enclave_contract.rs); shares no state with the emit_contract flow above.
 
 interface EnclaveVector {
-  domain: "challenge" | "presence";
   nonce: string;
   context: string | null;
   messageHex: string;
@@ -496,7 +495,6 @@ interface PolicyVector {
 
 interface EnclaveContract {
   challengeDomain: string;
-  presenceDomain: string;
   maxNonceLen: number;
   maxContextLen: number;
   pubkeyLen: number;
@@ -525,13 +523,14 @@ if (!enclaveEmitted.success) {
 const enclave = JSON.parse(enclaveEmitted.stdout.toString()) as EnclaveContract;
 
 // Structural sanity only; anything malformed would generate a silently weaker verifier, so generation fails.
-for (const domain of [enclave.challengeDomain, enclave.presenceDomain]) {
-  if (typeof domain !== "string" || domain.length === 0 || domain.includes("\0")) {
-    throw new Error(`gen-ops: malformed enclave domain string ${JSON.stringify(domain)}`);
-  }
-}
-if (enclave.challengeDomain === enclave.presenceDomain) {
-  throw new Error("gen-ops: the enclave challenge and presence domains must differ");
+if (
+  typeof enclave.challengeDomain !== "string" ||
+  enclave.challengeDomain.length === 0 ||
+  enclave.challengeDomain.includes("\0")
+) {
+  throw new Error(
+    `gen-ops: malformed enclave domain string ${JSON.stringify(enclave.challengeDomain)}`,
+  );
 }
 for (const bound of [
   enclave.maxNonceLen,
@@ -587,16 +586,15 @@ const emitAsciiString = (s: string): string =>
 const reasonCodes = enclave.reasonCodes.map((r) => emitAsciiString(r)).join(",\n  ");
 
 const enclaveOut = `// GENERATED from the Rust core (src/packages/core/src/enclave/challenge.rs,
-// pubkey.rs, der.rs, and mod.rs REASON_CODES) by scripts/gen-ops.ts - DO NOT
-// EDIT. Edit the enclave module, then run \`moon run gen\`.
+// pubkey.rs, and mod.rs REASON_CODES) by scripts/gen-ops.ts - DO NOT EDIT.
+// Edit the enclave module, then run \`moon run gen\`.
 //
-// The enclave signing contract, TS side: the constants the WebCrypto verifier (background/enclave-verify.ts) and the
+// The host-key signing contract, TS side: the constants the WebCrypto verifier (background/enclave-verify.ts) and the
 // enrollment state machine (background/enrollment.ts) enforce. The signed-message ALGORITHM is pinned separately by
 // the golden vectors in enclave-fixture.gen.ts.
 
-// Enrollment challenges and per-action presence sign under distinct domains, so neither can be replayed as the other.
+// The host-key challenge domain; the policy signature has its own (policy.gen.ts), so neither replays as the other.
 export const CHALLENGE_DOMAIN = ${emitAsciiString(enclave.challengeDomain)};
-export const PRESENCE_DOMAIN = ${emitAsciiString(enclave.presenceDomain)};
 
 // Host-enforced bounds on challenge fields, in UTF-8 bytes; the verifier rejects anything outside them before the crypto.
 export const MAX_NONCE_BYTES = ${enclave.maxNonceLen};
@@ -635,7 +633,6 @@ const vectorItems = enclave.fixture.vectors
   .map(
     (v) =>
       `  {\n` +
-      `    domain: ${JSON.stringify(v.domain)},\n` +
       `    nonce: ${emitAsciiString(v.nonce)},\n` +
       `    context: ${v.context === null ? "null" : emitAsciiString(v.context)},\n` +
       `    messageHex: ${JSON.stringify(v.messageHex)},\n` +
@@ -665,8 +662,6 @@ const fixtureOut = `// GENERATED from the Rust core (examples/emit_enclave_contr
 // identity on both sides (ENCLAVE_FIXTURE_KEY_ID in enclave.gen.ts). Test-only: production code never imports this.
 
 export interface EnclaveGoldenVector {
-  /** Which domain-separation prefix the message was built under. */
-  domain: "challenge" | "presence";
   nonce: string;
   /** null = the Rust side signed with no context (None). */
   context: string | null;
@@ -727,8 +722,8 @@ console.log(
 
 // ---- policy.gen.ts -----------------------------------------------------------
 // Its own Rust emitter (examples/emit_policy_contract.rs). The one cross-reference is the domain-separation check
-// against the enclave contract above: the policy domain must be a THIRD domain, or a policy signature could be
-// replayed as an enrollment or presence proof.
+// against the enclave contract above: the policy domain must differ from the host-key challenge domain, or a
+// policy signature could be replayed as a challenge proof.
 
 // The direction tags each value kind may carry (Rust BoolPole / MsOrder / the set order), so generation refuses an
 // unknown tag with a clear message instead of emitting a table the typed TS object rejects.
@@ -779,11 +774,8 @@ if (
 ) {
   throw new Error(`gen-ops: malformed policy domain string ${JSON.stringify(policy.policyDomain)}`);
 }
-if (
-  policy.policyDomain === enclave.challengeDomain ||
-  policy.policyDomain === enclave.presenceDomain
-) {
-  throw new Error("gen-ops: the policy domain must differ from both enclave domains");
+if (policy.policyDomain === enclave.challengeDomain) {
+  throw new Error("gen-ops: the policy domain must differ from the enclave challenge domain");
 }
 // The fixture vectors must sign under this domain, or a golden replay would verify bytes the real push never carries.
 if (policy.policyDomain !== enclave.policyFixture.policyDomain) {
@@ -901,8 +893,8 @@ const policyOut = `// GENERATED from the Rust core (src/packages/core/src/policy
 
 import { z } from "zod";
 
-// The enrollment key signs UTF8(POLICY_DOMAIN) || 0x00 || doc_bytes. A third domain, distinct from the enclave
-// challenge and presence domains, so a policy signature can never be replayed as either proof, nor they as a policy.
+// The host key signs UTF8(POLICY_DOMAIN) || 0x00 || doc_bytes. Distinct from the host-key challenge domain, so a
+// policy signature can never be replayed as a challenge proof, nor a proof as a policy.
 export const POLICY_DOMAIN = ${JSON.stringify(policy.policyDomain)};
 
 // PolicyDocSchema pins this as a literal: a newer document is rejected rather than misinterpreted.

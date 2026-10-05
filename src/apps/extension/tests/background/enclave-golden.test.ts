@@ -2,8 +2,8 @@
 //
 // The fixture ("@chromium-bridge/shared/enclave-fixture.gen") is
 // generated from the Rust core by `moon run gen`: message bytes built by
-// challenge_message/presence_message and deterministic software-P256
-// signatures routed through the host's DER -> P1363 converter. Replaying it
+// challenge_message and deterministic software-P256 signatures in the raw
+// r || s form the host's own signer emits. Replaying it
 // through the extension's WebCrypto verifier means either side drifting from
 // the shared byte contract breaks a gate: a Rust-side change regenerates the
 // fixture (check-gen fails until it does), and a TS verifier that no longer
@@ -23,7 +23,6 @@ import {
   ENCLAVE_FIXTURE_KEY_ID,
   MAX_CONTEXT_BYTES,
   MAX_NONCE_BYTES,
-  PRESENCE_DOMAIN,
 } from "@chromium-bridge/shared/enclave.gen";
 import { ENCLAVE_GOLDEN_FIXTURE } from "@chromium-bridge/shared/enclave-fixture.gen";
 import { describe, expect, test } from "vitest";
@@ -31,11 +30,9 @@ import {
   base64Decode,
   base64Encode,
   buildChallengeMessage,
-  buildPresenceMessage,
   computeKeyId,
   parsePubkey,
   verifyPairingProof,
-  verifyPresenceProofAgainstPin,
   verifyProofAgainstPin,
 } from "@/lib/background/enclave-verify";
 
@@ -50,16 +47,13 @@ function hexDecode(hex: string): Uint8Array {
 }
 
 function buildMessage(v: (typeof vectors)[number]): Uint8Array {
-  const build = v.domain === "challenge" ? buildChallengeMessage : buildPresenceMessage;
-  return build(v.nonce, v.context ?? undefined);
+  return buildChallengeMessage(v.nonce, v.context ?? undefined);
 }
 
 describe("enclave golden vectors (Rust-generated fixture)", () => {
-  test("the fixture covers both domains, a None context, multi-byte UTF-8, and both bounds", () => {
+  test("the fixture covers a None context, an empty one, multi-byte UTF-8, and both bounds", () => {
     // Guard the fixture's own coverage, so trimming the Rust vector matrix
     // cannot silently weaken this suite.
-    expect(vectors.some((v) => v.domain === "challenge")).toBe(true);
-    expect(vectors.some((v) => v.domain === "presence")).toBe(true);
     expect(vectors.some((v) => v.context === null)).toBe(true);
     expect(vectors.some((v) => v.context === "")).toBe(true);
     const utf8 = new TextEncoder();
@@ -81,17 +75,16 @@ describe("enclave golden vectors (Rust-generated fixture)", () => {
     ).toBe(true);
   });
 
-  test("buildChallengeMessage/buildPresenceMessage reconstruct the Rust bytes exactly", () => {
+  test("buildChallengeMessage reconstructs the Rust bytes exactly", () => {
     for (const v of vectors) {
       expect(base64Encode(buildMessage(v))).toBe(base64Encode(hexDecode(v.messageHex)));
     }
   });
 
-  test("the Rust bytes are prefixed by the matching generated domain", () => {
+  test("the Rust bytes are prefixed by the generated challenge domain", () => {
     const utf8 = new TextEncoder();
     for (const v of vectors) {
-      const domain = v.domain === "challenge" ? CHALLENGE_DOMAIN : PRESENCE_DOMAIN;
-      const prefix = [...utf8.encode(domain), 0];
+      const prefix = [...utf8.encode(CHALLENGE_DOMAIN), 0];
       expect(Array.from(hexDecode(v.messageHex).slice(0, prefix.length))).toEqual(prefix);
     }
   });
@@ -102,23 +95,17 @@ describe("enclave golden vectors (Rust-generated fixture)", () => {
     expect(keyIdHex).toBe(ENCLAVE_FIXTURE_KEY_ID);
   });
 
-  test("every proof verifies against the fixture-pinned pubkey under its domain", async () => {
+  test("every proof verifies against the fixture-pinned pubkey", async () => {
     for (const v of vectors) {
       const proof = { sig: v.sigB64, key_id: keyIdHex, pubkey: pubkeyB64 };
-      const verify =
-        v.domain === "challenge" ? verifyProofAgainstPin : verifyPresenceProofAgainstPin;
-      const res = await verify(proof, v.nonce, v.context ?? undefined, pubkeyB64, keyIdHex);
+      const res = await verifyProofAgainstPin(
+        proof,
+        v.nonce,
+        v.context ?? undefined,
+        pubkeyB64,
+        keyIdHex,
+      );
       expect(res).toEqual({ ok: true });
-    }
-  });
-
-  test("a proof never verifies under the other domain (no cross-replay)", async () => {
-    for (const v of vectors) {
-      const proof = { sig: v.sigB64, key_id: keyIdHex, pubkey: pubkeyB64 };
-      const verifyOther =
-        v.domain === "challenge" ? verifyPresenceProofAgainstPin : verifyProofAgainstPin;
-      const res = await verifyOther(proof, v.nonce, v.context ?? undefined, pubkeyB64, keyIdHex);
-      expect(res.ok).toBe(false);
     }
   });
 
@@ -165,7 +152,6 @@ describe("fixture key deny-list (never enrollable)", () => {
 
   test("checked-in proofs are refused at pairing time, before any crypto", async () => {
     for (const v of vectors) {
-      if (v.domain !== "challenge") continue;
       const proof = { sig: v.sigB64, key_id: keyIdHex, pubkey: pubkeyB64 };
       const res = await verifyPairingProof(proof, v.nonce, v.context ?? undefined);
       expect(res.ok).toBe(false);

@@ -12,12 +12,13 @@
  * instance. If the manifest has a pinned public key, the test derives the
  * pinned extension id; otherwise it derives the id from the throwaway path.
  *
- * OPT-IN, Windows + Chrome for Testing (or Chromium). Pops a non-headless
- * window. macOS is SKIPPED: enrollment is unconditionally required there and
- * needs an interactive Touch ID pairing a throwaway profile cannot perform (the
- * macOS host-manifest plumbing below is kept for the day a pairing harness
- * exists). On Windows the HKCU registry value is backed up and restored. Not
- * part of the default suite or CI.
+ * OPT-IN, macOS or Windows + Chrome for Testing (or Chromium). Pops a
+ * non-headless window. Enrollment is required on every platform and a
+ * throwaway profile has no pinned host key, so the proof this test can give is
+ * that the chain reaches the extension's enrollment gate: tab_list comes back
+ * refused with the enrollment reason (the structured-data checks below run only
+ * where a paired profile is supplied). On Windows the HKCU registry value is
+ * backed up and restored. Not part of the default suite or CI.
  *
  * Run:  BB_REAL_E2E=1 node tests/browser/integration_e2e.ts
  */
@@ -65,20 +66,8 @@ if (process.env.BB_REAL_E2E !== "1") {
   process.exit(0);
 }
 if (process.platform !== "darwin" && !IS_WINDOWS) {
-  console.log("SKIP: real integration test runs on Windows only (macOS is skipped below).");
-  process.exit(0);
-}
-if (process.platform === "darwin") {
-  // There is no requireEnrollment opt-out to write into the throwaway profile:
-  // enrollment is unconditionally required on macOS, and satisfying it takes a
-  // real pairing ceremony (interactive Touch ID) a throwaway profile cannot
-  // perform - the bridge would refuse tab_list at the enrollment gate. Windows
-  // keeps working because the browser's own platform probe reports no Secure
-  // Enclave there, so enrollment is unavailable rather than unsatisfied.
   console.log(
-    "SKIP: on macOS the enrollment gate is unconditional and needs " +
-      "an interactive Touch ID pairing this throwaway profile cannot perform; run the real " +
-      "e2e on Windows (see tests/README.md).",
+    "SKIP: real integration test runs on macOS and Windows (profile-scoped host manifests).",
   );
   process.exit(0);
 }
@@ -269,11 +258,9 @@ async function main(): Promise<void> {
       );
     }
 
-    // The enrollment gate refuses bridge ops on macOS until a host key is
-    // paired and pinned, with no requireEnrollment opt-out, which is why the
-    // preflight above skips macOS outright. Here (Windows) the browser's own
-    // platform probe reports no Secure Enclave, enrollment is unavailable
-    // rather than unsatisfied, and the gate does not block.
+    // The enrollment gate refuses bridge ops until a host key is paired and
+    // pinned, with no opt-out and no platform exemption, and a throwaway profile
+    // holds no pin: the refusal below is the round trip's proof.
     const workerTarget = browser.targets().find((target) => target.url() === expectedWorkerUrl);
     const worker = await workerTarget!.worker();
     if (!worker) throw new Error("could not attach to the extension service worker");
@@ -312,36 +299,46 @@ async function main(): Promise<void> {
       },
     });
     const r = await recv();
-    if (r.result?.isError === true) {
-      check(false, `tab_list failed: ${r.result.content?.[0]?.text || "unknown error"}`);
+    const refusal: string | null =
+      r.result?.isError === true ? r.result.content?.[0]?.text || "unknown error" : null;
+    if (refusal !== null && !refusal.includes("enrollment required")) {
+      check(false, `tab_list failed: ${refusal}`);
       throw new Error("tab_list failed through the real native-messaging chain");
     }
-    const tabs = JSON.parse(r.result.content[0].text);
-    // The real proof: structured chrome.tabs data crossed the entire chain.
-    const first = Array.isArray(tabs) && tabs.length >= 1 ? tabs[0] : undefined;
-    check(
-      !!first && typeof first.id === "number" && typeof first.url === "string",
-      "tab_list returned structured real chrome.tabs data (full round-trip works)",
-    );
-    check(r.result.isError === false, "tool call not an error");
-    check(
-      r.result.resultType === "complete" && r.result._meta === undefined,
-      "modern tool result carries resultType (serverInfo _meta rides only discover)",
-    );
-
-    // Bonus hermeticity check: only holds when this launch is truly isolated.
-    // If your normal Chrome is running, it captures --load-extension and the
-    // extension answers from THAT session instead of our throwaway profile.
-    const hermetic = tabs.some((t: { url?: string }) => (t.url || "").includes("page.html"));
-    if (hermetic) {
-      check(true, "isolated: our fixture tab present (fully hermetic)");
-    } else {
-      console.log(
-        "  NOTE: fixture tab not seen - a running Chrome captured the extension\n" +
-          "        load, so tab_list reflected that session. The round-trip above is\n" +
-          "        still real. For full isolation, quit Chrome or point CHROME_BIN at a\n" +
-          "        separate Chromium/Canary before running.",
+    if (refusal !== null) {
+      // The structured checks below need a paired profile; the refusal is this run's proof.
+      check(
+        true,
+        "tab_list reached the extension's enrollment gate and was refused (no pin in a throwaway profile)",
       );
+    } else {
+      const tabs = JSON.parse(r.result.content[0].text);
+      // The real proof: structured chrome.tabs data crossed the entire chain.
+      const first = Array.isArray(tabs) && tabs.length >= 1 ? tabs[0] : undefined;
+      check(
+        !!first && typeof first.id === "number" && typeof first.url === "string",
+        "tab_list returned structured real chrome.tabs data (full round-trip works)",
+      );
+      check(r.result.isError === false, "tool call not an error");
+      check(
+        r.result.resultType === "complete" && r.result._meta === undefined,
+        "modern tool result carries resultType (serverInfo _meta rides only discover)",
+      );
+
+      // Bonus hermeticity check: only holds when this launch is truly isolated.
+      // If your normal Chrome is running, it captures --load-extension and the
+      // extension answers from THAT session instead of our throwaway profile.
+      const hermetic = tabs.some((t: { url?: string }) => (t.url || "").includes("page.html"));
+      if (hermetic) {
+        check(true, "isolated: our fixture tab present (fully hermetic)");
+      } else {
+        console.log(
+          "  NOTE: fixture tab not seen - a running Chrome captured the extension\n" +
+            "        load, so tab_list reflected that session. The round-trip above is\n" +
+            "        still real. For full isolation, quit Chrome or point CHROME_BIN at a\n" +
+            "        separate Chromium/Canary before running.",
+        );
+      }
     }
   } finally {
     if (browser) await browser.close().catch(() => {});

@@ -657,48 +657,11 @@ def serve_bridge_loop(nh, responder):
 # Presence-gated CLI commands (unkill, pair-client) on a pty
 # ---------------------------------------------------------------------------
 
-_enclave_key = None
-
-
-def enclave_key_present(env=None):
-    """Whether a Secure Enclave enrollment key exists here. When it does,
-    presence-gated commands raise a real Touch ID prompt an automated run
-    cannot answer, so callers skip (tests never raise real prompts). Only a
-    definitive `key: none` line lets them run; off macOS there is no
-    hardware rung. Read-only, never prompts; cached per process."""
-    global _enclave_key
-    if _enclave_key is not None:
-        return _enclave_key
-    _enclave_key = _probe_enclave_key(env)
-    return _enclave_key
-
-
-def _probe_enclave_key(env):
-    if sys.platform != "darwin":
-        return False
-    try:
-        r = run_cli(["enclave-status"], env=env, timeout=10)
-    except (OSError, subprocess.SubprocessError):
-        return True
-    if r.returncode != 0:
-        return True
-    for line in r.stdout.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("key:"):
-            rest = stripped[len("key:"):].split()
-            # The not-enrolled line is exactly `key:        none (run ...)`;
-            # match the first token so `nonetheless` can never read as none.
-            return not (rest and rest[0] == "none")
-    return True
-
-
 def run_with_cli_presence(args, phrase="release", check=True, timeout=15, env=None):
     """Run a capability-restoring subcommand (`unkill`, `pair-client`) through
-    its presence floor: with no enrollment key the hardware rung is
-    Unavailable and the CLI floor reads the confirmation phrase from a
-    terminal, so the command runs on a pty with the phrase already typed (the
-    pty queues it until the child reads). Callers guard with
-    enclave_key_present(). Unix only."""
+    its presence floor: the CLI reads the confirmation phrase from a terminal,
+    so the command runs on a pty with the phrase already typed (the pty queues
+    it until the child reads). Unix only."""
     import pty
 
     master, slave = pty.openpty()
@@ -834,13 +797,6 @@ class BridgeCase(unittest.TestCase):
         if os.name == "nt":
             self.skipTest(f"{what} is Unix-only (Windows bridges over a named pipe)")
 
-    def skip_if_enrolled(self):
-        """The presence floor is driven on a pty; an enrolled Secure Enclave key
-        reaches the Touch ID rung first and would raise a real prompt. That
-        path is covered by `moon run touchid-gates`."""
-        if enclave_key_present():
-            self.skipTest("an enrolled Secure Enclave key would raise a real Touch ID prompt")
-
     def bounded(self, label, fn, secs=20):
         """`fn()` under a hard timeout: a hang is a failed test, never a stuck
         gate."""
@@ -857,9 +813,8 @@ class BridgeCase(unittest.TestCase):
     def enrolled_broker(self, client):
         """This interpreter paired as a trusted client, with a serving broker
         and an attached browser; `client(server)` opens the MCP session.
-        Enrollment is reset at cleanup. Skips where the presence floor or
-        harness attestation is unavailable."""
-        self.skip_if_enrolled()
+        Enrollment is reset at cleanup. Skips where harness attestation is
+        unavailable."""
         self.skip_unless_unix("harness attestation")
         reset_enrollment()
         self.addCleanup(reset_enrollment)

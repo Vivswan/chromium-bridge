@@ -105,7 +105,6 @@ The full task menu, by area:
 | Protocol suites | `test-e2e`, `test-adversarial`, `test-chaos`, `check-uv` |
 | Interop suites | `test-interop` (official MCP SDK v2 client against the release binary), `harness-smoke` (real harness CLIs, isolated config dirs; the legacy-era opening-method canary) |
 | Browser suites | `test-browser`, `test-integration` (isolated Chrome only; never in `ci`) |
-| Touch ID runbooks | `touchid-proof`, `touchid-gates` (USER-RUN: raise real Touch ID prompts) |
 | Versioning | `check-version`, `check-extension-id`, `check-refresh-lockfiles` |
 | Repo hygiene | `check-cjk`, `check-typography`, `check-fuzz-smoke`, `check-toolchain`, `check-pins`, `check-planning-refs`, `check-hasher`, `check-ignored`, `check-yaml`, `check-actions`, `check-docs-literals`, `check-docs-policy`, `check-ci-scripts` |
 

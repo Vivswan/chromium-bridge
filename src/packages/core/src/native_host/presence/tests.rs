@@ -160,6 +160,24 @@ fn enroll_reason(reply: &HostReply) -> Option<String> {
     reason.clone()
 }
 
+/// Open a later enrollment: `enroll_begin` is answered `presence_required` beside the pushed request, `approver`
+/// answers it, and the second `enroll_begin` consumes the approval. Returns the enroll_options challenge.
+fn approve_enrollment(exchange: &mut Exchange, approver: &mut Authenticator) -> String {
+    let replies = exchange.enroll_begin();
+    assert_eq!(replies.len(), 2, "{replies:?}");
+    let (challenge, _) = presence_request(&replies[0]);
+    assert_eq!(
+        enroll_reason(&replies[1]).as_deref(),
+        Some("presence_required")
+    );
+    let replies = exchange.presence_assert(&approver.id_b64(), Ok(approver.assert(&challenge)));
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    assert_approved(&replies[0]);
+    let replies = exchange.enroll_begin();
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    enroll_options(&replies[0]).0
+}
+
 /// Enroll `authenticator` for `exchange`'s browser on a machine with no enrollment (trust on first use).
 fn enroll_tofu(exchange: &mut Exchange, authenticator: &Authenticator) {
     let replies = exchange.enroll_begin();
@@ -310,15 +328,13 @@ fn replayed_misdirected_and_unenrolled_answers_are_refused_and_the_switch_stays_
     let mut chrome = Exchange::new(label("chrome"));
     let other_browser = Authenticator::new(0x22);
     {
-        let replies = chrome.enroll_begin();
-        let (challenge, allowed) = presence_request(&replies[0]);
+        let (_, allowed) = presence_request(&chrome.enroll_begin()[0]);
         assert_eq!(
             allowed,
             vec![own.id_b64()],
             "any enrolled credential approves"
         );
-        let replies = chrome.presence_assert(&own.id_b64(), Ok(own.assert(&challenge)));
-        let (challenge, _) = enroll_options(&replies[1]);
+        let challenge = approve_enrollment(&mut chrome, &mut own);
         chrome.enroll_finish(Ok(other_browser.register(&challenge)));
     }
     let unenrolled = Authenticator::new(0x33);
@@ -420,12 +436,20 @@ fn a_later_enrollment_needs_presence_and_a_superseded_request_cannot_be_answered
         presence_reason(&replies[0]).as_deref(),
         Some("challenge_mismatch")
     );
-    // The refusal consumed the request; a fresh one is answered and opens the enrollment.
-    let replies = exchange.enroll_begin();
-    let (challenge, _) = presence_request(&replies[0]);
+    // The refusal consumed the request; a fresh one is answered, and the approval is held for the next
+    // enroll_begin only: a kill_release in between supersedes it, so the enrollment needs presence again.
+    let (challenge, _) = presence_request(&exchange.enroll_begin()[0]);
     let replies = exchange.presence_assert(&first.id_b64(), Ok(first.assert(&challenge)));
-    assert_eq!(replies.len(), 2, "{replies:?}");
-    let (enroll_challenge, _) = enroll_options(&replies[1]);
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    assert_approved(&replies[0]);
+    presence_request(&exchange.kill_release()[0]);
+    let replies = exchange.enroll_begin();
+    assert_eq!(
+        enroll_reason(&replies[1]).as_deref(),
+        Some("presence_required"),
+        "the superseded approval does not open the enrollment"
+    );
+    let enroll_challenge = approve_enrollment(&mut exchange, &mut first);
     let second = Authenticator::new(0x22);
     let replies = exchange.enroll_finish(Ok(second.register(&enroll_challenge)));
     assert_enrolled(&replies[0], &second);
@@ -508,9 +532,7 @@ fn a_credential_moved_to_another_browser_cannot_answer_the_first_browsers_reques
 
     // Chrome enrolls the same credential (a synced passkey) with Brave's approval, which moves it.
     let mut chrome = Exchange::new(label("chrome"));
-    let (approval_challenge, _) = presence_request(&chrome.enroll_begin()[0]);
-    let replies = chrome.presence_assert(&shared.id_b64(), Ok(shared.assert(&approval_challenge)));
-    let (enroll_challenge, _) = enroll_options(&replies[1]);
+    let enroll_challenge = approve_enrollment(&mut chrome, &mut shared);
     assert_enrolled(
         &chrome.enroll_finish(Ok(shared.register(&enroll_challenge)))[0],
         &shared,
@@ -635,4 +657,43 @@ fn an_enrolled_browsers_window_answer_is_refused_and_the_switch_stays_engaged() 
         Some("request_mismatch")
     );
     assert!(crate::kill::is_killed().unwrap());
+}
+
+/// An approval is for the ceremony it was given for: it expires after APPROVAL_TTL, and it does not survive a
+/// trust reset, where the first-use rule (re-checked under the lock) governs again: the registration opened
+/// under a stale approval is refused once another credential landed first.
+#[test]
+fn an_enrollment_approval_expires_and_does_not_outlive_the_enrollments_it_presupposed() {
+    let _dir = scratch_runtime_dir("exchange-approval-lifetime");
+    let mut brave = Exchange::new(label("brave"));
+    let mut first = Authenticator::new(0x11);
+    enroll_tofu(&mut brave, &first);
+
+    // Expired: the next enroll_begin asks for presence again.
+    let (challenge, _) = presence_request(&brave.enroll_begin()[0]);
+    assert_approved(&brave.presence_assert(&first.id_b64(), Ok(first.assert(&challenge)))[0]);
+    brave.expire_approval_for_tests();
+    let replies = brave.enroll_begin();
+    assert_eq!(
+        enroll_reason(&replies[1]).as_deref(),
+        Some("presence_required"),
+        "an expired approval opens nothing"
+    );
+
+    // Approved again, then the trust record is reset: the store is empty, so the enroll_begin is first use,
+    // and a concurrent first-use enrollment landing first makes this one's write refuse.
+    let (challenge, _) = presence_request(&replies[0]);
+    assert_approved(&brave.presence_assert(&first.id_b64(), Ok(first.assert(&challenge)))[0]);
+    std::fs::remove_file(crate::ipc::runtime_dir().join("trust.json")).unwrap();
+    let replies = brave.enroll_begin();
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    let (challenge, _) = enroll_options(&replies[0]);
+    let mut chrome = Exchange::new(label("chrome"));
+    enroll_tofu(&mut chrome, &Authenticator::new(0x22));
+    let replies = brave.enroll_finish(Ok(Authenticator::new(0x33).register(&challenge)));
+    assert_eq!(
+        enroll_reason(&replies[0]).as_deref(),
+        Some("machine_already_enrolled")
+    );
+    assert_eq!(TrustState::current().unwrap().enrollments().len(), 1);
 }

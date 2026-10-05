@@ -44,7 +44,6 @@ const kill = {
   requestKillStatus: vi.fn(() => Promise.resolve()),
 };
 const auditLog = { collaborator: mockCollaborator() };
-const presence = { collaborator: mockCollaborator() };
 const policySync = { collaborator: mockCollaborator() };
 const webauthn = { collaborator: mockCollaborator() };
 const dispatch = vi.fn(
@@ -61,7 +60,6 @@ vi.mock("@/lib/background/clients", () => clients);
 vi.mock("@/lib/background/host-admin", () => hostAdmin);
 vi.mock("@/lib/background/kill", () => kill);
 vi.mock("@/lib/background/audit-log", () => auditLog);
-vi.mock("@/lib/background/confirm/presence", () => presence);
 vi.mock("@/lib/background/policy-sync", () => policySync);
 vi.mock("@/lib/webauthn/exchange", () => webauthn);
 vi.mock("@/lib/background/dispatch", () => ({ dispatch, collaborator: mockCollaborator() }));
@@ -233,14 +231,14 @@ describe("native link lifecycle", () => {
     // not be offered to any collaborator - only the live port's frames are.
     const portA = connect();
     const portB = connect(); // B replaces A
-    presence.collaborator.onFrame.mockReturnValueOnce(true);
+    webauthn.collaborator.onFrame.mockReturnValueOnce(true);
 
-    portA.emitMessage({ type: "presence_proof" });
+    portA.emitMessage({ type: "presence_request" });
     for (const c of mod.collaborators) expect(c.onFrame).not.toHaveBeenCalled();
 
     // The live port's frame IS routed.
-    portB.emitMessage({ type: "presence_proof" });
-    expect(presence.collaborator.onFrame).toHaveBeenCalledTimes(1);
+    portB.emitMessage({ type: "presence_request" });
+    expect(webauthn.collaborator.onFrame).toHaveBeenCalledTimes(1);
   });
 
   test("an unrecognized push frame is dropped without touching the link", async () => {

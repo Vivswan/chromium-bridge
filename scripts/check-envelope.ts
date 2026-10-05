@@ -25,7 +25,6 @@ import {
   ADMIN_RESULT_FRAME_TYPES,
   ENCLAVE_FRAME_TYPES,
   POLICY_FRAME_TYPES,
-  PRESENCE_FRAME_TYPES,
 } from "../src/packages/shared/src/enclave";
 import * as generated from "../src/packages/shared/src/envelope.gen";
 import {
@@ -78,8 +77,6 @@ const FRAMES: Readonly<Record<string, FrameArms>> = {
   cancel: [{ type: "cancel", id: 1 }],
   enclave_proof: [{ type: "enclave_proof", sig: "s", key_id: "k", pubkey: "p" }],
   enclave_error: [{ type: "enclave_error", reason: "denied" }],
-  presence_proof: [{ type: "presence_proof", sig: "s", key_id: "k", pubkey: "p" }],
-  presence_error: [{ type: "presence_error", reason: "busy" }],
   client_list_result: [
     {
       type: "client_list_result",
@@ -422,7 +419,7 @@ export function readerRuleProblems(kind: string, pair: ReaderPair): string[] {
 // route frames nothing checks, and a tag dropped from a classification array would silently stop routing.
 // kill_status_result has no classification array: isKillStatusFrame (enclave.ts) classifies by full parse.
 export const CLASSIFIED_TAGS: Record<Group, ReadonlySet<string>> = {
-  enclave: new Set([...ENCLAVE_FRAME_TYPES, ...PRESENCE_FRAME_TYPES]),
+  enclave: new Set(ENCLAVE_FRAME_TYPES),
   admin: new Set([...ADMIN_RESULT_FRAME_TYPES, "kill_status_result", ...REGISTRATION_FRAME_TYPES]),
   policy: new Set([...POLICY_FRAME_TYPES, ...POLICY_RESTRICT_FRAME_TYPES]),
   webauthn: new Set(WEBAUTHN_FRAME_TYPES),

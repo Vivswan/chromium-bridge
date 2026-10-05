@@ -13,7 +13,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CHALLENGE_DOMAIN, PRESENCE_DOMAIN } from "../src/packages/shared/src/enclave.gen";
+import { CHALLENGE_DOMAIN } from "../src/packages/shared/src/enclave.gen";
 import {
   AUDIT_DEFAULT_LIMIT,
   BROWSER_KEYS,
@@ -308,9 +308,10 @@ if (import.meta.main) {
       allowed: new Set([LOCK_FILENAME]),
     },
     {
+      // The presence spelling stays in the family so a doc naming the retired per-action presence domain fails.
       label: "enclave domain string",
       family: /chromium-bridge-(?:enclave|presence)-v\d+/g,
-      allowed: new Set([CHALLENGE_DOMAIN, PRESENCE_DOMAIN]),
+      allowed: new Set([CHALLENGE_DOMAIN]),
     },
     {
       label: "BB_LOG env var",

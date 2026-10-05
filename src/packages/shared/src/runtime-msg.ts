@@ -33,8 +33,6 @@ const Acknowledged = z.object({ ok: z.literal(true) });
 
 const enrollmentBase = {
   ok: z.literal(true),
-  // False on platforms without a Secure Enclave, where the gate never blocks.
-  platformSupported: z.boolean(),
   lastError: z.string().optional(),
   paused: z.boolean().optional(),
   // An unpair's host-key deletion is still awaiting the next host connection.
@@ -44,11 +42,12 @@ const enrollmentBase = {
 const pinIdentity = { keyId: z.string(), fingerprint: z.string() };
 
 export const EnrollmentStatusSchema = z.union([
-  z.object({ ...enrollmentBase, state: z.literal("unpaired"), blocked: z.boolean() }),
+  // Enrollment is required on every platform, so an unpaired or pending extension is always blocked.
+  z.object({ ...enrollmentBase, state: z.literal("unpaired"), blocked: z.literal(true) }),
   z.object({
     ...enrollmentBase,
     state: z.literal("pending"),
-    blocked: z.boolean(),
+    blocked: z.literal(true),
     ...pinIdentity,
   }),
   z.object({
@@ -280,6 +279,16 @@ export const RUNTIME_CONTRACT = contract({
     req: z.strictObject({
       type: z.literal("webauthn_presence_assert"),
       ...PresenceAnswerSchema.shape,
+    }),
+    res: Acknowledged,
+  },
+  // The window's answer to the pending request, for a browser with no enrolled credential: the host accepts
+  // it only when no credential could have answered (software_confirmation_not_allowed otherwise).
+  webauthn_presence_confirm: {
+    gate: "extension-page",
+    req: z.strictObject({
+      type: z.literal("webauthn_presence_confirm"),
+      nonce: z.string().min(1),
     }),
     res: Acknowledged,
   },

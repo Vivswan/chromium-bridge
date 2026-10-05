@@ -12,7 +12,6 @@ import { maskErrorMessage } from "../shared/masking";
 import * as webauthn from "../webauthn/exchange";
 import * as auditLog from "./audit-log";
 import * as clients from "./clients";
-import * as presence from "./confirm/presence";
 import type { Connection, PortCollaborator } from "./connection";
 import { collaborator as cancelSignals, dispatch } from "./dispatch";
 import * as enrollment from "./enrollment";
@@ -26,7 +25,6 @@ export const collaborators: readonly PortCollaborator[] = [
   hostAdmin.collaborator,
   kill.collaborator,
   auditLog.collaborator,
-  presence.collaborator,
   policySync.collaborator,
   webauthn.collaborator,
   cancelSignals,
@@ -67,8 +65,8 @@ function teardownLink(): void {
   if (prev.state === "connected") {
     // Detach in the same synchronous transition that consumes the port. Left
     // attached, a frame Chrome already queued on the old port could still
-    // reach a surface that acts on it (a presence proof approving a
-    // confirmation while the link reads down).
+    // reach a surface that acts on it (a presence request the options page
+    // would answer while the link reads down).
     for (const c of collaborators) c.onDetach();
     try {
       prev.port.disconnect();
@@ -157,7 +155,7 @@ function onNativeMessage(conn: Connection, msg: unknown) {
     console.warn("[bb] dropping frame from a stale native port");
     return;
   }
-  // Control frames (ceremony, admin results, kill state, presence answers,
+  // Control frames (ceremony, admin results, kill state, presence requests,
   // policy pushes) carry `type`, not `op`, and go to the one collaborator
   // that claims them BEFORE the request parse and the gates below: a killed
   // or unenrolled bridge still consumes pushes, and the dispatch barrier the

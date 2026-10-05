@@ -19,7 +19,7 @@ import { confirmationsLatched } from "../brake";
 /** The fields every confirmation request carries. */
 interface ConfirmRequestBase {
   timeoutMs: number;
-  /** Route this confirmation to the Enclave user-presence provider? Decided by the CALLER from the
+  /** Route this confirmation to the presence provider, if one is installed? Decided by the CALLER from the
    * SAME per-request policy snapshot as the rest of the decision, so a policy push landing while
    * the confirmation waits in the queue cannot re-route it. Only the "eval"/"upload" kinds honor it
    * (providerFor); false, or no presence provider, is the off-DOM window confirmation: still
@@ -52,7 +52,7 @@ export interface Presentation {
   /** The provider-observed outcome. The window provider only ever reports
    * denials here (surface closed / failed to open) - approvals arrive
    * through resolveConfirm(), from the extension page, via the router. The
-   * Enclave provider resolves true here from the host's signed user-presence
+   * presence provider resolves true here from its own verified user-presence
    * answer instead. */
   verdict: Promise<boolean>;
   /** Tear the surface down (deadline hit, or resolved through the router). */
@@ -82,7 +82,7 @@ export function installConfirmationProvider(p: ConfirmationProvider): void {
   defaultProvider.value = p;
 }
 
-// The Enclave user-presence provider. Whether a confirmation routes to it
+// The presence provider slot (empty today). Whether a confirmation routes to it
 // travels IN the request (presenceRouting above), decided from the caller's
 // per-request policy snapshot: providerFor never re-reads live policy, so a
 // push landing between decision and presentation cannot re-route an in-flight
@@ -94,7 +94,7 @@ export function installPresenceProvider(p: ConfirmationProvider): void {
   presence.value = p;
 }
 
-/** The provider for one request. "eval" and "upload" go to the Enclave
+/** The provider for one request. "eval" and "upload" go to the presence provider's
  * user-presence gate when the request's decision-time routing verdict says
  * so and a provider is installed; everything else (and every fallback)
  * keeps the window. `hardware` marks the payload so the window renders
@@ -291,8 +291,8 @@ export function getPendingConfirm(id: string): ConfirmPayload | null {
 
 /** messages.ts routes this ONLY from the confirmation window; that sender check is what makes
  * page-side auto-approval impossible. A hardware-gated payload is approved only by the verified
- * Enclave user-presence answer, so even the trusted window cannot stand in for the tap.
- *   hardware-gated + approve  -> refused; only the Touch ID prompt approves
+ * presence provider's answer, so even the trusted window cannot stand in for the tap.
+ *   hardware-gated + approve  -> refused; only the presence provider approves
  *   any payload + deny        -> accepted; removing capability is always friction-free */
 export function resolveConfirm(id: string, approved: boolean): RuntimeResponse<"confirm_resolve"> {
   const current = active.value;
@@ -302,7 +302,7 @@ export function resolveConfirm(id: string, approved: boolean): RuntimeResponse<"
   if (approved && isHardwareGated(current.payload)) {
     return {
       ok: false,
-      error: "hardware-gated confirmation: approval requires the Touch ID prompt",
+      error: "hardware-gated confirmation: approval requires the presence provider",
     };
   }
   current.settle(approved);

@@ -8,11 +8,12 @@
 // from extension pages. A content script or page script can therefore
 // neither read a pending confirmation nor answer one.
 //
-// ConfirmKind "eval" and "upload" are the two kinds whose authorization
-// moves to the host's Secure-Enclave user-presence gate (Touch ID) on a
-// capable, enrolled device with the touchIdConfirm policy on. The surface
-// stays a display-only window; `hardware: true` marks such a payload, and the
-// service refuses a window-side approval for it - the tap is the approval.
+// ConfirmKind "eval" and "upload" are the two kinds a presence provider may
+// authorize instead of the window when the touchIdConfirm policy is on and a
+// provider is installed (none is today: both kinds confirm on the window). The
+// surface then stays a display-only window; `hardware: true` marks such a
+// payload, and the service refuses a window-side approval for it - the
+// provider's verdict is the approval.
 //
 // The payload is a discriminated union on `kind`, each arm carrying exactly
 // its own fields, so the combinations the service never produces cannot even

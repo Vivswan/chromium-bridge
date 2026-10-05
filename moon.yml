@@ -270,6 +270,19 @@ tasks:
     options:
       runInCI: false
 
+  test-presence-exchange:
+    # SAFETY: the same isolated-browser rule as test-browser. Drives the REAL release host (control-plane mode in a
+    # throwaway runtime dir) through the real extension, so it needs the Rust build the browser CI job does not
+    # have, which is why it is not in run_all.ts.
+    description: 'The WebAuthn exchange end to end against the real host in the isolated Chrome (needs CHROME_BIN; builds the extension and the release binary first)'
+    deps: ['~:install-deps', '~:build-release']
+    script: |
+      set -e
+      bun run --cwd src/apps/extension build
+      bun tests/browser/presence_exchange_test.ts
+    options:
+      runInCI: false
+
   test-browser-container:
     description: 'Browser suites inside the container under xvfb with BB_REQUIRE_BROWSER=1 (a skipped suite fails as in CI); no test Chrome on the host'
     deps: ['~:install-deps']
@@ -454,63 +467,6 @@ tasks:
       set -e
       bun scripts/check-gen-isolation.ts
       bun test scripts/tests/check-gen-isolation.test.ts
-
-  # ----- Touch ID runbooks (macOS, USER-RUN) ---------------------------------
-
-  touchid-proof:
-    # Raises a real Touch ID prompt and, on success, genuinely enrolls the machine (undo: the same binary's
-    # `revoke`). The data-protection keychain refuses an ad-hoc build (src/packages/core/src/enclave/macos.rs),
-    # so the binary must be codesigned with an application identifier first; no task does that signing yet.
-    description: 'USER-RUN runbook: enroll the enclave key via the release host binary (raises a real Touch ID prompt)'
-    deps: ['~:build-release']
-    script: './target/release/chromium-bridge pair'
-    options:
-      runInCI: false
-      interactive: true
-
-  touchid-gates:
-    # Runs the per-action presence gate (the one page_eval / page_upload use) under a real Touch ID prompt,
-    # then prints the three capability-grant commands for you to run yourself: those require a real
-    # interactive TTY by design (anti tap-phishing), which a task runner cannot provide. Needs an enrolled
-    # Enclave key (`moon run touchid-proof` first).
-    description: 'USER-RUN runbook: demo the Touch ID presence gates (runs the per-action gate; prints the rest)'
-    deps: ['~:build-release']
-    script: |
-      set -eu
-      BIN="./target/release/chromium-bridge"
-      echo "== 1/4 per-action presence (page_eval / page_upload gate) =="
-      echo "   expect a Touch ID prompt now:"
-      "$BIN" presence-selftest
-      echo
-      echo "== 2/4 client pairing  +  3/4 kill-switch release =="
-      echo "   These GRANT or RESTORE capability, so from the CLI they require a"
-      echo "   real interactive terminal (a background or piped process must not be"
-      echo "   able to raise that Touch ID sheet). A task runner has no TTY, so run"
-      echo "   these yourself in this terminal - each raises a Touch ID prompt:"
-      echo
-      echo "     BIN=\"$BIN\""
-      echo "     \"\$BIN\" pair-client --name touchid-demo --hash abababababababababababababababababababababababababababababababab   # Touch ID"
-      echo "     \"\$BIN\" revoke-client --name touchid-demo                                    # instant, no prompt"
-      echo "     \"\$BIN\" kill && \"\$BIN\" unkill                                              # kill instant; unkill = Touch ID"
-      echo
-      echo "== 4/4 policy grant (signed GRANT lane) =="
-      echo "   'policy set' mints a fresh SIGNED baseline, so it is signature-only:"
-      echo "   the Touch ID sheet has no floor to fall through to. Run these yourself"
-      echo "   in this terminal - approve the first, DECLINE the second:"
-      echo
-      echo "     \"\$BIN\" policy set --page-eval on       # APPROVE the sheet, then check:"
-      echo "     \"\$BIN\" audit                           #   PolicyWrite ok, auth=touch_id"
-      echo "     \"\$BIN\" policy set --page-eval on       # DECLINE the sheet: the command must"
-      echo "     \"\$BIN\" audit                           #   refuse (no floor fallthrough) and"
-      echo "                                             #   audit PolicyWrite refused"
-      echo "     \"\$BIN\" policy restrict --page-eval off # roll the grant back (free lane,"
-      echo "                                             #   no prompt; or: policy rollback)"
-      echo
-      echo "touchid-gates: the per-action gate above raised a live Touch ID prompt;"
-      echo "the three capability-grant gates need a real terminal - commands printed above."
-    options:
-      runInCI: false
-      interactive: true
 
   # ----- version + repo hygiene checks ---------------------------------------
 
