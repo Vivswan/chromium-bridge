@@ -15,7 +15,9 @@ export function RegistrationPanel() {
   const [actionError, setActionError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
+    setBusy(true);
     setView(await send({ type: "get_registration" }));
+    setBusy(false);
   }, []);
 
   useEffect(() => {

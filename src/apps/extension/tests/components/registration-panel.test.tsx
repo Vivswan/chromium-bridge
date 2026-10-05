@@ -1,7 +1,8 @@
 // The registration panel's render path over the SW contract: the rows the host reports render with their state
 // and location, a repair posts repair_registration and shows the post-repair rows, a failed repair shows the
 // host's error and re-asks for the rows, and a not-connected worker renders the refusal with the repair
-// disabled, never an empty healthy-looking table.
+// disabled, never an empty healthy-looking table. While a status read is outstanding both actions are disabled,
+// since status and repair share one worker slot and a repair sent then is refused as already in flight.
 
 import type { RegistrationRow } from "@chromium-bridge/shared/envelope.gen";
 import { render, screen, waitFor } from "@testing-library/react";
@@ -27,7 +28,7 @@ const ROWS: RegistrationRow[] = [
 type Reply = { ok: true; browsers: RegistrationRow[] } | { ok: false; error: string };
 
 let sent: Array<{ type: string }>;
-let replies: Record<"get_registration" | "repair_registration", () => Reply>;
+let replies: Record<"get_registration" | "repair_registration", () => Reply | Promise<Reply>>;
 
 beforeEach(() => {
   fakeBrowser.reset();
@@ -125,5 +126,23 @@ describe("RegistrationPanel", () => {
     await screen.findByText("Could not read the registrations: native host not connected");
     expect(screen.getByRole("button", { name: "Repair registrations" })).toBeDisabled();
     expect(screen.queryByText("ok")).toBeNull();
+  });
+
+  test("while a refresh is outstanding both actions are disabled, so a repair cannot be refused as in flight", async () => {
+    await mount();
+    await screen.findByText("chrome");
+    let release!: (reply: Reply) => void;
+    replies.get_registration = () =>
+      new Promise<Reply>((resolve) => {
+        release = resolve;
+      });
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    const repair = screen.getByRole("button", { name: "Repair registrations" });
+    expect(repair).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Refresh" })).toBeDisabled();
+    await userEvent.click(repair);
+    expect(sent).toEqual([{ type: "get_registration" }, { type: "get_registration" }]);
+    release({ ok: true, browsers: ROWS });
+    await waitFor(() => expect(repair).toBeEnabled());
   });
 });
