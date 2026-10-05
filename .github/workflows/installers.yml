@@ -1,6 +1,5 @@
-# The installers' proof before a release: the same .pkg, .deb and .msi update-release.yml builds at
-# release time, built from the branch and installed on their own runners. Callable, so checks.yml can
-# fold it into the all-green gate.
+# The same .pkg, .deb and .msi update-release.yml builds at release time, proved before one. Callable, so
+# checks.yml can fold it into the all-green gate, which a separate workflow never reaches.
 
 name: Installers
 

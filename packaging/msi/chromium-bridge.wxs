@@ -1,10 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Per-user MSI for WiX 3 (candle + light with WixUtilExtension). Registration is the binary's own doctor
-  repair, run through WixQuietExec so its stdout and stderr land in the MSI log: a failed first install
-  shows the next step (install Chrome, Brave or Edge, then run the repair) instead of a bare action error.
-  XML comments cannot carry a double hyphen, so the flags are spelled out in words here.
-  Variables: Version (MAJOR.MINOR.PATCH, the tag's core) and Binary (the built chromium-bridge.exe).
+  WiX 3 source, built by candle and light with WixUtilExtension; WixQuietExec puts the repair's stdout and
+  stderr in the MSI log, so a failed install shows the next step instead of a bare action error. XML
+  comments cannot carry a double hyphen, so flags are spelled out in words here. Variables: Version
+  (MAJOR.MINOR.PATCH, the tag's core) and Binary (the built chromium-bridge.exe).
 -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Product Id="*"

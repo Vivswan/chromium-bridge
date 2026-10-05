@@ -1,9 +1,8 @@
 #!/usr/bin/env bun
 
-// installers.yml's smoke: install this leg's installer on the runner, drive the installed binary, uninstall.
-// Platform facts the checks rest on: msiexec reports its reason only in a UTF-16LE log; `reg query` exits 1
-// both for a missing key and for one it was not allowed to read, so only its not-found text counts as
-// absent; the pkg postinstall's output lands in /var/log/install.log.
+// Platform facts installers.yml's smoke rests on: msiexec reports its reason only in a UTF-16LE log;
+// `reg query` exits 1 both for a missing key and for one it was not allowed to read, so only its not-found
+// text counts as absent; the pkg postinstall's output lands in /var/log/install.log.
 
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
