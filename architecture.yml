@@ -1,0 +1,61 @@
+# The TypeScript layering, read by scripts/arch-lint.ts (the import graph must equal `edges` in both
+# directions) and scripts/render-architecture-map.ts (the module map on docs/architecture.md). The
+# Rust crates' layering is cargo's dependency graph and the module table on that page, not this lint.
+
+# layer -> the repository paths it owns; a trailing slash is a directory, and a file has one owner.
+layers:
+  shared: [src/packages/shared/src/]
+  extension/background:
+    - src/apps/extension/src/entrypoints/background.ts
+    - src/apps/extension/src/lib/background/
+    # lib/webauthn/ (the ceremony's page half and worker half) and lib/background/ import each
+    # other: exchange.ts imports connection and in-life, and port and messages import the folder
+    # back, so by the import graph the two folders are one layer.
+    - src/apps/extension/src/lib/webauthn/
+  extension/content:
+    - src/apps/extension/src/entrypoints/content.ts
+    - src/apps/extension/src/lib/content/
+  extension/confirm: [src/apps/extension/src/entrypoints/confirm/]
+  extension/options: [src/apps/extension/src/entrypoints/options/]
+  extension/popup: [src/apps/extension/src/entrypoints/popup/]
+  extension/ui:
+    - src/apps/extension/src/components/
+    - src/apps/extension/src/hooks/
+    - src/apps/extension/src/lib/cn.ts
+    - src/apps/extension/src/lib/theme.ts
+    - src/apps/extension/src/lib/i18n.ts
+    - src/apps/extension/src/lib/native-language-names.ts
+  extension/lib:
+    - src/apps/extension/src/lib/shared/
+    - src/apps/extension/src/lib/dom/
+    - src/apps/extension/src/lib/messages.ts
+  scripts: [scripts/]
+
+# Not sources of the graph: tests, build configs, and the web app (Astro, no layering of its own).
+# An import INTO an excluded file is still an edge.
+exclude:
+  - "src/apps/extension/tests/**"
+  - "src/packages/shared/tests/**"
+  - "scripts/tests/**"
+  - "src/apps/extension/*.config.ts"
+  - "src/apps/web/**"
+  # gen-envelope.ts loads each generated module its asymmetry table names through a computed import, which no
+  # import graph can follow; the scripts -> shared edge it draws is drawn by its static-importing siblings too.
+  - "scripts/gen-envelope.ts"
+
+# Specifier prefix -> the directory it stands for. The extension reaches the shared package through
+# its workspace name and its own tree through WXT's `@/`; the bundler resolves both, so the lint must.
+aliases:
+  "@chromium-bridge/shared/": src/packages/shared/src/
+  "@/": src/apps/extension/src/
+
+# from -> the layers it may import; a layer absent here imports nothing outside itself.
+edges:
+  extension/background: [shared, extension/lib, extension/ui]
+  extension/content: [shared, extension/lib]
+  extension/confirm: [shared, extension/lib, extension/ui]
+  extension/options: [shared, extension/lib, extension/ui]
+  extension/popup: [shared, extension/lib, extension/ui]
+  extension/ui: [shared, extension/lib]
+  extension/lib: [shared]
+  scripts: [shared, extension/lib]

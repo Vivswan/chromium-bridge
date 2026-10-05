@@ -405,3 +405,41 @@ On the wire-validation side the five frames ride the same generated machinery as
 The host also enforces its own policy at dispatch (`policy/gating.rs`): a tool whose capability grant is off or that is in `disabledTools` is refused with the stable `TOOL_DISABLED` code before any bridge traffic, with an absent store allowing (pre-cutover) and an unreadable one denying all. That check is defense in depth for the honest-host path; the extension's gate stays authoritative at its boundary precisely because the host may not be ours.
 
 > To troubleshoot these links at runtime (whether the connection is reachable; whether the lock file, socket, and manifests are in place), use the read-only `chromium-bridge doctor`; see [cli.md](./cli.md).
+
+## 12. The TypeScript module map
+
+Each node is one layer, labelled with the paths it owns; an arrow means the layer imports the other. Rendered from `architecture.yml` by `scripts/render-architecture-map.ts`; `scripts/arch-lint.ts` keeps that declaration equal to the import graph in both directions.
+
+<!-- BEGIN GENERATED: architecture-map (bun scripts/render-architecture-map.ts; derived from architecture.yml) -->
+```mermaid
+graph TD
+  shared["src/packages/shared/src/"]
+  extension_background["src/apps/extension/src/entrypoints/background.ts<br>src/apps/extension/src/lib/background/<br>src/apps/extension/src/lib/webauthn/"]
+  extension_content["src/apps/extension/src/entrypoints/content.ts<br>src/apps/extension/src/lib/content/"]
+  extension_confirm["src/apps/extension/src/entrypoints/confirm/"]
+  extension_options["src/apps/extension/src/entrypoints/options/"]
+  extension_popup["src/apps/extension/src/entrypoints/popup/"]
+  extension_ui["src/apps/extension/src/components/<br>src/apps/extension/src/hooks/<br>src/apps/extension/src/lib/cn.ts<br>src/apps/extension/src/lib/theme.ts<br>src/apps/extension/src/lib/i18n.ts<br>src/apps/extension/src/lib/native-language-names.ts"]
+  extension_lib["src/apps/extension/src/lib/shared/<br>src/apps/extension/src/lib/dom/<br>src/apps/extension/src/lib/messages.ts"]
+  scripts["scripts/"]
+  extension_background --> shared
+  extension_background --> extension_lib
+  extension_background --> extension_ui
+  extension_content --> shared
+  extension_content --> extension_lib
+  extension_confirm --> shared
+  extension_confirm --> extension_lib
+  extension_confirm --> extension_ui
+  extension_options --> shared
+  extension_options --> extension_lib
+  extension_options --> extension_ui
+  extension_popup --> shared
+  extension_popup --> extension_lib
+  extension_popup --> extension_ui
+  extension_ui --> shared
+  extension_ui --> extension_lib
+  extension_lib --> shared
+  scripts --> shared
+  scripts --> extension_lib
+```
+<!-- END GENERATED: architecture-map -->

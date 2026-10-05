@@ -20,13 +20,16 @@
     "scripts": {
       "entry": [
         "tests/*.test.ts",
+        "arch-lint.ts",
         "check-*.ts",
         "compose-run.ts",
         "dev-browser.ts",
         "dev.ts",
+        "docs-probe.ts",
         "gen-envelope.ts",
         "gen-ops.ts",
-        "help.ts"
+        "help.ts",
+        "render-architecture-map.ts"
       ],
       "project": ["**/*.ts"]
     },
