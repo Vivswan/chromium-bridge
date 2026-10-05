@@ -15,17 +15,16 @@
 | `chromium-bridge doctor --paths` | 只读诊断 | 打印当前环境解析出的运行时目录与锁文件路径, 两者都不会创建。 |
 | `chromium-bridge doctor --fix` | 修复 / 安装 | 把这个二进制注册 (或重新注册) 为原生消息主机。doctor 唯一会写入的形式。 |
 | `chromium-bridge uninstall` | 移除 | 只移除本项目写入的注册, 不动其他任何东西。 |
-| `chromium-bridge pair [--reset]` | 登记 | 生成 Secure Enclave 登记密钥 (macOS); 每次使用该密钥都需要 Touch ID。 |
-| `chromium-bridge revoke` | 登记 | 删除登记密钥; 已固定该密钥的扩展随即失败即关闭。 |
-| `chromium-bridge enclave-status [--json]` | 只读 | 打印登记状态与密钥指纹。 |
-| `chromium-bridge presence-selftest` | 诊断 | 弹出一次用户在场提示并报告结果, 无需浏览器。 |
+| `chromium-bridge pair [--reset] [--file-store]` | 登记 | 在终端键入确认之后, 生成扩展所固定的主机密钥; 密钥保存在操作系统的凭据存储中, 或在使用 `--file-store` 时保存在一个 0600 文件里。 |
+| `chromium-bridge revoke` | 登记 | 删除主机密钥; 固定了该密钥的扩展随即失败即关闭。 |
+| `chromium-bridge enclave-status [--json]` | 只读 | 打印主机密钥的状态、所在位置及其指纹。 |
 | `chromium-bridge pair-client --name <label> (--this-parent \| --hash <hex> \| --signer <id>)` | 受信任客户端 | 把一个 MCP 客户端程序 (harness) 加入受信任客户端白名单; 需要在场验证。 |
 | `chromium-bridge revoke-client --name <label>` | 受信任客户端 | 移除一个客户端; 运行中的中介会立即断开它。 |
 | `chromium-bridge list-clients` | 只读 | 打印受信任客户端白名单。 |
 | `chromium-bridge kill` | 紧急开关 | 启用全局紧急开关 (kill switch): 停止所有桥接活动, 直到显式解除。 |
-| `chromium-bridge unkill` | 紧急开关 | 在证明用户在场后解除紧急开关 (已登记的 Mac 上用 Touch ID; 否则在交互式终端确认, 管道传入的 stdin 会被拒绝)。 |
+| `chromium-bridge unkill` | 紧急开关 | 在证明用户在场之后解除紧急开关: 在交互式终端键入一段确认 (管道传入的 stdin 会被拒绝)。 |
 | `chromium-bridge policy show [--json]` | 只读 | 打印主机持有的策略状态与生效策略。 |
-| `chromium-bridge policy set <field flags> [--json]` | 策略 (授予通道) | 生成一份全新的已签名策略基线: 一次 Touch ID 触碰。仅限签名; 没有登记密钥时会预先拒绝。 |
+| `chromium-bridge policy set <field flags> [--json]` | 策略 (授予通道) | 在键入终端确认之后生成一份全新的已签名策略基线。仅限签名; 没有主机密钥时会预先拒绝。 |
 | `chromium-bridge policy restrict <field flags>` | 策略 (自由通道) | 应用一层未签名的限制覆盖层; 不弹提示, 因为它只能削减能力。 |
 | `chromium-bridge policy history [--json]` | 只读 | 打印已被取代的修订环。 |
 | `chromium-bridge policy rollback --revision <n> [--json]` | 策略 | 把过去某个修订的生效策略重新推导为一次全新写入, 绝不重放。 |
@@ -118,14 +117,17 @@ Chrome 自身的位置来自其文档。其他厂商的位置由它们存放清�
 
 ## 登记: pair / revoke / enclave-status
 
-登记仪式把主机绑定到这台机器的 Secure Enclave 和你本人:
+主机密钥仪式给扩展一个可供固定的主机身份:
 
-- `chromium-bridge pair` 在 Secure Enclave 内生成一把 P-256 密钥, 每次使用都要求用户在场 (Touch ID 或登录密码), 然后执行一次受在场验证保护的自测签名, 并打印该密钥的 SHA-256 指纹。把这个指纹与扩展在登记界面上显示的指纹比对; 不一致意味着两者之间有东西插在中间。
-- `chromium-bridge pair --reset` 用一把新密钥替换旧密钥 (再次需要在场验证); 扩展必须重新固定。
-- `chromium-bridge revoke` 删除密钥。主机确认删除并向扩展推送一条吊销, 扩展随即失败即关闭。
-- `chromium-bridge enclave-status [--json]` 以只读方式报告当前状态。
+- `chromium-bridge pair` 要求你在终端键入一段确认 (管道传入的 stdin 在任何提示出现之前就被拒绝), 生成一把 P-256 主机密钥, 把它保存在操作系统的凭据存储中 (钥匙串、凭据管理器或 Secret Service), 并打印该密钥的 SHA-256 指纹。把这个指纹与扩展在登记界面上显示的指纹比对; 不一致意味着两者之间有东西插在中间。
+- `chromium-bridge pair --file-store` 改为把密钥保存在运行时目录中的一个 0600 文件里, 供没有可用凭据存储的机器使用。这个选择是显式的: 存储失败会被报告, 绝不会悄悄改写到文件。
+- `chromium-bridge pair --reset` 先要求确认, 然后移除之前的密钥 (无论哪个存储持有它) 并生成一把新的; 扩展必须重新固定。当凭据存储没有响应时, `--file-store` 的重置会继续进行, 并警告存储中可能仍留有一条条目; 等存储恢复响应后再运行一次 `revoke`。
+- `chromium-bridge revoke` 删除密钥并确认它已不存在。主机向扩展推送一条吊销, 扩展随即失败即关闭。
+- `chromium-bridge enclave-status [--json]` 以只读方式报告当前状态: 是否存在密钥、哪个存储持有它, 以及它的指纹。
 
-登记把风险最高的几项确认 (`page_eval`、`page_upload`、紧急开关解除、客户端配对) 从屏幕上的对话框升级为硬件 Touch ID 触碰。`chromium-bridge presence-selftest` 恰好弹出一次这样的提示, 让你无需浏览器就能看到它工作。
+浏览器自身操作 (解除紧急开关、登记第二个浏览器) 的用户在场证明, 是在浏览器认证器上的一次 WebAuthn 触碰, 由主机验证。选项页尚未提供执行登记和应答的面板 (这一交换可以从后台处理程序和浏览器测试套件触达)。
+
+CLI 从不弹出那个提示: 它自己的授予 (`pair`、`pair-client`、`unkill`、`policy set`) 由在真实终端上键入的短语确认。
 
 ## 受信任客户端: pair-client / revoke-client / list-clients
 
@@ -142,7 +144,7 @@ chromium-bridge revoke-client --name codex
 - `--this-parent` 测量启动这次 CLI 调用的进程 (在你想信任的客户端内部运行它)。仅限 Unix: 在 Windows 上服务器以其 stdin 管道的创建者作为客户端程序的键, 而控制台命令没有这样的管道, 所以请用 `--hash` 或 `--signer` 配对, 取值用服务器在未登记状态下启动时记录的值。
 - 授权以经证明的锚点为键, 从不以 `--name` 标签为键; 标签只用于标注日志和吊销。各平台测量什么见[信任边界页面](security/trust-boundaries.md#边界-1-mcp-客户端---rust-mcp-服务器-stdio-json-rpc-20)。
 - 哈希锚点会在客户端更新时改变; 用同一个名字重新运行 `pair-client` 即可替换条目 (重新配对路径)。
-- 添加客户端是一次能力授予, 所以需要在场验证: 已登记的 Mac 上用 Touch ID, 否则在交互式终端确认。吊销刻意做到无阻力; 运行中的中介会断开被吊销的客户端并拒绝其重新接入。
+- 添加客户端是一次能力授予, 所以需要在场验证: 在交互式终端键入一段确认, 管道传入的 stdin 会被拒绝。吊销刻意做到无阻力; 运行中的中介会断开被吊销的客户端并拒绝其重新接入。
 
 白名单一旦存在, 任何不匹配的都失败即关闭, 包括无法测量的身份和不可读的白名单。Windows 上的测量见 [SECURITY.md](../../.github/SECURITY.md#platform-support)。
 
@@ -153,16 +155,16 @@ chromium-bridge revoke-client --name codex
 - 活跃的浏览器连接在大约一秒内被切断, 新连接被拒绝。进行中的工具调用以 `CONNECTION_LOST` 快速失败。
 - 之后来自每个已接入客户端的每次工具调用都以稳定的 `BRIDGE_KILLED` 错误码被拒绝。客户端保持连接, 以便向你显示拒绝原因, 而不是悄无声息地死掉。
 - 该状态持久化 (在锁文件旁边的 `trust.json` 中), 能在重启、重连和重新开机后保留。
-- 扩展的选项页显示该状态; 从任何界面都能启用开关, 但解除不行 (网页看不到、也碰不到其中任何东西)。
+- 扩展的选项页显示该状态; 从任何界面都能启用开关。从扩展解除时, 主机会以一次在场请求应答 (WebAuthn 触碰, 或在没有已登记凭据的浏览器上用确认窗口); 选项页尚未提供该控件, 所以今天的解除属于 CLI (网页看不到、也碰不到其中任何东西)。
 
-没有任何东西会自行解除开关。解除是一次 CLI 操作, 即在终端运行 `chromium-bridge unkill`, 并且要求证明用户在场。扩展的解除开关已被退役; 来自扩展的解除请求会被拒绝并记入审计。
+没有任何东西会自行解除开关。解除在两种界面上都要求证明用户在场:
 
-| 机器 | `unkill` 要求的证明 |
+| 界面 | 一次解除要求的证明 |
 | --- | --- |
-| 已登记的 Mac | 一次 Secure Enclave Touch ID 触碰 |
-| 没有 Enclave 密钥 | 在真实终端上键入的显式确认; 管道传入的 stdin 会被直接拒绝, 因此没有任何脚本或后台程序能悄悄通过 CLI 重新打开桥接 |
+| CLI 上的 `chromium-bridge unkill` | 在真实终端上键入的显式确认; 管道传入的 stdin 会被直接拒绝, 因此没有任何脚本或后台程序能悄悄通过 CLI 重新打开桥接 |
+| 扩展 | 来自该浏览器下已登记凭据的一次 WebAuthn 断言; 只有在浏览器没有已登记凭据时才用浏览器的确认窗口 |
 
-每次解除尝试都会记入审计, 并附上做出决定的认证路径 (`auth=touch_id`、`auth=cli_confirm`), 无论结果是已授予、在在场门禁处被拒绝, 还是在场验证通过后因记录不可写而被拒绝。
+每次解除尝试都会记入审计: 已授予的解除附上做出决定的认证路径 (`auth=tty`、`auth=webauthn:<fingerprint>`、`auth=confirm_window`), 在在场门禁处的拒绝附上在场错误, 在场验证通过后因记录不可写而拒绝的则两者都附上。
 
 如果任一命令报告信任记录不可读, 见[恢复步骤](./troubleshooting.md#doctor-显示紧急开关状态或信任记录不可读); 在此之前, 一切继续失败即关闭。
 
@@ -174,7 +176,7 @@ chromium-bridge revoke-client --name codex
 
 ```text
 chromium-bridge policy show [--json]              # read-only: store state + effective policy
-chromium-bridge policy set <field flags> [--json] # GRANT lane: sign a fresh baseline (Touch ID)
+chromium-bridge policy set <field flags> [--json] # GRANT lane: sign a fresh baseline (terminal confirmation)
 chromium-bridge policy restrict <field flags>     # FREE lane: unsigned restriction overlay
 chromium-bridge policy history [--json]           # read-only: superseded revisions
 chromium-bridge policy rollback --revision <n> [--json]
@@ -194,19 +196,19 @@ chromium-bridge policy rollback --revision <n> [--json]
 
 **两条通道刻意不对称。**
 
-- **`policy set` 是授予通道:** 它把编辑折叠到当前基线之上 (未触碰的字段沿用基线值, 而非生效值), 把被触碰的字段集合嵌入文档, 并用 Secure Enclave 登记密钥对精确的文档字节签名。Touch ID 触碰本身就是签名。
-- **没有登记密钥, 就没有授予:** 在非 macOS 系统或未登记的 Mac 上, CLI 会在任何提示出现之前预先拒绝。CLI 的授予路径只以这个签名的形式存在, 从不构造交互式的保底门槛, 因为一条以保底门槛把关的 CLI 授予会在 CLI 发布到的每个平台上悄悄开出一条写基线的路径。
+- **`policy set` 是授予通道:** 它把编辑折叠到当前基线之上 (未触碰的字段沿用基线值, 而非生效值), 把被触碰的字段集合嵌入文档, 并在键入的终端确认通过后, 用主机密钥对精确的文档字节签名。
+- **没有主机密钥, 就没有授予:** 在没有运行过 `pair` 的机器上, CLI 会在任何提示出现之前预先拒绝, 这样就不会存在扩展的固定指纹无法校验的基线。
 - **`policy restrict` 是自由通道:** 不弹提示、不签名, 并且接缝的方向检查会拒绝任何会放宽生效策略的编辑, 所以脚本化或伪造的限制至多是对你自己的桥接的一次拒绝服务。
 
 **回滚从不重放。** `policy rollback --revision <n>` 重新推导该修订的生效策略, 与当前策略做差异比较, 再把差异作为一次全新写入应用。
 
 - **只收紧的回滚** 走自由的 restrict 通道, 不弹提示。
-- **放宽了任何内容的回滚** 需要一次新的 Touch ID 触碰, 与任何其他授予完全一样。
+- **放宽了任何内容的回滚** 需要一次新的终端确认和签名, 与任何其他授予完全一样。
 - **旧的已签名产物从不被写回:** 更低的修订号必须持续通不过扩展的棘轮, 这正是防重放属性, 而不是限制。
 
 **`--json` 契约。** `show`、`history`、`set` 与 `rollback` 都接受 `--json`, 它把文字输出换成 stdout 上的一份带版本号的报告 (对写入通道而言, 拒绝时则是一个带版本号的错误对象)。先检查 `v` 字段, 遇到更新的值就拒绝, 然后再读取其他内容 (失败即关闭)。
 
-每次策略转换都会记入审计, 附上发起界面, 对于授予还附上授权该签名的在场验证级别 (`auth=touch_id`)。
+每次策略转换都会记入审计, 附上发起界面, 对于授予还附上授权该签名的在场路径 (`auth=tty`)。
 
 ## 日志与审计 (BB_LOG / BB_LOG_FORMAT)
 
@@ -217,7 +219,7 @@ chromium-bridge policy rollback --revision <n> [--json]
 | `BB_LOG` | `error` \| `warn` \| `info` (默认) \| `debug` | 日志阈值。`info` 及以上会打印审计行; 设为 `warn`/`error` 可关闭审计输出。 |
 | `BB_LOG_FORMAT` | `text` (默认) \| `json` | 审计行的格式。`json` 每行输出一个 JSON 对象, 便于机器采集。 |
 
-**审计事件 (stderr)**: 每个安全决定都输出一条审计行: 工具调用 (带 `req`、`tool`、`outcome`, 出错时还有来自 [`ERROR_SPECS`](../../src/packages/core/src/error.rs) 的稳定 `code`, 以及 `dur_ms`)、客户端程序的准入与拒绝、客户端配对与吊销、主机密钥吊销、紧急开关转换, 以及扩展的确认与登记决定 (通过端口转发而来)。
+**审计事件 (stderr)**: 每个安全决定都输出一条审计行: 工具调用 (带 `req`、`tool`、`outcome`, 出错时还有来自 [`ERROR_SPECS`](../../src/packages/core/src/error.rs) 的稳定 `code`, 以及 `dur_ms`)、客户端程序的准入与拒绝、客户端配对与吊销、主机密钥吊销、紧急开关转换、WebAuthn 登记与在场裁决、策略写入, 以及扩展的确认与登记决定 (通过端口转发而来)。
 
 同样的事件会以严格 JSON 记录的形式追加到一个持久、大小受限的 `audit.log` (权限 0600, 位于运行时目录中锁文件旁边), 它比写入它的那些短命进程活得更久。每条记录在 `event_kind` 中标明其事件; JSON 形式的 stderr 输出把记录包在一个 `"kind":"audit"` 信封里, 所以采集器以 `kind` 为键, 再从 `event_kind` 读取事件。
 

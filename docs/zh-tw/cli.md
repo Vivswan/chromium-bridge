@@ -15,17 +15,16 @@
 | `chromium-bridge doctor --paths` | 唯讀診斷 | 印出此環境解析出的執行階段目錄與鎖定檔路徑, 兩者都不建立。 |
 | `chromium-bridge doctor --fix` | 修復 / 安裝 | 將此執行檔註冊 (或重新註冊) 為原生訊息主機。doctor 唯一會修改狀態的形式。 |
 | `chromium-bridge uninstall` | 移除 | 只移除本專案寫入的註冊, 別無其他。 |
-| `chromium-bridge pair [--reset]` | 登記 | 產生 Secure Enclave 登記金鑰 (macOS); 每次使用該金鑰都需要 Touch ID。 |
-| `chromium-bridge revoke` | 登記 | 刪除登記金鑰; 已固定該金鑰的擴充功能隨即失敗即關閉。 |
-| `chromium-bridge enclave-status [--json]` | 唯讀 | 印出登記狀態與金鑰指紋。 |
-| `chromium-bridge presence-selftest` | 診斷 | 發出一次使用者在場提示並回報結果, 不需要瀏覽器。 |
+| `chromium-bridge pair [--reset] [--file-store]` | 登記 | 在終端機輸入確認之後, 產生擴充功能所固定的主機金鑰; 金鑰存放在作業系統的憑證存放區, 或在使用 `--file-store` 時存放在一個 0600 檔案中。 |
+| `chromium-bridge revoke` | 登記 | 刪除主機金鑰; 固定了該金鑰的擴充功能隨即失敗即關閉。 |
+| `chromium-bridge enclave-status [--json]` | 唯讀 | 印出主機金鑰的狀態、所在位置及其指紋。 |
 | `chromium-bridge pair-client --name <label> (--this-parent \| --hash <hex> \| --signer <id>)` | 受信任用戶端 | 將一個 MCP 用戶端程式 (harness) 加入受信任用戶端允許清單; 需在場驗證。 |
 | `chromium-bridge revoke-client --name <label>` | 受信任用戶端 | 移除一個用戶端; 執行中的中介會立即將其斷開。 |
 | `chromium-bridge list-clients` | 唯讀 | 印出受信任用戶端允許清單。 |
 | `chromium-bridge kill` | 緊急開關 (kill switch) | 啟用全域緊急開關: 停止所有橋接活動, 直到明確解除為止。 |
-| `chromium-bridge unkill` | 緊急開關 | 在證明使用者在場之後解除緊急開關 (已登記的 Mac 上為 Touch ID; 否則為互動式終端機確認, 且拒絕以管線輸入的 stdin)。 |
+| `chromium-bridge unkill` | 緊急開關 | 在證明使用者在場之後解除緊急開關: 在互動式終端機輸入一段確認 (以管線輸入的 stdin 會被拒絕)。 |
 | `chromium-bridge policy show [--json]` | 唯讀 | 印出主機持有的策略狀態與有效策略。 |
-| `chromium-bridge policy set <field flags> [--json]` | 策略 (授予通道) | 產生一份全新的已簽章策略基準: 一次 Touch ID 觸碰。只接受簽章; 沒有登記金鑰時一開始就拒絕。 |
+| `chromium-bridge policy set <field flags> [--json]` | 策略 (授予通道) | 在輸入終端機確認之後產生一份全新的已簽章策略基準。只接受簽章; 沒有主機金鑰時一開始就拒絕。 |
 | `chromium-bridge policy restrict <field flags>` | 策略 (自由通道) | 套用未簽章的限制覆蓋層; 不提示, 因為它只能移除能力。 |
 | `chromium-bridge policy history [--json]` | 唯讀 | 印出已被取代的修訂環。 |
 | `chromium-bridge policy rollback --revision <n> [--json]` | 策略 | 將過去某個修訂的有效策略重新推導為一次全新寫入, 絕非重放。 |
@@ -118,14 +117,17 @@ Chrome 自己的位置來自其文件。其他廠商的位置是從它們存放�
 
 ## 登記: pair / revoke / enclave-status
 
-登記儀式將主機綁定到這台機器的 Secure Enclave, 也綁定到你:
+主機金鑰程序給擴充功能一個可供固定的主機身分:
 
-- `chromium-bridge pair` 在 Secure Enclave 內產生一把 P-256 金鑰, 每次使用都需要使用者在場 (Touch ID 或登入密碼), 接著執行一次需在場驗證的自我測試簽章, 並印出金鑰的 SHA-256 指紋。把這個指紋與擴充功能登記畫面顯示的指紋比對; 不一致表示兩者之間夾了別的東西。
-- `chromium-bridge pair --reset` 以一把新金鑰取代原有金鑰 (同樣需在場驗證); 擴充功能必須重新固定。
-- `chromium-bridge revoke` 刪除金鑰。主機確認刪除並向擴充功能推送撤銷, 擴充功能隨即失敗即關閉。
-- `chromium-bridge enclave-status [--json]` 以唯讀方式回報目前狀態。
+- `chromium-bridge pair` 要求你在終端機輸入一段確認 (以管線輸入的 stdin 在任何提示出現之前就被拒絕), 產生一把 P-256 主機金鑰, 把它存放在作業系統的憑證存放區 (鑰匙圈、認證管理員或 Secret Service), 並印出金鑰的 SHA-256 指紋。把這個指紋與擴充功能登記畫面顯示的指紋比對; 不一致表示兩者之間夾了別的東西。
+- `chromium-bridge pair --file-store` 改為把金鑰存放在執行階段目錄中的一個 0600 檔案, 供沒有可用憑證存放區的機器使用。這個選擇是明確的: 存放區失敗會被回報, 絕不會悄悄改寫到檔案。
+- `chromium-bridge pair --reset` 先要求確認, 然後移除先前的金鑰 (不論哪個存放區持有它) 並產生一把新的; 擴充功能必須重新固定。當憑證存放區沒有回應時, `--file-store` 的重置會繼續進行, 並警告存放區中可能仍留有一筆項目; 等存放區恢復回應後再執行一次 `revoke`。
+- `chromium-bridge revoke` 刪除金鑰並確認它已不存在。主機向擴充功能推送撤銷, 擴充功能隨即失敗即關閉。
+- `chromium-bridge enclave-status [--json]` 以唯讀方式回報目前狀態: 是否存在金鑰、哪個存放區持有它, 以及它的指紋。
 
-登記會把風險最高的那些確認 (`page_eval`、`page_upload`、解除緊急開關、用戶端配對) 從螢幕上的對話框升級為硬體 Touch ID 觸碰。`chromium-bridge presence-selftest` 正好發出一次這樣的提示, 讓你不需要瀏覽器就能看到它運作。
+瀏覽器自身動作 (解除緊急開關、登記第二個瀏覽器) 的使用者在場證明, 是在瀏覽器認證器上的一次 WebAuthn 觸碰, 由主機驗證。選項頁面尚未提供執行登記與應答的面板 (這項交換可以從背景處理常式與瀏覽器測試套件觸及)。
+
+CLI 從不發出那個提示: 它自己的授予 (`pair`、`pair-client`、`unkill`、`policy set`) 由在真實終端機上輸入的片語確認。
 
 ## 受信任用戶端: pair-client / revoke-client / list-clients
 
@@ -142,7 +144,7 @@ chromium-bridge revoke-client --name codex
 - `--this-parent` 量測啟動這次 CLI 呼叫的程序 (請在你想信任的用戶端內部執行它)。僅限 Unix: 在 Windows 上, 伺服器以其 stdin 管道的建立者來識別用戶端程式, 而主控台命令沒有這樣的建立者, 所以請改用 `--hash` 或 `--signer` 配對, 其值取自伺服器在未登記時啟動所記錄的日誌。
 - 授權以經證明的錨點為準, 絕不以 `--name` 標籤為準; 標籤只用於日誌與撤銷。各平台量測的內容見[信任邊界頁面](security/trust-boundaries.md#邊界-1-mcp-用戶端---rust-mcp-伺服器-stdio-json-rpc-20)。
 - 雜湊錨點會在用戶端更新時改變; 以相同名稱重新執行 `pair-client` 即可取代該項目 (重新配對路徑)。
-- 新增用戶端是一種能力授予, 所以需在場驗證: 已登記的 Mac 上為 Touch ID, 否則為互動式終端機確認。撤銷則刻意設計為無阻力; 執行中的中介會斷開被撤銷的用戶端, 並拒絕其重新接入。
+- 新增用戶端是一種能力授予, 所以需在場驗證: 在互動式終端機輸入一段確認, 以管線輸入的 stdin 會被拒絕。撤銷則刻意設計為無阻力; 執行中的中介會斷開被撤銷的用戶端, 並拒絕其重新接入。
 
 允許清單一旦存在, 任何不符合的對象都失敗即關閉, 包括無法量測的身分與無法讀取的允許清單。Windows 的量測方式見 [SECURITY.md](../../.github/SECURITY.md#platform-support)。
 
@@ -153,16 +155,16 @@ chromium-bridge revoke-client --name codex
 - 即時的瀏覽器連線在約一秒內被切斷, 新連線被拒絕。進行中的工具呼叫以 `CONNECTION_LOST` 快速失敗。
 - 之後來自每個已接入用戶端的每一次工具呼叫, 都以穩定的 `BRIDGE_KILLED` 錯誤碼拒絕。用戶端保持連線, 以便向你顯示拒絕訊息, 而不是無聲地死掉。
 - 狀態會持久化 (寫在鎖定檔旁邊的 `trust.json` 中), 在重新啟動、重新連線與重開機後都保留。
-- 擴充功能的選項頁面會顯示該狀態; 從任何介面都能啟用開關, 但解除不行 (網頁看不到也碰不到其中任何東西)。
+- 擴充功能的選項頁面會顯示該狀態; 從任何介面都能啟用開關。從擴充功能解除時, 主機會以一次在場請求應答 (WebAuthn 觸碰, 或在沒有已登記憑證的瀏覽器上用確認視窗); 選項頁面尚未提供該控制項, 所以今天的解除屬於 CLI (網頁看不到也碰不到其中任何東西)。
 
-沒有任何東西會自行解除開關。解除是一個 CLI 動作, 即在終端機執行 `chromium-bridge unkill`, 而且它要求證明使用者在場。擴充功能的解除切換鈕已退役; 來自擴充功能的解除請求會被拒絕並記入稽核。
+沒有任何東西會自行解除開關。解除在兩種介面上都要求證明使用者在場:
 
-| 機器 | `unkill` 要求的證明 |
+| 介面 | 一次解除要求的證明 |
 | --- | --- |
-| 已登記的 Mac | 一次 Secure Enclave Touch ID 觸碰 |
-| 沒有 Enclave 金鑰 | 在真實終端機上輸入的明確確認; 以管線輸入的 stdin 會被直接拒絕, 所以沒有任何指令碼或背景程式能透過 CLI 悄悄重新開啟橋接 |
+| CLI 上的 `chromium-bridge unkill` | 在真實終端機上輸入的明確確認; 以管線輸入的 stdin 會被直接拒絕, 所以沒有任何指令碼或背景程式能透過 CLI 悄悄重新開啟橋接 |
+| 擴充功能 | 來自該瀏覽器下已登記憑證的一次 WebAuthn 斷言; 只有在瀏覽器沒有已登記憑證時才用瀏覽器的確認視窗 |
 
-每次解除嘗試都會記入稽核, 並附上做出決定的驗證路徑 (`auth=touch_id`、`auth=cli_confirm`), 不論它是被授予、在在場閘門被拒絕, 還是在在場驗證通過後因記錄無法寫入而被拒絕。
+每次解除嘗試都會記入稽核: 被授予的解除附上做出決定的驗證路徑 (`auth=tty`、`auth=webauthn:<fingerprint>`、`auth=confirm_window`), 在在場閘門被拒絕的附上在場錯誤, 在場驗證通過後因記錄無法寫入而被拒絕的則兩者都附上。
 
 如果任一命令回報信任記錄無法讀取, 見[復原步驟](./troubleshooting.md#doctor-顯示緊急開關狀態或信任記錄無法讀取); 在那之前, 一切持續失敗即關閉。
 
@@ -174,7 +176,7 @@ chromium-bridge revoke-client --name codex
 
 ```text
 chromium-bridge policy show [--json]              # read-only: store state + effective policy
-chromium-bridge policy set <field flags> [--json] # GRANT lane: sign a fresh baseline (Touch ID)
+chromium-bridge policy set <field flags> [--json] # GRANT lane: sign a fresh baseline (terminal confirmation)
 chromium-bridge policy restrict <field flags>     # FREE lane: unsigned restriction overlay
 chromium-bridge policy history [--json]           # read-only: superseded revisions
 chromium-bridge policy rollback --revision <n> [--json]
@@ -194,19 +196,19 @@ chromium-bridge policy rollback --revision <n> [--json]
 
 **兩條通道刻意不對稱。**
 
-- **`policy set` 是授予通道:** 它把編輯內容疊加在目前的基準上 (未碰到的欄位沿用基準值, 絕不是有效值), 把碰到的欄位集合嵌入文件, 並用 Secure Enclave 登記金鑰對該文件的精確位元組簽章。那一次 Touch ID 觸碰就是簽章本身。
-- **沒有登記金鑰就沒有授予:** 在非 macOS 或未登記的 Mac 上, CLI 一開始就拒絕, 任何提示都不會出現。CLI 的授予路徑只以那個簽章的形式存在, 絕不建構互動式底線, 因為以底線把關的 CLI 授予, 會在 CLI 發行到的每個平台上悄悄開出一條寫入基準的路徑。
+- **`policy set` 是授予通道:** 它把編輯內容疊加在目前的基準上 (未碰到的欄位沿用基準值, 絕不是有效值), 把碰到的欄位集合嵌入文件, 並在輸入的終端機確認通過後, 用主機金鑰對該文件的精確位元組簽章。
+- **沒有主機金鑰就沒有授予:** 在沒有執行過 `pair` 的機器上, CLI 一開始就拒絕, 任何提示都不會出現, 因此不會存在擴充功能的固定指紋無法驗證的基準。
 - **`policy restrict` 是自由通道:** 不提示、不簽章, 而接縫的方向檢查拒絕任何會放寬有效策略的編輯, 所以一次腳本化或偽造的限制, 最糟也只是對你自己的橋接造成阻斷服務。
 
 **回滾絕不重放。** `policy rollback --revision <n>` 重新推導該修訂的有效策略, 與目前的有效策略做差異比對, 並把差異作為一次全新寫入套用。
 
 - **只收緊的回滾** 走免提示的自由限制通道。
-- **放寬任何內容的回滾** 就是一次新的 Touch ID 觸碰, 和其他任何授予完全一樣。
+- **放寬任何內容的回滾** 就是一次新的終端機確認與簽章, 和其他任何授予完全一樣。
 - **舊的已簽章產物絕不寫回:** 較低的修訂必須持續無法通過擴充功能的棘輪, 這是防重放特性, 不是限制。
 
 **`--json` 契約。** `show`、`history`、`set` 與 `rollback` 都接受 `--json`, 它把文字敘述換成 stdout 上一份帶版本的報告 (寫入通道在拒絕時則是一個帶版本的錯誤物件)。先檢查 `v` 欄位, 遇到更新的值就拒絕, 然後才讀取其他內容 (失敗即關閉)。
 
-每次策略轉換都會記入稽核, 附上介面, 授予時還附上授權該簽章的在場驗證層級 (`auth=touch_id`)。
+每次策略轉換都會記入稽核, 附上介面, 授予時還附上授權該簽章的在場路徑 (`auth=tty`)。
 
 ## 日誌與稽核 (BB_LOG / BB_LOG_FORMAT)
 
@@ -217,7 +219,7 @@ chromium-bridge policy rollback --revision <n> [--json]
 | `BB_LOG` | `error` \| `warn` \| `info` (預設) \| `debug` | 日誌門檻。`info` 及以上會印出稽核行; 設為 `warn`/`error` 可關閉稽核輸出。 |
 | `BB_LOG_FORMAT` | `text` (預設) \| `json` | 稽核行的格式。`json` 每行輸出一個 JSON 物件, 便於機器收集。 |
 
-**稽核事件 (stderr)**: 每個安全決定都輸出一行稽核: 工具呼叫 (帶 `req`、`tool`、`outcome`, 出錯時還有來自 [`ERROR_SPECS`](../../src/packages/core/src/error.rs) 的穩定 `code`, 以及 `dur_ms`)、用戶端程式的准入與拒絕、用戶端配對與撤銷、主機金鑰撤銷、緊急開關的狀態轉換, 以及擴充功能的確認與登記決定 (經由連接埠轉送)。
+**稽核事件 (stderr)**: 每個安全決定都輸出一行稽核: 工具呼叫 (帶 `req`、`tool`、`outcome`, 出錯時還有來自 [`ERROR_SPECS`](../../src/packages/core/src/error.rs) 的穩定 `code`, 以及 `dur_ms`)、用戶端程式的准入與拒絕、用戶端配對與撤銷、主機金鑰撤銷、緊急開關的狀態轉換、WebAuthn 登記與在場裁決、策略寫入, 以及擴充功能的確認與登記決定 (經由連接埠轉送)。
 
 同樣的事件會以嚴格的 JSON 記錄附加到一份持久、有大小上限的 `audit.log` (0600, 位於執行階段目錄中鎖定檔旁邊), 它比寫入它的那些短命程序活得更久。每筆記錄在 `event_kind` 中指名其事件; stderr 的 JSON 形式把記錄包在 `"kind":"audit"` 封套裡, 所以收集器以 `kind` 為鍵, 從 `event_kind` 讀取事件。
 

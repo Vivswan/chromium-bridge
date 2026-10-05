@@ -127,7 +127,6 @@ bun run --cwd src/apps/extension build
 | 协议测试套件 | `test-e2e`、`test-adversarial`、`test-chaos`、`check-uv` |
 | 互操作测试套件 | `test-interop` (官方 MCP SDK v2 客户端对发布二进制的测试)、`harness-smoke` (真实的客户端程序 (harness) CLI, 隔离的配置目录; 旧时代打开方式的金丝雀测试) |
 | 浏览器测试套件 | `test-browser`、`test-integration` (只用隔离的 Chrome; 从不进入 `ci`) |
-| Touch ID 运行手册 | `touchid-proof`、`touchid-gates` (由用户运行: 会弹出真实的 Touch ID 提示) |
 | 版本管理 | `check-version`、`check-extension-id`、`check-refresh-lockfiles` |
 | 仓库卫生 (`hygiene` 的依赖) | `check-version`、`check-extension-id`、`check-toolchain`、`check-pins`、`check-hasher`、`check-moon-edges`、`check-ignored`、`check-cjk`、`check-typography`、`check-fuzz-smoke`、`check-harness-driver`、`check-docs-literals`、`check-docs-policy`、`check-planning-refs`、`check-compose`、`check-ci-scripts`、`check-docs-probe`、`check-architecture`、`check-docs-locales` |
 | 工作流 | `check-yaml`、`check-actions` |
@@ -276,16 +275,15 @@ env UID="$(id -u)" GID="$(id -g)" docker compose run --rm shell
 
 ## 模糊测试
 
-`src/packages/core/fuzz/` 是一个独立的 cargo 工作区 (cargo-fuzz + libFuzzer, nightly rust), 有十二个模糊测试目标。凡是存在正确性属性的地方, 目标都会断言该属性, 而不是只检查是否 panic。
+`src/packages/core/fuzz/` 是一个独立的 cargo 工作区 (cargo-fuzz + libFuzzer, nightly rust), 有十一个模糊测试目标。凡是存在正确性属性的地方, 目标都会断言该属性, 而不是只检查是否 panic。
 
 | 目标 | 模糊测试的对象 | 除不 panic 之外的判定依据 |
 |---------|----------------|------------------------|
 | `nm_frame`、`mcp_jsonrpc`、`handshake`、`attach` | 线路帧解码器 | 解码 -> 编码 -> 解码是恒等变换 |
 | `bridge_envelope` | 内部桥接信封读取器, 作为原始值以及作为两种带类型的帧 | 无 (拒绝或解码, 三次) |
 | `handshake_verify` | MAC 校验器和服务器接受路径 | 正确计算的 MAC 能通过校验 |
-| `enclave_challenge` | 挑战消息构造器 | 登记消息和在场消息保持域分离 |
+| `enclave_challenge` | 主机密钥质询消息构造器 | 只接受文档化的字段矩阵, 且被接受的消息能拆回它的各个字段 |
 | `classify_frame` | 控制帧路由器 | 帧的 `type` 恰好是它被读取时的标签 |
-| `enclave_der` | 严格 DER 签名解析器 | 无 (拒绝或解码) |
 | `registration_manifest` | 我方/外来清单及扩展指针的判定 | 任何不能被证明是我方的都是 `Foreign` |
 | `policy_doc` | 策略存储的解析面 | serde 往返, 比较格对每一对都给出划分 |
 | `webauthn_authdata` | WebAuthn authenticatorData 布局解析器, 并向证明对象和断言校验器喂入同样的字节 | 从已证明数据中解析出的凭据密钥经过其存储拼写后能往返一致 |
@@ -303,7 +301,7 @@ env UID="$(id -u)" GID="$(id -g)" docker compose run --rm shell
 - 对抗种子是对正常路径种子的一步变异 (一个未知字段、边界加一、超出阶梯的版本、重复的键、截断的 base64), 并标注必须拒绝它的读取器。
 - 结构化目标 (`handshake_verify`、`enclave_challenge`) 接受 `Arbitrary` 派生的输入, 其编码在不同 `arbitrary` 版本之间不稳定, 所以它们没有种子; 它们的回归用单元测试代替。
 - `fuzz/corpus/<target>/`: 被 gitignore, 由模糊测试器生成。夜间 CI 通过 `actions/cache` 恢复并保存它, 所以探索成果在各次运行之间累积, 而不是每晚从零开始。
-- `fuzz/dictionaries/`: 交给 libFuzzer 的 token 字典。`json_protocol.dict` (JSON 种子中的每个键和字符串值) 随种子一起生成并被 gitignore; `enclave_der` 用的 `der.dict` 是手写的 DER 语法原子, 被跟踪。
+- `fuzz/dictionaries/`: 交给 libFuzzer 的 token 字典。`json_protocol.dict` (JSON 种子中的每个键和字符串值) 随种子一起生成并被 gitignore。
 - `fuzz/failures/<target>/`: 被 gitignore, 每次 `fuzz-smoke.ts` 运行时清空重写。每个崩溃的目标一个目录, 存放一份 `report.md` (重放命令、种子、小输入的 base64 内嵌、固定指令) 加上崩溃输入的副本, 遵循 fleet 的失败报告契约 (fleet 仓库的 docs/fuzzer.md)。夜间作业的议题提交 action 消费这些内容。
 
 在本地运行:
