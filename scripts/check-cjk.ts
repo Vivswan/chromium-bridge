@@ -18,12 +18,17 @@ export const CJK_CLASS =
 export const CONTROL_FILE = "src/apps/extension/src/locales/zh_CN.yml";
 
 /** Git pathspecs for the files allowed to carry CJK: the zh locale bundles, the language picker's native
- * names, and the i18n fixtures. */
+ * names, the i18n fixtures, and the translated docs (the locale trees under docs/ and the root README
+ * translations, which check-docs-locales holds file-for-file to the English tree). */
 export const ALLOWED_PATHSPECS = [
   CONTROL_FILE,
   "src/apps/extension/src/locales/zh_TW.yml",
   "src/apps/extension/src/lib/native-language-names.ts",
   "src/apps/extension/tests/lib/i18n.test.ts",
+  "docs/zh-cn/",
+  "docs/zh-tw/",
+  "README.zh-cn.md",
+  "README.zh-tw.md",
 ];
 
 /** Tried in order when the inherited ctype locale is not UTF-8. C.UTF-8 is absent on macOS 14 and older,

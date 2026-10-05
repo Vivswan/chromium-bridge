@@ -476,8 +476,11 @@ export function baselineLines(findings: readonly Finding[]): string[] {
   for (const f of findings) {
     if (seen.has(f.key)) continue;
     seen.add(f.key);
+    // The comment is for the reader and stays ASCII: the check-cjk gate allows CJK in the translated
+    // pages alone, so a translated unit's line names its kind and nothing of its text.
     const words = f.subject.replace(/\s+/g, " ").trim().split(" ").slice(0, 6).join(" ");
-    lines.push(`${f.key}  # ${f.kind}: ${words}`);
+    const comment = /^[\x20-\x7e]*$/.test(words) ? `${f.kind}: ${words}` : f.kind;
+    lines.push(`${f.key}  # ${comment}`);
   }
   return lines;
 }
