@@ -67,10 +67,10 @@ describe("the command sequence per platform, against a conforming runner", () =>
       "cb.pkg",
       [
         ["sudo", "installer", "-pkg", "cb.pkg", "-target", "/"],
-        [macBin, "--version"],
-        ["pkgutil", "--pkg-info", pkgIdentifier],
         ["stat", "-f", "%Su", "/dev/console"],
         ["sudo", "grep", "-F", "chromium-bridge", "/var/log/install.log"],
+        [macBin, "--version"],
+        ["pkgutil", "--pkg-info", pkgIdentifier],
         [macBin, "doctor", "--list"],
         [macBin, "uninstall"],
         [macBin, "doctor", "--list"],
@@ -110,11 +110,37 @@ describe("the command sequence per platform, against a conforming runner", () =>
   });
 });
 
-/** A runner that answers like the conforming one except where `answer` overrides a command. */
+/** A runner that answers like the conforming one except where `answer` overrides a command; every call is recorded. */
 function answering(answer: (argv: string[]) => Finished | undefined): Partial<Fake> {
   const base = conforming();
-  return { run: (argv) => answer(argv) ?? base.run(argv) };
+  return {
+    calls: base.calls,
+    run: (argv) => {
+      const answered = answer(argv);
+      if (answered === undefined) return base.run(argv);
+      base.calls.push(argv);
+      return answered;
+    },
+  };
 }
+
+test("a failed pkg install still logs the console owner and the package's install.log lines before failing", () => {
+  const fake = conforming(
+    answering((argv) =>
+      argv[1] === "installer"
+        ? { exitCode: 1, stdout: "", stderr: "installer: failed\n" }
+        : undefined,
+    ),
+  );
+  expect(() => smoke("macos", "cb.pkg", "1.2.3", fake, roots)).toThrow(
+    /^sudo installer -pkg cb\.pkg -target \/ exited 1, expected 0:\ninstaller: failed/,
+  );
+  expect(fake.calls).toEqual([
+    ["sudo", "installer", "-pkg", "cb.pkg", "-target", "/"],
+    ["stat", "-f", "%Su", "/dev/console"],
+    ["sudo", "grep", "-F", "chromium-bridge", "/var/log/install.log"],
+  ]);
+});
 
 describe("each check fails on the one wrong answer it exists to catch", () => {
   test.each<[string, string, Partial<Fake>, RegExp]>([

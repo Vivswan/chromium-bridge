@@ -1,6 +1,8 @@
 #!/bin/bash
 # Installer hands this to installd, which runs it as root in its own environment: USER is root and the
-# caller's SUDO_USER is gone, so the account to register is read from the console session itself. With
-# nobody logged in the owner is root and `doctor --fix` fails loudly, which is the intended refusal.
+# caller's SUDO_USER is gone, so the account to register is read from the console session itself. Nobody
+# logged in means the owner is root, and the test line fails the install there rather than register root.
 set -eu
-exec sudo -u "$(stat -f %Su /dev/console)" -H /usr/local/bin/chromium-bridge doctor --fix
+user="$(stat -f %Su /dev/console)"
+test "$user" != root
+exec sudo -u "$user" -H /usr/local/bin/chromium-bridge doctor --fix

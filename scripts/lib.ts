@@ -171,7 +171,11 @@ export class CommandChecks {
   }
 
   ok(...argv: string[]): string {
-    const finished = this.run(...argv);
+    return this.exited0(argv, this.run(...argv));
+  }
+
+  /** The `ok` judgment on a command already run, for a caller that gathers evidence between the two. */
+  exited0(argv: string[], finished: Finished): string {
     if (finished.exitCode !== 0) {
       throw this.failed(argv, `exited ${finished.exitCode}, expected 0:\n${finished.stderr}`);
     }

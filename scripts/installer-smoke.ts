@@ -82,12 +82,15 @@ class Steps extends CommandChecks {
 
 function macos(installer: string, steps: Steps, home: string): void {
   const binary = "/usr/local/bin/chromium-bridge";
-  steps.ok("sudo", "installer", "-pkg", installer, "-target", "/");
-  steps.version(binary);
-  steps.ok("pkgutil", "--pkg-info", pkgIdentifier);
-  // Evidence first (logged, never judged): who owns the console, and what the postinstall printed.
+  // Evidence before judgment, so a failed install still shows who owned the console and what the
+  // postinstall printed (logged, never judged).
+  const install = ["sudo", "installer", "-pkg", installer, "-target", "/"];
+  const installed = steps.run(...install);
   steps.run("stat", "-f", "%Su", "/dev/console");
   steps.run("sudo", "grep", "-F", "chromium-bridge", "/var/log/install.log");
+  steps.exited0(install, installed);
+  steps.version(binary);
+  steps.ok("pkgutil", "--pkg-info", pkgIdentifier);
   // The postinstall registered the console owner, this account: its own doctor sees the registration,
   // then sees the manifest and pointer gone; the wrapper is outside doctor's view, so it is checked by path.
   steps.outputMatches(chromeRegistered, binary, "doctor", "--list");
