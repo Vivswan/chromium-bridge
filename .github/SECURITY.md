@@ -85,7 +85,7 @@ What differs on Windows:
 
 - **Every `page_eval` call reconfirms.** The confirmation shows the full code, the target origin, and the tab title on the extension-owned window.
 - **No silent-eval window.** `page_eval` is deliberately excluded from the same-origin grace window, so one approval never covers a later, different payload.
-- **The grace window is click-only.** `confirmGraceMs` lets a repeated same-origin click or submit skip re-prompting within the window. Those clicks are lower-risk and observable in the UI.
+- **The grace window is click-only.** `confirmGraceMs` lets a repeated click or submit in the same tab, origin, and action kind skip re-prompting within the window; another tab on the same origin confirms again. Those clicks are lower-risk and observable in the UI.
 
 These are host-owned policy defaults: the table shows the signed policy contract's deny baseline, which governs once a host policy applies. A power user can still relax a field, and doing so is an explicit, informed choice:
 
@@ -193,15 +193,19 @@ Dependency review is fully automated; there is no manual per-crate audit step. A
 | cargo-deny | inside the all-green gate on every PR and push, and again in the nightly.yml rerun | RUSTSEC advisories (yanked crates included), the license allow-list and banned sources in `deny.toml` |
 | the fleet's Trivy step | in the managed ci.yml's standard-checks job on every PR and push | HIGH/CRITICAL advisories with a fix in `Cargo.lock` and `bun.lock` |
 | GitHub's dependency-review action | on every PR, through the managed ci.yml's fleet-delivered job | dependencies with known advisories in the PR diff |
-| Dependabot | continuously, over cargo, bun, and GitHub Actions | alerts and bump PRs |
+| Dependabot | continuously, over cargo, bun, uv, and GitHub Actions | alerts and bump PRs |
 
 Boundaries of that stack:
 
 - The dependency-review action only has a diff to review on pull_request events; direct pushes stay covered by cargo-deny and Trivy in the same gate plus the nightly rerun.
 - License enforcement is cargo-deny's alone. The dependency-review action reads licenses from GitHub's dependency graph, which misreports real `Cargo.lock` entries (the deprecated slash syntax, crates missing from the resolved graph), so a mirrored allow-list would fail legitimate bumps.
 - The nightly rerun exists so advisories disclosed between pushes still surface; a red night files the `nightly-failure` tracking issue.
-- Two JS cases the retired `bun audit --audit-level=high` leg gated and Trivy does not: dev-only packages in `bun.lock` (Trivy runs without `--include-dev-deps`) and HIGH/CRITICAL advisories with no fixed version (Trivy runs with `ignore-unfixed`).
-  - **Both are accepted cuts:** the first because those packages run only in the local and CI toolchain, the second because a bump cannot fix it and a red gate would only block unrelated work. Dependabot alerts still cover both; the fleet's nightly Trivy scan additionally reports the unfixed production advisories.
+- Two JS cases Trivy does not gate, both accepted cuts, both still covered by Dependabot alerts:
+
+| Case | Why Trivy misses it | Why the cut is accepted |
+|------|---------------------|-------------------------|
+| dev-only packages in `bun.lock` | it runs without `--include-dev-deps` | those packages run only in the local and CI toolchain |
+| HIGH/CRITICAL advisories with no fixed version | it runs with `ignore-unfixed` | a bump cannot fix it, and a red gate would only block unrelated work; the fleet's nightly Trivy scan reports the unfixed production advisories |
 
 What this asserts is "no unwaived known advisory and an allowed license", not "a human audited this code". The RUSTSEC exceptions reviewed into `deny.toml`'s ignore list stay waived. The residual risk: a novel malicious crate, or an undiscovered flaw with no published advisory, enters the build with no human audit in its way. `deny.toml` refuses unknown registries and git sources, and PR review still sees every `Cargo.lock` diff.
 
@@ -232,9 +236,12 @@ The security-relevant identifiers, each owned by the Rust core and generated int
 
 ## Lock poisoning policy (std::sync::Mutex)
 
-The core is built with panics aborting the process, so a poisoned lock cannot occur in a shipped binary; library code still meets one under unwinding (tests and future embeddings). The broker's `Lock<T>` wrapper (`broker.rs`) and the native host's stdout writer carry one policy: recover the inner value and proceed.
+The core is built with panics aborting the process, so a poisoned lock cannot occur in a shipped binary; library code still meets one under unwinding (tests and future embeddings). Two policies cover every lock:
 
-`session.rs` is the deliberate exception and keeps its split: its connection-registry and pending-call lookups refuse on poison, since a poisoned map could route a call to the wrong browser, and its release paths recover.
+| Site | On poison | Why |
+|------|-----------|-----|
+| the broker's `Lock<T>` wrapper (`broker.rs`), the native host's stdout writer, and the Windows pipe's listener and stream locks (`ipc/platform/windows/pipe.rs`) | recover the inner value and proceed | the reasons below |
+| `session.rs`, the connection-registry and pending-call lookups | refuse | a poisoned map could route a call to the wrong browser; the kill sweep (`shutdown_all_browsers`) still recovers, so a halt always reaches every relay |
 
 - **Why recover is safe there.** The guarded values are bookkeeping (a harness count, the relay registry, a frame writer); an inconsistent reading can at worst refuse an attach or release a slot late, never admit a peer, because admission is decided from the trust record, not from a lock.
 - **Why refuse is not.** Refusing to lock would wedge the shutdown wait, leak a registry slot, or silence the browser leg, and leave the kill sweep unable to reach a relay.
