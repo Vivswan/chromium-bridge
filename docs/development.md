@@ -16,7 +16,7 @@ bun install      # workspace deps + wires the git hooks (lefthook)
 Four gate tools have no first-party proto plugin and are installed once by hand: `cargo install cargo-nextest` and `brew install typos-cli cargo-machete actionlint` (typos and cargo-machete also come from `cargo install`). Where CI gets them:
 
 - **The `Containerfile` pins all four plus cargo-deb** as `ARG <TOOL>_VERSION`. The CI image carries the four; cargo-deb is installed on the bare release and installer runners alone.
-- **A bare runner reads the same pin** through `bun scripts/pin.ts <tool>`: checks.yml for cargo-machete, `installers.yml` and `update-release.yml` for cargo-deb.
+- **A job that installs a tool itself reads the same pin** through `bun scripts/pin.ts <tool>`: checks.yml's tooling job for cargo-machete (inside the image, where that version is already present), `installers.yml` and `update-release.yml` for cargo-deb on their bare runners.
 - **typos and actionlint run through the managed ci.yml's fleet actions** at the platform's own pins, so a local skew can at worst surface a finding early.
 
 | Tool | Used for | Notes |

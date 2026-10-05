@@ -19,7 +19,9 @@ To let an approved AI agent operate the pages you are already signed into, the e
 - Execute JavaScript in the page (off by default).
 - Attach a local file to a page's file input (off by default; every use shows the exact path for confirmation).
 
-Independent of site approval, it can read the list of open tabs (titles and URLs) and open, focus, or close tabs; closing a tab asks for confirmation. Unless you turn the tab-grouping setting off, the tabs it opens are gathered into a tab group of their own in each window, so you can tell them apart from yours.
+Independent of site approval, it can read the list of open tabs (titles and URLs) and focus a tab. Opening a tab needs an approved site, like any page action; closing one asks for confirmation and, while that confirmation is on, needs an approved site as well.
+
+Unless you turn the tab-grouping setting off, the tabs it opens are gathered into a tab group of their own in each window, so you can tell them apart from yours.
 
 Credential-bearing values (cookies and web storage) are **read-only** (the extension has no API to write or modify cookies or storage by design) and are **masked** (JWTs, long hex strings, and long digit runs are redacted) before being returned.
 
@@ -31,7 +33,7 @@ Credential-bearing values (cookies and web storage) are **read-only** (the exten
 ## Consent and control
 
 - **Per-site approval.** A site's pages cannot be read or acted on until you approve its origin in a prompt.
-- **Per-action confirmation.** High-risk actions (form submissions, key presses, tab close, file uploads, and every JavaScript evaluation) ask for confirmation in an extension-owned window that web pages cannot see or interact with. On a Mac enrolled with Touch ID, the highest-risk actions require a Touch ID approval. These confirmations are on by default; each is a setting you control.
+- **Per-action confirmation.** High-risk actions (form submissions, key presses, tab close, file uploads, and, unless you turn that confirmation off, every JavaScript evaluation) ask for confirmation in an extension-owned window that web pages cannot see or interact with. On a Mac enrolled with Touch ID, the highest-risk actions require a Touch ID approval. These confirmations are on by default; each is a setting you control.
 - **A kill switch.** You can halt all bridge activity at any time from the extension's options page or the command line; releasing it requires your explicit, present approval.
 
 ## What the extension stores locally
