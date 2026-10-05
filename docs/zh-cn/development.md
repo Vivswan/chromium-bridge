@@ -1,6 +1,6 @@
 # 开发指南
 
-本页介绍本地开发循环、工具链, 以及测试与模糊测试的机制。分支、提交与合并的工作流见 [CONTRIBUTING.md](../../CONTRIBUTING.md); 项目为何采用当前这种形态, 见 [architecture.md](./architecture.md) 与 [security/rationale.md](./security/rationale.md)。
+本页介绍本地开发循环、工具链、测试与模糊测试的机制, 以及一次发布会改动的版本副本。分支、提交与合并的工作流见 [CONTRIBUTING.md](../../CONTRIBUTING.md); 项目为何采用当前这种形态, 见 [architecture.md](./architecture.md) 与 [security/rationale.md](./security/rationale.md)。
 
 ## 前置条件
 
@@ -16,7 +16,7 @@ bun install      # workspace deps + wires the git hooks (lefthook)
 四个门禁工具没有第一方 proto 插件, 需要手动安装一次: `cargo install cargo-nextest` 和 `brew install typos-cli cargo-machete actionlint` (typos 和 cargo-machete 也可以通过 `cargo install` 获得)。CI 从哪里获取它们:
 
 - **`Containerfile` 以 `ARG <TOOL>_VERSION` 的形式固定这四个工具外加 cargo-deb**。CI 镜像携带这四个; cargo-deb 只安装在裸的发布与安装程序运行器上。
-- **裸运行器通过 `bun scripts/pin.ts <tool>` 读取同一处固定版本**: checks.yml 读 cargo-machete, 安装程序工作流读 cargo-deb。
+- **裸运行器通过 `bun scripts/pin.ts <tool>` 读取同一处固定版本**: checks.yml 读 cargo-machete, `installers.yml` 与 `update-release.yml` 读 cargo-deb。
 - **typos 和 actionlint 通过受管 ci.yml 的 fleet actions 运行**, 使用平台自己固定的版本, 所以本地版本偏差最多只会让某个发现提前浮现。
 
 | 工具 | 用途 | 说明 |
@@ -138,7 +138,7 @@ bun run --cwd src/apps/extension build
 
 CI 运行同样的任务: 仓库自有的 `.github/workflows/checks.yml` 凡是某步骤有对应任务的地方都调用 `moon run <task>`。Rust 操作系统矩阵保留原始的 cargo 动词, 而 `runInCI: false` 的测试套件 (如 `test-interop`) 直接调用, 因为 `CI=true` 时 moon 不会解析它们。
 
-**门禁从不缓存。** 工作区默认让每个任务都不缓存 (`.moon/tasks/all.yml` 中的 `taskOptions.cache: false`): 一个能被缓存命中满足的门禁不是门禁。moon 无法对被 gitignore 的输入 (比如生成的 `.wxt/tsconfig.json`) 做哈希, 而一个写错的 `hasher.ignorePattern` 会悄悄把被跟踪的文件从每一个哈希中剔除。
+**门禁从不缓存。** 工作区默认让每个任务都不缓存 (`.moon/tasks/all.yml` 中的 `taskOptions.cache: false`): 一个能被缓存命中满足的门禁不是门禁, 因为一个错误的哈希会让未经验证的代码落地。moon 无法对被 gitignore 的输入 (比如生成的 `.wxt/tsconfig.json`) 做哈希, 而一个写错的 `hasher.ignorePattern` 会悄悄把被跟踪的文件从每一个哈希中剔除。
 
 重新选择启用缓存的两个任务 (`web:build`、`shared:typecheck`) 不是门禁步骤。因此 `moon run ci` 总是完整执行整套测试, 并按其 `deps` 列表声明的固定顺序进行 (`runDepsInParallel: false`)。底层工具 (cargo、tsc、vite、bun) 保留各自的增量缓存, 所以热重跑依然很快。
 
@@ -202,7 +202,7 @@ uv 只固定在 `.prototools` 中, python 由 uv 管理: 协议测试套件通�
 | `hygiene` | `moon run hygiene` | 镜像 |
 | `tooling` | `machete`, 使用 `Containerfile` 固定版本的 cargo-machete | 镜像 |
 | `web` | `web:build`、`web:test` | 镜像 |
-| `linux-install` | `scripts/linux-registration.ts`: 在隔离的 HOME 和 XDG 目录下运行 `doctor --fix`、重新注册、多浏览器、`uninstall` | 裸运行器 |
+| `linux-install` | 先下载 `build-release` 的二进制, 再运行 `scripts/linux-registration.ts`: 在隔离的 HOME 和 XDG 目录下运行 `doctor --fix`、重新注册、多浏览器、`uninstall` | 裸运行器: 它只需要那个二进制和一个运行场景驱动脚本的 bun |
 | `protocol` | 对下载的二进制运行 `e2e`、`adversarial` 和 `chaos` 测试套件 | 镜像 |
 | `interop` | 官方 MCP SDK 客户端对下载的二进制的测试 | 镜像 |
 | `browser` | 可复用的 `browser.yml` (输入 `chrome-version`), `nightly.yml` 也调用它 | 裸运行器, Chrome 来自 `setup-chrome` |

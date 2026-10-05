@@ -20,7 +20,7 @@
 - **`site`** 在發布之後、同一次執行中部署網站。
 - **`update-release-pr`** 在 release-please 建立或更新發行 PR 時, 呼叫儲存庫自有的 `update-release-pr.yml` 掛勾。
 
-掛勾內最後一個工作 `release-ready` 會在任一打包工作未成功時失敗: 被跳過或取消的工作會阻擋發布, 而 `continue-on-error` 的工作 (SBOM、Homebrew) 在那裡視為成功。受管理的發布階段只看得到掛勾的彙總結果, 所以正是這個工作防止意外的跳過流入發布。
+`update-release.yml` 內最後一個工作 `release-ready` 會在任一打包工作未成功時失敗: 被跳過或取消的工作會阻擋發布, 而 `continue-on-error` 的工作 (SBOM、Homebrew) 在那裡視為成功。受管理的發布階段只看得到掛勾的彙總結果, 所以正是這個工作防止意外的跳過流入發布。
 
 當版本升級改變了鎖定檔時, 發行 PR 會多帶一個 release-please 自身之外的提交: `update-release-pr` 掛勾會為升級後的版本重新鎖定 `Cargo.lock`、`src/packages/core/fuzz/Cargo.lock` 與 `bun.lock`, 並把該提交推送到 PR 分支, 因為 release-please 只升級資訊清單, 而每個 `--locked` 步驟都拒絕落後的鎖定檔。
 

@@ -113,8 +113,8 @@ Chrome 的官方協定, 定義於 [developer.chrome.com/native-messaging](https:
 連線建立依序進行, 每一步都失敗即關閉:
 
 1. **核心檢查** (Unix): 接受端驗證對端的 UID 等於自己的 UID, 並取得對端執行中執行檔的由核心證明的身分, 該身分必須與自己的映像相符 (雙向)。
-2. **HMAC 交握**: 伺服器送出一個新的 nonce; 對端以鎖定檔中的每次執行祕密計算 `HMAC-SHA256(secret, nonce)` 回應。祕密從不經過線路; nonce 擊敗重放。
-3. **接入訊框**: 一個必要的、宣告角色的訊框。瀏覽器的原生訊息主機以其標籤 (`chrome`、`brave`...) 接入; 中繼以其經證明的用戶端程式身分接入, 中介會對照受信任用戶端允許清單檢查該身分。
+2. **HMAC 交握**: 伺服器送出一個新的 nonce; 對端以鎖定檔中的每次執行祕密計算 `HMAC-SHA256(secret, nonce || 0x00 || label)` 回應, 標籤只在對端宣告自己是瀏覽器時才帶上。祕密從不經過線路; nonce 擊敗重放, 而未被 MAC 涵蓋的標籤無法通過驗證。
+3. **接入訊框**: 一個必要的、宣告角色的訊框。瀏覽器的原生訊息主機以瀏覽器身分接入, 標籤取自其交握回應所攜帶的那個 (`chrome`、`brave`...); 中繼以其經證明的用戶端程式身分接入, 中介會對照受信任用戶端允許清單檢查該身分。
 
 ```mermaid
 flowchart LR
@@ -130,7 +130,7 @@ flowchart LR
   peer -->|connect| socket
   socket -->|same user| cred
   cred -->|same executable image, both ways| attest
-  attest -->|HMAC over a fresh nonce| hs
+  attest -->|HMAC over a fresh nonce and the claimed browser label| hs
   hs -->|attach frame| broker
   broker -->|a browser attach, registered under its label| session
 ```
@@ -340,12 +340,12 @@ Broker exits when the last attached harness detaches.
 |------|------|-----|
 | 用戶端程式准入 (stdio) | 由核心證明的父程序身分, 對照受信任用戶端允許清單檢查; 一旦登記後即失敗即關閉 | [用戶端程式准入](./security/rationale.md#用戶端程式准入與用戶端允許清單) |
 | 橋接 socket | 0700 目錄中的 0600 Unix domain socket; 對端 UID 檢查; 雙向執行檔證明; HMAC 挑戰-回應; 宣告角色的接入 | [主機身分](./security/rationale.md#主機身分與證明) |
-| 任一方撤銷 | 每個強制執行點在決定前都重新讀取 `trust.json`; 解除配對時刪除憑證的兩半 | [撤銷](./security/rationale.md#撤銷與緊急開關) |
+| 任一方撤銷 | 主機端的每個強制執行點在決定前都重新讀取 `trust.json` (擴充功能的緊急開關閘門讀取其鏡像); 解除配對時刪除憑證的兩半 | [撤銷](./security/rationale.md#撤銷與緊急開關) |
 | 主機身分 (主機 <-> 擴充功能) | 由 `pair` 鑄造的 P-256 主機金鑰, 擴充功能在比對指紋後將其固定; 每個簽章的策略基準都對照固定的金鑰驗證 | [登記](./security/rationale.md#登記與使用者在場) |
 | 使用者在場 (主機 <-> 擴充功能) | 授予能力的行為需要 WebAuthn 斷言: 解除緊急開關, 用在本瀏覽器下登記的憑證; 登記另一個瀏覽器, 用本機上任何已登記的憑證。只有在該規則不允許任何憑證時, 確認視窗才頂替上場, 所以已登記的瀏覽器永遠不會被降級 | [使用者在場](./security/rationale.md#登記與使用者在場) |
 | 網站允許清單 | 逐來源核准 + `chrome.permissions.request`; 頁面無法自行核准 | [信任邊界](./security/trust-boundaries.md) |
 | 高風險確認 | 擴充功能擁有的視窗, 不在頁面可觸及的 DOM 中; 逾時/關閉即拒絕 | [信任邊界](./security/trust-boundaries.md) |
-| 皇冠寶石確認 | `page_eval` / `page_upload` 每次呼叫都在擴充功能擁有的視窗中確認; 只有 `page_eval` 的提示可以豁免, 由簽章策略的 `confirmPageEval` 選擇退出; 沒有為它們建置 WebAuthn 路徑 | [工具風險矩陣](./security/tool-risk-matrix.md) |
+| 皇冠寶石確認 | `page_eval` / `page_upload` 每次呼叫都在擴充功能擁有的視窗中確認; 只有 `page_eval` 的提示可以豁免, 由主機策略的 `confirmPageEval` 選擇退出 (在已固定的擴充功能上為簽章策略); 沒有為它們建置 WebAuthn 路徑 | [工具風險矩陣](./security/tool-risk-matrix.md) |
 | 緊急開關 + 稽核 | 在四層強制執行的失敗即關閉閂鎖; 解除需在場; 先決定後記錄的日誌 | [緊急開關](./security/rationale.md#撤銷與緊急開關) |
 | 遮罩 | Cookie/儲存空間/eval/頁面文字的出站資料在 SW 中遮罩, 兩個頁面後端共用一次 | [工具風險矩陣](./security/tool-risk-matrix.md) |
 | 協定安全 | NM 1 MB 出站上限; 單一寫入者 + flush; stderr panic hook; 經模糊測試的解析器 | (第 3.1 節) |
@@ -470,7 +470,7 @@ panic 訊息預設輸出到 stdout, 會損毀 NM 訊框與 MCP NDJSON。緩解: 
 |------|------|------|
 | 後端語言 | Rust, 單一執行檔 + 子命令 | 單檔發佈; 主機資訊清單要求絕對路徑; 伺服器、主機與 CLI 共用一套程式碼 |
 | IPC | Unix domain socket + 鎖定檔 (Windows 上為僅限使用者的具名管道) | 沒有監聽連接埠; 核心的對端憑證 (Windows 上為管道對端的 pid) 讓證明成為可能 |
-| 密碼學與解析 | RustCrypto `hmac`/`sha2`、`subtle`、`serde` | 即使在安全核心也偏好多方檢視過的函式庫而非自製程式碼; 只在沒有函式庫可用時才自行撰寫 (見 SECURITY.md 與 AGENTS.md) |
+| 密碼學與解析 | RustCrypto `hmac`/`sha2`、`subtle`、`serde` | 偏好廣泛採用的函式庫而非自製程式碼; 只在沒有函式庫可用時才自行撰寫 |
 | 擴充功能平台 | WXT 上的 MV3、React UI、Vitest | 產生含固定金鑰的資訊清單; 統一的 `browser.*`; 可測試的 SW |
 | 契約 | Rust 核心產生 TS 端 | 單一事實來源; CI 在漂移時失敗。見第 11 節 |
 | 工程閘門 | moon + proto + GitHub Actions、bun workspace、Biome、cargo-nextest、typos/machete、cargo-deny + 艦隊的 Trivy 與相依套件審查 | 一次 `moon run ci` 執行本機的跨平台閘門; CI 在其上疊加額外工作 (本儲存庫自己的工作放在 `.github/workflows/checks.yml`, 在受管理的 ci.yml 的 all-green 閘門內被呼叫) |
@@ -506,7 +506,7 @@ panic 訊息預設輸出到 stdout, 會損毀 NM 訊框與 MCP NDJSON。緩解: 
 - 夾具檔保存黃金向量: Rust 建構的訊息位元組加上確定性的軟體 P256 證明, 由 `src/apps/extension/tests/background/enclave-golden.test.ts` 透過擴充功能的 WebCrypto 驗證器重放, 所以簽章訊息的編碼本身在兩種語言間被固定下來。夾具檔的簽署金鑰是公開的測試資料, 在兩側都被列入主機身分的拒絕清單 (核心中的 `ensure_not_fixture_key`, 擴充功能配對驗證器與已儲存固定值驗證器中的 `ENCLAVE_FIXTURE_KEY_ID`)。
 - **策略文件與方向** (`src/packages/core/src/policy/`): 主機持有的 `PolicyDoc`、十五個策略欄位 (四個能力授予、確認策略、`disabledTools`、確認逾時)、它們的預設拒絕值、每個欄位的寬鬆方向表, 以及 `relaxes`/`restricts` 比較, 加上簽章儲存與 `set_signed`/`restrict` 寫入接縫。
 - `moon run gen` 輸出 `src/packages/shared/src/policy.gen.ts`: 簽章網域常數、帶方向的欄位清單、預設值, 以及針對文件、數值與限制覆蓋層的嚴格 Zod 驗證器。擴充功能自己從輸出的表重新計算每一次方向比較; 它從不相信主機對變更方向的說法。
-- 授予由主機金鑰對 `UTF8("chromium-bridge-policy-v1") || 0x00 || doc_bytes` 簽章, 這是第三個以 NUL 分隔的簽章網域, 與主機金鑰挑戰網域及在場網域互為單射, 所以一種儀式的產物不可能被重放成另一種。
+- 授予由主機金鑰對 `UTF8("chromium-bridge-policy-v1") || 0x00 || doc_bytes` 簽章, 這是與主機金鑰挑戰網域並列的一個以 NUL 分隔的簽章網域, 相對於它為單射, 所以一種儀式的產物不可能被重放成另一種。
 - 任何地方都沒有正規化步驟: 主機簽章並儲存精確的文件位元組, 擴充功能先用其固定的金鑰驗證收到的精確位元組, 再對同一份位元組做嚴格解析。第 11.3 節說明承載這一切的訊框。
 - **線路信封與控制訊框** (`src/packages/core/src/protocol.rs` 中的 `BridgeReq` / `BridgeResp`; `src/packages/core/src/protocol/control.rs` 中的 `EnclaveControl`、內嵌 `allowlist::ClientEntry` 的 `AdminControl`、`PolicyControl` 與 `WebAuthnControl`): Rust 型別就是契約, `moon run gen` 從它們產生擴充功能的驗證器到 `src/packages/shared/src/envelope.gen.ts`。下表列出每一層及其擁有者; `moon run check-gen` 在差異過期時失敗。
 
@@ -524,13 +524,13 @@ panic 訊息預設輸出到 stdout, 會損毀 NM 訊框與 MCP NDJSON。緩解: 
 
 | 代碼 | 今天由誰指派 |
 |------|------|
-| `EXECUTION_FAILED` | 主機, 針對擴充功能回報的每個自由格式失敗字串 |
-| `TOOL_DISABLED` | 主機端的策略閘門 (第 11.3 節): 分派在任何橋接流量之前, 拒絕能力授予已關閉或被有效策略停用的工具 |
-| `NOT_CONNECTED`、`EXTENSION_NOT_READY`、`CONNECTION_LOST`、准入與撤銷的拒絕、`BRIDGE_KILLED` | Rust 伺服器, 在每個程序中共用同一意義 |
+| `EXECUTION_FAILED` | MCP 伺服器, 針對擴充功能回報的每個自由格式失敗字串 |
+| `TOOL_DISABLED` | MCP 伺服器的策略閘門 (第 11.3 節): 分派在任何橋接流量之前, 拒絕能力授予已關閉或被有效策略停用的工具 |
+| `NOT_CONNECTED`、`EXTENSION_NOT_READY`、`CONNECTION_LOST`、准入與撤銷的拒絕、`BRIDGE_KILLED` | MCP 伺服器, 在每個程序中共用同一意義 |
 | `PROTOCOL_MISMATCH` | 尚無: 等待版本/能力交握接線 (第 11.2 節) |
 | `SITE_NOT_ALLOWED`、`USER_DENIED`、`TAB_NOT_FOUND`、... | 尚無: 需要擴充功能以結構化錯誤回報取代自由格式字串 |
 
-Rust 伺服器是唯一的指派者, 涵蓋該表的一個子集; 產生到 `errors.gen.ts` 的 TS 常數是為未來的消費者準備的。
+MCP 伺服器 (`src/packages/core/src/error.rs` 中的 `CallError::code()`) 是唯一的指派者, 涵蓋該表的一個子集; 產生到 `errors.gen.ts` 的 TS 常數是為未來的消費者準備的。
 
 ### 11.2 能力 / 版本交握
 
@@ -588,7 +588,7 @@ flowchart LR
 
 切換之後, 每連線的分派屏障會拒絕橋接 op, 直到該連線的第一次策略推送已驗證並套用, 所以 op 不可能搶在收緊之前執行。
 
-在線路驗證這一側, 這五個訊框與其他每個控制訊框走同一套產生的機制 (上文第 11 節); `policy_current` 在不對稱表中宣告其 ok 分支, 並輸出為可辨識聯集, 由 `moon run check-envelope` 閘門證明。
+在線路驗證這一側, 這七個訊框與其他每個控制訊框走同一套產生的機制 (上文第 11 節); `policy_current` 在不對稱表中宣告其 ok 分支, 並輸出為可辨識聯集, 由 `moon run check-envelope` 閘門證明。
 
 主機也在分派時強制執行自己的策略 (`policy/gating.rs`): 能力授予已關閉或列於 `disabledTools` 的工具, 會在任何橋接流量之前以穩定的 `TOOL_DISABLED` 代碼拒絕; 儲存缺失時放行 (切換前), 無法讀取時全部拒絕。
 

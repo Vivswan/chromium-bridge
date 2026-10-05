@@ -20,7 +20,7 @@
 - **`site`** 在发布之后、同一次运行中部署站点。
 - **`update-release-pr`** 在 release-please 创建或刷新发布 PR 时调用仓库自有的 `update-release-pr.yml` 钩子。
 
-钩子内部的最后一个作业 `release-ready` 只有在每个打包作业都成功时才通过: 被跳过或取消的作业会阻止发布, 而 `continue-on-error` 的作业 (SBOM、Homebrew) 在那里算作成功。由平台管理的发布阶段只看到钩子的汇总结果, 所以正是这个作业防止意外跳过的作业流入正式发布。
+`update-release.yml` 内的最后一个作业 `release-ready` 只有在每个打包作业都成功时才通过: 被跳过或取消的作业会阻止发布, 而 `continue-on-error` 的作业 (SBOM、Homebrew) 在那里算作成功。由平台管理的发布阶段只看到钩子的汇总结果, 所以正是这个作业防止意外跳过的作业流入正式发布。
 
 当版本提升改变了锁文件时, 发布 PR 会在 release-please 自己的提交之外多带一个提交: `update-release-pr` 钩子为提升后的版本重新锁定 `Cargo.lock`、`src/packages/core/fuzz/Cargo.lock` 和 `bun.lock`, 并把这个提交推送到 PR 分支, 因为 release-please 只提升清单文件, 而每个 `--locked` 步骤都会拒绝落后的锁文件。
 

@@ -113,8 +113,8 @@ Chrome 的官方协议, 定义见 [developer.chrome.com/native-messaging](https:
 连接建立按以下顺序进行, 每一步都失败即关闭:
 
 1. **内核检查** (Unix): 接受端验证对端的 UID 与自己相同, 并获取对端正在运行的可执行文件的由内核证明的身份, 该身份必须与自己的镜像一致 (双向)。
-2. **HMAC 握手**: 服务器发送一个新鲜的 nonce; 对端用锁文件中的本次运行密钥回复 `HMAC-SHA256(secret, nonce)`。密钥从不经过线路; nonce 阻止重放。
-3. **接入帧**: 一个必需的、声明角色的帧。浏览器的原生消息主机以其标签 (`chrome`、`brave` 等) 接入; 中继以其经证明的客户端程序身份接入, 中介据此核对受信任客户端白名单。
+2. **HMAC 握手**: 服务器发送一个新鲜的 nonce; 对端用锁文件中的本次运行密钥回复 `HMAC-SHA256(secret, nonce || 0x00 || label)`, 当对端声明自己是浏览器时才带上标签。密钥从不经过线路; nonce 阻止重放, 而未被 MAC 覆盖的标签无法通过校验。
+3. **接入帧**: 一个必需的、声明角色的帧。浏览器的原生消息主机以浏览器身份接入, 标签取自其握手应答所携带的那个 (`chrome`、`brave` 等); 中继以其经证明的客户端程序身份接入, 中介据此核对受信任客户端白名单。
 
 ```mermaid
 flowchart LR
@@ -130,7 +130,7 @@ flowchart LR
   peer -->|connect| socket
   socket -->|same user| cred
   cred -->|same executable image, both ways| attest
-  attest -->|HMAC over a fresh nonce| hs
+  attest -->|HMAC over a fresh nonce and the claimed browser label| hs
   hs -->|attach frame| broker
   broker -->|a browser attach, registered under its label| session
 ```
@@ -340,12 +340,12 @@ Broker exits when the last attached harness detaches.
 |------|------|-----|
 | 客户端程序准入 (stdio) | 由内核证明的父进程身份, 对照受信任客户端白名单核对; 一旦登记即失败即关闭 | [客户端程序准入](./security/rationale.md#客户端程序准入与客户端白名单) |
 | 桥接套接字 | 0700 目录中的 0600 Unix 域套接字; 对端 UID 检查; 双向可执行文件证明; HMAC 质询-应答; 声明角色的接入帧 | [主机身份](./security/rationale.md#主机身份与证明) |
-| 任一侧吊销 | 每个执行点在决策前重新读取 `trust.json`; 取消配对时删除凭据的两半 | [吊销](./security/rationale.md#吊销与紧急开关) |
+| 任一侧吊销 | 主机侧的每个执行点在决策前重新读取 `trust.json` (扩展的紧急开关门禁读取其镜像); 取消配对时删除凭据的两半 | [吊销](./security/rationale.md#吊销与紧急开关) |
 | 主机身份 (主机 <-> 扩展) | 由 `pair` 铸造的 P-256 主机密钥, 扩展在比对指纹后将其固定; 每个签名的策略基线都对照该固定值验证 | [登记](./security/rationale.md#登记与用户在场) |
 | 用户在场 (主机 <-> 扩展) | 授予能力的操作需要 WebAuthn 断言: 解除紧急开关, 用在本浏览器下登记的凭据; 登记另一个浏览器, 用本机上任一已登记的凭据。仅当该规则不允许任何凭据时才由确认窗口代替, 因此已登记的浏览器绝不会被降级 | [用户在场](./security/rationale.md#登记与用户在场) |
 | 站点白名单 | 按源逐一批准 + `chrome.permissions.request`; 页面无法自行批准 | [信任边界](./security/trust-boundaries.md) |
 | 高风险确认 | 扩展自有的窗口, 不在页面可触及的 DOM 中; 超时/关闭即拒绝 | [信任边界](./security/trust-boundaries.md) |
-| 核心资产确认 | `page_eval` / `page_upload` 每次调用都在扩展自有窗口中确认; 只有 `page_eval` 的提示可以豁免, 通过签名策略的 `confirmPageEval` 选择退出; 它们没有 WebAuthn 路径 | [工具风险矩阵](./security/tool-risk-matrix.md) |
+| 核心资产确认 | `page_eval` / `page_upload` 每次调用都在扩展自有窗口中确认; 只有 `page_eval` 的提示可以豁免, 通过主机策略的 `confirmPageEval` 选择退出 (在已固定的扩展上为签名策略); 它们没有 WebAuthn 路径 | [工具风险矩阵](./security/tool-risk-matrix.md) |
 | 紧急开关 + 审计 | 在四个层面执行的失败即关闭闩锁; 由在场把关的解除; 先决策后记录的日志 | [紧急开关](./security/rationale.md#吊销与紧急开关) |
 | 脱敏 | Cookie/存储/eval/页面文本的出口在 SW 中脱敏, 对两个页面后端只做一次 | [工具风险矩阵](./security/tool-risk-matrix.md) |
 | 协议安全 | NM 1 MB 出站上限; 单写入者 + 刷新; stderr panic 钩子; 经模糊测试的解析器 | (第 3.1 节) |
@@ -470,7 +470,7 @@ panic 消息默认输出到 stdout, 会破坏 NM 帧与 MCP NDJSON。缓解: rel
 |------|------|------|
 | 后端语言 | Rust, 单一二进制 + 子命令 | 单文件分发; 主机清单接受绝对路径; 服务器、主机与 CLI 共用一套代码 |
 | IPC | Unix 域套接字 + 锁文件 (Windows 上为仅限当前用户的命名管道) | 没有监听端口; 内核的对端凭据 (Windows 上是管道对端的 pid) 使身份证明成为可能 |
-| 加密与解析 | RustCrypto `hmac`/`sha2`、`subtle`、`serde` | 即使在安全核心中也优先选择多人审视过的库而非自研代码; 只有在没有现成库时才写定制代码 (见 SECURITY.md 与 AGENTS.md) |
+| 加密与解析 | RustCrypto `hmac`/`sha2`、`subtle`、`serde` | 优先选择被广泛采用的库而非自研代码; 只有在没有现成库时才写定制代码 |
 | 扩展平台 | 基于 WXT 的 MV3、React UI、Vitest | 生成的清单带固定密钥; 统一的 `browser.*`; 可测试的 SW |
 | 契约 | Rust 核心生成 TS 侧 | 单一事实来源; CI 在出现漂移时失败。见第 11 节 |
 | 工程门禁 | moon + proto + GitHub Actions、bun 工作区、Biome、cargo-nextest、typos/machete、cargo-deny + 车队共用的 Trivy 与依赖审查 | 一条 `moon run ci` 运行本地跨平台门禁; CI 在其上叠加额外任务 (仓库自己的任务位于 `.github/workflows/checks.yml`, 在受管的 ci.yml 的 all-green 门禁内被调用) |
@@ -506,7 +506,7 @@ panic 消息默认输出到 stdout, 会破坏 NM 帧与 MCP NDJSON。缓解: rel
 - 夹具文件保存黄金向量: 由 Rust 构建的消息字节, 配上确定性的软件 P256 证明, 由 `src/apps/extension/tests/background/enclave-golden.test.ts` 通过扩展的 WebCrypto 校验器回放, 从而把签名消息的编码本身跨语言固定下来。夹具的签名密钥是公开的测试数据, 在两侧都被列入主机身份的拒绝名单 (核心中的 `ensure_not_fixture_key`, 扩展配对校验器与已存固定值校验器中的 `ENCLAVE_FIXTURE_KEY_ID`)。
 - **策略文档与方向** (`src/packages/core/src/policy/`): 主机持有的 `PolicyDoc`、十五个策略字段 (四项能力授予、确认策略、`disabledTools`、确认超时)、它们的默认拒绝值、逐字段的宽松方向表、`relaxes`/`restricts` 比较, 以及签名存储和 `set_signed`/`restrict` 写入接缝。
 - `moon run gen` 生成 `src/packages/shared/src/policy.gen.ts`: 签名域常量、带方向的字段列表、默认值, 以及针对文档、取值与限制覆盖层的严格 Zod 校验器。扩展自己根据生成的表重新计算每一次方向比较; 它从不相信主机关于某次变更朝向哪边的说法。
-- 授予由主机密钥对 `UTF8("chromium-bridge-policy-v1") || 0x00 || doc_bytes` 签名, 这是第三个以 NUL 分隔的签名域, 相对于主机密钥质询域与在场域是单射的, 因此一个仪式的产物无法作为另一个仪式的产物重放。
+- 授予由主机密钥对 `UTF8("chromium-bridge-policy-v1") || 0x00 || doc_bytes` 签名, 这是与主机密钥质询域并列的一个以 NUL 分隔的签名域, 相对于它是单射的, 因此一个仪式的产物无法重放为另一个。
 - 任何地方都没有规范化步骤: 主机签名并存储精确的文档字节, 扩展先对照其固定密钥验证收到的精确字节, 再对这些相同的字节做严格解析。第 11.3 节介绍承载这一切的帧。
 - **线路信封与控制帧** (`src/packages/core/src/protocol.rs` 中的 `BridgeReq` / `BridgeResp`; `src/packages/core/src/protocol/control.rs` 中的 `EnclaveControl`、`AdminControl` (它内嵌 `allowlist::ClientEntry`)、`PolicyControl` 与 `WebAuthnControl`): Rust 类型就是契约, `moon run gen` 据此为扩展生成校验器到 `src/packages/shared/src/envelope.gen.ts`。下表列出每一层及其归属; `moon run check-gen` 在差异过期时失败。
 
@@ -524,13 +524,13 @@ panic 消息默认输出到 stdout, 会破坏 NM 帧与 MCP NDJSON。缓解: rel
 
 | 代码 | 今天由谁赋予 |
 |------|------|
-| `EXECUTION_FAILED` | 主机, 用于扩展报告的每个自由格式失败字符串 |
-| `TOOL_DISABLED` | 主机侧的策略门禁 (第 11.3 节): 分发在任何桥接流量之前拒绝能力授予已关闭或被有效策略禁用的工具 |
-| `NOT_CONNECTED`、`EXTENSION_NOT_READY`、`CONNECTION_LOST`、准入与吊销拒绝、`BRIDGE_KILLED` | Rust 服务器, 在每个进程中含义一致 |
+| `EXECUTION_FAILED` | MCP 服务器, 用于扩展报告的每个自由格式失败字符串 |
+| `TOOL_DISABLED` | MCP 服务器的策略门禁 (第 11.3 节): 分发在任何桥接流量之前拒绝能力授予已关闭或被有效策略禁用的工具 |
+| `NOT_CONNECTED`、`EXTENSION_NOT_READY`、`CONNECTION_LOST`、准入与吊销拒绝、`BRIDGE_KILLED` | MCP 服务器, 在每个进程中含义一致 |
 | `PROTOCOL_MISMATCH` | 尚无: 它等待版本/能力握手接线完成 (第 11.2 节) |
 | `SITE_NOT_ALLOWED`、`USER_DENIED`、`TAB_NOT_FOUND`... | 尚无: 它们需要扩展用结构化错误报告取代自由格式字符串 |
 
-Rust 服务器是唯一的赋予者, 只覆盖该表的一个子集; 生成到 `errors.gen.ts` 的 TS 常量是为将来的消费者准备的。
+MCP 服务器 (`src/packages/core/src/error.rs` 中的 `CallError::code()`) 是唯一的赋予者, 只覆盖该表的一个子集; 生成到 `errors.gen.ts` 的 TS 常量是为将来的消费者准备的。
 
 ### 11.2 能力 / 版本握手
 
@@ -588,7 +588,7 @@ flowchart LR
 
 切换之后, 每连接的分发屏障会拒绝桥接操作, 直到该连接的首次策略推送完成验证并应用, 因此操作不可能抢在收紧之前执行。
 
-在线路校验方面, 这五个帧与其他每个控制帧走同一套生成机制 (见上文第 11 节); `policy_current` 在不对称表中声明其 ok 分裂, 并被生成为可区分联合类型, 由 `moon run check-envelope` 门禁证明。
+在线路校验方面, 这七个帧与其他每个控制帧走同一套生成机制 (见上文第 11 节); `policy_current` 在不对称表中声明其 ok 分裂, 并被生成为可区分联合类型, 由 `moon run check-envelope` 门禁证明。
 
 主机也在分发时执行自己的策略 (`policy/gating.rs`): 能力授予已关闭或位于 `disabledTools` 中的工具, 在任何桥接流量之前就以稳定的 `TOOL_DISABLED` 代码被拒绝; 存储缺失时允许 (切换前), 存储不可读时全部拒绝。
 

@@ -1,6 +1,6 @@
 # 開發指南
 
-本頁涵蓋本機開發迴圈、工具鏈, 以及測試與模糊測試的機制。分支、提交與合併的工作流程見 [CONTRIBUTING.md](../../CONTRIBUTING.md); 專案為何如此設計, 見 [architecture.md](./architecture.md) 與 [security/rationale.md](./security/rationale.md)。
+本頁涵蓋本機開發迴圈、工具鏈、測試與模糊測試的機制, 以及一次發行會更動的版本副本。分支、提交與合併的工作流程見 [CONTRIBUTING.md](../../CONTRIBUTING.md); 專案為何如此設計, 見 [architecture.md](./architecture.md) 與 [security/rationale.md](./security/rationale.md)。
 
 ## 先決條件
 
@@ -16,7 +16,7 @@ bun install      # workspace deps + wires the git hooks (lefthook)
 有四個閘門工具沒有第一方的 proto 外掛, 需手動安裝一次: `cargo install cargo-nextest` 與 `brew install typos-cli cargo-machete actionlint` (typos 與 cargo-machete 也可透過 `cargo install` 取得)。CI 從哪裡取得它們:
 
 - **`Containerfile` 以 `ARG <TOOL>_VERSION` 固定這四個工具加上 cargo-deb**。CI 映像檔帶有這四個; cargo-deb 只安裝在裸機的發行與安裝程式執行器上。
-- **裸機執行器透過 `bun scripts/pin.ts <tool>` 讀取同一個固定版本**: checks.yml 讀 cargo-machete, 安裝程式工作流程讀 cargo-deb。
+- **裸機執行器透過 `bun scripts/pin.ts <tool>` 讀取同一個固定版本**: checks.yml 讀 cargo-machete, `installers.yml` 與 `update-release.yml` 讀 cargo-deb。
 - **typos 與 actionlint 經由受管理的 ci.yml 的 fleet actions 執行**, 使用平台自己的固定版本, 所以本機的版本偏差最壞也只是提早浮現一項發現。
 
 | 工具 | 用途 | 備註 |
@@ -138,7 +138,7 @@ bun run --cwd src/apps/extension build
 
 CI 執行同樣的任務: 儲存庫自有的 `.github/workflows/checks.yml` 凡有對應任務的步驟都呼叫 `moon run <task>`。Rust 的作業系統矩陣保留原始的 cargo 動詞, 而 `runInCI: false` 的測試套件 (例如 `test-interop`) 則直接呼叫, 因為 `CI=true` 時 moon 不會解析它們。
 
-**閘門永不快取。** 依工作區預設, 每個任務都不快取 (`.moon/tasks/all.yml` 中的 `taskOptions.cache: false`): 能被快取命中滿足的閘門就不是閘門。moon 無法雜湊像產生出來的 `.wxt/tsconfig.json` 這類被 gitignore 的輸入, 而一個寫錯的 `hasher.ignorePattern` 會悄悄把受追蹤的檔案從每個雜湊中剔除。
+**閘門永不快取。** 依工作區預設, 每個任務都不快取 (`.moon/tasks/all.yml` 中的 `taskOptions.cache: false`): 能被快取命中滿足的閘門就不是閘門, 因為錯誤的雜湊會讓未經驗證的程式碼落地。moon 無法雜湊像產生出來的 `.wxt/tsconfig.json` 這類被 gitignore 的輸入, 而一個寫錯的 `hasher.ignorePattern` 會悄悄把受追蹤的檔案從每個雜湊中剔除。
 
 兩個選擇重新開啟快取的任務 (`web:build`、`shared:typecheck`) 都不是閘門步驟。因此 `moon run ci` 一律執行完整套件, 並依其 `deps` 清單宣告的固定順序進行 (`runDepsInParallel: false`)。底層工具 (cargo、tsc、vite、bun) 保有各自的增量快取, 所以暖機後的重跑依然快速。
 
@@ -202,7 +202,7 @@ uv 只固定於 `.prototools`, 而 python 由 uv 擁有: 協定測試套件透�
 | `hygiene` | `moon run hygiene` | 映像檔 |
 | `tooling` | `machete`, 使用 `Containerfile` 固定版本的 cargo-machete | 映像檔 |
 | `web` | `web:build`、`web:test` | 映像檔 |
-| `linux-install` | `scripts/linux-registration.ts`: 在隔離的 HOME 與 XDG 目錄下執行 `doctor --fix`、重新註冊、多瀏覽器、`uninstall` | 裸機執行器 |
+| `linux-install` | 先下載 `build-release` 的執行檔, 再執行 `scripts/linux-registration.ts`: 在隔離的 HOME 與 XDG 目錄下執行 `doctor --fix`、重新註冊、多瀏覽器、`uninstall` | 裸機執行器: 它只需要那個執行檔和一個執行情境驅動指令碼的 bun |
 | `protocol` | 對下載的執行檔執行 `e2e`、`adversarial` 與 `chaos` 測試套件 | 映像檔 |
 | `interop` | 官方 MCP SDK 用戶端對下載的執行檔 | 映像檔 |
 | `browser` | 可重用的 `browser.yml` (輸入 `chrome-version`), `nightly.yml` 也會呼叫它 | 裸機執行器, Chrome 來自 `setup-chrome` |
