@@ -35,7 +35,6 @@
   --focus: #3fe081;
   --primary-hover: #ffffff;
   --show-light-label: inline; --show-dark-label: none;
-  --in-dark: block; --in-light: none;
 }
 
 /* ---- LIGHT: forced, or toggle flips an OS-dark page ---- */
@@ -60,7 +59,6 @@
   --focus: #0f7a3e;
   --primary-hover: #05090e;
   --show-light-label: none; --show-dark-label: inline;
-  --in-dark: none; --in-light: block;
 }
 @media (prefers-color-scheme: light) {
   :root:not(.force-dark):not(.force-light) {
@@ -84,7 +82,6 @@
     --focus: #0f7a3e;
     --primary-hover: #05090e;
     --show-light-label: none; --show-dark-label: inline;
-    --in-dark: none; --in-light: block;
   }
   :root:not(.force-dark):not(.force-light):has(#theme-flip:checked) {
     color-scheme: dark;
@@ -107,7 +104,6 @@
     --focus: #3fe081;
     --primary-hover: #ffffff;
     --show-light-label: inline; --show-dark-label: none;
-    --in-dark: block; --in-light: none;
   }
 }
 
