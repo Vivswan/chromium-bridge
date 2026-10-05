@@ -90,9 +90,7 @@ def isolate(prefix):
     """Point every future subprocess at a fresh private runtime dir and prove
     it took; refuse to run otherwise. The proof is the binary's own word: a
     resolver that read a variable this env does not set would place the lock
-    outside the dir, and `doctor --paths` would say so. That probe resolves
-    without creating or probing anything, so a misrouted binary is refused
-    with the real runtime dir untouched."""
+    outside the dir, and `doctor --paths` would say so."""
     global RUNDIR, LOCK
     rundir = new_runtime_dir(prefix)
     os.environ.update(runtime_env(rundir))

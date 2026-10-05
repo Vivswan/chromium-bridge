@@ -130,7 +130,7 @@ impl LockFile {
         Self::path_in(&runtime_dir())
     }
 
-    /// The lock's place inside a runtime dir the caller resolved without creating it ([`resolve_runtime_dir`]).
+    /// The lock's place inside whatever runtime dir it is handed, resolved or created.
     pub(crate) fn path_in(runtime_dir: &Path) -> PathBuf {
         runtime_dir.join(LOCK_FILENAME)
     }

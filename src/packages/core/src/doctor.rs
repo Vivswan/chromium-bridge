@@ -332,8 +332,7 @@ fn run_list() -> i32 {
     0
 }
 
-/// `doctor --paths`: the runtime dir and lock path as this environment resolves them, through the pure resolver,
-/// so the protocol harness can ask a possibly misrouted binary where it would write and refuse it before it does.
+/// `doctor --paths`: the two paths through the pure resolver; [`resolve_runtime_dir`] owns why it must stay pure.
 fn paths_report() -> String {
     let dir = resolve_runtime_dir();
     format!(
