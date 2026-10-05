@@ -339,8 +339,8 @@ mod tests {
     use super::super::pubkey::EnclavePublicKey;
     use super::*;
 
-    /// `enclave-status --json` is documented in docs/cli.md for scripts to parse: the bytes, sorted keys and
-    /// each state's exact field set, are the contract, pinned at the one place they leave the program.
+    /// `enclave-status --json` is the CLI's machine-readable contract: the bytes, sorted keys and each state's
+    /// exact field set are pinned at the one place they leave the program.
     #[test]
     fn json_report_wire_bytes_for_each_key_state() {
         let mut bytes = vec![0x04u8];

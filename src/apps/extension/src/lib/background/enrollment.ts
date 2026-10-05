@@ -326,7 +326,7 @@ const REASON_HELP: Record<EnclaveReasonCode, (mode: CeremonyMode) => string> = {
     "Run `chromium-bridge pair --reset` to delete it and mint a fresh one.",
   keychain_error: () => "keychain_error: the host could not reach its credential store. Try again.",
   signing_failed: (mode) =>
-    "signing_failed: no signature was produced (presence prompt declined or failed). " +
+    "signing_failed: the host produced no signature. " +
     `The ${mode} attempt did not complete; try again. If it repeats, treat it as host ` +
     "substitution and re-pair.",
 };

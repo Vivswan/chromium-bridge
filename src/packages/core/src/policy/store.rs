@@ -248,8 +248,8 @@ impl std::fmt::Display for PolicyWriteError {
 }
 
 /// Write a new signed policy baseline, the one grant path every editing surface shares; `restrict` is the free
-/// lane. `attest` is the surface's presence prompt (the typed phrase on the CLI, the WebAuthn exchange from the
-/// extension), run only after the request validated and the host key was found, so a malformed request or a
+/// lane. `attest` is the surface's presence prompt (today the typed phrase on the CLI's terminal), run only after
+/// the request validated and the host key was found, so a malformed request or a
 /// keyless machine never puts a prompt in front of the user; the host key then signs the exact document bytes.
 /// ```text
 /// presence refused       -> terminal, never downgraded to a softer prompt
