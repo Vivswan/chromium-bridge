@@ -20,6 +20,10 @@ import { fileURLToPath } from "node:url";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 export const setupCommand = "moon run setup";
+const relock = "re-lock with `bun install`";
+
+// bun.lock writes member paths and workspace links with forward slashes on every platform.
+const posix = (path: string): string => path.split(sep).join("/");
 
 type PackageEntry = [
   resolution: string,
@@ -69,7 +73,7 @@ function disagreements(
     .filter((name) => declared[name] !== recorded[name])
     .map(
       (name) =>
-        `${where}: ${name} is ${declared[name] ?? "absent"} in package.json, ${recorded[name] ?? "absent"} in bun.lock (re-lock with \`bun install\`)`,
+        `${where}: ${name} is ${declared[name] ?? "absent"} in package.json, ${recorded[name] ?? "absent"} in bun.lock (${relock})`,
     );
 }
 
@@ -79,7 +83,9 @@ function declaredMembers(root: string, manifest: Manifest): Record<string, strin
   for (const pattern of patterns) {
     if (typeof pattern !== "string") continue;
     for (const match of new Bun.Glob(pattern).scanSync({ cwd: root, onlyFiles: false })) {
-      if (existsSync(join(root, match, "package.json"))) members[normalize(match)] = "a member";
+      // A glob such as `./src/*` yields `./`-prefixed matches; the lockfile key has neither prefix nor backslash.
+      if (existsSync(join(root, match, "package.json")))
+        members[posix(normalize(match))] = "a member";
     }
   }
   return members;
@@ -136,8 +142,8 @@ function judge(root: string, from: string, dep: string, resolution: string): Jud
     return { ok: false, finding: `is ${String(manifest.name)} (bun.lock: ${resolution})` };
   }
   if (version.startsWith("workspace:")) {
-    const linked = relative(root, real);
-    const expected = normalize(version.slice("workspace:".length));
+    const linked = posix(relative(root, real));
+    const expected = version.slice("workspace:".length);
     if (linked !== expected) {
       return { ok: false, finding: `links to ${linked} (bun.lock: ${resolution})` };
     }
@@ -212,7 +218,7 @@ export function auditWorkspace(checkout: string): string[] {
     }
     if (manifest.name !== member.name) {
       findings.push(
-        `${label}: name is ${String(manifest.name)} in package.json, ${member.name} in bun.lock (re-lock with \`bun install\`)`,
+        `${label}: name is ${String(manifest.name)} in package.json, ${member.name} in bun.lock (${relock})`,
       );
     }
     for (const kind of declarationKinds) {
@@ -286,10 +292,14 @@ export function auditCrates(
 }
 
 export function report(findings: string[]): string {
+  // setup runs with frozen lockfiles, so manifest drift is sent to the re-lock first.
+  const remedy = findings.some((finding) => finding.includes(relock))
+    ? `bun.lock is behind its manifests: ${relock}, then run \`${setupCommand}\` once`
+    : `run \`${setupCommand}\` once`;
   return [
     `error: the checkout is missing what \`${setupCommand}\` installs:`,
     ...findings.map((finding) => `  ${finding}`),
-    `run \`${setupCommand}\` once; this check installs and fetches nothing`,
+    `${remedy}; this check installs and fetches nothing`,
   ].join("\n");
 }
 

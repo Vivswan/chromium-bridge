@@ -46,12 +46,14 @@ tasks:
       runInCI: false
 
   setup:
-    # `rustup toolchain install` with no name installs the active toolchain: the pin, unless RUSTUP_TOOLCHAIN
-    # overrides it (the Containerfile's rustup step says the same; check-crates refuses the override).
+    # `rustup toolchain install` with no name installs the active toolchain (the Containerfile's rustup step
+    # says the same); an inherited RUSTUP_TOOLCHAIN would make that another toolchain, so the script drops it
+    # and the pin wins here as it does in check-crates.
     description: 'Run once per fresh checkout: install the bun workspace to bun.lock (lefthook wires the git hooks from its postinstall), the pinned Rust toolchain, and the crates of both cargo workspaces to their Cargo.lock'
     script: |
       set -e
       bun install --frozen-lockfile
+      unset RUSTUP_TOOLCHAIN
       rustup toolchain install
       cargo fetch --locked
       cargo fetch --locked --manifest-path src/packages/core/fuzz/Cargo.toml

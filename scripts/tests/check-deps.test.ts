@@ -1,7 +1,7 @@
 import { afterAll, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { auditCrates, auditWorkspace } from "../check-deps.ts";
+import { auditCrates, auditWorkspace, report } from "../check-deps.ts";
 import { Scratch, writeTree } from "../lib.ts";
 
 // Drift answer: bun's install state is not visible to moon's task graph, and bun's own read-only commands read only
@@ -381,4 +381,20 @@ test("no cargo on PATH is a finding pointing at rustup, not a crash", () => {
   expect(auditCrates(root, { ...process.env, PATH: scratch.dir("empty-path") })).toEqual([
     "rust toolchain: cargo is not on PATH (rustup installs it: https://rustup.rs)",
   ]);
+});
+
+// setup installs with frozen lockfiles, so it cannot fix manifest drift; the last line the developer reads must
+// send drift to the re-lock first and everything else to setup alone.
+test("the remedy line names the re-lock when a finding is manifest drift, and setup alone otherwise", () => {
+  const drift =
+    "pkg: epsilon is ^1.0.0 in package.json, absent in bun.lock (re-lock with `bun install`)";
+  expect(report([drift]).split("\n").at(-1)).toBe(
+    "bun.lock is behind its manifests: re-lock with `bun install`, then run `moon run setup` once; this check installs and fetches nothing",
+  );
+  expect(report(["node_modules/ is absent", drift]).split("\n").at(-1)).toBe(
+    "bun.lock is behind its manifests: re-lock with `bun install`, then run `moon run setup` once; this check installs and fetches nothing",
+  );
+  expect(report(["pkg: beta is missing (bun.lock: beta@1.2.3)"]).split("\n").at(-1)).toBe(
+    "run `moon run setup` once; this check installs and fetches nothing",
+  );
 });
