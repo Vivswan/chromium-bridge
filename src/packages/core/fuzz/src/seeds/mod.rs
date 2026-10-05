@@ -123,8 +123,9 @@ pub struct Written {
     pub refused: usize,
 }
 
-/// Replace `fuzz_dir/seeds/` with the generated corpus and rewrite the JSON dictionary. The whole seeds
-/// directory is removed first, so a directory for a target that no longer exists cannot linger.
+/// Replace `fuzz_dir/seeds/` with the generated corpus and rewrite the JSON dictionary. Nothing under
+/// either directory is tracked, so a fresh checkout has neither, and a stale `seeds/<target>` must not
+/// outlive its target.
 pub fn write_corpus(fuzz_dir: &Path) -> io::Result<Summary> {
     let corpus = corpus();
     let seeds_dir = fuzz_dir.join("seeds");
@@ -152,7 +153,13 @@ pub fn write_corpus(fuzz_dir: &Path) -> io::Result<Summary> {
         directories.push(written);
     }
     let words = json_dictionary(&corpus);
-    fs::write(fuzz_dir.join(JSON_DICTIONARY), render_dictionary(&words))?;
+    let dictionary = fuzz_dir.join(JSON_DICTIONARY);
+    fs::create_dir_all(
+        dictionary
+            .parent()
+            .expect("JSON_DICTIONARY names a file inside a directory"),
+    )?;
+    fs::write(&dictionary, render_dictionary(&words))?;
     Ok(Summary {
         directories,
         dictionary_words: words.len(),

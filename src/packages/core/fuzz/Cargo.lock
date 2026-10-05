@@ -345,6 +345,7 @@ dependencies = [
  "chromium-bridge-core",
  "libfuzzer-sys",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
