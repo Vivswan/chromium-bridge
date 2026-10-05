@@ -12,23 +12,18 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { BunLockFile, BunLockFilePackageArray } from "bun";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 export const setupCommand = "moon run setup";
-// Every re-lock finding carries this prefix, so report() can route drift to the re-lock before setup.
+// A finding setup cannot fix carries one of these markers, so report() can route it ahead of setup.
 const relockWith = (command: string): string => `(re-lock with \`${command}\`)`;
 const relock = relockWith("bun install");
+const unsetOverride = "(unset RUSTUP_TOOLCHAIN)";
 
 // bun.lock writes member paths and workspace links with forward slashes on every platform.
 const posix = (path: string): string => path.split(sep).join("/");
-
-type PackageEntry = [
-  resolution: string,
-  registry?: string,
-  manifest?: { dependencies?: Record<string, string> },
-  integrity?: string,
-];
 
 const declarationKinds = [
   "dependencies",
@@ -39,10 +34,15 @@ const declarationKinds = [
 type Declarations = Partial<Record<(typeof declarationKinds)[number], Record<string, string>>>;
 
 /** The bun text lockfile, the fields read here. Workspace keys are member paths relative to the root ("" is the root). */
-interface Lockfile {
-  workspaces: Record<string, { name: string } & Declarations>;
-  overrides?: Record<string, string>;
-  packages: Record<string, PackageEntry>;
+type Lockfile = BunLockFile;
+
+// An npm entry carries its info third ([pkg, registry, info, integrity]); a git, tarball, or folder entry second; a
+// workspace entry carries none.
+function requiredDependencies(entry: BunLockFilePackageArray): string[] {
+  const info = entry.length === 4 ? entry[2] : entry.length === 1 ? undefined : entry[1];
+  return info !== undefined && "dependencies" in info
+    ? Object.keys(info.dependencies ?? {}).sort()
+    : [];
 }
 
 type Manifest = {
@@ -109,7 +109,7 @@ function locked(
   packages: Lockfile["packages"],
   path: string[],
   dep: string,
-): { entry: PackageEntry; path: string[] } | undefined {
+): { entry: BunLockFilePackageArray; path: string[] } | undefined {
   for (let depth = path.length; depth >= 0; depth--) {
     const prefix = path.slice(0, depth);
     const entry = packages[[...prefix, dep].join("/")];
@@ -197,7 +197,7 @@ export function auditWorkspace(checkout: string): string[] {
     const key = hit.path.join("/");
     if (verdict.workspace || walked.has(key)) return;
     walked.add(key);
-    const required = Object.keys(hit.entry[2]?.dependencies ?? {}).sort();
+    const required = requiredDependencies(hit.entry);
     const next = { label: from.label, dir: verdict.real, path: hit.path, chain };
     for (const name of required) walk(name, next);
   };
@@ -216,14 +216,14 @@ export function auditWorkspace(checkout: string): string[] {
     }
     if (manifest.name !== member.name) {
       findings.push(
-        `${label}: name is ${String(manifest.name)} in package.json, ${member.name} in bun.lock ${relock}`,
+        `${label}: name is ${String(manifest.name)} in package.json, ${String(member.name)} in bun.lock ${relock}`,
       );
     }
     for (const kind of declarationKinds) {
       findings.push(...disagreements(label, manifest[kind] ?? {}, member[kind] ?? {}));
     }
     const walkable = Object.keys({ ...member.dependencies, ...member.devDependencies }).sort();
-    for (const dep of walkable) walk(dep, { label, dir, path: [member.name], chain: [] });
+    for (const dep of walkable) walk(dep, { label, dir, path: [member.name ?? ""], chain: [] });
   }
   return findings;
 }
@@ -279,7 +279,13 @@ export function auditCrates(
     }
   ).toolchain?.channel;
   if (typeof pin === "string" && /^\d/.test(pin) && !active.includes(` ${pin} `)) {
-    return [`rust toolchain: ${active} is active, rust-toolchain.toml pins ${pin}`];
+    // setup unsets the variable only in its own shell, so an inherited override is the developer's to clear.
+    const override = env.RUSTUP_TOOLCHAIN;
+    return override
+      ? [
+          `rust toolchain: RUSTUP_TOOLCHAIN=${override} overrides rust-toolchain.toml's ${pin} ${unsetOverride}`,
+        ]
+      : [`rust toolchain: ${active} is active, rust-toolchain.toml pins ${pin}`];
   }
   return cargoManifests(root).flatMap((manifest) => {
     const failure = cargo("fetch", "--locked", "--offline", "--manifest-path", manifest);
@@ -296,10 +302,17 @@ export function auditCrates(
 }
 
 export function report(findings: string[]): string {
-  // setup runs with frozen lockfiles, so manifest drift is sent to the re-lock first.
-  const remedy = findings.some((finding) => finding.includes("(re-lock with "))
-    ? `a lockfile is behind its manifest: re-lock as its line says, then run \`${setupCommand}\` once`
-    : `run \`${setupCommand}\` once`;
+  // setup runs with frozen lockfiles and cannot clear the developer's shell, so those steps come first.
+  const first = [
+    findings.some((finding) => finding.includes("(re-lock with "))
+      ? "re-lock as the line above says"
+      : "",
+    findings.some((finding) => finding.includes(unsetOverride)) ? "unset RUSTUP_TOOLCHAIN" : "",
+  ].filter((step) => step !== "");
+  const remedy =
+    first.length > 0
+      ? `first ${first.join(", then ")}, then run \`${setupCommand}\` once`
+      : `run \`${setupCommand}\` once`;
   return [
     `error: the checkout is missing what \`${setupCommand}\` installs:`,
     ...findings.map((finding) => `  ${finding}`),

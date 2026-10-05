@@ -1,7 +1,7 @@
 import { afterAll, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { auditCrates, auditWorkspace, report } from "../check-deps.ts";
+import { auditCrates, auditWorkspace } from "../check-deps.ts";
 import { Scratch, writeTree } from "../lib.ts";
 
 // Drift answer: bun's install state is not visible to moon's task graph, and bun's own read-only commands read only
@@ -55,7 +55,7 @@ const lockfile = `{
 
     "gamma": ["gamma@1.0.0", "", {}, "sha512-fixture-gamma"],
 
-    "delta": ["delta@git+ssh://git@example.com/example-user/delta.git#abc1234", {}, "sha512-fixture-delta"],
+    "delta": ["delta@git+ssh://git@example.com/example-user/delta.git#abc1234", { "dependencies": { "gamma": "^1.0.0" } }, "abc1234"],
   }
 }
 `;
@@ -105,6 +105,10 @@ function installedRoot(parent = scratch.dir("check-deps")): string {
     "../../node_modules/.bun/delta@git+abc1234/node_modules/delta",
     join(root, "pkg/node_modules/delta"),
   );
+  symlinkSync(
+    "../../gamma@1.0.0/node_modules/gamma",
+    join(root, "node_modules/.bun/delta@git+abc1234/node_modules/gamma"),
+  );
   symlinkSync(`.bun/alpha@1.0.0/node_modules/alpha`, join(root, "node_modules/alpha"));
   symlinkSync(`.bun/beta@1.2.3/node_modules/beta`, join(root, "node_modules/beta"));
   symlinkSync(`../../${store("alpha", "2.0.0")}`, join(root, "pkg/node_modules/alpha"));
@@ -133,9 +137,17 @@ const cases: { name: string; drift: (root: string) => void; findings: (string | 
     ],
   },
   {
-    name: "a required transitive dependency's store entry deleted (no member declares it); walked once",
+    name: "a required transitive dependency's store entry deleted (no member declares it): named from each dependent that links it",
     drift: (root) => rmSync(join(root, "node_modules/.bun/gamma@1.0.0"), { recursive: true }),
-    findings: [".: beta > gamma is missing (bun.lock: gamma@1.0.0)"],
+    findings: [
+      ".: beta > gamma is missing (bun.lock: gamma@1.0.0)",
+      "pkg: delta > gamma is missing (bun.lock: gamma@1.0.0)",
+    ],
+  },
+  {
+    name: "a git package's required dependency missing: the git entry's info is read from its own arm",
+    drift: (root) => rmSync(join(root, "node_modules/.bun/delta@git+abc1234/node_modules/gamma")),
+    findings: ["pkg: delta > gamma is missing (bun.lock: gamma@1.0.0)"],
   },
   {
     name: "the lockfile moved past the installed version",
@@ -255,15 +267,28 @@ test("a checkout under another checkout: the parent's node_modules never stands 
 });
 
 // moon sees only the exit status, and the developer only stderr: a drift that exited 0, or a verdict on stdout,
-// would let the dependent task run or hide the command to run.
-test("as a process: an installed root is silent and exits 0, a fresh clone exits 1 naming the setup command on stderr", () => {
+// would let the dependent task run or hide the steps to take; what setup cannot fix (a lockfile behind its manifest,
+// an inherited toolchain override) must be named before it.
+test("as a process: installed is silent and exits 0; a fresh clone, a manifest drift, and a toolchain override exit 1 with the steps on stderr", () => {
   const installed = installedRoot();
   const cold = installedRoot();
   rmSync(join(cold, "node_modules"), { recursive: true });
-  const run = (root: string) => {
+  const drifted = installedRoot();
+  writeFileSync(
+    join(drifted, "pkg/package.json"),
+    pkgManifest({
+      "@fixture/shared": "workspace:*",
+      alpha: "2.0.0",
+      beta: "^1.0.0",
+      delta: "git+ssh://git@example.com/example-user/delta.git#abc1234",
+      epsilon: "^1.0.0",
+    }),
+  );
+  const overridden = cargoRoot("", "", "1.97.0");
+  const run = (mode: string, root: string, env: Record<string, string> = {}) => {
     const proc = Bun.spawnSync(
-      [process.execPath, join(import.meta.dir, "..", "check-deps.ts"), "bun", root],
-      { stdout: "pipe", stderr: "pipe" },
+      [process.execPath, join(import.meta.dir, "..", "check-deps.ts"), mode, root],
+      { stdout: "pipe", stderr: "pipe", env: { ...process.env, ...env } },
     );
     return {
       status: proc.exitCode,
@@ -271,17 +296,43 @@ test("as a process: an installed root is silent and exits 0, a fresh clone exits
       stderr: proc.stderr.toString(),
     };
   };
-  expect({ installed: run(installed), cold: run(cold) }).toEqual({
+  const stderr = (lines: string[]) => [...lines, ""].join("\n");
+  expect({
+    installed: run("bun", installed),
+    cold: run("bun", cold),
+    drifted: run("bun", drifted),
+    overridden: run("cargo", overridden.root, {
+      PATH: join(overridden.root, "bin"),
+      RUSTUP_TOOLCHAIN: "stable",
+    }),
+  }).toEqual({
     installed: { status: 0, stdout: "", stderr: "" },
     cold: {
       status: 1,
       stdout: "",
-      stderr: [
+      stderr: stderr([
         "error: the checkout is missing what `moon run setup` installs:",
         "  node_modules/ is absent",
         "run `moon run setup` once; this check installs and fetches nothing",
-        "",
-      ].join("\n"),
+      ]),
+    },
+    drifted: {
+      status: 1,
+      stdout: "",
+      stderr: stderr([
+        "error: the checkout is missing what `moon run setup` installs:",
+        "  pkg: epsilon is ^1.0.0 in package.json, absent in bun.lock (re-lock with `bun install`)",
+        "first re-lock as the line above says, then run `moon run setup` once; this check installs and fetches nothing",
+      ]),
+    },
+    overridden: {
+      status: 1,
+      stdout: "",
+      stderr: stderr([
+        "error: the checkout is missing what `moon run setup` installs:",
+        "  rust toolchain: RUSTUP_TOOLCHAIN=stable overrides rust-toolchain.toml's 1.96.1 (unset RUSTUP_TOOLCHAIN)",
+        "first unset RUSTUP_TOOLCHAIN, then run `moon run setup` once; this check installs and fetches nothing",
+      ]),
     },
   });
 });
@@ -343,7 +394,7 @@ const cargoCases: {
     asked: ["cargo --version"],
   },
   {
-    name: "another toolchain is active than the pin (an inherited RUSTUP_TOOLCHAIN): named, nothing fetched is asked",
+    name: "another toolchain is active than the pin: named, nothing fetched is asked",
     fail: "",
     message: "",
     active: "1.97.0",
@@ -382,7 +433,9 @@ const cargoCases: {
 
 test.each(cargoCases)("$name", ({ fail, message, active, findings, asked }) => {
   const { root, log } = cargoRoot(fail, message, active);
-  const env = { ...process.env, PATH: join(root, "bin") };
+  // The caller's shell may carry the override the process test supplies on purpose; these cases judge without it.
+  const { RUSTUP_TOOLCHAIN: _inherited, ...inherited } = process.env;
+  const env = { ...inherited, PATH: join(root, "bin") };
   expect(auditCrates(root, env)).toEqual(findings);
   expect(readFileSync(log, "utf8")).toBe(
     asked.map((command) => `RUSTUP_AUTO_INSTALL=0 ${command}\n`).join(""),
@@ -394,25 +447,4 @@ test("no cargo on PATH is a finding pointing at rustup, not a crash", () => {
   expect(auditCrates(root, { ...process.env, PATH: scratch.dir("empty-path") })).toEqual([
     "rust toolchain: cargo is not on PATH (rustup installs it: https://rustup.rs)",
   ]);
-});
-
-// setup installs with frozen lockfiles, so it cannot fix manifest drift; the last line the developer reads must
-// send drift to the re-lock first and everything else to setup alone.
-test("the remedy line names the re-lock when a finding is manifest drift, and setup alone otherwise", () => {
-  const drift =
-    "pkg: epsilon is ^1.0.0 in package.json, absent in bun.lock (re-lock with `bun install`)";
-  expect(report([drift]).split("\n").at(-1)).toBe(
-    "a lockfile is behind its manifest: re-lock as its line says, then run `moon run setup` once; this check installs and fetches nothing",
-  );
-  const cargoDrift =
-    "Cargo.toml: its Cargo.lock is behind it (re-lock with `cargo fetch --manifest-path Cargo.toml`)";
-  expect(report([cargoDrift]).split("\n").at(-1)).toBe(
-    "a lockfile is behind its manifest: re-lock as its line says, then run `moon run setup` once; this check installs and fetches nothing",
-  );
-  expect(report(["node_modules/ is absent", drift]).split("\n").at(-1)).toBe(
-    "a lockfile is behind its manifest: re-lock as its line says, then run `moon run setup` once; this check installs and fetches nothing",
-  );
-  expect(report(["pkg: beta is missing (bun.lock: beta@1.2.3)"]).split("\n").at(-1)).toBe(
-    "run `moon run setup` once; this check installs and fetches nothing",
-  );
 });
