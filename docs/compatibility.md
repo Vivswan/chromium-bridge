@@ -39,6 +39,10 @@ The host-owned policy work added five control frames for the host-owned policy a
 
 When the deferred capability handshake above lands, the advertised capability set should be computed from the effective policy, which host-owned policy makes possible but does not wire.
 
+The options page's frames (`registration_status`, `registration_repair`, `policy_restrict` and their results) are additive and host-handled too, but the extension sends them on demand, so the never-speak-first row does not cover them: against a host without them the broker's strict parse tears the browser leg down.
+
+Accepted before the first release, since no shipped host lacks them. Covering them later needs the deferred handshake to advertise the host's control frames and the extension to gate its sends on that.
+
 One platform consequence of the same work is a breaking change without a version bump: the `requireEnrollment` opt-out was retired, so a Mac without a Secure Enclave (pre-T2 Intel hardware) can no longer enroll and the bridge stays blocked there permanently - deliberate fail-closed behavior with no recovery path, since every grant and policy signature hangs off the enclave key that hardware cannot hold.
 
 ## Related

@@ -1,5 +1,6 @@
 use super::*;
 use crate::protocol::BRIDGE_MAX_LINE;
+use crate::runtime_record::RuntimeRecord;
 use crate::trust::{Clients, Trust, TrustState};
 use std::io::Cursor;
 
@@ -286,6 +287,178 @@ fn policy_get_answers_ok_false_without_a_usable_store() {
         };
         assert!(error.starts_with(error_prefix), "{case}: {error}");
     }
+}
+
+#[test]
+fn registration_report_carries_rows_exactly_when_the_resolver_ran() {
+    // The row mapping doctor's `ManifestStatus` takes onto the wire, without a HOME: the browser key,
+    // detection, state, and location all cross, and an unresolvable environment answers ok:false with the
+    // reason and no rows (the extension shows the error instead of an empty healthy-looking table).
+    use crate::doctor::ManifestStatus;
+    use crate::protocol::control::RegistrationState;
+    use crate::registration::RegState;
+    let report = registration_report(Ok(vec![
+        ManifestStatus {
+            key: "chrome",
+            detected: true,
+            state: RegState::Ok,
+            location: "/home/user/chrome/host.json".into(),
+        },
+        ManifestStatus {
+            key: "brave",
+            detected: false,
+            state: RegState::Foreign("another host's manifest".into()),
+            location: "/home/user/brave/host.json".into(),
+        },
+    ]));
+    assert_eq!(
+        report,
+        RegistrationReport::Rows(vec![
+            RegistrationRow {
+                browser: "chrome".into(),
+                detected: true,
+                state: RegistrationState::Ok {},
+                location: "/home/user/chrome/host.json".into(),
+            },
+            RegistrationRow {
+                browser: "brave".into(),
+                detected: false,
+                state: RegistrationState::Foreign {
+                    detail: "another host's manifest".into()
+                },
+                location: "/home/user/brave/host.json".into(),
+            },
+        ])
+    );
+    assert_eq!(
+        registration_report(Err("HOME (or USERPROFILE) is not set".into())),
+        RegistrationReport::Unavailable {
+            error: "HOME (or USERPROFILE) is not set".into()
+        }
+    );
+}
+
+#[test]
+fn policy_restrict_tightens_the_store_and_refuses_a_relaxation() {
+    // The extension's restriction lane rides the same seam as `policy restrict`: a tightening lands in the
+    // store (and the next policy_current carries the overlay), a relaxation is refused with the seam's reason
+    // and leaves the store untouched, and both verdicts are audited with the extension surface.
+    let _dir = scratch_runtime_dir("native-host-policy-restrict");
+    let _reset = crate::presence::policy_test_hook::ResetOnDrop;
+    crate::presence::policy_test_hook::set(crate::presence::policy_test_hook::Mock::Return(
+        crate::presence::PolicySignOutcome::Signed {
+            sig: [7; 64],
+            key_id: "kid".into(),
+            pubkey_b64: "pk".into(),
+        },
+    ));
+    crate::policy::set_signed(
+        crate::policy::PolicyValues {
+            page_eval_enabled: true,
+            ..Default::default()
+        },
+        vec![crate::policy::PolicyField::PageEvalEnabled],
+        crate::audit::Surface::Core,
+    )
+    .unwrap();
+
+    let tightened = policy_restrict_replies(crate::policy::PolicyOverlay {
+        page_eval_enabled: Some(false),
+        ..Default::default()
+    });
+    assert_eq!(
+        serde_json::to_value(&tightened[0]).unwrap(),
+        serde_json::json!({ "type": "policy_restrict_result", "ok": true })
+    );
+    let PolicyControl::PolicyCurrent {
+        overlay: Some(overlay),
+        ..
+    } = policy_current_reply()
+    else {
+        panic!("the restriction must show in the next policy_current");
+    };
+    assert_eq!(overlay.page_eval_enabled, Some(false));
+
+    let relaxed = policy_restrict_replies(crate::policy::PolicyOverlay {
+        page_eval_enabled: Some(true),
+        ..Default::default()
+    });
+    let [PolicyControl::PolicyRestrictResult {
+        ok: false,
+        error: Some(error),
+    }] = relaxed.as_slice()
+    else {
+        panic!("a relaxation must be refused with nothing pushed: {relaxed:?}");
+    };
+    assert!(error.contains("relax"), "{error}");
+    let PolicyControl::PolicyCurrent {
+        overlay: Some(overlay),
+        ..
+    } = policy_current_reply()
+    else {
+        panic!("the refused relaxation must leave the overlay in place");
+    };
+    assert_eq!(overlay.page_eval_enabled, Some(false));
+    // Both verdicts reach the trail under the extension surface: the tightening as ok, the relaxation as its
+    // own refused record (deleting the seam's NotARestriction audit branch loses the second).
+    let trail = audit_text();
+    assert!(
+        trail.contains("\"surface\":\"extension\"")
+            && trail.contains("\"outcome\":\"ok\"")
+            && trail.contains("restricted=pageEvalEnabled")
+            && trail.contains("\"outcome\":\"refused\"")
+            && trail.contains("refused: relaxes the effective policy"),
+        "{trail}"
+    );
+}
+
+#[test]
+fn an_applied_restrict_pushes_policy_current_even_when_the_epoch_bump_fails() {
+    // The store write and the epoch bump are two steps, and the bump is best-effort. A trust record whose
+    // epoch cannot climb makes the bump fail after a successful write, so the watch sees nothing to push;
+    // the restriction must still reach the extension as the reply that follows the result, since
+    // confirmPageEval is enforced in the extension's mirror alone.
+    let _dir = scratch_runtime_dir("native-host-policy-restrict-push");
+    let _reset = crate::presence::policy_test_hook::ResetOnDrop;
+    crate::presence::policy_test_hook::set(crate::presence::policy_test_hook::Mock::Return(
+        crate::presence::PolicySignOutcome::Signed {
+            sig: [7; 64],
+            key_id: "kid".into(),
+            pubkey_b64: "pk".into(),
+        },
+    ));
+    crate::policy::set_signed(
+        crate::policy::PolicyValues {
+            page_eval_enabled: true,
+            ..Default::default()
+        },
+        vec![crate::policy::PolicyField::PageEvalEnabled],
+        crate::audit::Surface::Core,
+    )
+    .unwrap();
+    crate::ipc::with_runtime_lock(|lock| {
+        Trust::fixture(u64::MAX, false, Clients::NeverPaired).write(lock)
+    })
+    .unwrap();
+
+    let replies = policy_restrict_replies(crate::policy::PolicyOverlay {
+        page_eval_enabled: Some(false),
+        ..Default::default()
+    });
+    let [PolicyControl::PolicyRestrictResult { ok: true, .. }, PolicyControl::PolicyCurrent {
+        overlay: Some(overlay),
+        ..
+    }] = replies.as_slice()
+    else {
+        panic!("an applied restriction must be followed by policy_current: {replies:?}");
+    };
+    assert_eq!(overlay.page_eval_enabled, Some(false));
+    let trust = TrustState::current().unwrap();
+    assert_eq!(
+        (trust.epoch(), trust.policy_epoch()),
+        (u64::MAX, 0),
+        "the bump must have failed, so the reply above is the only push"
+    );
 }
 
 #[test]

@@ -25,7 +25,7 @@ use crate::ipc;
 use crate::protocol::control::{
     classify_nm_frame, host_control_type, AdminControl, EnclaveControl, EnrollOutcome,
     FrameDisposition, HostRequest, KillStatus, MalformedReply, PolicyControl, PolicyStatus,
-    PresenceOutcome,
+    PresenceOutcome, RegistrationReport, RegistrationRow, RestrictOutcome,
 };
 use crate::protocol::{bridge_read, bridge_write, nm_read_frame, nm_write_frame};
 use crate::runtime_record::RuntimeRecord as _;
@@ -133,6 +133,85 @@ fn admin_client_revoke(name: &str) -> AdminControl {
             ok: false,
             error: Some(e.to_string()),
         },
+    }
+}
+
+/// Handle a `registration_status` frame: the per-browser rows `doctor` diagnoses, from one read of the
+/// resolver.
+fn registration_status_reply() -> AdminControl {
+    registration_report(crate::doctor::gather_manifests()).into_frame()
+}
+
+/// The wire report for one manifest gather. Pure, so the row mapping is testable without a HOME.
+fn registration_report(
+    manifests: Result<Vec<crate::doctor::ManifestStatus>, String>,
+) -> RegistrationReport {
+    match manifests {
+        Ok(rows) => RegistrationReport::Rows(rows.iter().map(RegistrationRow::from).collect()),
+        Err(error) => RegistrationReport::Unavailable { error },
+    }
+}
+
+/// Handle a `registration_repair` frame: `doctor --fix` for the detected browsers through the same seam, then
+/// the fresh rows. The lines the CLI prints go to the log instead (stdout is the protocol here), and a repair
+/// that failed on any target answers that failure in place of rows, so the extension re-asks for the state it
+/// should show.
+fn registration_repair_reply() -> AdminControl {
+    let outcomes = match crate::registration::fix(&crate::cli::FixTargets::Detected) {
+        Ok(outcomes) => outcomes,
+        Err(e) => {
+            log_warn!(
+                "native-host",
+                "extension-requested repair could not start: {e}"
+            );
+            return RegistrationReport::Unavailable {
+                error: e.to_string(),
+            }
+            .into_frame();
+        }
+    };
+    let mut failures = Vec::new();
+    for outcome in &outcomes {
+        match &outcome.result {
+            Ok(lines) => {
+                for line in lines {
+                    log_info!("native-host", "repair {}: {line}", outcome.target);
+                }
+            }
+            Err(e) => failures.push(format!("{}: {e}", outcome.target)),
+        }
+    }
+    if failures.is_empty() {
+        registration_status_reply()
+    } else {
+        let error = failures.join("; ");
+        log_warn!("native-host", "extension-requested repair failed: {error}");
+        RegistrationReport::Unavailable { error }.into_frame()
+    }
+}
+
+/// Answer a `policy_restrict` frame: the result, then the freshly loaded `policy_current` when the restriction
+/// applied. The seam's epoch bump is best-effort after the store write and `confirmPageEval` is enforced in the
+/// extension's mirror alone, so the written state is pushed here; the watch's push on a successful bump duplicates it.
+fn policy_restrict_replies(overlay: crate::policy::PolicyOverlay) -> Vec<PolicyControl> {
+    match crate::policy::restrict(overlay, crate::audit::Surface::Extension) {
+        Ok(()) => {
+            log_info!("native-host", "extension applied a policy restriction");
+            vec![
+                RestrictOutcome::Applied.into_frame(),
+                policy_current_reply(),
+            ]
+        }
+        Err(e) => {
+            log_warn!(
+                "native-host",
+                "extension-requested policy restriction refused: {e}"
+            );
+            vec![RestrictOutcome::Refused {
+                error: e.to_string(),
+            }
+            .into_frame()]
+        }
     }
 }
 
@@ -671,7 +750,16 @@ fn handle_request(request: HostRequest, out: &Arc<Mutex<BufWriter<io::Stdout>>>)
         HostRequest::KillStatus {} => write_control_reply(out, &kill_status_reply()),
         HostRequest::KillEngage {} => write_control_reply(out, &handle_kill_engage()),
         HostRequest::KillRelease {} => write_control_reply(out, &handle_kill_release_refused()),
+        HostRequest::RegistrationStatus {} => {
+            write_control_reply(out, &registration_status_reply())
+        }
+        HostRequest::RegistrationRepair {} => {
+            write_control_reply(out, &registration_repair_reply())
+        }
         HostRequest::PolicyGet {} => write_control_reply(out, &policy_current_reply()),
+        HostRequest::PolicyRestrict { overlay } => policy_restrict_replies(overlay)
+            .iter()
+            .try_for_each(|reply| write_control_reply(out, reply)),
         HostRequest::LangGet {} => match lang_current_frame() {
             Some(reply) => write_control_reply(out, &reply),
             None => Ok(()),

@@ -11,18 +11,21 @@ import { send } from "@/lib/messages";
 import { AuditPanel } from "./AuditPanel";
 import { EnrollmentPanel } from "./EnrollmentPanel";
 import { KillSwitchPanel } from "./KillSwitchPanel";
+import { PolicyEditor } from "./PolicyEditor";
+import { RegistrationPanel } from "./RegistrationPanel";
 import { SiteList } from "./SiteList";
 import { TrustedClientsPanel } from "./TrustedClientsPanel";
 
 // The options page. Every write is event-driven (useSettings rides storage.onChanged), so a change from any
 // surface reflects here with no polling and no manual refresh.
 //
-// The security policy itself (the 15 host-owned fields) is not edited here: it is set with
-// `chromium-bridge policy`, signed by the paired host key, and only enforced by this extension. Kill RELEASE
-// lives host-side too (the host refuses `kill_release` from the extension); engaging stays one click away.
+// The security policy (the 15 host-owned fields) is host-owned: this page tightens it through the host's
+// unsigned restriction lane and shows what it enforces; loosening needs the signed lane (`chromium-bridge
+// policy set`). Kill RELEASE lives host-side too (the host refuses `kill_release` from the extension);
+// engaging stays one click away.
 //
-// Sections are ordered by decision weight: kill switch, pairing, then the sites hero that scopes everything
-// below. Amber and red stay reserved for pending and kill/deny; consequences are neutral ink.
+// Sections are ordered by decision weight: kill switch, pairing, the host's registrations, then the sites hero
+// that scopes everything below. Amber and red stay reserved for pending and kill/deny; consequences are neutral ink.
 export function OptionsApp() {
   const { t } = useI18n();
   const { settings, update } = useSettings();
@@ -102,6 +105,10 @@ export function OptionsApp() {
         <EnrollmentPanel />
       </Section>
 
+      <Section title={t("options.section_registration")} id="registration">
+        <RegistrationPanel />
+      </Section>
+
       <Section title={t("options.section_sites")}>
         {/* the page's one boxed hero: where the browser is actually reachable.
             Placed directly after kill + pairing - it is the decision that
@@ -122,15 +129,8 @@ export function OptionsApp() {
         <p className="consequence mt-2">{t("settings.sites_consequence")}</p>
       </Section>
 
-      <Section title={t("options.section_security")}>
-        {/* The pointer where the 15 policy toggles used to be: the security
-            policy is host-owned - set with `chromium-bridge policy`, signed by
-            the paired key, enforced here - so this page shows where it lives
-            instead of pretending to control it. */}
-        <div className="py-1">
-          <div className="text-[13px] font-medium">{t("settings.policy_managed_title")}</div>
-          <p className="consequence mt-1">{t("settings.policy_managed_desc")}</p>
-        </div>
+      <Section title={t("options.section_security")} id="policy">
+        <PolicyEditor />
       </Section>
 
       <Section title={t("options.section_clients")}>

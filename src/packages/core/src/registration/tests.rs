@@ -354,10 +354,10 @@ fn fix_default_targets_only_detected_browsers_but_explicit_keys_always_work() {
         ..dirs
     };
     let entries = browsers::resolve(Os::MacOs, &empty_dirs);
-    assert_eq!(
-        select_targets(&crate::cli::FixTargets::Detected, &entries).err(),
-        Some(1)
-    );
+    assert!(matches!(
+        select_targets(&crate::cli::FixTargets::Detected, &entries),
+        Err(FixError::NoTargets(_))
+    ));
 }
 
 #[cfg(unix)]

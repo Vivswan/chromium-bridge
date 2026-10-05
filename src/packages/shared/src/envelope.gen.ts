@@ -98,6 +98,39 @@ export const TrustedClientSchema = z
 
 export type TrustedClient = z.infer<typeof TrustedClientSchema>;
 
+// One browser's registration row (protocol::control::RegistrationRow), embedded in registration_status_result's `browsers` array.
+export const RegistrationRowWireSchema = z
+  .object({
+    "browser": z.string(),
+    "detected": z.boolean(),
+    "location": z.string(),
+    "state": z.union([
+      z.object({ "kind": z.literal("missing") }).strict(),
+      z.object({ "kind": z.literal("ok") }).strict(),
+      z.object({ "detail": z.string(), "kind": z.literal("stale") }).strict(),
+      z.object({ "detail": z.string(), "kind": z.literal("foreign") }).strict(),
+      z.object({ "detail": z.string(), "kind": z.literal("unreadable") }).strict(),
+    ]),
+  })
+  .strict();
+
+export const RegistrationRowSchema = z
+  .object({
+    "browser": z.string(),
+    "detected": z.boolean(),
+    "location": z.string(),
+    "state": z.union([
+      z.object({ "kind": z.literal("missing") }).catchall(z.unknown()),
+      z.object({ "kind": z.literal("ok") }).catchall(z.unknown()),
+      z.object({ "detail": z.string(), "kind": z.literal("stale") }).catchall(z.unknown()),
+      z.object({ "detail": z.string(), "kind": z.literal("foreign") }).catchall(z.unknown()),
+      z.object({ "detail": z.string(), "kind": z.literal("unreadable") }).catchall(z.unknown()),
+    ]),
+  })
+  .catchall(z.unknown());
+
+export type RegistrationRow = z.infer<typeof RegistrationRowSchema>;
+
 // The host->extension control frames: the faithful base, then the enforced reader (the base plus the
 // asymmetry table, read loose under its loose-frames rule).
 export const EnclaveProofWireSchema = z
@@ -220,6 +253,36 @@ export const KillStatusResultSchema = z
 
 export type KillStatusResult = z.infer<typeof KillStatusResultSchema>;
 
+export const RegistrationStatusResultWireSchema = z
+  .object({
+    "browsers": z.union([z.array(RegistrationRowWireSchema), z.null()]).optional(),
+    "error": z.union([z.string(), z.null()]).optional(),
+    "ok": z.boolean(),
+    "type": z.literal("registration_status_result"),
+  })
+  .strict();
+
+export const RegistrationStatusResultSchema = z.discriminatedUnion("ok", [
+  z
+    .object({
+      "browsers": z.array(RegistrationRowSchema),
+      "error": z.undefined().optional(),
+      "ok": z.literal(true),
+      "type": z.literal("registration_status_result"),
+    })
+    .catchall(z.unknown()),
+  z
+    .object({
+      "browsers": z.undefined().optional(),
+      "error": z.string(),
+      "ok": z.literal(false),
+      "type": z.literal("registration_status_result"),
+    })
+    .catchall(z.unknown()),
+]);
+
+export type RegistrationStatusResult = z.infer<typeof RegistrationStatusResultSchema>;
+
 export const PolicyCurrentWireSchema = z
   .object({
     "baseline": z.union([z.string(), z.null()]).optional(),
@@ -278,6 +341,33 @@ export const PolicyCurrentFrameSchema = z.discriminatedUnion("ok", [
 ]);
 
 export type PolicyCurrentFrame = z.infer<typeof PolicyCurrentFrameSchema>;
+
+export const PolicyRestrictResultWireSchema = z
+  .object({
+    "error": z.union([z.string(), z.null()]).optional(),
+    "ok": z.boolean(),
+    "type": z.literal("policy_restrict_result"),
+  })
+  .strict();
+
+export const PolicyRestrictResultSchema = z.discriminatedUnion("ok", [
+  z
+    .object({
+      "error": z.undefined().optional(),
+      "ok": z.literal(true),
+      "type": z.literal("policy_restrict_result"),
+    })
+    .catchall(z.unknown()),
+  z
+    .object({
+      "error": z.string(),
+      "ok": z.literal(false),
+      "type": z.literal("policy_restrict_result"),
+    })
+    .catchall(z.unknown()),
+]);
+
+export type PolicyRestrictResult = z.infer<typeof PolicyRestrictResultSchema>;
 
 export const LangCurrentWireSchema = z
   .object({
@@ -400,8 +490,13 @@ export type PresenceResultFrame = z.infer<typeof PresenceResultFrameSchema>;
 // scripts/check-envelope.ts holds the extension's inbound classifiers to these.
 export const GENERATED_WIRE_FRAMES = {
   enclave: ["enclave_proof", "enclave_error", "presence_proof", "presence_error"],
-  admin: ["client_list_result", "client_revoke_result", "kill_status_result"],
-  policy: ["policy_current", "lang_current"],
+  admin: [
+    "client_list_result",
+    "client_revoke_result",
+    "kill_status_result",
+    "registration_status_result",
+  ],
+  policy: ["policy_current", "policy_restrict_result", "lang_current"],
   webauthn: ["enroll_options", "enroll_result", "presence_request", "presence_result"],
 } as const;
 
@@ -475,9 +570,48 @@ export const AuditEventWireSchema = z
 
 export type AuditEventWire = z.infer<typeof AuditEventWireSchema>;
 
+export const RegistrationStatusWireSchema = z
+  .object({ "type": z.literal("registration_status") })
+  .strict();
+
+export type RegistrationStatusWire = z.infer<typeof RegistrationStatusWireSchema>;
+
+export const RegistrationRepairWireSchema = z
+  .object({ "type": z.literal("registration_repair") })
+  .strict();
+
+export type RegistrationRepairWire = z.infer<typeof RegistrationRepairWireSchema>;
+
 export const PolicyGetWireSchema = z.object({ "type": z.literal("policy_get") }).strict();
 
 export type PolicyGetWire = z.infer<typeof PolicyGetWireSchema>;
+
+export const PolicyRestrictWireSchema = z
+  .object({
+    "overlay": z
+      .object({
+        "cdpMode": z.union([z.boolean(), z.null()]).optional(),
+        "clickToastTimeoutMs": z.union([z.number().int().gte(0), z.null()]).optional(),
+        "confirmGraceMs": z.union([z.number().int().gte(0), z.null()]).optional(),
+        "confirmHighRiskClick": z.union([z.boolean(), z.null()]).optional(),
+        "confirmPageEval": z.union([z.boolean(), z.null()]).optional(),
+        "confirmTabClose": z.union([z.boolean(), z.null()]).optional(),
+        "disabledTools": z.union([z.array(z.string()), z.null()]).optional(),
+        "evalMask": z.union([z.boolean(), z.null()]).optional(),
+        "evalToastTimeoutMs": z.union([z.number().int().gte(0), z.null()]).optional(),
+        "fileUploadEnabled": z.union([z.boolean(), z.null()]).optional(),
+        "handleDialogEnabled": z.union([z.boolean(), z.null()]).optional(),
+        "hostReverifyMs": z.union([z.number().int().gte(0), z.null()]).optional(),
+        "pageEvalEnabled": z.union([z.boolean(), z.null()]).optional(),
+        "touchIdConfirm": z.union([z.boolean(), z.null()]).optional(),
+        "warnPreciseSnapshot": z.union([z.boolean(), z.null()]).optional(),
+      })
+      .strict(),
+    "type": z.literal("policy_restrict"),
+  })
+  .strict();
+
+export type PolicyRestrictWire = z.infer<typeof PolicyRestrictWireSchema>;
 
 export const LangSetWireSchema = z
   .object({ "type": z.literal("lang_set"), "value": z.string() })
@@ -525,7 +659,9 @@ export const GENERATED_WRITER_FRAMES = {
     "kill_engage",
     "kill_release",
     "audit_event",
+    "registration_status",
+    "registration_repair",
   ],
-  policy: ["policy_get", "lang_set", "lang_get"],
+  policy: ["policy_get", "policy_restrict", "lang_set", "lang_get"],
   webauthn: ["enroll_begin", "enroll_finish", "presence_assert"],
 } as const;

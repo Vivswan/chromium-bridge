@@ -747,9 +747,17 @@ export const READER_FRAMES: Record<
       enforced: "ClientRevokeResultSchema",
     },
     kill_status_result: { wire: "KillStatusResultWireSchema", enforced: "KillStatusResultSchema" },
+    registration_status_result: {
+      wire: "RegistrationStatusResultWireSchema",
+      enforced: "RegistrationStatusResultSchema",
+    },
   },
   policy: {
     policy_current: { wire: "PolicyCurrentWireSchema", enforced: "PolicyCurrentFrameSchema" },
+    policy_restrict_result: {
+      wire: "PolicyRestrictResultWireSchema",
+      enforced: "PolicyRestrictResultSchema",
+    },
     lang_current: { wire: "LangCurrentWireSchema", enforced: "LangCurrentFrameSchema" },
   },
   webauthn: {
@@ -785,9 +793,12 @@ export const WRITER_FRAMES: Record<Group, Readonly<Record<string, string>>> = {
     kill_engage: "KillEngageWireSchema",
     kill_release: "KillReleaseWireSchema",
     audit_event: "AuditEventWireSchema",
+    registration_status: "RegistrationStatusWireSchema",
+    registration_repair: "RegistrationRepairWireSchema",
   },
   policy: {
     policy_get: "PolicyGetWireSchema",
+    policy_restrict: "PolicyRestrictWireSchema",
     lang_set: "LangSetWireSchema",
     lang_get: "LangGetWireSchema",
   },
@@ -1012,30 +1023,67 @@ async function main(): Promise<void> {
     );
   }
 
-  // One trusted-client entry (allowlist::ClientEntry), extracted from client_list_result's `clients` items and
-  // emitted as its own export (base and enforced); the embedding schemas reference it by name (the override
-  // substitutes the identical node).
-  const clientListResult = preparedFrame("admin", "client_list_result");
-  const clientsItems = (schema: unknown): unknown => {
-    if (isObject(schema) && isObject(schema.properties)) {
-      const clients = schema.properties.clients;
-      if (isObject(clients) && clients.items !== undefined) return clients.items;
+  // Item types embedded in a reader's array field, emitted as their own exports (base and enforced) so a
+  // consumer can name the element type; the embedding readers reference them by name (the override
+  // substitutes the identical node). An ok-split reader carries the field on one arm only, so the search
+  // walks the arms.
+  const EMBEDDED_ITEMS = [
+    {
+      group: "admin",
+      tag: "client_list_result",
+      field: "clients",
+      wire: "ClientEntryWireSchema",
+      enforced: "TrustedClientSchema",
+      doc: "One trusted-client entry (allowlist::ClientEntry), embedded in client_list_result's `clients` array.",
+    },
+    {
+      group: "admin",
+      tag: "registration_status_result",
+      field: "browsers",
+      wire: "RegistrationRowWireSchema",
+      enforced: "RegistrationRowSchema",
+      doc: "One browser's registration row (protocol::control::RegistrationRow), embedded in registration_status_result's `browsers` array.",
+    },
+  ] as const satisfies readonly {
+    group: Group;
+    tag: string;
+    field: string;
+    wire: string;
+    enforced: string;
+    doc: string;
+  }[];
+  const itemsOf = (schema: unknown, field: string, tag: string): unknown => {
+    const nodes = isObject(schema) && Array.isArray(schema.anyOf) ? schema.anyOf : [schema];
+    for (const node of nodes) {
+      if (!isObject(node) || !isObject(node.properties)) continue;
+      const prop = node.properties[field];
+      if (isObject(prop) && prop.items !== undefined) return prop.items;
     }
-    throw new Error("gen-envelope: client_list_result no longer embeds a clients items schema");
+    throw new Error(`gen-envelope: ${tag} no longer embeds a ${field} items schema`);
   };
-  const clientEntry = clientsItems(clientListResult);
-  const clientListResultEnforced = enforced("client_list_result", clientListResult, true);
-  const trustedClient = clientsItems(clientListResultEnforced);
-
-  pieces.push(
-    "// One trusted-client entry (allowlist::ClientEntry), embedded in client_list_result's `clients` array.",
-    `export const ClientEntryWireSchema = ${convert(clientEntry, "ClientEntryWireSchema")};`,
-    "",
-    `export const TrustedClientSchema = ${convert(trustedClient, "TrustedClientSchema")};`,
-    "",
-    "export type TrustedClient = z.infer<typeof TrustedClientSchema>;",
-    "",
-  );
+  const preparedBases = new Map<string, unknown>();
+  const enforcedReaders = new Map<string, unknown>();
+  const namedNodes = new Map<unknown, string>();
+  for (const item of EMBEDDED_ITEMS) {
+    const base = preparedFrame(item.group, item.tag);
+    const reader = enforced(item.tag, base, true);
+    preparedBases.set(item.tag, base);
+    enforcedReaders.set(item.tag, reader);
+    const wireNode = itemsOf(base, item.field, item.tag);
+    const enforcedNode = itemsOf(reader, item.field, item.tag);
+    namedNodes.set(wireNode, item.wire);
+    namedNodes.set(enforcedNode, item.enforced);
+    pieces.push(
+      `// ${item.doc}`,
+      `export const ${item.wire} = ${convert(wireNode, item.wire)};`,
+      "",
+      `export const ${item.enforced} = ${convert(enforcedNode, item.enforced)};`,
+      "",
+      `export type ${typeOf(item.enforced)} = z.infer<typeof ${item.enforced}>;`,
+      "",
+    );
+  }
+  const byName = (node: unknown): string | undefined => namedNodes.get(node);
 
   pieces.push(
     "// The host->extension control frames: the faithful base, then the enforced reader (the base plus the",
@@ -1044,17 +1092,12 @@ async function main(): Promise<void> {
   for (const group of GROUPS) {
     for (const [tag, names] of Object.entries(READER_FRAMES[group])) {
       kindsWithEntries.delete(tag);
-      const base = tag === "client_list_result" ? clientListResult : preparedFrame(group, tag);
-      const reader =
-        tag === "client_list_result" ? clientListResultEnforced : enforced(tag, base, true);
+      const base = preparedBases.get(tag) ?? preparedFrame(group, tag);
+      const reader = enforcedReaders.get(tag) ?? enforced(tag, base, true);
       pieces.push(
-        `export const ${names.wire} = ${convert(base, names.wire, (node) =>
-          node === clientEntry ? "ClientEntryWireSchema" : undefined,
-        )};`,
+        `export const ${names.wire} = ${convert(base, names.wire, byName)};`,
         "",
-        `export const ${names.enforced} = ${convert(reader, names.enforced, (node) =>
-          node === trustedClient ? "TrustedClientSchema" : undefined,
-        )};`,
+        `export const ${names.enforced} = ${convert(reader, names.enforced, byName)};`,
         "",
         `export type ${typeOf(names.enforced)} = z.infer<typeof ${names.enforced}>;`,
         "",

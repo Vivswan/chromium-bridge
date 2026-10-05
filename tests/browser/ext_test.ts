@@ -208,14 +208,20 @@ async function main(): Promise<void> {
       zh_CN: "\u663E\u793A\u8BED\u8A00",
       zh_TW: "\u986F\u793A\u8A9E\u8A00",
     };
-    // The Security section's host-owned-policy pointer, per locale
-    // (settings.policy_managed_title in the locale bundles), proving the page
-    // body reads the locale bundle (the original leak was the since-removed
+    // The Security section's policy editor in its no-host-policy state, per locale (policy.none_title in the
+    // locale bundles), proving the page body reads the locale bundle (the original leak was the since-removed
     // tool grid showing zh on en).
-    const POLICY_MANAGED_TITLE = {
-      en: "Set with chromium-bridge policy",
-      zh_CN: "\u7528 chromium-bridge policy \u8BBE\u7F6E",
-      zh_TW: "\u7528 chromium-bridge policy \u8A2D\u5B9A",
+    const POLICY_NONE_TITLE = {
+      en: "No host policy applied yet",
+      zh_CN: "\u5C1A\u672A\u5E94\u7528\u4E3B\u673A\u7B56\u7565",
+      zh_TW: "\u5C1A\u672A\u5957\u7528\u4E3B\u6A5F\u539F\u5247",
+    };
+    // The registration panel's not-connected refusal per locale (registration.error in the bundles), the
+    // host's error text untranslated inside it.
+    const REGISTRATION_REFUSAL = {
+      en: "Could not read the registrations: native host not connected",
+      zh_CN: "\u65E0\u6CD5\u8BFB\u53D6\u6CE8\u518C\u72B6\u6001: native host not connected",
+      zh_TW: "\u7121\u6CD5\u8B80\u53D6\u8A3B\u518A\u72C0\u614B: native host not connected",
     };
 
     const page = await browser.newPage();
@@ -228,12 +234,26 @@ async function main(): Promise<void> {
     // English, whatever the machine's locale is.
     check((await bodyText()).includes(LANG_LABEL.en), "fresh profile renders English");
     check(
-      (await bodyText()).includes(POLICY_MANAGED_TITLE.en),
-      "fresh profile policy pointer is English (policy_managed_title)",
+      (await bodyText()).includes(POLICY_NONE_TITLE.en),
+      "fresh profile policy editor is English (policy.none_title)",
     );
     check(
       (await page.evaluate(() => document.documentElement.lang)) === "en",
       "fresh profile html lang is en",
+    );
+
+    // The two host-admin panels render their render path with no native host behind them: the registration
+    // panel shows the worker's not-connected refusal (never an empty healthy table), and the policy editor the
+    // pre-cutover state with no field controls (nothing is editable before a host policy applies).
+    const freshText = await bodyText();
+    check(
+      freshText.includes(REGISTRATION_REFUSAL.en),
+      "registration panel renders the not-connected refusal with no host",
+    );
+    check(
+      (await page.$$('#policy button[role="switch"]')).length === 0 &&
+        freshText.includes("built-in deny baseline"),
+      "policy editor renders the pre-cutover state with no field controls",
     );
 
     // The picker names each language in that language, in every locale.
@@ -261,8 +281,12 @@ async function main(): Promise<void> {
         .catch(() => {});
       check((await bodyText()).includes(LANG_LABEL[locale]), `${locale} locale renders`);
       check(
-        (await bodyText()).includes(POLICY_MANAGED_TITLE[locale]),
-        `${locale} policy pointer is localized (policy_managed_title)`,
+        (await bodyText()).includes(POLICY_NONE_TITLE[locale]),
+        `${locale} policy editor is localized (policy.none_title)`,
+      );
+      check(
+        (await bodyText()).includes(REGISTRATION_REFUSAL[locale]),
+        `${locale} registration panel is localized (registration.error)`,
       );
       // Native names stay untranslated under this locale too.
       await page.click('[aria-labelledby="lang-label"]');

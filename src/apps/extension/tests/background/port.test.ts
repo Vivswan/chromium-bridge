@@ -38,6 +38,7 @@ const enrollment = {
   onPortConnected: vi.fn(() => Promise.resolve()),
 };
 const clients = { collaborator: mockCollaborator() };
+const hostAdmin = { collaborator: mockCollaborator() };
 const kill = {
   collaborator: mockCollaborator(),
   requestKillStatus: vi.fn(() => Promise.resolve()),
@@ -57,6 +58,7 @@ const runtime = {
 
 vi.mock("@/lib/background/enrollment", () => enrollment);
 vi.mock("@/lib/background/clients", () => clients);
+vi.mock("@/lib/background/host-admin", () => hostAdmin);
 vi.mock("@/lib/background/kill", () => kill);
 vi.mock("@/lib/background/audit-log", () => auditLog);
 vi.mock("@/lib/background/confirm/presence", () => presence);
