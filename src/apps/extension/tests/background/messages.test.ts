@@ -53,6 +53,7 @@ const REQUESTS: { [K in RuntimeMsgType]: RuntimeRequest<K> } = {
   revoke_client: { type: "revoke_client", name: "claude-code" },
   get_kill: { type: "get_kill" },
   set_kill: { type: "set_kill", on: true },
+  kill_release: { type: "kill_release" },
   get_audit: { type: "get_audit" },
   sweep_pending: { type: "sweep_pending" },
   lang_choose: { type: "lang_choose", value: "en" },
@@ -68,6 +69,7 @@ const REQUESTS: { [K in RuntimeMsgType]: RuntimeRequest<K> } = {
     client_data_json: "Y2Rq",
   },
   webauthn_presence_pending: { type: "webauthn_presence_pending" },
+  webauthn_enrollment: { type: "webauthn_enrollment" },
   webauthn_presence_assert: {
     type: "webauthn_presence_assert",
     nonce: "nonce-0002",

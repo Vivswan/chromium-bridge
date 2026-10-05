@@ -29,6 +29,7 @@ import type {
 import pLimit from "p-limit";
 import { browser } from "wxt/browser";
 import { inLife } from "../shared/in-life";
+import { failKillRelease } from "../webauthn/exchange";
 import { auditEvent } from "./audit-log";
 import { advance, engageOutstanding, resetBrakeForTests, stampArrival } from "./brake";
 import type { Connection, PortCollaborator } from "./connection";
@@ -103,8 +104,8 @@ async function setMirror(state: KillMirror["state"]): Promise<void> {
 // ---- port plumbing (mirrors clients.ts) --------------------------------------
 
 /** Closed over the GENERATED wire types (envelope.gen.ts <- protocol/control.rs), so a typo'd frame type is a compile
- * error rather than a frame the host drops. kill_release is deliberately absent: the host refuses it from the
- * extension; release lives in the CLI. */
+ * error rather than a frame the host drops. kill_release is not here: its reply is a presence request, so the
+ * WebAuthn exchange (../webauthn/exchange.ts) posts it. */
 export type KillControlFrame = KillStatusWire | KillEngageWire;
 
 const ENGAGE = { type: "kill_engage" } satisfies KillControlFrame;
@@ -217,9 +218,9 @@ export function requestKillStatus(): Promise<KillView> {
   return request({ type: "kill_status" }).view;
 }
 
-/** Engage, the ONLY transition the extension can request: the host refuses kill_release from the extension (release
- * is `chromium-bridge unkill` behind its presence gate), and the router accepts set_kill from extension pages only,
- * with `on` pinned to true. The host performs and audits the transition; the mirror adopts its answer. */
+/** Engage. The router accepts set_kill from extension pages only, with `on` pinned to true, so a page can neither
+ * reach this nor express a release here: release is the WebAuthn exchange's kill_release, behind the host's presence
+ * request. The host performs and audits the transition; the mirror adopts its answer. */
 export function engageKill(): Promise<KillView> {
   // Local ring only: the host records the authoritative kill_engage.
   auditEvent("kill_engaged", { outcome: "requested" });
@@ -276,7 +277,10 @@ async function handleOneKillFrame(msg: KillStatusResult, seq: number): Promise<v
   pending.value = null;
   if (current) clearTimeout(current.timer);
 
-  // ok:false = the host cannot read its own state: unknown, which the gate refuses.
+  // ok:false = the host cannot read its own state: unknown, which the gate refuses. It is also what a
+  // kill_release gets instead of a presence request when the record is unreadable, and that exchange
+  // must not wait out its deadline for a reason that is already here.
+  if (!msg.ok) failKillRelease(msg.error ?? "the host could not read its kill-switch state");
   const state: KillMirror["state"] =
     msg.ok && typeof msg.killed === "boolean" ? (msg.killed ? "killed" : "alive") : "unknown";
   let stored = false;

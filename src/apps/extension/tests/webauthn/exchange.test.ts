@@ -3,15 +3,19 @@
 // The host side is the Rust verifier's own tests; the tag roster itself is held to the generated table by
 // tests/background/port-routing.test.ts and scripts/check-envelope.ts.
 
+import { WEBAUTHN_ENROLLMENT_KEY } from "@chromium-bridge/shared/runtime-msg";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 import {
   assertPresence,
   beginEnrollment,
+  beginKillRelease,
   collaborator,
+  failKillRelease,
   finishEnrollment,
   handleWebAuthnFrame,
   pendingPresenceRequest,
+  recordedEnrollment,
   resetWebAuthnForTests,
   WEBAUTHN_EXCHANGE_TIMEOUT_MS,
 } from "@/lib/webauthn/exchange";
@@ -99,6 +103,59 @@ describe("enrollment exchanges", () => {
       await expect(p).resolves.toEqual({ ok: false, error: "malformed enroll_result from host" });
     },
   );
+});
+
+describe("the enrollment note for the options page", () => {
+  test("an ok enroll_result notes the credential; the note reads back; a refusal leaves none", async () => {
+    vi.useFakeTimers({ now: 1_700_000_000_000 });
+    const p = finishEnrollment(registration);
+    handleWebAuthnFrame({ type: "enroll_result", ok: true, credential_id: "Y3JlZC1h" });
+    await expect(p).resolves.toEqual({ ok: true, credentialId: "Y3JlZC1h" });
+    await expect(recordedEnrollment()).resolves.toEqual({
+      ok: true,
+      enrollment: { credentialId: "Y3JlZC1h", enrolledAt: 1_700_000_000_000 },
+    });
+    await fakeBrowser.storage.local.remove(WEBAUTHN_ENROLLMENT_KEY);
+    const refused = finishEnrollment(registration);
+    handleWebAuthnFrame({ type: "enroll_result", ok: false, reason: "challenge_mismatch" });
+    await expect(refused).resolves.toEqual({ ok: false, error: "challenge_mismatch" });
+    await expect(recordedEnrollment()).resolves.toEqual({ ok: true, enrollment: null });
+  });
+
+  test("a present note that does not parse is a refusal, never 'not enrolled'", async () => {
+    await fakeBrowser.storage.local.set({ [WEBAUTHN_ENROLLMENT_KEY]: { credentialId: "" } });
+    await expect(recordedEnrollment()).resolves.toEqual({
+      ok: false,
+      error: "the stored enrollment note is malformed",
+    });
+  });
+});
+
+describe("kill release", () => {
+  test("kill_release posts the frame; the pushed presence_request answers it, stays pending for the page, and opens no page", async () => {
+    const open = vi.spyOn(fakeBrowser.runtime, "openOptionsPage").mockResolvedValue(undefined);
+    const release = { ...presenceRequest, action: "release the kill switch" };
+    const p = beginKillRelease();
+    expect(posted).toEqual([{ type: "kill_release" }]);
+    handleWebAuthnFrame(release as never);
+    await expect(p).resolves.toEqual({ ok: true, request: release });
+    expect(pendingPresenceRequest()).toEqual(release);
+    expect(open).not.toHaveBeenCalled();
+    // The page's answer then rides the ordinary presence path.
+    const answered = assertPresence(answer);
+    expect(posted).toEqual([{ type: "kill_release" }, { type: "presence_assert", ...assertion }]);
+    handleWebAuthnFrame({ type: "presence_result", ok: true });
+    await expect(answered).resolves.toEqual({ ok: true });
+  });
+
+  // The handoff itself, from a real kill_status_result, is pinned in tests/background/kill.test.ts.
+  test("a refusal handed over while another exchange is outstanding leaves that exchange alone", async () => {
+    // Only a kill_release can be answered by a kill_status_result; an enroll_begin's reply is still coming.
+    const p = beginEnrollment();
+    failKillRelease("trust record unreadable");
+    handleWebAuthnFrame(enrollOptions as never);
+    await expect(p).resolves.toEqual({ ok: true, options: enrollOptions });
+  });
 });
 
 describe("presence exchange", () => {

@@ -27,6 +27,11 @@ import {
   resetKillForTests,
 } from "@/lib/background/kill";
 import { route } from "@/lib/background/messages";
+import {
+  beginKillRelease,
+  resetWebAuthnForTests,
+  collaborator as webauthn,
+} from "@/lib/webauthn/exchange";
 import { attach } from "./fake-connection";
 
 const EXT_ID = "test-ext-id";
@@ -99,6 +104,21 @@ describe("kill mirror updates from host frames only", () => {
     await handleKillFrame({ type: "kill_status_result", ok: false, killed: false });
     expect((await getKillMirror())?.state).toBe("unknown");
     expect((await killGate()).allowed).toBe(false);
+  });
+
+  test("an ok:false result also fails a kill_release waiting for its presence request", async () => {
+    // The host answers a kill_release it cannot serve (unreadable trust record) with kill_status_result,
+    // which this module owns; the release exchange in exchange.ts must not sit out its deadline for it.
+    resetWebAuthnForTests();
+    attach(webauthn);
+    const release = beginKillRelease();
+    await handleKillFrame({
+      type: "kill_status_result",
+      ok: false,
+      error: "trust record unreadable",
+    });
+    await expect(release).resolves.toEqual({ ok: false, error: "trust record unreadable" });
+    expect((await getKillMirror())?.state).toBe("unknown");
   });
 
   test("an ok result missing the killed flag is unknown too", async () => {
