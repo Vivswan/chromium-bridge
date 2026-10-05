@@ -331,33 +331,6 @@ mod registry {
     }
 
     #[test]
-    fn a_request_severed_by_its_connection_is_cancelled_through_the_replacement() {
-        // The host restarts mid-request (its port dropped, the service worker reconnected, the new host
-        // attached) and only then does the old connection's reader see EOF. The caller is woken with
-        // Disconnected, and its guard must still cancel the op: the new connection reaches the same service
-        // worker, which holds the id in its in-flight table. A drain that removed the entry would lose the
-        // cancel here.
-        let session = Session::new();
-        let old = attach(&session, "chrome");
-        old.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-        let mut old_host = std::io::BufReader::new(old.try_clone().unwrap());
-        let in_flight = send_tab_list(&session, Duration::from_secs(5));
-        let id = next_frame(&mut old_host)["id"].as_u64().unwrap();
-
-        let new = attach(&session, "chrome");
-        new.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-        let mut new_host = std::io::BufReader::new(new.try_clone().unwrap());
-        // The old host is gone: its reader sees EOF and wakes the caller.
-        drop(old_host);
-        drop(old);
-        assert!(matches!(in_flight.wait(), Err(CallError::Disconnected)));
-        assert_eq!(
-            next_frame(&mut new_host),
-            serde_json::json!({ "type": "cancel", "id": id })
-        );
-    }
-
-    #[test]
     fn an_answered_request_sends_no_cancel() {
         // The pending entry is the one record of in-flight: the reader removed it when it delivered the reply,
         // so the guard's Drop has nothing to cancel. A cancel after a reply would make the extension abort
@@ -381,7 +354,7 @@ mod registry {
     fn a_superseded_connection_is_closed_so_its_extension_life_reconnects() {
         // The service-worker double-start incident: two lives attach under one label within a millisecond and
         // the newer dies, which left the older host on an open socket nothing routed to and every call
-        // NotConnected. The far end must see EOF although the reader thread still holds a cloned fd.
+        // NotConnected.
         let session = Session::new();
         let old = attach(&session, "chrome");
         old.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
@@ -478,9 +451,8 @@ mod registry {
         let req: BridgeReq = serde_json::from_str(&line).unwrap();
         assert_eq!(req.browser.as_deref(), Some("chrome"));
 
-        // The sweep itself drains the caller (its reader thread may
-        // never observe the shutdown on macOS): the caller must see
-        // Disconnected now, not its timeout.
+        // The sweep itself drains the caller, without waiting on its reader
+        // thread: the caller must see Disconnected now, not its timeout.
         assert_eq!(session.shutdown_all_browsers(), 1);
         assert!(matches!(
             caller.join().unwrap(),

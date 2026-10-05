@@ -489,8 +489,8 @@ impl Session {
     }
 
     /// Sever every live browser connection (the kill switch's teeth on the browser leg) and do the
-    /// registry bookkeeping synchronously here, not in the reader threads: on macOS a reader blocked in `recv(2)`
-    /// is not reliably woken by `shutdown(2)`. Idempotent, so the broker's watcher may call it every tick while killed; returns how many
+    /// registry bookkeeping synchronously here, not in the reader threads, so the kill does not wait on a
+    /// reader waking. Idempotent, so the broker's watcher may call it every tick while killed; returns how many
     /// connections THIS call severed.
     ///
     /// ```text
