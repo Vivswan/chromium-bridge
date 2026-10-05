@@ -20,11 +20,8 @@ use chromium_bridge_core::trust::Trust;
 #[test]
 fn revoke_always_writes_an_audit_trail_entry() {
     // Isolate the runtime dir BEFORE anything resolves it; the TempDir is removed on every exit, a failed
-    // assertion included.
-    let dir = tempfile::Builder::new()
-        .prefix("chromium-bridge-revoke-audit-test-")
-        .tempdir()
-        .unwrap();
+    // assertion included. Short on purpose: the socket path beneath it must fit sun_path (ipc/runtime_dir.rs).
+    let dir = tempfile::Builder::new().prefix("bbt-").tempdir().unwrap();
     std::env::set_var("XDG_RUNTIME_DIR", dir.path());
 
     // Plant a paired client as the bytes on disk: pairing through the API would demand a user-presence
@@ -34,10 +31,10 @@ fn revoke_always_writes_an_audit_trail_entry() {
         Trust::VERSION,
         "ab".repeat(20)
     );
-    std::fs::write(Trust::path(), record).unwrap();
+    std::fs::write(Trust::path().unwrap(), record).unwrap();
 
     let revoke_records = || -> Vec<AuditRecord> {
-        match std::fs::read_to_string(audit_path()) {
+        match std::fs::read_to_string(audit_path().unwrap()) {
             Ok(text) => text
                 .lines()
                 .map(|l| serde_json::from_str(l).unwrap())

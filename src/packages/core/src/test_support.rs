@@ -1,20 +1,21 @@
 //! Test-only support shared across the crate's unit-test modules.
 //!
-//! The scratch runtime-dir guard lives HERE, once, because the resource it
-//! guards is process-global: [`crate::ipc::runtime_dir`] resolves from the
-//! [`RUNTIME_DIR_VAR`] environment variable on every call, and
-//! `std::env::set_var` mutates the whole process. cargo-nextest runs
-//! each test in its own process, where any lock is a no-op; plain
-//! `cargo test` (one process, parallel threads - the coverage job's mode)
-//! needs real serialization, and a per-module lock only serializes that
-//! module's own tests: two modules' guards race, one re-pointing the env
-//! var (or deleting its scratch directory) in the middle of the other's
-//! test. One crate-wide lock, held for the guard's whole lifetime, is the
-//! honest guard for a process-global variable.
+//! The scratch runtime-dir guard lives HERE, once, because the resource it guards is process-global:
+//! [`crate::ipc::RuntimeDir`] resolves from the [`RUNTIME_DIR_VAR`] environment variable on every call, and
+//! `std::env::set_var` mutates the whole process. One crate-wide lock, held for the guard's whole lifetime, is
+//! the honest guard for a process-global variable.
+//!
+//! ```text
+//! cargo-nextest, one process per test       -> any lock is a no-op
+//! plain `cargo test`, parallel threads      -> real serialization needed (the coverage job's mode)
+//! a per-module lock                         -> two modules' guards race, one re-pointing the variable mid-test
+//! ```
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
+
+use tempfile::TempDir;
 
 use crate::ipc::RUNTIME_DIR_VAR;
 
@@ -24,41 +25,41 @@ fn env_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
-/// Points [`crate::ipc::runtime_dir`] at a fresh scratch directory for one
-/// test, restoring the previous environment and removing the directory on
-/// drop, so no test reads or writes the user's real runtime state. Holds
-/// the crate-wide env lock for its whole lifetime (module docs above).
+/// Points [`crate::ipc::RuntimeDir`] at a fresh scratch directory for one test, restoring the previous
+/// environment and removing the directory on drop, so no test reads or writes the user's real runtime state.
+/// Holds the crate-wide env lock for its whole lifetime (module docs above).
 pub(crate) struct RuntimeDirGuard {
-    _serial: MutexGuard<'static, ()>,
-    dir: PathBuf,
+    dir: TempDir,
     prev: Option<OsString>,
+    _serial: MutexGuard<'static, ()>,
 }
 
-/// A fresh [`RuntimeDirGuard`] for `name`. Callers tag the name with their
-/// module (`policy-set-signed`, `native-host-answered-or-dropped`, ...) so a
-/// leftover directory from a crashed run is attributable.
-pub(crate) fn scratch_runtime_dir(name: &str) -> RuntimeDirGuard {
+/// A fresh [`RuntimeDirGuard`]. The directory sits directly under the OS temp dir under a short name: the
+/// bridge socket path beneath it must fit `sun_path`, and [`crate::ipc::RuntimeDir`] refuses one that does not.
+pub(crate) fn scratch_runtime_dir() -> RuntimeDirGuard {
     let serial = env_lock().lock().unwrap_or_else(|e| e.into_inner());
-    let dir = std::env::temp_dir().join(format!(
-        "chromium-bridge-test-{}-{name}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = tempfile::Builder::new().prefix("bbt-").tempdir().unwrap();
     let prev = std::env::var_os(RUNTIME_DIR_VAR);
-    std::env::set_var(RUNTIME_DIR_VAR, &dir);
+    std::env::set_var(RUNTIME_DIR_VAR, dir.path());
     RuntimeDirGuard {
-        _serial: serial,
         dir,
         prev,
+        _serial: serial,
     }
 }
 
 impl RuntimeDirGuard {
+    /// The scratch root, which [`point_at_absent`](Self::point_at_absent) leaves in place while it re-points the
+    /// variable beneath it.
+    pub(crate) fn root(&self) -> &Path {
+        self.dir.path()
+    }
+
     /// Re-point the runtime dir at `name` under the scratch dir WITHOUT creating it, for a test proving that a
-    /// resolver leaves an absent dir absent. Drop still restores the environment and removes the scratch dir.
+    /// resolver leaves an absent dir absent, or staging a path of a chosen length. Drop still restores the
+    /// environment and removes the scratch dir.
     pub(crate) fn point_at_absent(&self, name: &str) -> PathBuf {
-        let absent = self.dir.join(name);
+        let absent = self.dir.path().join(name);
         std::env::set_var(RUNTIME_DIR_VAR, &absent);
         absent
     }
@@ -70,6 +71,5 @@ impl Drop for RuntimeDirGuard {
             Some(v) => std::env::set_var(RUNTIME_DIR_VAR, v),
             None => std::env::remove_var(RUNTIME_DIR_VAR),
         }
-        let _ = std::fs::remove_dir_all(&self.dir);
     }
 }

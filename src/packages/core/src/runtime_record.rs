@@ -76,7 +76,7 @@ impl Ladder {
 /// What a record declares: its file name, its read cap, and its ladder. Everything else comes from
 /// [`RuntimeRecord`], which every `Record` gets.
 pub trait Record: Serialize + DeserializeOwned + Sized {
-    /// File name inside [`ipc::runtime_dir`].
+    /// File name inside the [`ipc::RuntimeDir`].
     const FILE: &'static str;
     /// Read cap; a larger file is refused unread.
     const MAX_BYTES: usize;
@@ -90,14 +90,14 @@ pub trait Record: Serialize + DeserializeOwned + Sized {
 pub trait RuntimeRecord: Record {
     const VERSION: usize = Self::LADDER.current();
 
-    fn path() -> PathBuf {
-        ipc::runtime_dir().join(Self::FILE)
+    fn path() -> io::Result<PathBuf> {
+        Ok(ipc::RuntimeDir::ensure()?.join(Self::FILE))
     }
 
     /// Read the record. `Ok(None)` when the file does not exist. A present file that cannot be read is
     /// an error, never a silent `None`: treating a damaged record as absent would fail open.
     fn load() -> io::Result<Option<Self>> {
-        match fsguard::read_capped(&Self::path(), Self::MAX_BYTES)? {
+        match fsguard::read_capped(&Self::path()?, Self::MAX_BYTES)? {
             Some(bytes) => Self::decode(&bytes).map(Some),
             None => Ok(None),
         }
@@ -134,11 +134,11 @@ pub trait RuntimeRecord: Record {
     }
 
     fn write(&self, _lock: &RuntimeLockToken) -> io::Result<()> {
-        fsguard::write_private_atomic(&Self::path(), &self.encode()?)
+        fsguard::write_private_atomic(&Self::path()?, &self.encode()?)
     }
 
     fn remove(_lock: &RuntimeLockToken) -> io::Result<()> {
-        match fs::remove_file(Self::path()) {
+        match fs::remove_file(Self::path()?) {
             Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
             Ok(()) | Err(_) => Ok(()),
         }
@@ -253,7 +253,11 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mode = fs::metadata(T::path()).unwrap().permissions().mode() & 0o777;
+            let mode = fs::metadata(T::path().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
             assert_eq!(
                 mode & 0o077,
                 0,
@@ -263,7 +267,7 @@ mod tests {
         assert_eq!(T::load().unwrap().unwrap(), sample, "{file}: round trip");
 
         let written: Map<String, Value> =
-            serde_json::from_slice(&fs::read(T::path()).unwrap()).unwrap();
+            serde_json::from_slice(&fs::read(T::path().unwrap()).unwrap()).unwrap();
         assert_eq!(
             written.get("version"),
             Some(&Value::from(T::VERSION)),
@@ -323,7 +327,7 @@ mod tests {
             ("over the cap", padded),
         ];
         for (case, bytes) in tampered {
-            fs::write(T::path(), bytes).unwrap();
+            fs::write(T::path().unwrap(), bytes).unwrap();
             let err = T::load().expect_err(&format!("{file}: {case} must be refused"));
             assert_eq!(
                 err.kind(),
@@ -580,7 +584,7 @@ mod tests {
 
     #[test]
     fn every_record_honours_the_cap_the_envelope_the_mode_and_strict_parsing() {
-        let _dir = scratch_runtime_dir("runtime-record-matrix");
+        let _dir = scratch_runtime_dir();
         let mut exercised = BTreeSet::new();
         exercise(
             &mut exercised,

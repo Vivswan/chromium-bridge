@@ -33,12 +33,12 @@ fn signed_mock() -> Mock {
 
 /// The audit trail written into the scratch runtime dir, as one string.
 fn audit_text() -> String {
-    fs::read_to_string(crate::audit::audit_path()).unwrap_or_default()
+    fs::read_to_string(crate::audit::audit_path().unwrap()).unwrap_or_default()
 }
 
 #[test]
 fn store_round_trips_the_exact_baseline_bytes() {
-    let _dir = scratch_runtime_dir("policy-round-trip");
+    let _dir = scratch_runtime_dir();
     let doc = PolicyDoc {
         revision: 7,
         touched: vec![PolicyField::PageEvalEnabled],
@@ -66,7 +66,7 @@ fn store_round_trips_the_exact_baseline_bytes() {
 
 #[test]
 fn a_flipped_baseline_byte_still_parses_but_changes_the_doc() {
-    let _dir = scratch_runtime_dir("policy-tamper-flip");
+    let _dir = scratch_runtime_dir();
     let store = seed_store(1, &PolicyValues::default(), None);
     let mut bytes = base64_decode(&store.baseline_b64).unwrap();
     // Flip the revision digit: still valid JSON, different document.
@@ -96,7 +96,7 @@ fn a_flipped_baseline_byte_still_parses_but_changes_the_doc() {
 
 #[test]
 fn a_flipped_byte_that_breaks_json_fails_baseline_doc_not_load() {
-    let _dir = scratch_runtime_dir("policy-tamper-break");
+    let _dir = scratch_runtime_dir();
     let store = seed_store(1, &PolicyValues::default(), None);
     let mut bytes = base64_decode(&store.baseline_b64).unwrap();
     bytes[0] = b'X';
@@ -114,7 +114,7 @@ fn a_flipped_byte_that_breaks_json_fails_baseline_doc_not_load() {
 
 #[test]
 fn a_non_base64_baseline_fails_baseline_doc_not_load() {
-    let _dir = scratch_runtime_dir("policy-tamper-b64");
+    let _dir = scratch_runtime_dir();
     let store = PolicyStore {
         baseline_b64: "not base64!".into(),
         sig_b64: None,
@@ -128,7 +128,7 @@ fn a_non_base64_baseline_fails_baseline_doc_not_load() {
 
 #[test]
 fn set_signed_writes_the_exact_signed_bytes_and_bumps_revisions() {
-    let _dir = scratch_runtime_dir("policy-set-signed-happy");
+    let _dir = scratch_runtime_dir();
     let _reset = policy_test_hook::ResetOnDrop;
     policy_test_hook::set(signed_mock());
 
@@ -186,7 +186,7 @@ fn set_signed_writes_the_exact_signed_bytes_and_bumps_revisions() {
 
 #[test]
 fn set_signed_clears_touched_overlay_entries_and_keeps_the_rest() {
-    let _dir = scratch_runtime_dir("policy-overlay-retention");
+    let _dir = scratch_runtime_dir();
     let _reset = policy_test_hook::ResetOnDrop;
     let overlay = PolicyOverlay {
         confirm_grace_ms: Some(Ms::from(1_000u32)),
@@ -220,7 +220,7 @@ fn set_signed_clears_touched_overlay_entries_and_keeps_the_rest() {
 
 #[test]
 fn folding_the_effective_values_leaves_effective_unchanged() {
-    let _dir = scratch_runtime_dir("policy-overlay-fold");
+    let _dir = scratch_runtime_dir();
     let _reset = policy_test_hook::ResetOnDrop;
     // A baseline with grants on, restricted by overlay.
     let baseline_values = PolicyValues {
@@ -261,7 +261,7 @@ fn folding_the_effective_values_leaves_effective_unchanged() {
 
 #[test]
 fn set_signed_signs_exactly_the_bytes_it_stores() {
-    let _dir = scratch_runtime_dir("policy-signed-bytes-identity");
+    let _dir = scratch_runtime_dir();
     let _reset = policy_test_hook::ResetOnDrop;
     policy_test_hook::set(signed_mock());
     let values = PolicyValues {
@@ -285,7 +285,7 @@ fn set_signed_signs_exactly_the_bytes_it_stores() {
 
 #[test]
 fn an_empty_touched_set_refuses_before_any_prompt() {
-    let _dir = scratch_runtime_dir("policy-empty-touched");
+    let _dir = scratch_runtime_dir();
     let _reset = policy_test_hook::ResetOnDrop;
     // The mock panics if the signing primitive is reached: the refusal
     // must be promptless.
@@ -297,7 +297,7 @@ fn an_empty_touched_set_refuses_before_any_prompt() {
 
 #[test]
 fn revision_overflow_refuses_before_any_prompt() {
-    let _dir = scratch_runtime_dir("policy-revision-overflow");
+    let _dir = scratch_runtime_dir();
     let _reset = policy_test_hook::ResetOnDrop;
     seed_store(JS_SAFE_INT_MAX, &PolicyValues::default(), None);
     policy_test_hook::set(Mock::PanicIfCalled);
@@ -315,7 +315,7 @@ fn the_last_js_safe_revision_still_writes() {
     // The near-boundary through the full seam: MAX - 1 mints exactly
     // MAX, the last legal revision (the overflow test above pins that
     // MAX itself refuses).
-    let _dir = scratch_runtime_dir("policy-revision-at-bound");
+    let _dir = scratch_runtime_dir();
     let _reset = policy_test_hook::ResetOnDrop;
     seed_store(JS_SAFE_INT_MAX - 1, &PolicyValues::default(), None);
     policy_test_hook::set(signed_mock());
@@ -353,7 +353,7 @@ fn the_revision_seam_covers_its_boundaries() {
 
 #[test]
 fn a_refused_signature_never_falls_to_the_floor() {
-    let _dir = scratch_runtime_dir("policy-refused-no-floor");
+    let _dir = scratch_runtime_dir();
     let _reset = policy_test_hook::ResetOnDrop;
     let seeded = seed_store(1, &PolicyValues::default(), None);
     policy_test_hook::set(Mock::Return(PolicySignOutcome::Refused(
@@ -374,7 +374,7 @@ fn a_refused_signature_never_falls_to_the_floor() {
 
 #[test]
 fn unavailable_hardware_refuses_the_grant() {
-    let _dir = scratch_runtime_dir("policy-no-signing-key");
+    let _dir = scratch_runtime_dir();
     let _reset = policy_test_hook::ResetOnDrop;
     // The default mock is Unavailable: a keyless machine.
     let err = set_signed(
@@ -390,7 +390,7 @@ fn unavailable_hardware_refuses_the_grant() {
 
 #[test]
 fn restrict_without_a_baseline_refuses() {
-    let _dir = scratch_runtime_dir("policy-restrict-no-baseline");
+    let _dir = scratch_runtime_dir();
     let err = restrict(
         PolicyOverlay {
             page_eval_enabled: Some(false),
@@ -407,7 +407,7 @@ fn restrict_without_a_baseline_refuses() {
 
 #[test]
 fn a_restricting_overlay_applies_and_pushes_history() {
-    let _dir = scratch_runtime_dir("policy-restrict-applies");
+    let _dir = scratch_runtime_dir();
     let seeded = seed_store(
         1,
         &PolicyValues {
@@ -436,7 +436,7 @@ fn a_restricting_overlay_applies_and_pushes_history() {
 
 #[test]
 fn a_relaxing_overlay_is_refused_with_the_store_unchanged() {
-    let _dir = scratch_runtime_dir("policy-restrict-relaxing");
+    let _dir = scratch_runtime_dir();
     let seeded = seed_store(
         1,
         &PolicyValues {
@@ -474,7 +474,7 @@ fn a_relaxing_overlay_is_refused_with_the_store_unchanged() {
 
 #[test]
 fn restrict_merges_entrywise_keeping_unnamed_entries() {
-    let _dir = scratch_runtime_dir("policy-restrict-merge");
+    let _dir = scratch_runtime_dir();
     seed_store(
         1,
         &PolicyValues {
@@ -545,10 +545,10 @@ fn history_evicts_oldest_entries_until_the_ring_encodes_under_its_own_cap() {
 
 #[test]
 fn a_corrupt_history_file_never_blocks_policy_writes() {
-    let _dir = scratch_runtime_dir("policy-history-corrupt");
+    let _dir = scratch_runtime_dir();
     let _reset = policy_test_hook::ResetOnDrop;
     seed_store(1, &PolicyValues::default(), None);
-    fs::write(PolicyHistory::path(), b"garbage, not json").unwrap();
+    fs::write(PolicyHistory::path().unwrap(), b"garbage, not json").unwrap();
     // Reading it fails closed for the (future) rollback surface...
     assert!(PolicyHistory::load().is_err());
     // ...but the enforcement paths and both seams stay fully functional:
@@ -575,7 +575,7 @@ fn a_corrupt_history_file_never_blocks_policy_writes() {
 
 #[test]
 fn a_moved_baseline_revision_conflicts_instead_of_overwriting() {
-    let _dir = scratch_runtime_dir("policy-revision-guard");
+    let _dir = scratch_runtime_dir();
     seed_store(2, &PolicyValues::default(), None);
     let doc = PolicyDoc::from_values(&PolicyValues::default(), 3, vec![PolicyField::CdpMode]);
     let bytes = serde_json::to_vec(&doc).unwrap();
@@ -651,7 +651,7 @@ fn a_moved_baseline_revision_conflicts_instead_of_overwriting() {
 
 #[test]
 fn an_overlay_moved_mid_prompt_conflicts_instead_of_clobbering() {
-    let _dir = scratch_runtime_dir("policy-overlay-guard");
+    let _dir = scratch_runtime_dir();
     seed_store(
         2,
         &PolicyValues {
@@ -718,7 +718,7 @@ fn an_overlay_moved_mid_prompt_conflicts_instead_of_clobbering() {
 
 #[test]
 fn a_disposal_during_the_prompt_conflicts_even_with_no_store_on_both_sides() {
-    let _dir = scratch_runtime_dir("policy-dispose-guard");
+    let _dir = scratch_runtime_dir();
     // A first write's pre-prompt observation: no store, and the host-key
     // epoch as it stood before the tap.
     let doc = PolicyDoc::from_values(&PolicyValues::default(), 1, vec![PolicyField::CdpMode]);
@@ -756,7 +756,7 @@ fn a_disposal_during_the_prompt_conflicts_even_with_no_store_on_both_sides() {
 
 #[test]
 fn a_tampered_overlay_that_relaxes_the_baseline_refuses_every_read() {
-    let _dir = scratch_runtime_dir("policy-overlay-tamper");
+    let _dir = scratch_runtime_dir();
     // No legitimate write produces this state (restrict only tightens,
     // set_signed carries baseline values on untouched fields), so a
     // schema-valid overlay flipping a grant ON over a denying baseline
@@ -781,7 +781,7 @@ fn a_tampered_overlay_that_relaxes_the_baseline_refuses_every_read() {
 
 #[test]
 fn a_relaxation_outside_the_touched_set_refuses_before_any_prompt() {
-    let _dir = scratch_runtime_dir("policy-touched-coverage");
+    let _dir = scratch_runtime_dir();
     let _reset = policy_test_hook::ResetOnDrop;
     seed_store(1, &PolicyValues::default(), None);
     // page_eval_enabled: true relaxes the effective anchor, but touched
@@ -796,7 +796,7 @@ fn a_relaxation_outside_the_touched_set_refuses_before_any_prompt() {
     assert!(matches!(err, PolicyWriteError::Invalid(_)));
     // With no store at all the anchor is the deny baseline: an
     // undeclared first-write grant refuses the same way.
-    fs::remove_file(PolicyStore::path()).unwrap();
+    fs::remove_file(PolicyStore::path().unwrap()).unwrap();
     let err = set_signed(relaxing, vec![PolicyField::CdpMode], Surface::Core).unwrap_err();
     assert!(matches!(err, PolicyWriteError::Invalid(_)));
     assert!(PolicyStore::load().unwrap().is_none());
@@ -804,7 +804,7 @@ fn a_relaxation_outside_the_touched_set_refuses_before_any_prompt() {
 
 #[test]
 fn a_touched_superset_of_the_relaxations_passes() {
-    let _dir = scratch_runtime_dir("policy-touched-superset");
+    let _dir = scratch_runtime_dir();
     let _reset = policy_test_hook::ResetOnDrop;
     seed_store(1, &PolicyValues::default(), None);
     policy_test_hook::set(signed_mock());
@@ -829,7 +829,7 @@ fn a_touched_superset_of_the_relaxations_passes() {
 
 #[test]
 fn a_restriction_lands_when_named_and_refuses_as_untouched_drift() {
-    let _dir = scratch_runtime_dir("policy-touched-restriction");
+    let _dir = scratch_runtime_dir();
     let _reset = policy_test_hook::ResetOnDrop;
     seed_store(
         1,
@@ -872,7 +872,7 @@ fn a_restriction_lands_when_named_and_refuses_as_untouched_drift() {
 #[test]
 fn restrict_bounds_the_merged_disabled_tools() {
     use crate::policy::{DISABLED_TOOLS_MAX_ENTRIES, DISABLED_TOOL_NAME_MAX_BYTES};
-    let _dir = scratch_runtime_dir("policy-restrict-tools-bounds");
+    let _dir = scratch_runtime_dir();
     let seeded = seed_store(1, &PolicyValues::default(), None);
     // Growing the set restricts, so only the bounds can refuse these.
     let with_tools = |tools: Vec<String>| PolicyOverlay {
@@ -916,7 +916,7 @@ fn restrict_bounds_the_merged_disabled_tools() {
 
 #[test]
 fn store_write_refuses_bytes_over_the_read_cap() {
-    let _dir = scratch_runtime_dir("policy-write-cap");
+    let _dir = scratch_runtime_dir();
     let store = PolicyStore {
         baseline_b64: "A".repeat(<PolicyStore as Record>::MAX_BYTES),
         sig_b64: None,
@@ -931,7 +931,7 @@ fn store_write_refuses_bytes_over_the_read_cap() {
 
 #[test]
 fn clear_baseline_removes_the_store_and_keeps_history() {
-    let _dir = scratch_runtime_dir("policy-clear-baseline");
+    let _dir = scratch_runtime_dir();
     // A signed baseline plus a surviving restriction overlay.
     let seeded = seed_store(
         3,
@@ -961,7 +961,7 @@ fn clear_baseline_removes_the_store_and_keeps_history() {
 
 #[test]
 fn clear_baseline_is_a_noop_without_a_store() {
-    let _dir = scratch_runtime_dir("policy-clear-baseline-empty");
+    let _dir = scratch_runtime_dir();
     ipc::with_runtime_lock(clear_baseline_locked).unwrap();
     assert!(PolicyStore::load().unwrap().is_none());
     assert!(PolicyHistory::load().unwrap().is_none());
@@ -1049,7 +1049,7 @@ fn every_policy_write_moves_the_policy_epoch_and_a_noop_clear_holds_it() {
         },
     ];
     for case in cases {
-        let _dir = scratch_runtime_dir("policy-epoch");
+        let _dir = scratch_runtime_dir();
         let _reset = policy_test_hook::ResetOnDrop;
         (case.start)();
         let before = crate::trust::TrustState::current().unwrap().policy_epoch();

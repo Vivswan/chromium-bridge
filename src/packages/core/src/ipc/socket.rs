@@ -4,8 +4,6 @@
 //! serializes the unlink-bind-publish sequence against other instances.
 
 use std::io;
-#[cfg(unix)]
-use std::path::PathBuf;
 
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -16,6 +14,7 @@ use super::lockfile::{cleanup_stale_lock, read_lock_or_err, LockFile};
 #[cfg(windows)]
 use super::platform::windows::{pipe, PipeName};
 use super::rand::generate_secret;
+use super::runtime_dir::RuntimeDir;
 
 /// The bridge listener and stream types, unified across platforms so the rest
 /// of the crate is transport-agnostic: a Unix-domain socket on Unix, a named
@@ -34,13 +33,6 @@ pub type BridgeStream = pipe::PipeStream;
 #[cfg(windows)]
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Path of the Unix-domain socket the server binds. Unix-only: Windows uses a
-/// named pipe, whose name `PipeName::for_broker` derives.
-#[cfg(unix)]
-pub(super) fn socket_path() -> PathBuf {
-    super::lockfile::runtime_dir().join("run.sock")
-}
-
 /// Server side: bind the bridge socket and return the listener plus the
 /// lock-file contents to publish. Private to the ipc module: callers go through
 /// [`super::lockfile::listen_and_publish`], which serializes the
@@ -49,7 +41,7 @@ pub(super) fn socket_path() -> PathBuf {
 pub(super) fn listen() -> io::Result<(BridgeListener, LockFile)> {
     use std::fs;
 
-    let sock = socket_path();
+    let sock = RuntimeDir::ensure()?.socket_path();
     // A leftover socket from a crashed server makes bind fail with EADDRINUSE;
     // unlink it first. Binding recreates it fresh.
     let _ = fs::remove_file(&sock);
@@ -67,7 +59,7 @@ pub(super) fn listen() -> io::Result<(BridgeListener, LockFile)> {
 /// no leftover to unlink, since a pipe name vanishes with its last instance.
 #[cfg(windows)]
 pub(super) fn listen() -> io::Result<(BridgeListener, LockFile)> {
-    let name = PipeName::for_broker(&super::lockfile::runtime_dir(), std::process::id());
+    let name = PipeName::for_broker(RuntimeDir::ensure()?.as_path(), std::process::id());
     let listener = pipe::PipeListener::bind(&name)?;
     let lf = LockFile {
         endpoint: name.into(),
@@ -144,18 +136,5 @@ pub(super) fn loopback_pair() -> (BridgeStream, BridgeStream) {
             server,
             client.join().expect("client thread").expect("connect"),
         )
-    }
-}
-
-// The only test here exercises the Unix socket path; on Windows the module
-// would be empty, so it is gated out entirely.
-#[cfg(all(test, unix))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn socket_path_sits_beside_the_lock_file() {
-        assert_eq!(socket_path().file_name().unwrap(), "run.sock");
-        assert_eq!(socket_path().parent(), LockFile::path().parent());
     }
 }

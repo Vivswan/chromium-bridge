@@ -72,10 +72,9 @@ pub fn run() -> i32 {
             Ok(ipc::PublishOutcome::Published(listener, lock)) => {
                 log_info!(
                     "mcp",
-                    "this instance is the broker; bridge listening at {} (pid {}) lock at {}",
+                    "this instance is the broker; bridge listening at {} (pid {})",
                     lock.endpoint,
-                    lock.pid,
-                    ipc::LockFile::path().display()
+                    lock.pid
                 );
                 return broker::run_broker(
                     listener,

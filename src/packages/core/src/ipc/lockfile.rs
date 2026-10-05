@@ -1,15 +1,15 @@
-//! The published runtime state: the per-user runtime directory, the lock file
-//! naming the live server (endpoint + per-run secret + pid), and the
-//! cross-process [`RuntimeMutex`] that serializes every mutation of that
-//! shared state.
+//! The published runtime state: the lock file naming the live server (endpoint + per-run secret + pid), and
+//! the cross-process [`RuntimeMutex`] that serializes every mutation of that shared state. The directory both
+//! live in is [`RuntimeDir`].
 
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use super::peercred::pid_is_alive;
+use super::runtime_dir::RuntimeDir;
 use super::socket::{listen, BridgeListener};
 use crate::fsguard::{read_capped, write_private_atomic};
 
@@ -40,83 +40,6 @@ pub struct LockFile {
     pub pid: u32,
 }
 
-/// The environment variable that places the runtime dir when it is set; the per-platform fallbacks in
-/// [`resolve_runtime_dir`] apply only without it. `crate::test_support` points tests at it, and the protocol
-/// harness mirrors it by hand (tests/protocol/harness.py, `runtime_dir_var`).
-#[cfg(unix)]
-pub(crate) const RUNTIME_DIR_VAR: &str = "XDG_RUNTIME_DIR";
-#[cfg(windows)]
-pub(crate) const RUNTIME_DIR_VAR: &str = "LOCALAPPDATA";
-
-/// Where the per-user runtime directory resolves under this process's environment, with nothing created or
-/// hardened. `doctor --paths` prints this alone, so the protocol harness can refuse a misrouted binary before it
-/// touches the real runtime dir; every writer goes through [`runtime_dir`].
-pub(crate) fn resolve_runtime_dir() -> PathBuf {
-    #[cfg(windows)]
-    {
-        std::env::var_os(RUNTIME_DIR_VAR)
-            .map(PathBuf::from)
-            .or_else(|| {
-                std::env::var_os("USERPROFILE").map(|p| PathBuf::from(p).join("AppData/Local"))
-            })
-            .unwrap_or_else(std::env::temp_dir)
-            .join("chromium-bridge")
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        match std::env::var_os(RUNTIME_DIR_VAR) {
-            Some(xdg) => PathBuf::from(xdg).join("chromium-bridge"),
-            None => {
-                let home = std::env::var_os("HOME").unwrap_or_else(|| "/tmp".into());
-                PathBuf::from(home).join("Library/Application Support/chromium-bridge")
-            }
-        }
-    }
-
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        if let Some(xdg) = std::env::var_os(RUNTIME_DIR_VAR) {
-            PathBuf::from(xdg).join("chromium-bridge")
-        } else if let Some(xdg_cache) = std::env::var_os("XDG_CACHE_HOME") {
-            PathBuf::from(xdg_cache).join("chromium-bridge")
-        } else if let Some(home) = std::env::var_os("HOME") {
-            PathBuf::from(home).join(".cache/chromium-bridge")
-        } else {
-            std::env::temp_dir().join(format!("chromium-bridge-{}", crate::sys::effective_uid()))
-        }
-    }
-}
-
-/// Per-user runtime/data directory holding the lock file and (on Unix) the
-/// bridge socket: [`resolve_runtime_dir`], created on the way, 0700 on Unix
-/// so no other user can enter it. Also holds the enrollment policy config
-/// (`src/packages/core/src/enclave`).
-pub(crate) fn runtime_dir() -> PathBuf {
-    let dir = resolve_runtime_dir();
-    #[cfg(windows)]
-    let _ = fs::create_dir_all(&dir);
-    #[cfg(unix)]
-    harden_runtime_dir(&dir);
-    dir
-}
-
-/// Directory hardening for [`runtime_dir`], which returns a path, not a `Result`: a directory that cannot be created
-/// or secured (a pre-planted symlink at the leaf, an unwritable parent) is logged loudly and the path still returned,
-/// losing only the directory-level 0700 tightening because every security-bearing file inside guards its own creation
-/// (0600 + `O_NOFOLLOW` opens, exclusive creates, see [`crate::fsguard`]) and fails closed on its own error. Chmod
-/// through the symlink is NOT attempted: chmodding an attacker-chosen path is the primitive fsguard exists to remove.
-#[cfg(unix)]
-fn harden_runtime_dir(dir: &Path) {
-    if let Err(e) = crate::fsguard::ensure_private_dir(dir) {
-        log_warn!(
-            "ipc",
-            "could not secure the runtime directory {}: {e}",
-            dir.display()
-        );
-    }
-}
-
 /// Read cap for the lock file (a few hundred bytes of JSON); see [`read_capped`].
 const LOCK_MAX_BYTES: usize = 64 * 1024;
 
@@ -126,12 +49,12 @@ pub const LOCK_FILENAME: &str = "run.lock";
 
 impl LockFile {
     /// Path of the lock file in the per-user runtime directory, which is created on the way.
-    pub fn path() -> PathBuf {
-        Self::path_in(&runtime_dir())
+    pub fn path() -> io::Result<PathBuf> {
+        Ok(Self::path_in(&RuntimeDir::ensure()?))
     }
 
     /// The lock's place inside whatever runtime dir it is handed, resolved or created.
-    pub(crate) fn path_in(runtime_dir: &Path) -> PathBuf {
+    pub(crate) fn path_in(runtime_dir: &RuntimeDir) -> PathBuf {
         runtime_dir.join(LOCK_FILENAME)
     }
 
@@ -140,11 +63,11 @@ impl LockFile {
     /// writes, the interleaving class [`cleanup_stale_lock`] exists to prevent.
     fn write(&self) -> io::Result<()> {
         let bytes = serde_json::to_vec(self)?;
-        write_private_atomic(&Self::path(), &bytes)
+        write_private_atomic(&Self::path()?, &bytes)
     }
 
     pub fn read() -> io::Result<Option<Self>> {
-        let Some(bytes) = read_capped(&Self::path(), LOCK_MAX_BYTES)? else {
+        let Some(bytes) = read_capped(&Self::path()?, LOCK_MAX_BYTES)? else {
             return Ok(None);
         };
         let lf: LockFile = serde_json::from_slice(&bytes).map_err(|e| {
@@ -160,9 +83,12 @@ impl LockFile {
     /// [`cleanup_stale_lock`], [`listen_and_publish`]); an unguarded remove
     /// once deleted a live server's files.
     fn remove() {
+        let Ok(dir) = RuntimeDir::ensure() else {
+            return;
+        };
         #[cfg(unix)]
-        let _ = fs::remove_file(super::socket::socket_path());
-        let _ = fs::remove_file(Self::path());
+        let _ = fs::remove_file(dir.socket_path());
+        let _ = fs::remove_file(Self::path_in(&dir));
     }
 
     /// Remove the lock file (and on Unix the socket) ONLY if the on-disk lock still names this process: after a
@@ -205,7 +131,7 @@ pub struct RuntimeLockToken(());
 
 impl RuntimeMutex {
     fn acquire() -> io::Result<RuntimeMutex> {
-        let path = runtime_dir().join("run.mutex");
+        let path = RuntimeDir::ensure()?.join("run.mutex");
         let f = crate::fsguard::open_private_rw(&path)?;
         f.lock()?; // blocks until exclusive; released on drop (close)
         Ok(RuntimeMutex(f))

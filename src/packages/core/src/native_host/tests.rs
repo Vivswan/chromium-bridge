@@ -145,7 +145,7 @@ fn server_injected_policy_frames_are_dropped_not_forwarded() {
 use crate::test_support::scratch_runtime_dir;
 
 fn audit_text() -> String {
-    std::fs::read_to_string(crate::audit::audit_path()).unwrap_or_default()
+    std::fs::read_to_string(crate::audit::audit_path().unwrap()).unwrap_or_default()
 }
 
 #[test]
@@ -155,7 +155,7 @@ fn policy_frames_from_the_browser_are_answered_or_dropped() {
     // server's strict BridgeResp parse). The two host->extension pushes (policy_current, lang_current)
     // arriving FROM the browser are malformed under their tag with nothing owed. All are Handled, never
     // forwarded. A scratch runtime dir isolates the store reads/writes the answers do.
-    let _dir = scratch_runtime_dir("native-host-answered-or-dropped");
+    let _dir = scratch_runtime_dir();
     let out = Arc::new(Mutex::new(BufWriter::new(io::stdout())));
     for (frame, is_push) in [
         (serde_json::json!({ "type": "policy_get" }), false),
@@ -199,7 +199,7 @@ fn policy_frames_from_the_browser_are_answered_or_dropped() {
 
 #[test]
 fn policy_get_answers_the_signed_baseline_from_the_store() {
-    let _dir = scratch_runtime_dir("native-host-policy-get-present");
+    let _dir = scratch_runtime_dir();
     let _reset = crate::presence::policy_test_hook::ResetOnDrop;
     crate::presence::policy_test_hook::set(crate::presence::policy_test_hook::Mock::Return(
         crate::presence::PolicySignOutcome::Signed {
@@ -270,9 +270,9 @@ fn policy_get_answers_ok_false_without_a_usable_store() {
         ),
     ];
     for (case, bytes, error_prefix) in cases {
-        let _dir = scratch_runtime_dir("native-host-policy-get-unusable");
+        let _dir = scratch_runtime_dir();
         if let Some(bytes) = bytes {
-            std::fs::write(crate::policy::PolicyStore::path(), bytes).unwrap();
+            std::fs::write(crate::policy::PolicyStore::path().unwrap(), bytes).unwrap();
         }
         let reply = policy_current_reply();
         let PolicyControl::PolicyCurrent {
@@ -345,7 +345,7 @@ fn policy_restrict_tightens_the_store_and_refuses_a_relaxation() {
     // The extension's restriction lane rides the same seam as `policy restrict`: a tightening lands in the
     // store (and the next policy_current carries the overlay), a relaxation is refused with the seam's reason
     // and leaves the store untouched, and both verdicts are audited with the extension surface.
-    let _dir = scratch_runtime_dir("native-host-policy-restrict");
+    let _dir = scratch_runtime_dir();
     let _reset = crate::presence::policy_test_hook::ResetOnDrop;
     crate::presence::policy_test_hook::set(crate::presence::policy_test_hook::Mock::Return(
         crate::presence::PolicySignOutcome::Signed {
@@ -420,7 +420,7 @@ fn an_applied_restrict_pushes_policy_current_even_when_the_epoch_bump_fails() {
     // epoch cannot climb makes the bump fail after a successful write, so the watch sees nothing to push;
     // the restriction must still reach the extension as the reply that follows the result, since
     // confirmPageEval is enforced in the extension's mirror alone.
-    let _dir = scratch_runtime_dir("native-host-policy-restrict-push");
+    let _dir = scratch_runtime_dir();
     let _reset = crate::presence::policy_test_hook::ResetOnDrop;
     crate::presence::policy_test_hook::set(crate::presence::policy_test_hook::Mock::Return(
         crate::presence::PolicySignOutcome::Signed {
@@ -465,7 +465,7 @@ fn an_applied_restrict_pushes_policy_current_even_when_the_epoch_bump_fails() {
 
 #[test]
 fn lang_get_answers_the_current_language() {
-    let _dir = scratch_runtime_dir("native-host-lang-get");
+    let _dir = scratch_runtime_dir();
     crate::lang::set("zh_TW").unwrap();
     let reply = lang_current_frame().unwrap();
     let PolicyControl::LangCurrent { value, seq } = reply else {
@@ -477,7 +477,7 @@ fn lang_get_answers_the_current_language() {
 
 #[test]
 fn lang_set_applies_a_valid_value_and_bumps_the_sequence() {
-    let _dir = scratch_runtime_dir("native-host-lang-set-valid");
+    let _dir = scratch_runtime_dir();
     let reply = handle_lang_set("zh_CN".into()).unwrap();
     let PolicyControl::LangCurrent { value, seq } = reply else {
         panic!("lang_set must answer the applied lang_current: {reply:?}");
@@ -495,7 +495,7 @@ fn an_out_of_enum_lang_set_replies_the_unchanged_current() {
     // A value outside the enum is refused and the
     // previous value stands - the reply is lang_current with the
     // UNCHANGED value+seq, and the store is untouched.
-    let _dir = scratch_runtime_dir("native-host-lang-set-invalid");
+    let _dir = scratch_runtime_dir();
     crate::lang::set("zh_CN").unwrap();
     let reply = handle_lang_set("fr".into()).unwrap();
     let PolicyControl::LangCurrent { value, seq } = reply else {
@@ -516,7 +516,7 @@ fn extension_kill_release_is_refused_audited_and_does_not_release() {
     // from the extension: the reply
     // is a refusal (ok:false, no killed claim), the trail records it, and
     // the bridge stays killed - the refusal never calls kill::release.
-    let _dir = scratch_runtime_dir("native-host-kill-release-refused");
+    let _dir = scratch_runtime_dir();
     crate::kill::engage(crate::audit::Surface::Cli).unwrap();
     let reply = handle_kill_release_refused();
     assert!(
@@ -688,7 +688,7 @@ fn the_loop_handles_buffered_frames_before_exiting_on_unkill() {
 #[test]
 fn a_released_record_recovered_after_an_unreadable_gap_hands_the_release_to_the_loop() {
     // The push helpers read the policy, language and trust stores from the runtime dir.
-    let _dir = scratch_runtime_dir("native-host-recovered-release");
+    let _dir = scratch_runtime_dir();
     let out = Mutex::new(BufWriter::new(io::stdout()));
     let released = || Ok(TrustState::from(Trust::default()));
     let killed = || {

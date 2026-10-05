@@ -742,8 +742,6 @@ function ensureBinary(): void {
  * log (NDJSON, like MCP stdio) on its way to the real binary. The server's runtime/config/home dirs
  * point at throwaway dirs so this server never shares a lock file, socket, pairing state, or kill switch
  * with the user's real bridge (the e2e suite's admin-frames test isolates the same way).
- *   runtime dir created SEPARATELY, short name -> the Unix socket path must stay under SUN_LEN (104 bytes
- *                                                 on macOS) or the server fails closed before answering initialize
  */
 function writeShim(ctx: { scratch: string; runtime: string; capture: string }): string {
   const q = (value: string): string => `'${value.replace(/'/g, "'\\''")}'`;
@@ -903,8 +901,7 @@ async function runHarness(harness: Harness): Promise<HarnessReport> {
   }
 
   const scratch = mkdtempSync(join(tmpdir(), `bb-harness-${harness.name}-`));
-  // Short prefix on purpose: the socket path bound under this dir must stay
-  // inside SUN_LEN (see writeShim).
+  // Short on purpose: the binary refuses a runtime dir whose socket path overruns sun_path (ipc/runtime_dir.rs).
   const runtime = mkdtempSync(join(tmpdir(), "bbh-"));
   const capture = join(CAPTURE_DIR, `${harness.name}.ndjson`);
   try {

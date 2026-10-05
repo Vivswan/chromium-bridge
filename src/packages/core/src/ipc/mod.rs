@@ -27,6 +27,7 @@ mod lockfile;
 mod peercred;
 mod platform;
 mod rand;
+mod runtime_dir;
 mod socket;
 
 pub use attest::{attest_parent, attest_peer, attest_pid, ensure_own_identity};
@@ -46,7 +47,8 @@ pub use peercred::peer_uid;
 pub use peercred::pid_is_alive;
 pub use socket::{connect, probe_endpoint, BridgeListener, BridgeStream};
 
-#[cfg(test)]
-pub(crate) use lockfile::RUNTIME_DIR_VAR;
-pub(crate) use lockfile::{resolve_runtime_dir, runtime_dir, with_runtime_lock, RuntimeLockToken};
+pub(crate) use lockfile::{with_runtime_lock, RuntimeLockToken};
 pub(crate) use rand::generate_secret;
+pub(crate) use runtime_dir::RuntimeDir;
+#[cfg(test)]
+pub(crate) use runtime_dir::RUNTIME_DIR_VAR;

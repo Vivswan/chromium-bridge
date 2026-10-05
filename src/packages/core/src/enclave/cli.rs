@@ -270,14 +270,14 @@ pub fn run_status() -> i32 {
         Err(e) => println!("key:        lookup failed: {e}"),
     }
 
-    match HostConfig::load() {
-        Ok(Some(cfg)) => println!(
+    match HostConfig::path().and_then(|path| HostConfig::load().map(|cfg| (path, cfg))) {
+        Ok((path, Some(cfg))) => println!(
             "policy:     enrolled={} granularity={} ({})",
             cfg.enrolled,
             cfg.granularity,
-            HostConfig::path().display()
+            path.display()
         ),
-        Ok(None) => println!("policy:     no config ({})", HostConfig::path().display()),
+        Ok((path, None)) => println!("policy:     no config ({})", path.display()),
         Err(e) => println!("policy:     unreadable: {e}"),
     }
     0

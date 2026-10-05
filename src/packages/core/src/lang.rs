@@ -157,14 +157,14 @@ mod tests {
 
     #[test]
     fn absent_store_reads_the_default() {
-        let _dir = scratch_runtime_dir("lang-absent-default");
+        let _dir = scratch_runtime_dir();
         assert!(LangStore::load().unwrap().is_none());
         assert_eq!(load_current().unwrap(), ("en".to_string(), 0));
     }
 
     #[test]
     fn a_changing_set_round_trips_and_bumps_seq_and_epoch() {
-        let _dir = scratch_runtime_dir("lang-set-round-trip");
+        let _dir = scratch_runtime_dir();
         let before = lang_epoch();
         let (value, seq) = set("zh_CN").unwrap();
         assert_eq!(value, "zh_CN");
@@ -180,7 +180,7 @@ mod tests {
 
     #[test]
     fn a_noop_set_does_not_bump_seq_or_epoch() {
-        let _dir = scratch_runtime_dir("lang-noop-set");
+        let _dir = scratch_runtime_dir();
         set("zh_CN").unwrap();
         let epoch_after_change = lang_epoch();
         // Re-setting the same value is a no-op: seq stands, epoch stands, so a
@@ -193,7 +193,7 @@ mod tests {
 
     #[test]
     fn setting_the_default_value_on_a_fresh_store_is_a_noop() {
-        let _dir = scratch_runtime_dir("lang-noop-default");
+        let _dir = scratch_runtime_dir();
         let before = lang_epoch();
         // The host's implicit value is the default "en"; setting "en" changes
         // nothing, so seq stays 0 and nothing propagates.
