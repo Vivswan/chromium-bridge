@@ -48,8 +48,7 @@ Read [the security bar](security-bar.md) first: it states what these mechanisms 
    **Not covered:** a same-user attacker who re-executes *our own* binary is byte-identical to the legitimate host (same hash, same cdhash), so neither the hash nor a code signature can tell them apart. The enrollment ceremony (threat #6) makes the *pairing* of extension to bridge presence-gated, but does not distinguish same-user processes post-enrollment (see the manifest-substitution residual). Team-ID pinning on macOS (trusting a separate signed build too) is deferred.
 
 5. **A malformed/oversized message crashes or corrupts the bridge.** -> Native-messaging framing is length-checked (64 MB inbound clamp, 1 MB outbound cap); a `panic = "abort"` profile + stderr panic hook keep panics off the protocol stream; parse errors are surfaced, not fatal.
-
-   cargo-fuzz targets (`src/packages/core/fuzz/`) cover the wire parsers (native-messaging framing, MCP JSON-RPC, the bridge and handshake decoders) and the semantic validators behind them (the handshake MAC verifier, the frame classifier, the host-key challenge builder, and the manifest ownership decision).
+   - **Fuzzed:** cargo-fuzz targets (`src/packages/core/fuzz/`) cover the wire parsers (native-messaging framing, MCP JSON-RPC, the bridge and handshake decoders) and the semantic validators behind them (the handshake MAC verifier, the frame classifier, the host-key challenge builder, and the manifest ownership decision).
 
 6. **Silent pairing: a malicious `claude mcp add` (or any process able to write an MCP client config) stands up the whole chain without the user noticing.** -> Two ceremonies, both run by the user.
 
