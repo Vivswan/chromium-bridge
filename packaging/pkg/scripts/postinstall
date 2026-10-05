@@ -1,0 +1,7 @@
+#!/bin/bash
+# installd runs this as root in its own environment (USER is root, the caller's SUDO_USER is gone), so the
+# account to register is the console session's owner; root there means nobody is logged in.
+set -eu
+user="$(stat -f %Su /dev/console)"
+test "$user" != root
+exec sudo -u "$user" -H /usr/local/bin/chromium-bridge doctor --fix

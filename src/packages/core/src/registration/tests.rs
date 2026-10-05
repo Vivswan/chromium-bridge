@@ -44,7 +44,109 @@ fn browser_target(tree: &TempTree) -> Target {
     Target {
         browser: Some(Browser::Chrome),
         registration: Registration::ManifestDir(tree.path("nm/chrome/NativeMessagingHosts")),
+        pointer: None,
     }
+}
+
+/// The macOS shape, through the resolver: the pointer file sits beside the
+/// manifest dir, under the browser's user data root.
+fn macos_target(tree: &TempTree) -> Target {
+    let dirs = BaseDirs {
+        home: tree.path("home"),
+        xdg_config_home: None,
+        xdg_data_home: None,
+        local_app_data: None,
+        roaming_app_data: None,
+        system_applications: tree.path("Applications"),
+    };
+    Target::for_browser(&browsers::entry(Os::MacOs, &dirs, Browser::Chrome))
+}
+
+fn pointer_path(target: &Target) -> PathBuf {
+    match &target.pointer {
+        Some(ExtensionPointer::File(path)) => path.clone(),
+        other => panic!("expected a pointer file, got {other:?}"),
+    }
+}
+
+#[test]
+fn register_writes_the_pointer_chrome_reads_and_uninstall_removes_it_with_the_manifest() {
+    // The pointer's bytes are what Chrome's preferences loader parses, and the Web Store is the only
+    // update source it accepts on macOS and Windows.
+    let tree = TempTree::new("pointer");
+    let reg = registrar(&tree);
+    let target = macos_target(&tree);
+    let lines = reg.register(&target).unwrap();
+    let pointer = pointer_path(&target);
+    assert_eq!(
+        fs::read_to_string(&pointer).unwrap(),
+        "{\n  \"external_update_url\": \"https://clients2.google.com/service/update2/crx\"\n}\n"
+    );
+    assert_eq!(
+        assess_pointer(target.pointer.as_ref().unwrap()),
+        PointerState::Ok
+    );
+    assert!(
+        lines.iter().any(|l| l.contains("extension pointer")),
+        "{lines:?}"
+    );
+    // Idempotent over our own pointer.
+    reg.register(&target).unwrap();
+
+    let (lines, errors) = Registrar::uninstall(&target);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(lines[0].contains("removed manifest"), "{lines:?}");
+    assert!(lines[1].contains("removed extension pointer"), "{lines:?}");
+    assert!(!pointer.exists());
+    assert!(!target.registration.manifest_path().exists());
+    assert_eq!(
+        assess_pointer(target.pointer.as_ref().unwrap()),
+        PointerState::Missing
+    );
+    // A second uninstall reports nothing to do, for both.
+    assert_eq!(
+        Registrar::uninstall(&target),
+        (vec!["chrome: not registered".to_string()], vec![])
+    );
+}
+
+#[test]
+fn foreign_pointer_blocks_register_and_is_left_alone_by_uninstall() {
+    // Fail closed before any write: a pointer this project did not write means another installer
+    // owns the slot, so register writes nothing, not even the manifest. uninstall still removes a
+    // manifest of ours beside it and refuses only the pointer, so nothing of ours survives to dangle
+    // once the wrappers go.
+    let tree = TempTree::new("foreign-pointer");
+    let reg = registrar(&tree);
+    let target = macos_target(&tree);
+    let pointer = pointer_path(&target);
+    fs::create_dir_all(pointer.parent().unwrap()).unwrap();
+    // Our update url beside a key this project never writes: the closest foreign shape.
+    let foreign = r#"{"external_update_url":"https://clients2.google.com/service/update2/crx","supported_locales":["en"]}"#;
+    fs::write(&pointer, foreign).unwrap();
+
+    let err = reg.register(&target).unwrap_err();
+    assert!(
+        err.contains("refusing to overwrite extension pointer"),
+        "{err}"
+    );
+    assert!(!target.registration.manifest_path().exists());
+    assert!(matches!(
+        assess_pointer(target.pointer.as_ref().unwrap()),
+        PointerState::Foreign(_)
+    ));
+
+    fs::remove_file(&pointer).unwrap();
+    reg.register(&target).unwrap();
+    fs::write(&pointer, foreign).unwrap();
+    let (lines, errors) = Registrar::uninstall(&target);
+    assert!(lines[0].contains("removed manifest"), "{lines:?}");
+    assert!(
+        errors[0].contains("refusing to remove extension pointer"),
+        "{errors:?}"
+    );
+    assert!(!target.registration.manifest_path().exists());
+    assert_eq!(fs::read_to_string(&pointer).unwrap(), foreign);
 }
 
 #[test]
@@ -66,8 +168,6 @@ fn register_writes_manifest_and_labeled_wrapper() {
     let manifest_path = target.registration.manifest_path();
     let manifest: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
-    // Named from identity.rs itself, not the browsers.rs re-export the engine imports: a constant shadowing
-    // that re-export would otherwise register a foreign origin while this assertion stayed green.
     assert_eq!(manifest["name"], crate::identity::NATIVE_HOST_ID);
     assert_eq!(manifest["type"], "stdio");
     assert_eq!(
@@ -108,13 +208,15 @@ fn register_is_idempotent_and_uninstall_reverses_it() {
     reg.register(&target).unwrap();
     assert_eq!(assess(&target.registration), RegState::Ok);
 
-    let line = Registrar::uninstall(&target).unwrap();
-    assert!(line.contains("removed manifest"));
+    let (lines, errors) = Registrar::uninstall(&target);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(lines[0].contains("removed manifest"), "{lines:?}");
     assert!(!target.registration.manifest_path().exists());
     assert_eq!(assess(&target.registration), RegState::Missing);
     // Uninstall again: cleanly reports nothing to do.
-    let line = Registrar::uninstall(&target).unwrap();
-    assert!(line.contains("not registered"));
+    let (lines, errors) = Registrar::uninstall(&target);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(lines[0].contains("not registered"), "{lines:?}");
 
     let (removed, errors) = remove_wrappers(&tree.path("install"));
     assert_eq!(removed.len(), 1, "{removed:?}");
@@ -172,8 +274,9 @@ fn foreign_manifest_is_never_overwritten_or_removed() {
 
     let err = reg.register(&target).unwrap_err();
     assert!(err.contains("refusing to overwrite"), "{err}");
-    let err = Registrar::uninstall(&target).unwrap_err();
-    assert!(err.contains("refusing to remove"), "{err}");
+    let (lines, errors) = Registrar::uninstall(&target);
+    assert!(lines.is_empty(), "{lines:?}");
+    assert!(errors[0].contains("refusing to remove"), "{errors:?}");
     // Fail closed: the file is byte-identical afterwards.
     assert_eq!(fs::read_to_string(&manifest_path).unwrap(), foreign);
     assert!(matches!(assess(&target.registration), RegState::Foreign(_)));
@@ -181,22 +284,53 @@ fn foreign_manifest_is_never_overwritten_or_removed() {
 
 #[test]
 fn unreadable_manifest_path_fails_closed() {
-    // A DIRECTORY at the manifest path: read fails with a non-NotFound
-    // error, and neither register nor uninstall may proceed.
+    // Two entries that are not a readable file: a directory, and a dangling symlink, which reads as
+    // NotFound like an empty slot although replacing it would destroy an entry nobody verified.
+    // Neither register nor uninstall may proceed, and the entry stays.
     let tree = TempTree::new("unreadable");
     let reg = registrar(&tree);
-    let target = browser_target(&tree);
-    fs::create_dir_all(target.registration.manifest_path()).unwrap();
+    type Plant = fn(&Path);
+    fn directory(p: &Path) {
+        fs::create_dir_all(p).unwrap();
+    }
+    #[cfg(unix)]
+    fn dangling_symlink(p: &Path) {
+        let dir = p.parent().unwrap();
+        fs::create_dir_all(dir).unwrap();
+        std::os::unix::fs::symlink(dir.join("gone"), p).unwrap();
+    }
+    #[cfg(unix)]
+    let planted: Vec<(&str, Plant)> = vec![
+        ("directory", directory),
+        ("dangling-symlink", dangling_symlink),
+    ];
+    #[cfg(not(unix))]
+    let planted: Vec<(&str, Plant)> = vec![("directory", directory)];
+    for (case, plant) in planted {
+        let target = Target {
+            browser: Some(Browser::Chrome),
+            registration: Registration::ManifestDir(
+                tree.path(&format!("nm/{case}/NativeMessagingHosts")),
+            ),
+            pointer: None,
+        };
+        let manifest = target.registration.manifest_path();
+        plant(&manifest);
 
-    let err = reg.register(&target).unwrap_err();
-    assert!(err.contains("cannot verify"), "{err}");
-    let err = Registrar::uninstall(&target).unwrap_err();
-    assert!(err.contains("left in place"), "{err}");
-    assert!(target.registration.manifest_path().is_dir());
-    assert!(matches!(
-        assess(&target.registration),
-        RegState::Unreadable(_)
-    ));
+        let err = reg.register(&target).unwrap_err();
+        assert!(err.contains("cannot verify"), "{case}: {err}");
+        let (lines, errors) = Registrar::uninstall(&target);
+        assert!(lines.is_empty(), "{case}: {lines:?}");
+        assert!(errors[0].contains("left in place"), "{case}: {errors:?}");
+        assert!(
+            fs::symlink_metadata(&manifest).is_ok(),
+            "{case}: entry gone"
+        );
+        assert!(
+            matches!(assess(&target.registration), RegState::Unreadable(_)),
+            "{case}"
+        );
+    }
 }
 
 #[test]
@@ -360,6 +494,44 @@ fn fix_default_targets_only_detected_browsers_but_explicit_keys_always_work() {
     ));
 }
 
+/// The options page shows the host's reason as is, so it names what was looked for and the next step
+/// and carries no CLI flag.
+#[test]
+fn no_targets_reason_reads_as_a_page_sentence() {
+    let tree = TempTree::new("no-targets-page");
+    let dirs = BaseDirs {
+        home: tree.path("home"),
+        xdg_config_home: None,
+        xdg_data_home: None,
+        local_app_data: None,
+        roaming_app_data: None,
+        system_applications: tree.path("Applications"),
+    };
+    let entries = browsers::resolve(Os::MacOs, &dirs);
+    let Err(FixError::NoTargets(reason)) =
+        select_targets(&crate::cli::FixTargets::Detected, &entries)
+    else {
+        panic!("an empty machine must refuse the detected selection");
+    };
+    assert!(!reason.contains("--"), "{reason}");
+    assert!(reason.contains(&known_keys()), "{reason}");
+    assert!(reason.contains("install Chrome, Brave or Edge"), "{reason}");
+}
+
+/// The CLI (and the installer logs that capture it) gets the same reason with the flags a terminal
+/// can act on appended, and nothing else changes.
+#[test]
+fn cli_guidance_appends_the_flags_to_the_reason_alone() {
+    let reason = "no browser (looked for chrome): install Chrome, then repair again".to_string();
+    let cli = cli_guidance(&FixError::NoTargets(reason.clone()));
+    assert!(cli.starts_with(&reason), "{cli}");
+    for flag in ["--browser", "--all", "--manifest-dir"] {
+        assert!(cli.contains(flag), "{cli}");
+    }
+    let other = FixError::Environment("HOME is not set".into());
+    assert_eq!(cli_guidance(&other), other.to_string());
+}
+
 #[cfg(unix)]
 #[test]
 fn symlinked_install_dir_is_refused() {
@@ -373,11 +545,12 @@ fn symlinked_install_dir_is_refused() {
         install_dir: link,
         extension_id: PINNED_EXTENSION_ID.to_string(),
     };
-    let target = browser_target(&tree);
+    let target = macos_target(&tree);
     let err = reg.register(&target).unwrap_err();
     assert!(err.contains("symlink"), "{err}");
-    // Nothing was written through the link.
+    // Nothing was written through the link, and no pointer either.
     assert!(fs::read_dir(&real).unwrap().next().is_none());
+    assert!(!pointer_path(&target).exists());
 }
 
 #[test]
@@ -392,11 +565,21 @@ fn registry_targets_fail_closed_off_windows() {
                 key: r"Software\Google\Chrome\NativeMessagingHosts\x".into(),
                 manifest_path: tree.path("store/x.json"),
             },
+            pointer: Some(ExtensionPointer::Registry {
+                key: r"Software\Google\Chrome\Extensions\x".into(),
+            }),
         };
         // Refused before anything is written: no manifest, no store dir.
         assert!(reg.register(&target).is_err());
         assert!(!target.registration.manifest_path().exists());
         assert!(!tree.path("store").exists());
-        assert!(Registrar::uninstall(&target).is_err());
+        // The file slot is plainly absent; the two registry slots cannot be read here.
+        let (lines, errors) = Registrar::uninstall(&target);
+        assert_eq!(lines, vec!["chrome: not registered".to_string()]);
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(matches!(
+            assess_pointer(target.pointer.as_ref().unwrap()),
+            PointerState::Unreadable(_)
+        ));
     }
 }

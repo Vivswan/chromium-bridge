@@ -241,7 +241,7 @@ The isolation guard's container exception is stated once, in the Safety section 
 | `enclave_challenge` | the challenge-message builders | enrollment and presence messages stay domain-separated |
 | `classify_frame` | the control-frame router | a frame's `type` is exactly the tag it was read as |
 | `enclave_der` | the strict-DER signature parser | none (reject-or-decode) |
-| `registration_manifest` | the ours/foreign manifest decision | anything not provably ours is `Foreign` |
+| `registration_manifest` | the ours/foreign manifest and extension-pointer decisions | anything not provably ours is `Foreign` |
 | `policy_doc` | the policy store parse surface | serde round trip, the comparison lattice partitions every pair |
 | `webauthn_authdata` | the WebAuthn authenticatorData layout parser, with the attestation object and the assertion verifier fed the same bytes | a credential key parsed from attested data round-trips through its storage spelling |
 

@@ -6,6 +6,7 @@
 
 import {
   appendFileSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -121,5 +122,89 @@ export class Scratch {
 
   remove(): void {
     for (const dir of this.dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** A finished command: its exit status and both streams. */
+export interface Finished {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+export type Presence = "present" | "absent";
+
+/**
+ * Whether a directory entry exists, by lstat, so a dangling symlink counts as present. Only ENOENT is
+ * absence: a path that could not be looked at throws, so a check never reads a failed look as "gone".
+ */
+export function presenceOf(path: string): Presence {
+  try {
+    lstatSync(path);
+    return "present";
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "absent";
+    throw new Error(`could not check ${path}: ${(error as Error).message}`);
+  }
+}
+
+/**
+ * The command checks the scenario drivers share (linux-registration.ts, installer-smoke.ts), so every driver
+ * fails a step the same way: the command as the reader would type it, what was expected, and what it printed.
+ * A command that exits 0 is the vacuous pass `refused` exists to catch; silence from one that exits 0 is the
+ * one `outputMatches` catches.
+ */
+export class CommandChecks {
+  constructor(
+    private readonly spawn: (argv: string[]) => Finished,
+    protected readonly log: (line: string) => void,
+    /** How a command reads in logs and failures; the Linux driver prefixes the binary's name. */
+    private readonly describe: (argv: string[]) => string = (argv) => argv.join(" "),
+    private readonly presence: (path: string) => Presence = presenceOf,
+  ) {}
+
+  run(...argv: string[]): Finished {
+    this.log(`$ ${this.describe(argv)}`);
+    const finished = this.spawn(argv);
+    for (const text of [finished.stdout, finished.stderr]) if (text) this.log(text.trimEnd());
+    return finished;
+  }
+
+  ok(...argv: string[]): string {
+    return this.exited0(argv, this.run(...argv));
+  }
+
+  /** The `ok` judgment on a command already run, for a caller that gathers evidence between the two. */
+  exited0(argv: string[], finished: Finished): string {
+    if (finished.exitCode !== 0) {
+      throw this.failed(argv, `exited ${finished.exitCode}, expected 0:\n${finished.stderr}`);
+    }
+    return finished.stdout;
+  }
+
+  refused(...argv: string[]): void {
+    if (this.run(...argv).exitCode === 0) throw this.failed(argv, "exited 0, expected a refusal");
+  }
+
+  outputMatches(pattern: RegExp, ...argv: string[]): void {
+    const stdout = this.ok(...argv);
+    if (!pattern.test(stdout)) {
+      throw this.failed(argv, `printed nothing matching ${pattern}:\n${stdout}`);
+    }
+  }
+
+  absent(path: string): void {
+    if (this.presence(path) === "present") {
+      throw new Error(`expected ${this.shown(path)} to be gone`);
+    }
+  }
+
+  /** How a path reads in a failure; a driver with a root shows paths relative to it. */
+  protected shown(path: string): string {
+    return path;
+  }
+
+  protected failed(argv: string[], what: string): Error {
+    return new Error(`${this.describe(argv)} ${what}`);
   }
 }

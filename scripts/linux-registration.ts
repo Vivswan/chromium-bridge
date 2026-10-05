@@ -5,13 +5,13 @@
 // developer's machine. Each scenario is a sequence of commands and the files they must leave. A failed
 // check names its step, and a command expected to refuse fails its step when it exits 0.
 //
-//   bun scripts/linux-registration.ts fresh-machine   -> detect, repair, refuse a foreign manifest; uninstall reverses it
+//   bun scripts/linux-registration.ts fresh-machine   -> detect, repair, refuse a foreign manifest; no extension pointer
+//                                                        on Linux (Chrome would install it silently); uninstall reverses it
 //   bun scripts/linux-registration.ts multi-browser   -> --browser a,b and --all register exactly those rows; uninstall clears all
 
 import {
   accessSync,
   constants,
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -22,13 +22,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { NATIVE_HOST_ID, PINNED_EXTENSION_ID } from "../src/packages/shared/src/identity.gen.ts";
-import { die, repoRoot, selectMode } from "./lib.ts";
-
-export interface Finished {
-  exitCode: number;
-  stdout: string;
-  stderr: string;
-}
+import { CommandChecks, die, type Finished, repoRoot, selectMode } from "./lib.ts";
 
 /** The binary under test behind one call, so a test can stand a fake in for it. */
 export type RunBinary = (args: string[], env: Record<string, string>) => Finished;
@@ -47,21 +41,38 @@ const browsers = Object.keys(browserConfigDirs) as Browser[];
 
 export const manifestFile = `${NATIVE_HOST_ID}.json`;
 export const allowedOrigin = `chrome-extension://${PINNED_EXTENSION_ID}/`;
+/** The chrome row of `doctor --list` once registered: the manifest in place and, on Linux, no pointer. */
+export const chromeRegistered = /chrome\s+detected\s+manifest ok\s+pointer n\/a/;
 
 /** An isolated machine: the binary sees these roots through HOME and the XDG variables, nothing else. */
-export class Machine {
+export class Machine extends CommandChecks {
   readonly home: string;
   readonly config: string;
   readonly data: string;
 
   constructor(
     readonly root: string,
-    private readonly binary: RunBinary,
-    private readonly log: (line: string) => void = console.log,
+    binary: RunBinary,
+    log: (line: string) => void = console.log,
   ) {
-    this.home = join(root, "home");
-    this.config = join(root, "config");
-    this.data = join(root, "data");
+    const roots = {
+      HOME: join(root, "home"),
+      XDG_CONFIG_HOME: join(root, "config"),
+      XDG_DATA_HOME: join(root, "data"),
+    };
+    super(
+      (argv) => {
+        const inherited = Object.entries(process.env).filter(
+          (entry): entry is [string, string] => entry[1] !== undefined,
+        );
+        return binary(argv, { ...Object.fromEntries(inherited), ...roots });
+      },
+      log,
+      (argv) => `chromium-bridge ${argv.join(" ")}`,
+    );
+    this.home = roots.HOME;
+    this.config = roots.XDG_CONFIG_HOME;
+    this.data = roots.XDG_DATA_HOME;
     mkdirSync(this.home, { recursive: true });
   }
 
@@ -73,43 +84,19 @@ export class Machine {
     return join(this.data, "chromium-bridge", `run-host-${browser}.sh`);
   }
 
+  /** Where a Chromium-branded build would read an external-extension pointer; never written on Linux. */
+  pointer(browser: Browser): string {
+    return join(
+      this.config,
+      browserConfigDirs[browser],
+      "External Extensions",
+      `${PINNED_EXTENSION_ID}.json`,
+    );
+  }
+
   /** The binary detects an installed browser by its config directory. */
   install(browser: Browser): void {
     mkdirSync(join(this.config, browserConfigDirs[browser]), { recursive: true });
-  }
-
-  run(...args: string[]): Finished {
-    this.log(`$ chromium-bridge ${args.join(" ")}`);
-    const inherited = Object.entries(process.env).filter(
-      (entry): entry is [string, string] => entry[1] !== undefined,
-    );
-    const finished = this.binary(args, {
-      ...Object.fromEntries(inherited),
-      HOME: this.home,
-      XDG_CONFIG_HOME: this.config,
-      XDG_DATA_HOME: this.data,
-    });
-    for (const text of [finished.stdout, finished.stderr]) if (text) this.log(text.trimEnd());
-    return finished;
-  }
-
-  ok(...args: string[]): string {
-    const finished = this.run(...args);
-    if (finished.exitCode !== 0) {
-      throw this.failed(args, `exited ${finished.exitCode}, expected 0:\n${finished.stderr}`);
-    }
-    return finished.stdout;
-  }
-
-  refused(...args: string[]): void {
-    if (this.run(...args).exitCode === 0) throw this.failed(args, "exited 0, expected a refusal");
-  }
-
-  outputMatches(pattern: RegExp, ...args: string[]): void {
-    const stdout = this.ok(...args);
-    if (!pattern.test(stdout)) {
-      throw this.failed(args, `printed nothing matching ${pattern}:\n${stdout}`);
-    }
   }
 
   /** A regular file, as `test -f` judges it: a directory at a manifest path is not a manifest. */
@@ -120,18 +107,14 @@ export class Machine {
     } catch {
       regular = false;
     }
-    if (!regular) throw new Error(`expected ${this.rel(path)} to be a regular file`);
-  }
-
-  absent(path: string): void {
-    if (existsSync(path)) throw new Error(`expected ${this.rel(path)} to be gone`);
+    if (!regular) throw new Error(`expected ${this.shown(path)} to be a regular file`);
   }
 
   executable(path: string): void {
     try {
       accessSync(path, constants.X_OK);
     } catch {
-      throw new Error(`expected ${this.rel(path)} to be executable`);
+      throw new Error(`expected ${this.shown(path)} to be executable`);
     }
   }
 
@@ -141,7 +124,7 @@ export class Machine {
     for (const needle of needles) {
       if (!text.includes(needle)) {
         throw new Error(
-          `expected ${this.rel(path)} to contain ${JSON.stringify(needle)}:\n${text}`,
+          `expected ${this.shown(path)} to contain ${JSON.stringify(needle)}:\n${text}`,
         );
       }
     }
@@ -152,16 +135,12 @@ export class Machine {
     const text = readFileSync(path, "utf8");
     if (text !== expected) {
       throw new Error(
-        `expected ${this.rel(path)} to be byte-identical to what was written:\n${text}`,
+        `expected ${this.shown(path)} to be byte-identical to what was written:\n${text}`,
       );
     }
   }
 
-  private failed(args: string[], what: string): Error {
-    return new Error(`chromium-bridge ${args.join(" ")} ${what}`);
-  }
-
-  private rel(path: string): string {
+  protected override shown(path: string): string {
     return relative(this.root, path);
   }
 }
@@ -178,7 +157,9 @@ export function freshMachine(m: Machine): void {
   const wrapper = m.wrapper("chrome");
   m.executable(wrapper);
   m.contains(wrapper, "--native-host", "--label 'chrome'");
-  m.outputMatches(/chrome\s+detected\s+ok/, "doctor", "--list");
+  // Linux Chrome installs an external extension without asking, so the post-install writes no pointer there.
+  m.absent(m.pointer("chrome"));
+  m.outputMatches(chromeRegistered, "doctor", "--list");
   rmSync(wrapper);
   m.outputMatches(/stale/, "doctor", "--list");
   m.ok("doctor", "--fix");

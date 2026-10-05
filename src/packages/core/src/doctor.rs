@@ -15,12 +15,12 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
-use crate::browsers::{self, BaseDirs, Os};
+use crate::browsers::{self, BaseDirs, ExtensionPointer, Os};
 use crate::cli::DoctorCommand;
 use crate::identity::NATIVE_HOST_ID;
 use crate::ipc::{resolve_runtime_dir, LockFile};
 use crate::policy::{PolicyStatusReport, PolicyStoreState};
-use crate::registration::{self, RegState};
+use crate::registration::{self, PointerState, RegState};
 
 /// Schema version of the serialized [`Report`]. Like every `--json` report of
 /// this binary, a consumer checks `v` first and refuses a newer value.
@@ -86,7 +86,35 @@ pub struct ManifestStatus {
     pub detected: bool,
     pub state: RegState,
     pub location: String,
+    /// The browser's external-extension pointer; `None` where the resolver
+    /// defines none (Linux). It informs and never decides the verdict: the
+    /// bridge works without it once the extension is loaded any other way.
+    pub pointer: Option<PointerStatus>,
 }
+
+/// One browser's external-extension pointer state, beside its manifest's.
+#[derive(Debug, Clone, Serialize)]
+pub struct PointerStatus {
+    pub state: PointerState,
+    pub location: String,
+}
+
+impl PointerStatus {
+    fn assess(pointer: &ExtensionPointer) -> PointerStatus {
+        PointerStatus {
+            state: registration::assess_pointer(pointer),
+            location: pointer.location(),
+        }
+    }
+
+    fn describe(status: Option<&PointerStatus>) -> String {
+        status.map_or_else(|| "n/a".into(), |p| p.state.describe())
+    }
+}
+
+/// Why Linux rows carry no pointer, as the full report says beside them.
+const NO_POINTER_ON_LINUX: &str =
+    "none on linux: Chrome would install the extension silently; add it from the Web Store";
 
 impl ManifestStatus {
     fn healthy(&self) -> bool {
@@ -127,6 +155,7 @@ pub(crate) fn gather_manifests() -> Result<Vec<ManifestStatus>, String> {
             detected: entry.detected(),
             state: registration::assess(&entry.registration),
             location: entry.registration.location(),
+            pointer: entry.pointer.as_ref().map(PointerStatus::assess),
         })
         .collect())
 }
@@ -250,7 +279,7 @@ fn render(r: &Report) -> String {
         Ok(list) => {
             for m in list {
                 out.push_str(&format!(
-                    "  {:<9} {:<13} manifest {:<8} {}\n",
+                    "  {:<9} {:<13} manifest {:<10} {}\n",
                     m.key,
                     if m.detected {
                         "detected"
@@ -259,6 +288,15 @@ fn render(r: &Report) -> String {
                     },
                     m.state.describe(),
                     m.location,
+                ));
+                out.push_str(&format!(
+                    "  {:<9} {:<13} pointer  {:<10} {}\n",
+                    "",
+                    "",
+                    PointerStatus::describe(m.pointer.as_ref()),
+                    m.pointer
+                        .as_ref()
+                        .map_or(NO_POINTER_ON_LINUX, |p| p.location.as_str()),
                 ));
             }
         }
@@ -330,7 +368,7 @@ fn run_list() -> i32 {
     println!("known browsers (host id {NATIVE_HOST_ID}):");
     for entry in browsers::resolve(os, &dirs) {
         println!(
-            "  {:<9} {:<13} {:<30} {}",
+            "  {:<9} {:<13} manifest {:<10} pointer {:<10} {}",
             entry.browser.key(),
             if entry.detected() {
                 "detected"
@@ -338,6 +376,7 @@ fn run_list() -> i32 {
                 "not detected"
             },
             registration::assess(&entry.registration).describe(),
+            PointerStatus::describe(entry.pointer.as_ref().map(PointerStatus::assess).as_ref()),
             entry.registration.location()
         );
     }
@@ -405,12 +444,18 @@ mod tests {
                     detected: true,
                     state: RegState::Ok,
                     location: "/tmp/com.vivswan.chromium_bridge.host.json".into(),
+                    pointer: Some(PointerStatus {
+                        state: PointerState::Ok,
+                        location: "/tmp/External Extensions/mkjjlmjbcljpcfkfadfmhblmmddkdihf.json"
+                            .into(),
+                    }),
                 },
                 ManifestStatus {
                     key: "brave",
                     detected: false,
                     state: RegState::Missing,
                     location: "/tmp/brave/com.vivswan.chromium_bridge.host.json".into(),
+                    pointer: None,
                 },
             ]),
             kill: Ok(false),
@@ -453,6 +498,11 @@ mod tests {
         assert!(text.contains("chrome"));
         assert!(text.contains("manifest ok"));
         assert!(text.contains("manifest missing"));
+        // The pointer row beside each manifest: its state and location, or why Linux has none.
+        assert!(text.contains("pointer  ok         /tmp/External Extensions/"));
+        assert!(text.contains(
+            "pointer  n/a        none on linux: Chrome would install the extension silently"
+        ));
         // Honest note: green checks still don't prove the extension connected.
         assert!(text.contains("do NOT confirm the Chrome extension"));
         assert!(text.trim_end().ends_with("OK"));
@@ -522,6 +572,7 @@ mod tests {
                 location:
                     "/home/u/.config/google-chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
                         .into(),
+                pointer: None,
             }]),
             kill: Ok(false),
             policy: policy_report(PolicyStoreState::None),

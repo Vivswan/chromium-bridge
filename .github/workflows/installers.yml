@@ -1,0 +1,70 @@
+# The same .pkg, .deb and .msi update-release.yml builds at release time, proved before one.
+
+name: Installers
+
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  installer:
+    name: ${{ matrix.platform }}-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # The same three legs as update-release.yml's binaries job.
+        include:
+          - os: macos-14
+            platform: macos
+            arch: arm64
+          - os: ubuntu-22.04
+            platform: linux
+            arch: x64
+          - os: windows-2022
+            platform: windows
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    env:
+      ARCH: ${{ matrix.arch }}
+      PLATFORM: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-moon
+        with:
+          cargo: "true"
+
+      - name: Build the release binary
+        run: cargo build --release --locked --package chromium-bridge
+
+      - id: pin
+        if: matrix.platform == 'linux'
+        run: bun scripts/pin.ts cargo-deb --output deb
+      - uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
+        if: matrix.platform == 'linux'
+        with:
+          tool: cargo-deb@${{ steps.pin.outputs.deb }}
+
+      - name: Package installer
+        id: installer
+        run: bun scripts/release-package.ts installer-from-cargo
+
+      - name: Install, drive the installed binary, uninstall
+        env:
+          INSTALLER: ${{ steps.installer.outputs.installer }}
+        run: bun scripts/installer-smoke.ts
+
+      # For a human to try by hand on a machine of that platform.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.installer.outputs.installer }}
+          path: |
+            ${{ steps.installer.outputs.installer }}
+            ${{ steps.installer.outputs.installersha256file }}
+          if-no-files-found: error
+          retention-days: 7

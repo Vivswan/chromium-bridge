@@ -12,6 +12,9 @@ ARG ACTIONLINT_VERSION=1.7.12
 # checks.yml's tooling job installs the same cargo-machete on a bare runner, read from this line by
 # scripts/pin.ts.
 ARG CARGO_MACHETE_VERSION=0.9.2
+# Declared here as the one pin owner; installed on the release and installers legs alone (bare ubuntu
+# runners, read by scripts/pin.ts), never in this image.
+ARG CARGO_DEB_VERSION=3.8.0
 # No default: proto's own pin is .prototools's, and no script runs in here to read it. container-image.yml
 # and scripts/compose-run.ts compute it with `bun scripts/pin.ts proto` and pass it in.
 ARG PROTO_VERSION

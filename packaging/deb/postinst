@@ -1,0 +1,4 @@
+#!/bin/sh
+# Runs as root with no user context, so the registration stays the user's to run; this line is the only
+# post-install the package has.
+echo "chromium-bridge: run 'chromium-bridge doctor --fix' once as your own user to register it with your browsers"

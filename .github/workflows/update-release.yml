@@ -94,6 +94,22 @@ jobs:
         if: matrix.platform == 'macos'
         run: bun scripts/release-package.ts extension-zip
 
+      # The pin is the Containerfile's, read like cargo-machete's in checks.yml. cargo-deb wraps the built
+      # binary (--no-build --no-strip in the script) so the .deb ships the attested bytes.
+      - id: pin
+        if: matrix.platform == 'linux'
+        run: bun scripts/pin.ts cargo-deb --output deb
+      - uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
+        if: matrix.platform == 'linux'
+        with:
+          tool: cargo-deb@${{ steps.pin.outputs.deb }}
+
+      # One installer per leg (.pkg, .deb, .msi), each running the binary's own `doctor --fix` as its
+      # post-install (packaging/). Unsigned: the signing and notarization switch is in docs/release.md.
+      - name: Package installer
+        id: installer
+        run: bun scripts/release-package.ts installer
+
       # Per-asset attestation on top of the managed publish stage's global
       # attestation.json: that stage only attests release ASSETS, and the
       # bare binary inside the archive is not one - users verify after
@@ -106,6 +122,7 @@ jobs:
           subject-path: |
             ${{ steps.pkg.outputs.archive }}
             ${{ steps.pkg.outputs.binary }}
+            ${{ steps.installer.outputs.installer }}
 
       # Attest the standalone extension zip on the same (macos) leg that built it.
       - name: Attest extension zip provenance
@@ -118,23 +135,25 @@ jobs:
       # The Sigstore bundle ships as a release asset next to the artifacts it
       # covers, so `gh attestation verify <asset> --repo Vivswan/chromium-bridge
       # --bundle <file>` verifies against the frozen release without depending
-      # on GitHub's attestations API. One bundle covers both the archive and
-      # the bare binary - which is why it is named after the shared release
-      # stem rather than either file - and verify picks the entry matching the
-      # asset's digest.
-      - name: Attach release archive to the draft release
+      # on GitHub's attestations API. One bundle covers the archive, the bare
+      # binary, and the installer - which is why it is named after the shared
+      # release stem rather than any one file - and verify picks the entry
+      # matching the asset's digest.
+      - name: Attach release archive and installer to the draft release
         env:
           GH_TOKEN: ${{ github.token }}
           ARCHIVE: ${{ steps.pkg.outputs.archive }}
           SHA256FILE: ${{ steps.pkg.outputs.sha256file }}
           BINSHA256FILE: ${{ steps.pkg.outputs.binsha256file }}
+          INSTALLER: ${{ steps.installer.outputs.installer }}
+          INSTALLERSHA256FILE: ${{ steps.installer.outputs.installersha256file }}
           NAME: ${{ steps.pkg.outputs.name }}
           BUNDLE: ${{ steps.attest.outputs.bundle-path }}
         shell: bash
         run: |
           cp "$BUNDLE" "$NAME.attestation.jsonl"
           gh release upload "$RELEASE_TAG" "$ARCHIVE" "$SHA256FILE" "$BINSHA256FILE" \
-            "$NAME.attestation.jsonl" --clobber
+            "$INSTALLER" "$INSTALLERSHA256FILE" "$NAME.attestation.jsonl" --clobber
 
       # The standalone extension zip rides its own macos-only upload (matching
       # the extzip step above): each asset is named explicitly and must exist
@@ -213,6 +232,61 @@ jobs:
           gh release upload "$RELEASE_TAG" chromium-bridge.cdx.json \
             chromium-bridge.cdx.json.attestation.jsonl --clobber
 
+  # The Homebrew formula bump rides the release as a pull request on the tap repository, pushed with the
+  # platform token (github.token cannot reach another repository). The tap is the owner's to create and
+  # to merge into; until it exists this job fails, and continue-on-error keeps that from blocking the
+  # release, as with the SBOM. It runs after binaries because the formula carries the two archive
+  # checksums those legs uploaded.
+  homebrew:
+    needs: [binaries]
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # download the two checksum assets from the draft release
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      TAP_REPOSITORY: Vivswan/homebrew-tap
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      # Only the tag check and the formula renderer run under this bun; scripts/release-package.ts imports
+      # nothing installed.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - name: Verify tag matches Cargo version
+        run: bun scripts/release-package.ts verify-tag
+      - name: Download the archive checksums from the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "$RELEASE_TAG" --pattern '*.tar.gz.sha256'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.TAP_REPOSITORY }}
+          token: ${{ secrets.REPO_PLATFORM_TOKEN }}
+          path: tap
+      - name: Render the formula into the tap checkout (final tags alone)
+        id: formula
+        env:
+          FORMULA_PATH: tap/Formula/chromium-bridge.rb
+        run: bun scripts/release-package.ts brew-formula
+      - name: Open the bump pull request on the tap
+        if: steps.formula.outputs.bump == 'true'
+        working-directory: tap
+        env:
+          GH_TOKEN: ${{ secrets.REPO_PLATFORM_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "chromium-bridge-$RELEASE_TAG"
+          git add Formula/chromium-bridge.rb
+          git commit -m "chromium-bridge $RELEASE_TAG"
+          git push --force-with-lease origin "HEAD:chromium-bridge-$RELEASE_TAG"
+          gh pr create --head "chromium-bridge-$RELEASE_TAG" --title "chromium-bridge $RELEASE_TAG" \
+            --body "Formula bump for https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG"
+
   # Any tag with a suffix (v0.1.0-dev, -rc.1, ...) is a prerelease. Set the
   # flag on the DRAFT: the managed publish stage only flips draft=false, so
   # the prerelease bit must already be in place when it does. Runs after
@@ -246,12 +320,12 @@ jobs:
   # does not fail a workflow, so an unexpected skip (a future `if:` on a
   # packaging job) would otherwise slip through to publication. This job
   # always runs (unless the run is cancelled) and fails unless every job
-  # succeeded. sbom is continue-on-error, so its failure already reads as
-  # success here; a skip or cancellation blocks. Both conditions read every
+  # succeeded. sbom and homebrew are continue-on-error, so their failures
+  # already read as success here; a skip or cancellation blocks. Both conditions read every
   # entry of `needs`, so a job added to the list is folded in by itself.
   release-ready:
     name: allowed to publish?
-    needs: [binaries, sbom, mark-prerelease]
+    needs: [binaries, sbom, homebrew, mark-prerelease]
     if: ${{ !cancelled() }}
     permissions: {}
     runs-on: ubuntu-latest

@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  WiX 3 source, built by candle and light with WixUtilExtension; WixQuietExec puts the repair's stdout and
+  stderr in the MSI log, so a failed install shows the next step instead of a bare action error. XML
+  comments cannot carry a double hyphen, so flags are spelled out in words here. Variables: Version
+  (MAJOR.MINOR.PATCH, the tag's core) and Binary (the built chromium-bridge.exe).
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*"
+           Name="Chromium Bridge"
+           Language="1033"
+           Version="$(var.Version)"
+           Manufacturer="Chromium Bridge"
+           UpgradeCode="BAE1B6DF-4B84-4C66-B614-04752E474E59">
+    <Package InstallerVersion="500"
+             Compressed="yes"
+             InstallScope="perUser"
+             Description="Chromium Bridge: an authenticated MCP bridge to your Chromium browser" />
+    <!-- A prerelease and its final release share the core version; the old product goes inside the new
+         transaction, so a failed upgrade restores it. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  Schedule="afterInstallInitialize"
+                  DowngradeErrorMessage="A newer Chromium Bridge is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="ProgramsFolder" Name="Programs">
+          <Directory Id="INSTALLFOLDER" Name="chromium-bridge">
+            <Component Id="HostBinary" Guid="3AE5CD5C-67D9-4089-BFFA-EED89AD5437F">
+              <File Id="HostExe" Source="$(var.Binary)" Name="chromium-bridge.exe" />
+              <!-- A component under the user profile keys on a registry value (ICE38), and every directory
+                   it creates there is removed on uninstall (ICE64). -->
+              <RegistryValue Root="HKCU" Key="Software\chromium-bridge" Name="InstallFolder"
+                             Type="string" Value="[INSTALLFOLDER]" KeyPath="yes" />
+              <Environment Id="UserPath" Name="PATH" Value="[INSTALLFOLDER]" Part="last"
+                           Action="set" Permanent="no" System="no" />
+              <RemoveFolder Id="RemoveInstallFolder" On="uninstall" />
+              <RemoveFolder Id="RemoveProgramsFolder" Directory="ProgramsFolder" On="uninstall" />
+            </Component>
+          </Directory>
+        </Directory>
+      </Directory>
+    </Directory>
+
+    <Feature Id="Main" Level="1">
+      <ComponentRef Id="HostBinary" />
+    </Feature>
+
+    <!-- A deferred WixQuietExec reads its command line from the property named after the action. -->
+    <SetProperty Id="Register" Sequence="execute" Before="Register"
+                 Value="&quot;[INSTALLFOLDER]chromium-bridge.exe&quot; doctor --fix" />
+    <SetProperty Id="RollbackRegister" Sequence="execute" Before="RollbackRegister"
+                 Value="&quot;[INSTALLFOLDER]chromium-bridge.exe&quot; uninstall" />
+    <SetProperty Id="Unregister" Sequence="execute" Before="Unregister"
+                 Value="&quot;[INSTALLFOLDER]chromium-bridge.exe&quot; uninstall" />
+    <CustomAction Id="Register" BinaryKey="WixCA" DllEntry="WixQuietExec"
+                  Execute="deferred" Impersonate="yes" Return="check" />
+    <CustomAction Id="RollbackRegister" BinaryKey="WixCA" DllEntry="WixQuietExec"
+                  Execute="rollback" Impersonate="yes" Return="ignore" />
+    <CustomAction Id="Unregister" BinaryKey="WixCA" DllEntry="WixQuietExec"
+                  Execute="deferred" Impersonate="yes" Return="ignore" />
+    <InstallExecuteSequence>
+      <!-- A rollback action precedes the action it reverses, and same-anchor siblings are ordered by name,
+           so Register anchors on RollbackRegister. The rollback runs on a first install alone: on an
+           upgrade the registrations it would remove are the ones the restored old product still needs. -->
+      <Custom Action="RollbackRegister" After="InstallFiles">NOT Installed AND NOT WIX_UPGRADE_DETECTED</Custom>
+      <Custom Action="Register" After="RollbackRegister">NOT Installed</Custom>
+      <Custom Action="Unregister" Before="RemoveFiles">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
+    </InstallExecuteSequence>
+  </Product>
+</Wix>

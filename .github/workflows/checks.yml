@@ -280,6 +280,14 @@ jobs:
     with:
       chrome-version: stable
 
+  # On every PR: the managed all-green aggregate allows a skip of `checks` alone, so a path-filtered skip
+  # here would fail it.
+  installers:
+    name: Installers
+    uses: ./.github/workflows/installers.yml
+    permissions:
+      contents: read
+
   # The public web app (src/apps/web) must keep building. Build-only here: the deploy is the managed ci.yml's
   # site leg, which runs .github/actions/site-build.
   web:
