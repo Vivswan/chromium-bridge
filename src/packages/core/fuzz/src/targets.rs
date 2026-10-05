@@ -20,7 +20,7 @@ use chromium_bridge_core::protocol::{
     bridge_read, bridge_write, mcp_read, mcp_write, nm_read_frame, nm_write_frame, AttachRequest,
     BridgeReq, Handshake, JsonRpc, ParsedResp, BRIDGE_MAX_LINE, MCP_MAX_LINE, NM_MAX_OUTGOING,
 };
-use chromium_bridge_core::registration::{fuzz_api, manifest_ownership, Ownership};
+use chromium_bridge_core::registration::{fuzz_api, manifest_ownership, pointer_ownership, Ownership};
 use chromium_bridge_core::runtime_record::RuntimeRecord as _;
 use chromium_bridge_core::webauthn::encode::P256_GENERATOR_SEC1;
 use chromium_bridge_core::webauthn::{
@@ -241,26 +241,42 @@ pub fn enclave_der(data: &[u8]) {
     let _ = der_to_raw_signature(data);
 }
 
-/// The ours/foreign decision over attacker-controlled manifest JSON. The security property is
-/// never-delete-foreign, so the oracle re-derives the only accepted shape (our exact host id plus one of
-/// the two markers this project has ever written) and requires everything else to come back Foreign.
+/// The two ours/foreign decisions over attacker-controlled JSON on disk: the host manifest and the
+/// extension pointer file. The security property is never-delete-foreign, so each oracle re-derives the
+/// only accepted shape (the manifest: our exact host id plus one of the two markers this project has ever
+/// written; the pointer: an object whose single key is `external_update_url` naming the Web Store) and
+/// requires everything else to come back Foreign. The Windows pointer is a registry value compared by
+/// string equality, not bytes a parser judges, so it is outside this target.
 pub fn registration_manifest(data: &[u8]) {
     let contents = String::from_utf8_lossy(data);
-    let expect_ours = serde_json::from_str::<Value>(&contents)
-        .ok()
-        .is_some_and(|manifest| {
-            manifest.get("name").and_then(|v| v.as_str()) == Some(NATIVE_HOST_ID)
-                && manifest
-                    .get("description")
-                    .and_then(|v| v.as_str())
-                    .is_some_and(|d| {
-                        d == fuzz_api::MANIFEST_DESCRIPTION
-                            || d == fuzz_api::MANIFEST_DESCRIPTION_LEGACY
-                    })
-        });
+    let parsed = serde_json::from_str::<Value>(&contents).ok();
+    let expect_ours = parsed.as_ref().is_some_and(|manifest| {
+        manifest.get("name").and_then(|v| v.as_str()) == Some(NATIVE_HOST_ID)
+            && manifest
+                .get("description")
+                .and_then(|v| v.as_str())
+                .is_some_and(|d| {
+                    d == fuzz_api::MANIFEST_DESCRIPTION || d == fuzz_api::MANIFEST_DESCRIPTION_LEGACY
+                })
+    });
     match manifest_ownership(&contents) {
         Ownership::Ours => assert!(expect_ours, "claimed Ours outside the accepted shape"),
         Ownership::Foreign(_) => assert!(!expect_ours, "our own manifest judged Foreign"),
+    }
+    let expect_pointer_ours = parsed
+        .as_ref()
+        .and_then(Value::as_object)
+        .is_some_and(|object| {
+            object.len() == 1
+                && object.get("external_update_url").and_then(|v| v.as_str())
+                    == Some(fuzz_api::WEB_STORE_UPDATE_URL)
+        });
+    match pointer_ownership(&contents) {
+        Ownership::Ours => assert!(
+            expect_pointer_ours,
+            "pointer claimed Ours outside the accepted shape"
+        ),
+        Ownership::Foreign(_) => assert!(!expect_pointer_ours, "our own pointer judged Foreign"),
     }
 }
 

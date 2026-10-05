@@ -241,6 +241,27 @@ export const installerOutputs = ["installer", "installersha256file"] as const;
 /** `bump` is `true` when a formula was written (a final tag) and `false` for a prerelease, which the tap never sees. */
 export const formulaOutputs = ["bump"] as const;
 
+/**
+ * Write the tap formula for a final release and report `bump`; a prerelease writes nothing. Homebrew's
+ * Version ranks `1.2.3-rc.1` below `1.2.3` but `1.2.3-dev` above it, so a prerelease formula could pin the
+ * tap at a version `brew upgrade` never leaves; the tap sees final releases alone.
+ */
+export function writeTapFormula(
+  inputs: FormulaInputs,
+  path: string,
+  env: Env,
+  write: (path: string, text: string) => void,
+): boolean {
+  if (inputs.release.prerelease) {
+    githubOutput("bump", "false", env);
+    return false;
+  }
+  mkdirSync(dirname(path), { recursive: true });
+  write(path, brewFormula(inputs));
+  githubOutput("bump", "true", env);
+  return true;
+}
+
 export function packageInstaller(root: string, env: Env, plan: InstallerPlan, run: RunTool): void {
   for (const [source, destination] of plan.staged) {
     mkdirSync(dirname(join(root, destination)), { recursive: true });
@@ -368,8 +389,14 @@ const modes: Record<string, () => void> = {
   },
   "brew-formula"() {
     const release = verifyTag(requiredEnv("RELEASE_TAG"), cargoVersion());
+    const path = requiredEnv("FORMULA_PATH");
     if (release.prerelease) {
-      githubOutput("bump", "false");
+      writeTapFormula(
+        { repository: "", release, macosArm64: "", linuxX64: "" },
+        path,
+        process.env,
+        writeFileSync,
+      );
       console.log(`${release.tag} is a prerelease; the tap receives final releases alone`);
       return;
     }
@@ -380,16 +407,17 @@ const modes: Record<string, () => void> = {
           "utf8",
         ),
       );
-    const formula = brewFormula({
-      repository: requiredEnv("GITHUB_REPOSITORY"),
-      release,
-      macosArm64: digest("macos", "arm64"),
-      linuxX64: digest("linux", "x64"),
-    });
-    const path = requiredEnv("FORMULA_PATH");
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, formula);
-    githubOutput("bump", "true");
+    writeTapFormula(
+      {
+        repository: requiredEnv("GITHUB_REPOSITORY"),
+        release,
+        macosArm64: digest("macos", "arm64"),
+        linuxX64: digest("linux", "x64"),
+      },
+      path,
+      process.env,
+      writeFileSync,
+    );
     console.log(`formula written to ${path}`);
   },
   prerelease() {

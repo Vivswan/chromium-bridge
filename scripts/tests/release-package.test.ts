@@ -20,6 +20,7 @@ import {
   type RunTool,
   releaseText,
   verifyTag,
+  writeTapFormula,
 } from "../release-package.ts";
 
 // What would drift silently: the release grammar that keeps a tag safe as a file name and a gh argument,
@@ -288,6 +289,29 @@ describe("the Homebrew formula", () => {
   // digest read from the wrong line installs nothing or fails the brew checksum.
   const linuxX64 = "b".repeat(64);
   const macosArm64 = "a".repeat(64);
+
+  // Homebrew's Version ranks "1.2.3-rc.1" below "1.2.3" and "1.2.3-dev" above it (a dev formula would
+  // pin the tap past the final release), so the tap sees final releases alone, at the core version.
+  test.each<[string, boolean]>([
+    ["v1.2.3-dev", false],
+    ["v1.2.3-rc.1", false],
+    ["v1.2.3", true],
+  ])("%s -> bump %p", (tag, bump) => {
+    const root = scratch.dir("tap-formula");
+    const output = join(root, "output");
+    const path = join(root, "Formula", "chromium-bridge.rb");
+    const written = writeTapFormula(
+      { repository: "example-user/repo", release: parseTag(tag), macosArm64, linuxX64 },
+      path,
+      { GITHUB_OUTPUT: output },
+      writeFileSync,
+    );
+    expect({
+      written,
+      formula: existsSync(path) ? readFileSync(path, "utf8").includes('version "1.2.3"') : "none",
+      output: readFileSync(output, "utf8"),
+    }).toEqual({ written: bump, formula: bump ? true : "none", output: `bump=${bump}\n` });
+  });
 
   test("every `steps.formula.outputs.<x>` update-release.yml reads is a record the brew-formula mode writes", () => {
     const workflow = readFileSync(join(repoRoot, ".github/workflows/update-release.yml"), "utf8");
