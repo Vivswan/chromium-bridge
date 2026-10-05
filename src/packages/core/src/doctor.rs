@@ -634,7 +634,7 @@ mod tests {
     }
 
     /// Regression: with the kill check first, a refused runtime dir read as "kill state unreadable", since the kill
-    /// record resolves the same dir. The verdict must name the one cause behind all three unreadable rows.
+    /// record resolves the same dir.
     #[test]
     fn a_refused_runtime_dir_is_the_verdict_not_an_unreadable_kill_state() {
         let refused = "runtime dir refused: the bridge socket path /tmp/x/run.sock is 104 bytes, over the 103-byte sun_path limit; point XDG_RUNTIME_DIR at a shorter directory".to_string();

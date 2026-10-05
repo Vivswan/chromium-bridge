@@ -50,9 +50,19 @@ impl RuntimeDir {
     pub(crate) fn ensure() -> io::Result<RuntimeDir> {
         let dir = Self::resolve()?;
         #[cfg(windows)]
-        std::fs::create_dir_all(&dir.0)?;
+        let created = std::fs::create_dir_all(&dir.0);
         #[cfg(unix)]
-        crate::fsguard::ensure_private_dir(&dir.0)?;
+        let created = crate::fsguard::ensure_private_dir(&dir.0);
+        created.map_err(|e| {
+            io::Error::new(
+                e.kind(),
+                format!(
+                    "runtime dir refused: {} could not be created and secured ({e}); point \
+                     {RUNTIME_DIR_VAR} at a directory this user can own",
+                    dir.0.display()
+                ),
+            )
+        })?;
         Ok(dir)
     }
 
