@@ -11,6 +11,10 @@ layer: 'library'
 taskOptions:
   runFromWorkspaceRoot: true
 
+# The root moon.yml header's rule for every cargo verb the gate reaches.
+env:
+  RUSTUP_AUTO_INSTALL: '0'
+
 fileGroups:
   # Everything a workspace-level cargo verb can read: every member's sources,
   # the workspace manifests, and the toolchain/lint pins.

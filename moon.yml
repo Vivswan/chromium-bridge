@@ -11,8 +11,10 @@
 #                                                          moon's noop, never a bun install; a tool another runtime or
 #                                                          a separate install provides runs in `ci`
 #   a cargo verb reachable from `gate`                  -> takes --frozen (a missing crate fails, never fetches; fmt
-#                                                          reads no crates and has no such flag)
-#   a bun task whose script spawns cargo                -> the same flag by convention (gen-shared, check-gen,
+#                                                          reads no crates and has no such flag) and carries
+#                                                          RUSTUP_AUTO_INSTALL=0 in its env (rustup would otherwise
+#                                                          download a missing pinned toolchain)
+#   a bun task whose script spawns cargo                -> the same flag and env by convention (gen-shared, check-gen,
 #                                                          check-gen-isolation): the auditor sees only a task's own command
 #   reads or writes src/packages/shared/src/*.gen.ts    -> options.mutex 'generated-contract', shared with gen-shared,
 #                                                          so one invocation never overlaps a reader with the rewrite
@@ -350,12 +352,16 @@ tasks:
       Cargo-check the excluded fuzz workspace (stable is enough to compile it) so fuzz targets
       cannot rot outside the main build; CI runs the same check in checks.yml's rust job
     command: 'cargo check --frozen --manifest-path src/packages/core/fuzz/Cargo.toml --all-targets'
+    env:
+      RUSTUP_AUTO_INSTALL: '0'
 
   test-fuzz:
     description: >-
       The fuzz workspace's own tests (stable rust): every generated seed runs through its target
       in-process and its reader agrees with its label
     command: 'cargo test --frozen --manifest-path src/packages/core/fuzz/Cargo.toml'
+    env:
+      RUSTUP_AUTO_INSTALL: '0'
 
   doc:
     description: >-
@@ -363,6 +369,7 @@ tasks:
       same step in checks.yml's rust job
     command: 'cargo doc --frozen --workspace --no-deps --document-private-items'
     env:
+      RUSTUP_AUTO_INSTALL: '0'
       RUSTDOCFLAGS: '-D warnings'
 
   # ----- python protocol suites (uv-provisioned interpreter) -----------------
@@ -426,6 +433,8 @@ tasks:
         src/packages/shared/src/audit.gen.ts \
         src/packages/shared/src/host.gen.ts \
         src/packages/shared/src/policy.gen.ts
+    env:
+      RUSTUP_AUTO_INSTALL: '0'
     options:
       mutex: 'generated-contract'
 
@@ -442,6 +451,8 @@ tasks:
       set -e
       bun scripts/check-gen.ts
       bun test scripts/tests/check-gen.test.ts scripts/tests/gen-envelope.test.ts
+    env:
+      RUSTUP_AUTO_INSTALL: '0'
     options:
       mutex: 'generated-contract'
 
@@ -466,6 +477,8 @@ tasks:
       set -e
       bun scripts/check-gen-isolation.ts
       bun test scripts/tests/check-gen-isolation.test.ts
+    env:
+      RUSTUP_AUTO_INSTALL: '0'
 
   # ----- version + repo hygiene checks ---------------------------------------
 

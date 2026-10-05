@@ -10,7 +10,13 @@ export type TaskGraph = Record<
   string,
   Record<
     string,
-    { command: string; args?: string[] | null; script?: string | null; deps?: { target: string }[] }
+    {
+      command: string;
+      args?: string[] | null;
+      script?: string | null;
+      deps?: { target: string }[];
+      env?: Record<string, string> | null;
+    }
   >
 >;
 
@@ -43,8 +49,18 @@ export const TOOLCHAIN_CARGO_VERBS = new Set([
   "tree",
 ]);
 
-const unalias = (words: string[]): string[] =>
-  words[0] === "bun" && words[1] === "x" ? ["bunx", ...words.slice(2)] : words;
+// bun's global options may or may not take a value (`--config` accepts an omitted one), so no table of them
+// is trusted: the subcommand is the first word that is not an option, and the installer rule reads every word.
+const bunSubcommand = (words: string[]): number => {
+  const sub = words.findIndex((word, i) => i > 0 && !word.startsWith("-"));
+  return sub === -1 ? words.length : sub;
+};
+
+const unalias = (words: string[]): string[] => {
+  if (words[0] !== "bun") return words;
+  const sub = bunSubcommand(words);
+  return words[sub] === "x" ? ["bunx", ...words.slice(sub + 1)] : words;
+};
 
 function simpleCommands(task: TaskGraph[string][string]): string[][] {
   if (task.script == null) return [unalias([task.command, ...(task.args ?? [])])];
@@ -97,9 +113,11 @@ export function auditGraph(graph: TaskGraph): string[] {
     const [project, id] = target.split(":") as [string, string];
     const task = graph[project]?.[id];
     if (task === undefined) continue;
-    for (const [word, ...rest] of simpleCommands(task)) {
-      if (word === "bun" && BUN_INSTALLERS.has(rest[0] ?? "")) {
-        findings.push(`${target}: bun ${rest[0]} inside ${GATE} (installs)`);
+    for (const words of simpleCommands(task)) {
+      const [word, ...rest] = words;
+      const installer = word === "bun" ? rest.find((w) => BUN_INSTALLERS.has(w)) : undefined;
+      if (installer !== undefined) {
+        findings.push(`${target}: bun ${installer} inside ${GATE} (installs)`);
       }
       // `noop` is moon's placeholder command for a dependency-only aggregate.
       if (word === "bun" || word === "set" || word === "noop") continue;
@@ -111,8 +129,16 @@ export function auditGraph(graph: TaskGraph): string[] {
       if (!TOOLCHAIN_CARGO_VERBS.has(verb)) {
         findings.push(`${target}: runs cargo ${verb} inside ${GATE} (not a toolchain verb)`);
       }
-      if (verb !== "fmt" && !rest.includes("--frozen")) {
+      // Past cargo's `--` the words belong to the tool it runs, so a --frozen there is not cargo's.
+      const cargoArgs = rest.includes("--") ? rest.slice(0, rest.indexOf("--")) : rest;
+      if (verb !== "fmt" && !cargoArgs.includes("--frozen")) {
         findings.push(`${target}: cargo ${verb} inside ${GATE} without --frozen`);
+      }
+      // rustup downloads a missing pinned toolchain before cargo reads any flag unless told not to.
+      if (task.env?.RUSTUP_AUTO_INSTALL !== "0") {
+        findings.push(
+          `${target}: cargo ${verb} inside ${GATE} without RUSTUP_AUTO_INSTALL=0 in env`,
+        );
       }
     }
   }

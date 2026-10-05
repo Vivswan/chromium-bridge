@@ -20,6 +20,10 @@ const graph: TaskGraph = {
         { target: "root:sneaky-install" },
         { target: "root:sneaky-alias" },
         { target: "root:sneaky-x" },
+        { target: "root:sneaky-cwd" },
+        { target: "root:sneaky-config" },
+        { target: "root:frozen-after-dashes" },
+        { target: "root:auto-install" },
       ],
     },
     ci: { command: "noop", deps: [{ target: "root:gate" }, { target: "root:check-yaml" }] },
@@ -44,8 +48,22 @@ const graph: TaskGraph = {
       deps: [],
     },
     "check-yaml": { command: "uvx", args: ["yamllint@1.38.0", "-s", "."], deps: [] },
-    machete: { command: "cargo", args: ["machete"], deps: [] },
-    unfetched: { command: "cargo", args: ["doc", "--workspace"], deps: [] },
+    machete: { command: "cargo", args: ["machete"], deps: [], env: { RUSTUP_AUTO_INSTALL: "0" } },
+    unfetched: {
+      command: "cargo",
+      args: ["doc", "--workspace"],
+      deps: [],
+      env: { RUSTUP_AUTO_INSTALL: "0" },
+    },
+    "sneaky-cwd": { command: "bun", args: ["--cwd=.", "install"], deps: [] },
+    "sneaky-config": { command: "bun", args: ["--config", "install"], deps: [] },
+    "frozen-after-dashes": {
+      command: "cargo",
+      args: ["clippy", "--all-targets", "--", "--frozen"],
+      deps: [],
+      env: { RUSTUP_AUTO_INSTALL: "0" },
+    },
+    "auto-install": { command: "cargo", args: ["doc", "--frozen"], deps: [] },
     "sneaky-install": { command: "bun", args: ["install", "--frozen-lockfile"], deps: [] },
     "sneaky-alias": { command: "bun", args: ["i"], deps: [] },
     "sneaky-x": { command: "bun", args: ["x", "fixture-tool"], deps: [] },
@@ -78,14 +96,20 @@ const graph: TaskGraph = {
       command: "cargo",
       args: ["clippy", "--frozen", "--all-targets", "--", "-D", "warnings"],
       deps: [],
+      env: { RUSTUP_AUTO_INSTALL: "0" },
     },
-    "fmt-check": { command: "cargo", args: ["fmt", "--check"], deps: [] },
+    "fmt-check": {
+      command: "cargo",
+      args: ["fmt", "--check"],
+      deps: [],
+      env: { RUSTUP_AUTO_INSTALL: "0" },
+    },
   },
   web: { build: { command: "bun" } },
 };
 
 describe("auditGraph", () => {
-  test("names every rule a task breaks, sorted: no bunx anywhere, own-toolchain commands with --frozen and no bun install inside the gate's closure only", () => {
+  test("names every rule a task breaks, sorted: no bunx anywhere, own-toolchain commands with --frozen and RUSTUP_AUTO_INSTALL=0 and no bun install inside the gate's closure only", () => {
     expect(auditGraph(graph)).toEqual(
       [
         "root:check-yaml: runs uvx inside root:gate (not bun or a cargo toolchain verb)",
@@ -93,6 +117,10 @@ describe("auditGraph", () => {
         "root:machete: cargo machete inside root:gate without --frozen",
         "root:fmt-ts: runs bunx (bun's global cache stands in for a missing package)",
         "root:quoted-runner: runs bunx (bun's global cache stands in for a missing package)",
+        "root:auto-install: cargo doc inside root:gate without RUSTUP_AUTO_INSTALL=0 in env",
+        "root:frozen-after-dashes: cargo clippy inside root:gate without --frozen",
+        "root:sneaky-config: bun install inside root:gate (installs)",
+        "root:sneaky-cwd: bun install inside root:gate (installs)",
         "root:sneaky-install: bun install inside root:gate (installs)",
         "root:sneaky-alias: bun i inside root:gate (installs)",
         "root:sneaky-x: runs bunx (bun's global cache stands in for a missing package)",
