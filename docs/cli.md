@@ -125,7 +125,7 @@ The host-key ceremony gives the extension one host identity to pin:
 - `chromium-bridge revoke` deletes the key and confirms it is gone. The host pushes a revocation to the extension, which fails closed.
 - `chromium-bridge enclave-status [--json]` reports the current state read-only: whether a key is present, which store holds it, and its fingerprint.
 
-User presence for the browser's own acts (releasing the kill switch, enrolling a second browser) is a WebAuthn tap on the browser's authenticator, verified by the host. The options page does not offer the panel that enrolls and answers yet (the exchange is reachable from the background handlers and the browser suite).
+User presence for the browser's own acts (releasing the kill switch, enrolling a second browser) is a WebAuthn tap on the browser's authenticator, verified by the host. The options page's identity section enrolls the authenticator, and its kill panel answers the host's presence request with the tap.
 
 The CLI never raises that prompt: its own grants (`pair`, `pair-client`, `unkill`, `policy set`) are confirmed by the typed phrase on a real terminal.
 
@@ -155,7 +155,7 @@ Once the allowlist exists, anything unmatched fails closed, including an identit
 - Live browser connections are severed within about a second, and new ones are refused. In-flight tool calls fail fast with `CONNECTION_LOST`.
 - Every subsequent tool call, from every attached client, is refused with the stable `BRIDGE_KILLED` error code. Clients stay connected so they can show you the refusal instead of dying silently.
 - The state is persisted (in `trust.json`, next to the lock file) and survives restarts, reconnects, and reboots.
-- The extension's options page shows the state; engaging the switch works from any surface. Releasing it from the extension is answered by the host with a presence request (the WebAuthn tap, or the window on a browser with no enrolled credential); the options page does not offer that control yet, so today release is the CLI's (a web page cannot see or touch any of it).
+- The extension's options page shows the state; engaging the switch works from any surface. Releasing it from the options page is answered by the host with a presence request, which the page settles with the WebAuthn tap (or the software confirmation it offers only on a browser with no enrolled credential); a web page cannot see or touch any of it.
 
 Nothing releases the switch on its own. Release demands proof of user presence on either surface:
 
