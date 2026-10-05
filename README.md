@@ -116,7 +116,7 @@ MCP client B --stdio--> chromium-bridge ----attach----^   |
 ```
 
 - **MCP server (default mode):** launched by your MCP client over stdio; JSON-RPC 2.0, MCP protocol `2026-07-28`, stateless, with temporary legacy compatibility for older harnesses. The first instance owns the socket and becomes the broker; later instances attach as relays.
-- **`--native-host`:** launched by the browser via the host manifest, one per browser with its own label; a thin bridge from Chrome's native-messaging frames to NDJSON on the socket.
+- **`--native-host`:** launched by the browser via the host manifest, one per browser, with its own label on macOS and Linux; a thin bridge from Chrome's native-messaging frames to NDJSON on the socket.
 - **CLI:** the management surface over the same core (registration, pairing, revocation, kill switch, audit). It is not a trust root; capability-granting acts end in a user-presence gate.
 
 The browser spawns the native host and the MCP client spawns the server, so they are not parent and child and need an IPC; the host stays thin so that MV3 service-worker recycling (about every 5 minutes) and host restarts lose no session state. The deep dive is [docs/architecture.md](./docs/architecture.md).

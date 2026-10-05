@@ -63,7 +63,7 @@ CLI 只需要二进制本身, 在桌面机、无头机器和 CI 上都一样。
 
 - `chromium-bridge pair-client` 创建受信任客户端白名单。它一旦存在, 只有代码身份经证明且获你批准的 MCP 客户端才会得到服务, 并且任何一个界面都能随时吊销其中一个。
 
-两者均在 [cli.md](./cli.md) 与[安全页面](./security.md)中有说明。
+三者均在 [cli.md](./cli.md) 与[安全页面](./security.md)中有说明。
 
 ## 卸载
 
@@ -77,4 +77,4 @@ CLI 只需要二进制本身, 在桌面机、无头机器和 CI 上都一样。
 | Homebrew | `brew uninstall chromium-bridge` |
 | 压缩包 | 删除解压出的目录 |
 
-配对状态是独立的: `chromium-bridge revoke --all` 删除主机密钥并忘记每一个浏览器和受信任客户端, 扩展的选项页清除其固定的指纹; 第 6 步登记的认证器保存在主机的信任记录中, `revoke <browser>` 只忘记一个浏览器的。
+配对状态是独立的: `chromium-bridge revoke --all` 删除主机密钥并忘记每一个浏览器和受信任客户端, 扩展的选项页清除其固定的指纹。第 6 步登记的认证器保存在 `trust.json` 中; `revoke <browser>` 只忘记一个浏览器的, `revoke --all` 从头来过, 而 `doctor` 读不了的 `trust.json` 是[故障排除页面](./troubleshooting.md#doctor-显示紧急开关状态或信任记录不可读)的情形。

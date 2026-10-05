@@ -116,7 +116,7 @@ MCP client B --stdio--> chromium-bridge ----attach----^   |
 ```
 
 - **MCP 伺服器 (預設模式):** 由你的 MCP 用戶端透過 stdio 啟動; JSON-RPC 2.0, MCP 協定 `2026-07-28`, 無狀態, 並為較舊的用戶端程式 (harness) 保留暫時的舊版相容性。第一個實例擁有 socket 並成為中介 (broker); 之後的實例以中繼身分附接。
-- **`--native-host`:** 由瀏覽器透過主機資訊清單啟動, 每個瀏覽器一個, 各有自己的標籤; 一個精簡的橋接, 把 Chrome 的原生訊息訊框轉換為 socket 上的 NDJSON。
+- **`--native-host`:** 由瀏覽器透過主機資訊清單啟動, 每個瀏覽器一個, 在 macOS 與 Linux 上各有自己的標籤; 一個精簡的橋接, 把 Chrome 的原生訊息訊框轉換為 socket 上的 NDJSON。
 - **CLI:** 建立在同一個核心上的管理介面 (註冊、配對、撤銷、緊急開關、稽核)。它不是信任根; 授予能力的動作最終都要通過使用者在場的閘門。
 
 瀏覽器產生原生主機, MCP 用戶端產生伺服器, 所以兩者不是父子關係, 需要 IPC; 主機保持精簡, 讓 MV3 Service Worker 的回收 (約每 5 分鐘一次) 與主機重啟不會遺失工作階段狀態。深入探討見 [docs/architecture.md](./docs/zh-tw/architecture.md)。

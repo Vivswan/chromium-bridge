@@ -63,7 +63,7 @@ Pairing (step 5) is required on every platform. Enrolling (step 6) is recommende
 
 - `chromium-bridge pair-client` creates the trusted-client allowlist. Once it exists, only MCP clients whose attested code identity you approved are served, and any surface can revoke one at any time.
 
-Both are described in [cli.md](./cli.md) and the [security page](./security.md).
+All three are described in [cli.md](./cli.md) and the [security page](./security.md).
 
 ## Uninstalling
 
@@ -77,4 +77,4 @@ Both are described in [cli.md](./cli.md) and the [security page](./security.md).
 | Homebrew | `brew uninstall chromium-bridge` |
 | archive | delete the extracted directory |
 
-Pairing state is separate: `chromium-bridge revoke --all` deletes the host key and forgets every browser and trusted client, and the extension's options page clears its pin; the authenticators enrolled in step 6 live in the host's trust record, and `revoke <browser>` forgets one browser's alone.
+Pairing state is separate: `chromium-bridge revoke --all` deletes the host key and forgets every browser and trusted client, and the extension's options page clears its pin. The authenticators enrolled in step 6 live in `trust.json`; `revoke <browser>` forgets one browser's, `revoke --all` starts over, and a `trust.json` that `doctor` cannot read is the [troubleshooting page's](./troubleshooting.md#doctor-says-the-kill-state-or-the-trust-record-is-unreadable) case.
