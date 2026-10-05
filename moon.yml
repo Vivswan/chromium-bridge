@@ -447,8 +447,7 @@ tasks:
 
   check-gen-isolation:
     # Only `cargo tree -e normal` sees the shipped graph (scripts/check-gen-isolation.ts says why cargo-deny
-    # cannot): ts-rs is refused anywhere in it, schemars only through rmcp. p256 is not gen-only: the WebAuthn
-    # verifier ships it (src/packages/core/src/webauthn).
+    # cannot): ts-rs is refused anywhere in it, schemars only through rmcp.
     description: 'Gen-only tooling (ts-rs; schemars outside rmcp) stays out of the shipped binary dependency graph'
     deps: ['~:install-deps']
     script: |

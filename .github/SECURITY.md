@@ -311,7 +311,7 @@ Extra review care applies to these security-critical surfaces:
 - `src/packages/core/src/kill.rs`
 - `src/packages/core/src/presence/`
 - `src/packages/core/src/enclave/`
-- `src/packages/core/src/webauthn/` (the WebAuthn assertion verifier; the shipped binary carries `p256` for it, a reviewed exception to the gen-only posture that crate had)
+- `src/packages/core/src/webauthn/` (the WebAuthn assertion verifier, the reason `p256` ships)
 - `src/packages/core/src/registration.rs`
 - `src/packages/core/src/mcp/` (the rmcp seam)
 - the extension's allowlist/eval/confirmation code

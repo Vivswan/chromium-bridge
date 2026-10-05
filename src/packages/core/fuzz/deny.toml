@@ -44,8 +44,7 @@ wildcards = "deny"
 # own gate is `moon run check-gen-isolation`, a cargo tree walk: cargo-deny
 # cannot see that graph in the root workspace, where the core's self
 # dev-dependency switches the envelope-schema feature on workspace-wide).
-# p256 is not gen-only: the WebAuthn verifier ships it for verification, and
-# the host holds no private key to sign with (docs/security/rationale.md).
+# p256 is shipped, not gen-only (docs/security/rationale.md).
 deny = [
   { crate = "schemars", wrappers = ["rmcp"], reason = "runtime tool schemas come from rmcp only" },
 ]
