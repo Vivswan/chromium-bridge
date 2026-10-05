@@ -291,8 +291,11 @@ fn explicit_dir_gets_the_unlabeled_wrapper() {
     assert!(!script.contains("--label"));
 }
 
+/// The owner's rule for a manifest another tool wrote at our host id, on `Slot`: status reports it
+/// foreign, uninstall leaves it (a warning, exit 0), an explicit --fix overwrites it and names what it
+/// launched.
 #[test]
-fn foreign_manifest_is_never_overwritten_or_removed() {
+fn a_foreign_manifest_reads_foreign_survives_uninstall_and_is_overwritten_by_fix() {
     let tree = TempTree::new("foreign");
     let reg = registrar(&tree);
     let target = browser_target(&tree);
@@ -302,20 +305,25 @@ fn foreign_manifest_is_never_overwritten_or_removed() {
         r#"{"name":"com.other.host","description":"someone else","path":"/x","type":"stdio"}"#;
     fs::write(&manifest_path, foreign).unwrap();
 
-    let err = reg.register(&target).unwrap_err();
-    assert!(err.contains("refusing to overwrite"), "{err}");
+    assert!(matches!(assess(&target.registration), RegState::Foreign(_)));
     let removal = Registrar::uninstall(&target);
     assert!(removal.lines.is_empty(), "{removal:?}");
     assert!(
         removal.refused[0].contains("refusing to remove"),
         "{removal:?}"
     );
-    // A refusal is a warning: a package removal must complete over a manifest another tool wrote.
     assert!(removal.failed.is_empty(), "{removal:?}");
     assert_eq!(uninstall_exit_code(&[removal]), 0);
-    // Fail closed: the file is byte-identical afterwards.
     assert_eq!(fs::read_to_string(&manifest_path).unwrap(), foreign);
-    assert!(matches!(assess(&target.registration), RegState::Foreign(_)));
+
+    let lines = reg.register(&target).unwrap();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("replaced") && l.contains("launched /x")),
+        "{lines:?}"
+    );
+    assert_eq!(assess(&target.registration), RegState::Ok);
 }
 
 #[test]
@@ -709,7 +717,11 @@ fn a_windows_registration_is_its_key() {
         ),
         (
             "foreign file without the key",
-            Slot::Foreign("not JSON".into()),
+            Slot::Foreign {
+                why: "not JSON".into(),
+                launched: None,
+                shape: ForeignShape::Replaceable,
+            },
             Some(Slot::Absent),
             RegState::Missing,
         ),
@@ -740,7 +752,11 @@ fn a_windows_registration_is_its_key() {
         (
             "a foreign key is reported before the file",
             Slot::Ours(String::new()),
-            Some(Slot::Foreign("re-pointed".into())),
+            Some(Slot::Foreign {
+                why: "re-pointed".into(),
+                launched: None,
+                shape: ForeignShape::Replaceable,
+            }),
             RegState::Foreign("re-pointed".into()),
         ),
     ];

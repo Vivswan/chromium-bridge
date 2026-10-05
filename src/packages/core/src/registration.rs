@@ -1,9 +1,10 @@
 //! Native-messaging registration: the write/repair/remove engine behind `doctor --fix` and `uninstall`; browser
 //! locations come from [`crate::browsers`], the resolver `doctor`
-//! diagnoses with. Fail closed: `uninstall` removes only files this project verifiably wrote and `--fix` refuses to
-//! overwrite a manifest it cannot verify as ours (reported and left in place), which keeps OUR tooling from destroying
-//! someone else's registration but does not stop a same-user attacker who can write the user's config dirs directly
-//! (that boundary is the IPC layer's).
+//! diagnoses with. Fail closed: `uninstall` removes only files this project verifiably wrote, and `--fix` refuses an
+//! entry it cannot read; a manifest another tool wrote at our host id is the one thing an explicit `--fix` replaces
+//! (the rule, with the pointer's refusal, is on [`Slot`]). That keeps OUR tooling from destroying someone else's
+//! registration but does not stop a same-user attacker who can write the user's config dirs directly (that boundary
+//! is the IPC layer's).
 //!
 //! ```text
 //! target         -> THIS binary (current_exe); nothing is built, downloaded, or copied, and repairing is idempotent
@@ -225,25 +226,72 @@ pub fn pointer_json() -> String {
     format!("{{\n  \"external_update_url\": \"{WEB_STORE_UPDATE_URL}\"\n}}\n")
 }
 
-/// What a location this engine may own holds. `register` writes only into
-/// `Absent` or `Ours`, `uninstall` deletes only `Ours`; the other two are
-/// reported and left in place, whichever command met them.
+/// What a location this engine may own holds, and the rule for each, in both directions. A manifest at
+/// our host id that another tool wrote (`Foreign`): `doctor` reports it foreign, an explicit `--fix`
+/// overwrites it and reports what it launched, `uninstall` never removes it. An entry nobody can verify
+/// (`Unreadable`: a directory, a dangling link) is refused both ways. The extension pointer is refused
+/// both ways when foreign: it is another installer's claim on the extension, not a manifest of ours to
+/// repair.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Slot {
     Absent,
     /// Ours, with what was read (the file's bytes, or the key's value).
     Ours(String),
-    Foreign(String),
+    /// Not ours: why, the launch path it carried (a manifest's `path`, a key's default), so a
+    /// replacement can say what it displaced without echoing the rest of a file nobody here wrote, and
+    /// whether `--fix` can replace it whole.
+    Foreign {
+        why: String,
+        launched: Option<String>,
+        shape: ForeignShape,
+    },
     Unreadable(String),
 }
 
+/// Whether an explicit `--fix` can replace a foreign slot whole: a file or a flat key, yes; a key with
+/// child keys, no (the non-recursive delete this engine allows itself fails on it), so it is refused in
+/// preflight rather than after the manifest beside it has already changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ForeignShape {
+    Replaceable,
+    Rooted,
+}
+
 impl Slot {
-    /// `Ok` when `register` may write here; the refusal names `what`.
+    /// `Ok` when `register` may write a pointer here; the refusal names `what`.
     fn writable(&self, what: &str) -> Result<(), String> {
         match self {
             Slot::Absent | Slot::Ours(_) => Ok(()),
-            Slot::Foreign(why) => Err(format!(
+            Slot::Foreign { why, .. } => Err(format!(
                 "refusing to overwrite {what}: {why}. Inspect and remove it yourself if it is stale."
+            )),
+            Slot::Unreadable(why) => Err(format!(
+                "cannot verify the existing {what}: {why} (left untouched)"
+            )),
+        }
+    }
+
+    /// `register`'s answer for a manifest slot: `Ok(None)` writes, `Ok(Some(line))` overwrites a foreign
+    /// one and reports what it displaced, `Err` refuses what nobody can verify.
+    fn replaceable(&self, what: &str) -> Result<Option<String>, String> {
+        match self {
+            Slot::Absent | Slot::Ours(_) => Ok(None),
+            Slot::Foreign {
+                why,
+                launched,
+                shape: ForeignShape::Replaceable,
+            } => Ok(Some(format!(
+                "  replaced {what}, not written by chromium-bridge ({why}); it launched {}",
+                launched
+                    .as_deref()
+                    .unwrap_or("nothing readable as a launch path")
+            ))),
+            Slot::Foreign {
+                why,
+                shape: ForeignShape::Rooted,
+                ..
+            } => Err(format!(
+                "refusing to replace {what}: {why}; remove it yourself if you are sure"
             )),
             Slot::Unreadable(why) => Err(format!(
                 "cannot verify the existing {what}: {why} (left untouched)"
@@ -257,7 +305,7 @@ impl Slot {
         match self {
             Slot::Absent => Ok(false),
             Slot::Ours(_) => Ok(true),
-            Slot::Foreign(why) => Err(format!(
+            Slot::Foreign { why, .. } => Err(format!(
                 "refusing to remove {what}: {why}. Not written by chromium-bridge; remove it yourself if you are sure."
             )),
             Slot::Unreadable(why) => Err(format!(
@@ -289,7 +337,13 @@ fn file_slot(path: &Path, ownership: fn(&str) -> Ownership) -> Slot {
         Ok(None) => Slot::Absent,
         Ok(Some(contents)) => match ownership(&contents) {
             Ownership::Ours => Slot::Ours(contents),
-            Ownership::Foreign(why) => Slot::Foreign(why),
+            Ownership::Foreign(why) => Slot::Foreign {
+                why,
+                launched: serde_json::from_str::<serde_json::Value>(&contents)
+                    .ok()
+                    .and_then(|v| v.get("path").and_then(|p| p.as_str()).map(str::to_string)),
+                shape: ForeignShape::Replaceable,
+            },
         },
     }
 }
@@ -301,17 +355,26 @@ fn registry_slot(hive: Hive, key: &str, name: &str, expected: impl Fn(&str) -> b
     match registry_key(hive, key) {
         Err(why) => Slot::Unreadable(format!("registry key {hive}\\{key}: {why}")),
         Ok(None) => Slot::Absent,
-        Ok(Some(RegistryKey { children, .. })) if children > 0 => Slot::Foreign(format!(
-            "registry key {hive}\\{key} carries child keys this project never writes"
-        )),
+        Ok(Some(RegistryKey { children, .. })) if children > 0 => Slot::Foreign {
+            why: format!("registry key {hive}\\{key} carries child keys this project never writes"),
+            launched: None,
+            shape: ForeignShape::Rooted,
+        },
         Ok(Some(RegistryKey { values, .. })) => match values.as_slice() {
             [(only, value)] if only == name && expected(value) => Slot::Ours(value.clone()),
-            [(only, value)] if only == name => Slot::Foreign(format!(
-                "registry key {hive}\\{key} points at {value:?}, not ours"
-            )),
-            _ => Slot::Foreign(format!(
-                "registry key {hive}\\{key} carries values this project never writes"
-            )),
+            [(only, value)] if only == name => Slot::Foreign {
+                why: format!("registry key {hive}\\{key} points at {value:?}, not ours"),
+                launched: Some(value.clone()),
+                shape: ForeignShape::Replaceable,
+            },
+            _ => Slot::Foreign {
+                why: format!("registry key {hive}\\{key} carries values this project never writes"),
+                launched: values
+                    .iter()
+                    .find(|(n, _)| n == name)
+                    .map(|(_, v)| v.clone()),
+                shape: ForeignShape::Replaceable,
+            },
         },
     }
 }
@@ -354,7 +417,7 @@ pub fn assess_pointer(pointer: &ExtensionPointer) -> PointerState {
     match pointer_slot(pointer) {
         Slot::Absent => PointerState::Missing,
         Slot::Ours(_) => PointerState::Ok,
-        Slot::Foreign(why) => PointerState::Foreign(why),
+        Slot::Foreign { why, .. } => PointerState::Foreign(why),
         Slot::Unreadable(why) => PointerState::Unreadable(why),
     }
 }
@@ -423,7 +486,7 @@ pub fn assess(reg: &Registration) -> RegState {
 fn classify(slots: ManifestSlots, key_name: &str) -> RegState {
     // A re-pointed or unreadable key must never be summarized as merely "missing".
     match &slots.key {
-        Some(Slot::Foreign(why)) => return RegState::Foreign(why.clone()),
+        Some(Slot::Foreign { why, .. }) => return RegState::Foreign(why.clone()),
         Some(Slot::Unreadable(why)) => return RegState::Unreadable(why.clone()),
         Some(Slot::Absent) => return RegState::Missing,
         Some(Slot::Ours(_)) | None => {}
@@ -438,7 +501,7 @@ fn classify(slots: ManifestSlots, key_name: &str) -> RegState {
             };
         }
         Slot::Unreadable(why) => return RegState::Unreadable(why),
-        Slot::Foreign(why) => return RegState::Foreign(why),
+        Slot::Foreign { why, .. } => return RegState::Foreign(why),
         Slot::Ours(contents) => contents,
     };
     // Ours: the registration is healthy only if what it launches exists.
@@ -494,8 +557,9 @@ impl Registrar {
     /// Write one registration. Returns the human report lines for stdout.
     /// Idempotent: re-running overwrites our own artifacts in place. Every
     /// slot the target occupies (manifest file, its Windows key, the pointer)
-    /// is verified before the first write, so a foreign or unreadable one
-    /// fails the target with nothing changed.
+    /// is judged before the first write ([`Slot`]): an unreadable one or a
+    /// foreign pointer fails the target with nothing changed, a foreign
+    /// manifest is replaced and reported.
     pub fn register(&self, target: &Target) -> Result<Vec<String>, String> {
         // A registry registration is impossible from a non-Windows build;
         // refuse before writing anything at all.
@@ -504,16 +568,22 @@ impl Registrar {
         }
         let manifest_path = target.registration.manifest_path();
         let slots = manifest_slots(&target.registration);
-        slots.file.writable(&manifest_path.display().to_string())?;
-        if let (
-            Some(key),
-            Registration::Registry {
-                hive, key: name, ..
-            },
-        ) = (&slots.key, &target.registration)
-        {
-            key.writable(&format!("registry key {hive}\\{name}"))?;
-        }
+        // Every slot is judged before anything changes, so a refusal leaves the target as it was.
+        let mut replaced = Vec::new();
+        replaced.extend(
+            slots
+                .file
+                .replaceable(&format!("manifest {}", manifest_path.display()))?,
+        );
+        let foreign_key = match (&slots.key, &target.registration) {
+            (
+                Some(key),
+                Registration::Registry {
+                    hive, key: name, ..
+                },
+            ) => key.replaceable(&format!("registry key {hive}\\{name}"))?,
+            _ => None,
+        };
         if let Some(pointer) = &target.pointer {
             pointer_slot(pointer).writable(&format!("extension pointer {}", pointer.location()))?;
         }
@@ -566,12 +636,20 @@ impl Registrar {
             0,
             format!(
                 "{}: manifest written to {}",
-                target.name.clone(),
+                target.name,
                 manifest_path.display()
             ),
         );
+        lines.extend(replaced);
 
         if let Registration::Registry { hive, key, .. } = &target.registration {
+            if let Some(line) = foreign_key {
+                // A foreign key is replaced whole, here in the write phase once every guard has passed:
+                // setting the default alone would leave the values that made it foreign, and `uninstall`
+                // would then refuse the key we point at.
+                delete_registry_key(*hive, key)?;
+                lines.push(line);
+            }
             set_registry_value(*hive, key, "", &manifest_path.to_string_lossy())?;
         }
         if let Some(pointer) = &target.pointer {

@@ -186,6 +186,17 @@ export class CommandChecks {
     if (this.run(...argv).exitCode === 0) throw this.failed(argv, "exited 0, expected a refusal");
   }
 
+  /** The one exit a caller tells apart from success and refusal, with the line that explains it. */
+  exits(code: number, stderr: RegExp, ...argv: string[]): void {
+    const finished = this.run(...argv);
+    if (finished.exitCode !== code || !stderr.test(finished.stderr)) {
+      throw this.failed(
+        argv,
+        `exited ${finished.exitCode}, expected ${code} with stderr matching ${stderr}:\n${finished.stderr}`,
+      );
+    }
+  }
+
   outputMatches(pattern: RegExp, ...argv: string[]): void {
     const stdout = this.ok(...argv);
     if (!pattern.test(stdout)) {

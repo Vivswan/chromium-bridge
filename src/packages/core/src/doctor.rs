@@ -105,7 +105,8 @@ pub struct ManifestStatus {
     pub pointer: Option<Scoped<PointerStatus>>,
 }
 
-/// One scope's manifest state and where it lives.
+/// One scope's manifest state and where it lives. A foreign state here is the reporting leg of the rule
+/// on `registration::Slot` (reported, overwritten by an explicit `--fix`, never removed by `uninstall`).
 #[derive(Debug, Clone, Serialize)]
 pub struct SlotStatus {
     pub state: RegState,

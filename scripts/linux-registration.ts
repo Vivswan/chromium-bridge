@@ -5,7 +5,8 @@
 // developer's machine. Each scenario is a sequence of commands and the files they must leave. A failed
 // check names its step, and a command expected to refuse fails its step when it exits 0.
 //
-//   bun scripts/linux-registration.ts fresh-machine   -> detect, repair, refuse a foreign manifest; no extension pointer
+//   bun scripts/linux-registration.ts fresh-machine   -> nothing to register (exit 3), detect, repair, a foreign manifest
+//                                                        survives uninstall and is overwritten by --fix; no extension pointer
 //                                                        on Linux (Chrome would install it silently); uninstall reverses it
 //   bun scripts/linux-registration.ts multi-browser   -> --browser a,b and --all register exactly those rows; uninstall clears all
 
@@ -42,7 +43,7 @@ const browsers = Object.keys(browserConfigDirs) as Browser[];
 export const manifestFile = `${NATIVE_HOST_ID}.json`;
 export const allowedOrigin = `chrome-extension://${PINNED_EXTENSION_ID}/`;
 /** The chrome row of `doctor --list` once registered: the manifest in place and, on Linux, no pointer. */
-export const chromeRegistered = /chrome\s+detected\s+manifest ok\s+pointer n\/a/;
+export const chromeRegistered = /chrome\s+detected\s+user\s+manifest ok\s+pointer n\/a/;
 
 /** An isolated machine: the binary sees these roots through HOME and the XDG variables, nothing else. */
 export class Machine extends CommandChecks {
@@ -147,8 +148,8 @@ export class Machine extends CommandChecks {
 
 export function freshMachine(m: Machine): void {
   m.ok("--help");
-  // No browser detected: --fix refuses rather than guess a browser.
-  m.refused("doctor", "--fix");
+  // No browser detected: nothing to register, exit 3 with the hint, which the .deb postinst accepts.
+  m.exits(3, /no Chromium-family browser detected/, "doctor", "--fix");
   m.install("chrome");
   m.ok("doctor", "--list");
   m.ok("doctor", "--fix");
@@ -175,14 +176,16 @@ export function freshMachine(m: Machine): void {
   const foreignBytes = '{"name":"com.other.host","description":"not ours"}\n';
   mkdirSync(foreignDir, { recursive: true });
   writeFileSync(foreign, foreignBytes);
-  m.refused("doctor", "--fix", "--manifest-dir", foreignDir);
-  m.refused("uninstall", "--manifest-dir", foreignDir);
+  // A manifest another tool wrote at our id: uninstall warns and leaves it, an explicit --fix overwrites it.
+  m.ok("uninstall", "--manifest-dir", foreignDir);
   m.fileIs(foreign, foreignBytes);
-  // uninstall clears every row it wrote, the refused foreign file notwithstanding.
-  m.ok("uninstall", "--manifest-dir", custom);
+  m.ok("doctor", "--fix", "--manifest-dir", foreignDir);
+  m.contains(foreign, allowedOrigin);
+  m.ok("uninstall", "--manifest-dir", custom, "--manifest-dir", foreignDir);
   for (const path of [
     manifest,
     join(custom, manifestFile),
+    foreign,
     wrapper,
     m.manifest("brave"),
     m.wrapper("brave"),
