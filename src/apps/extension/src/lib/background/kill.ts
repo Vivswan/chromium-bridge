@@ -28,10 +28,10 @@ import type {
 } from "@chromium-bridge/shared/envelope.gen";
 import pLimit from "p-limit";
 import { browser } from "wxt/browser";
+import { inLife } from "../shared/in-life";
 import { auditEvent } from "./audit-log";
 import { advance, engageOutstanding, resetBrakeForTests, stampArrival } from "./brake";
 import type { Connection, PortCollaborator } from "./connection";
-import { inLife } from "./in-life";
 
 const KILL_MIRROR_KEY = "bridgeKillMirror";
 

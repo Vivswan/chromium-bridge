@@ -28,8 +28,8 @@ import {
 import type { AuditEventWire } from "@chromium-bridge/shared/envelope.gen";
 import pLimit from "p-limit";
 import { browser } from "wxt/browser";
+import { inLife } from "../shared/in-life";
 import type { Connection, PortCollaborator } from "./connection";
-import { inLife } from "./in-life";
 
 const AUDIT_RING_KEY = "auditRing";
 

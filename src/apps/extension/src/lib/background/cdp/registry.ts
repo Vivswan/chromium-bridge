@@ -6,8 +6,8 @@
 // detaches us, or when the user turns CDP mode off.
 
 import { browser } from "wxt/browser";
+import { inLife } from "../../shared/in-life";
 import { getEffectivePolicy } from "../effective-policy";
-import { inLife } from "../in-life";
 import { POLICY_STORAGE_KEYS } from "../policy-sync";
 import { CdpSession } from "./session";
 

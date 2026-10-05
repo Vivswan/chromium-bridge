@@ -13,7 +13,7 @@
 // planted pin achieves.
 
 import { browser } from "wxt/browser";
-import { inLife } from "./in-life";
+import { inLife } from "../shared/in-life";
 
 export type Hardening = { ok: true } | { ok: false; reason: string };
 
