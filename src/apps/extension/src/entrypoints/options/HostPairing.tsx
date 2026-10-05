@@ -7,15 +7,15 @@ import { useI18n } from "@/hooks/useI18n";
 import type { MessageKey } from "@/lib/i18n";
 import { send } from "@/lib/messages";
 
-// The pairing ceremony panel. Event-driven: the enclave-* storage keys change
+// The host-key pairing block of the identity panel. Event-driven: the enclave-* storage keys change
 // when a proof/error frame lands in the background, so this refreshes on
-// storage.onChanged instead of the old 2s poll. Every action
+// storage.onChanged instead of polling. Every action
 // (pair/verify/approve/reject/revoke) also refreshes on return.
 //
 // Control Tower: open rows, no card chrome. The pending fingerprint renders
 // as two open columns - what this extension sees vs. what the terminal
 // printed - with the extension's side marked in amber (waiting on you).
-export function EnrollmentPanel() {
+export function HostPairing() {
   const { t } = useI18n();
   // null until the first answer lands; a refusal renders the no-status line.
   const [st, setSt] = useState<RuntimeResponse<"get_enrollment"> | null>(null);
