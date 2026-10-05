@@ -45,27 +45,16 @@ const WEB_STORE_UPDATE_URL: &str = "https://clients2.google.com/service/update2/
 /// The Windows pointer key's value name, the one Chrome's registry loader reads before any other.
 const POINTER_VALUE_NAME: &str = "update_url";
 
-/// Fuzz-only aliases of the two ownership markers and the manifest writer, for the
-/// cargo-fuzz workspace's [`manifest_ownership`] oracle and seed generator (see the
-/// `fuzzing` feature in Cargo.toml). Aliases of the real items, so neither can drift
-/// from what this module actually writes; they stay private otherwise.
+/// Fuzz-only aliases of the two ownership markers and the Web Store url, for the
+/// cargo-fuzz workspace's ownership oracles and seed generator (see the `fuzzing`
+/// feature in Cargo.toml). Aliases of the real constants, so none can drift from
+/// what this module actually writes; they stay private otherwise.
 #[cfg(feature = "fuzzing")]
 #[doc(hidden)]
 pub mod fuzz_api {
     pub const MANIFEST_DESCRIPTION: &str = super::MANIFEST_DESCRIPTION;
     pub const MANIFEST_DESCRIPTION_LEGACY: &str = super::MANIFEST_DESCRIPTION_LEGACY;
     pub const WEB_STORE_UPDATE_URL: &str = super::WEB_STORE_UPDATE_URL;
-
-    pub fn pointer_json() -> String {
-        super::pointer_json()
-    }
-
-    pub fn manifest_json(
-        registrar: &super::Registrar,
-        launch_path: &std::path::Path,
-    ) -> Result<String, String> {
-        registrar.manifest_json(launch_path)
-    }
 }
 
 /// Everything the engine needs to lay a registration down. Paths are injected
@@ -188,7 +177,8 @@ impl PointerState {
     }
 }
 
-fn pointer_json() -> String {
+/// The pointer file's bytes, which the fuzz seeds take as the one accepted shape.
+pub fn pointer_json() -> String {
     format!("{{\n  \"external_update_url\": \"{WEB_STORE_UPDATE_URL}\"\n}}\n")
 }
 
@@ -417,8 +407,8 @@ pub fn assess(reg: &Registration) -> RegState {
 
 impl Registrar {
     /// The JSON manifest for `launch_path` (the wrapper on Unix, the binary
-    /// itself on Windows).
-    fn manifest_json(&self, launch_path: &Path) -> Result<String, String> {
+    /// itself on Windows); the fuzz seeds take it as the accepted shape.
+    pub fn manifest_json(&self, launch_path: &Path) -> Result<String, String> {
         let manifest = serde_json::json!({
             "name": NATIVE_HOST_ID,
             "description": MANIFEST_DESCRIPTION,

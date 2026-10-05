@@ -284,9 +284,6 @@ describe("packageInstaller", () => {
 });
 
 describe("the Homebrew formula", () => {
-  // What would drift silently: the formula downloads the archives by the names the archive mode gives
-  // them (one grammar in two files), with the digests the checksum files carry. A renamed asset or a
-  // digest read from the wrong line installs nothing or fails the brew checksum.
   const linuxX64 = "b".repeat(64);
   const macosArm64 = "a".repeat(64);
 

@@ -304,8 +304,6 @@ export function brewFormula(inputs: FormulaInputs): string {
   const base = `https://github.com/${inputs.repository}/releases/download/${inputs.release.tag}`;
   const archive = (platform: string, arch: string) =>
     `${base}/${packagingPlan(inputs.release.tag, platform, arch).archive}`;
-  // Homebrew ranks an rc below its final version but a dev suffix above it, so the tap only ever sees
-  // final releases and the version is the core.
   return `class ChromiumBridge < Formula
   desc "Authenticated MCP bridge to your real Chromium browsers"
   homepage "https://github.com/${inputs.repository}"
