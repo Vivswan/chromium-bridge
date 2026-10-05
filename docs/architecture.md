@@ -113,8 +113,8 @@ Custom, NDJSON over the bridge socket: a 0600 Unix-domain socket inside the 0700
 Connection setup, in order, each step fail-closed:
 
 1. **Kernel checks** (Unix): the accepting end verifies the peer's UID equals its own and takes a kernel-attested identity of the peer's running executable, which must match its own image (mutual).
-2. **HMAC handshake**: the server sends a fresh nonce; the peer answers with `HMAC-SHA256(secret, nonce)` over the per-run secret from the lock file. The secret never crosses the wire; the nonce defeats replay.
-3. **Attach frame**: one mandatory role-declaring frame. A browser's native host attaches with its label (`chrome`, `brave`, ...); a relay attaches with its attested harness identity, which the broker checks against the trusted-client allowlist.
+2. **HMAC handshake**: the server sends a fresh nonce; the peer answers with `HMAC-SHA256(secret, nonce || 0x00 || label)` over the per-run secret from the lock file, the label present when the peer claims a browser. The secret never crosses the wire; the nonce defeats replay, and a label the MAC does not cover fails verification.
+3. **Attach frame**: one mandatory role-declaring frame. A browser's native host attaches as a browser, under the label its handshake response carried (`chrome`, `brave`, ...); a relay attaches with its attested harness identity, which the broker checks against the trusted-client allowlist.
 
 ```mermaid
 flowchart LR
@@ -130,7 +130,7 @@ flowchart LR
   peer -->|connect| socket
   socket -->|same user| cred
   cred -->|same executable image, both ways| attest
-  attest -->|HMAC over a fresh nonce| hs
+  attest -->|HMAC over a fresh nonce and the claimed browser label| hs
   hs -->|attach frame| broker
   broker -->|a browser attach, registered under its label| session
 ```
@@ -344,12 +344,12 @@ The full treatment is in [docs/security/](./security/); this is the map.
 |------|------|-----|
 | Harness admission (stdio) | Kernel-attested parent identity checked against the trusted-client allowlist; fail-closed once enrolled | [harness admission](./security/rationale.md#harness-admission-and-the-client-allowlist) |
 | Bridge socket | 0600 Unix-domain socket in a 0700 dir; peer-UID check; mutual executable attestation; HMAC challenge-response; role-declaring attach | [host identity](./security/rationale.md#host-identity-and-attestation) |
-| Any-side revocation | Every enforcement point re-reads `trust.json` before it decides; both credential halves deleted on unpair | [revocation](./security/rationale.md#revocation-and-the-kill-switch) |
+| Any-side revocation | Every host-side enforcement point re-reads `trust.json` before it decides (the extension's kill gate reads its mirror); both credential halves deleted on unpair | [revocation](./security/rationale.md#revocation-and-the-kill-switch) |
 | Host identity (host <-> extension) | A P-256 host key minted by `pair`, pinned by the extension after a fingerprint comparison; every signed policy baseline verifies against the pin | [enrollment](./security/rationale.md#enrollment-and-user-presence) |
 | User presence (host <-> extension) | A capability-granting act needs a WebAuthn assertion: releasing the kill switch, from a credential enrolled under this browser; enrolling another browser, from any credential already enrolled on the machine. The confirmation window stands in only where that rule admits no credential, so an enrolled browser is never demoted | [user presence](./security/rationale.md#enrollment-and-user-presence) |
 | Site allowlist | Per-origin approval + `chrome.permissions.request`; page cannot self-approve | [trust boundaries](./security/trust-boundaries.md) |
 | High-risk confirmation | Extension-owned window off the page-reachable DOM; deny on timeout/close | [trust boundaries](./security/trust-boundaries.md) |
-| Crown-jewel confirmation | `page_eval` / `page_upload` confirm per call in the extension-owned window; only `page_eval`'s prompt can be waived, by the signed policy's `confirmPageEval` opt-out; a WebAuthn route for them is not built | [tool risk matrix](./security/tool-risk-matrix.md) |
+| Crown-jewel confirmation | `page_eval` / `page_upload` confirm per call in the extension-owned window; only `page_eval`'s prompt can be waived, by the host policy's `confirmPageEval` opt-out (signed, on a pinned extension); a WebAuthn route for them is not built | [tool risk matrix](./security/tool-risk-matrix.md) |
 | Kill switch + audit | Fail-closed latch enforced at four layers; presence-gated release; log-after-decide trail | [kill switch](./security/rationale.md#revocation-and-the-kill-switch) |
 | Masking | Cookie/storage/eval/page-text egress masked in the SW, once for both page backends | [tool risk matrix](./security/tool-risk-matrix.md) |
 | Protocol safety | NM 1 MB outbound limit; single-writer + flush; stderr panic hook; fuzzed parsers | (section 3.1) |
@@ -474,7 +474,7 @@ The `chrome.debugger` API is SW-only, cannot attach to `chrome://` or Web Store 
 |------|------|------|
 | Backend language | Rust, single binary + subcommands | Single-file distribution; the host manifest takes an absolute path; one codebase for server, host, and CLI |
 | IPC | Unix-domain socket + lock file (a user-only named pipe on Windows) | No listening port; the kernel's peer credentials (the pipe peer's pid on Windows) enable attestation |
-| Crypto and parsing | RustCrypto `hmac`/`sha2`, `subtle`, `serde` | Many-eyes libraries over homegrown code, even in the security core; bespoke code only where no library exists (see SECURITY.md and AGENTS.md) |
+| Crypto and parsing | RustCrypto `hmac`/`sha2`, `subtle`, `serde` | Well-adopted libraries over homegrown code; bespoke code only where no library exists |
 | Extension platform | MV3 on WXT, React UI, Vitest | Generated manifest with the pinned key; unified `browser.*`; testable SW |
 | Contracts | The Rust core generates the TS side | One source of truth; CI fails on drift. See section 11 |
 | Engineering gates | moon + proto + GitHub Actions, bun workspace, Biome, cargo-nextest, typos/machete, cargo-deny + the fleet's Trivy and dependency review | One `moon run ci` runs the local cross-platform gate; CI layers additional jobs on top (the repo's jobs live in `.github/workflows/checks.yml`, called inside the managed ci.yml's all-green gate) |
@@ -510,7 +510,7 @@ The cross-process contracts live in the Rust core, the single source of truth; t
 - The fixture file holds golden vectors: Rust-built message bytes with deterministic software-P256 proofs, replayed through the extension's WebCrypto verifier by `src/apps/extension/tests/background/enclave-golden.test.ts`, so the signed-message encoding itself is pinned across languages. The fixture's signing key is public test data and deny-listed as a host identity on both sides (`ensure_not_fixture_key` in the core, `ENCLAVE_FIXTURE_KEY_ID` in the extension's pairing verifier and stored-pin validators).
 - **Policy document and directions** (`src/packages/core/src/policy/`): the host-owned `PolicyDoc`, the fifteen policy fields (the four capability grants, the confirmation policy, `disabledTools`, the confirmation timeouts), their deny defaults, the per-field permissive-direction table, and the `relaxes`/`restricts` comparisons, plus the signed store and the `set_signed`/`restrict` write seams.
 - `moon run gen` emits `src/packages/shared/src/policy.gen.ts`: the signing domain constant, the field list with its directions, the defaults, and strict Zod validators for the document, the values, and the restriction overlay. The extension recomputes every direction comparison from the emitted table itself; it never trusts a host's claim about which way a change points.
-- A grant is signed by the host key over `UTF8("chromium-bridge-policy-v1") || 0x00 || doc_bytes`, a third NUL-separated signing domain, injective against the host-key challenge and presence domains, so no artifact of one ceremony replays as another.
+- A grant is signed by the host key over `UTF8("chromium-bridge-policy-v1") || 0x00 || doc_bytes`, a NUL-separated signing domain beside the host-key challenge domain, injective against it, so no artifact of one ceremony replays as the other.
 - There is no canonicalization step anywhere: the host signs and stores the exact document bytes, and the extension verifies the exact bytes it received against its pinned key before strict-parsing those same bytes. Section 11.3 covers the frames that carry all of this.
 - **Wire envelopes and control frames** (`BridgeReq` / `BridgeResp` in `src/packages/core/src/protocol.rs`; `EnclaveControl`, `AdminControl`, which embeds `allowlist::ClientEntry`, `PolicyControl` and `WebAuthnControl` in `src/packages/core/src/protocol/control.rs`): the Rust types ARE the contract, and `moon run gen` generates the extension's validators from them into `src/packages/shared/src/envelope.gen.ts`. The table below names each layer and its owner; `moon run check-gen` fails on a stale diff.
 
@@ -528,13 +528,13 @@ At the tool-call boundary, Rust's typed error `CallError` maps to the stable `co
 
 | Code | Who assigns it today |
 |------|------|
-| `EXECUTION_FAILED` | the host, for every free-form failure string the extension reports |
-| `TOOL_DISABLED` | the host-side policy gate (section 11.3): dispatch refuses a tool whose capability grant is off or that the effective policy disables, before any bridge traffic |
-| `NOT_CONNECTED`, `EXTENSION_NOT_READY`, `CONNECTION_LOST`, the admission and revocation refusals, `BRIDGE_KILLED` | the Rust server, with one shared meaning across every process |
+| `EXECUTION_FAILED` | the MCP server, for every free-form failure string the extension reports |
+| `TOOL_DISABLED` | the MCP server's policy gate (section 11.3): dispatch refuses a tool whose capability grant is off or that the effective policy disables, before any bridge traffic |
+| `NOT_CONNECTED`, `EXTENSION_NOT_READY`, `CONNECTION_LOST`, the admission and revocation refusals, `BRIDGE_KILLED` | the MCP server, with one shared meaning across every process |
 | `PROTOCOL_MISMATCH` | nobody yet: it awaits the version/capability handshake wiring (section 11.2) |
 | `SITE_NOT_ALLOWED`, `USER_DENIED`, `TAB_NOT_FOUND`, ... | nobody yet: they would need structured error reporting from the extension in place of the free-form strings |
 
-The Rust server is the only assigner, covering a subset of the table; the TS constants generated into `errors.gen.ts` exist for future consumers.
+The MCP server (`CallError::code()` in `src/packages/core/src/error.rs`) is the only assigner, covering a subset of the table; the TS constants generated into `errors.gen.ts` exist for future consumers.
 
 ### 11.2 Capability / version handshake
 
@@ -592,7 +592,7 @@ The extension verifies the signature against its own pinned key (never a frame-s
 
 Post-cutover a per-connection dispatch barrier refuses bridge ops until the connection's first policy push has verified and applied, so an op cannot race ahead of a tightening.
 
-On the wire-validation side the five frames ride the same generated machinery as every other control frame (section 11 above); `policy_current` declares its ok-split in the asymmetry table and is emitted as a discriminated union, proved by the `moon run check-envelope` gate.
+On the wire-validation side the seven frames ride the same generated machinery as every other control frame (section 11 above); `policy_current` declares its ok-split in the asymmetry table and is emitted as a discriminated union, proved by the `moon run check-envelope` gate.
 
 The host also enforces its own policy at dispatch (`policy/gating.rs`): a tool whose capability grant is off or that is in `disabledTools` is refused with the stable `TOOL_DISABLED` code before any bridge traffic, with an absent store allowing (pre-cutover) and an unreadable one denying all.
 
