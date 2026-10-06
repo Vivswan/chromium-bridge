@@ -28,7 +28,7 @@ describe("RuntimeMsgSchema", () => {
     { name: "an unknown field (strict)", msg: { type: "get_status", extra: 1 } },
     { name: "enroll_pair with an unknown field", msg: { type: "enroll_pair", now: true } },
     {
-      name: "a kill release (the host refuses it; engage-only by shape)",
+      name: "set_kill with on: false (engage-only by shape; release is the kill_release message)",
       msg: { type: "set_kill", on: false },
     },
     { name: "revoke_client with a non-label name", msg: { type: "revoke_client", name: "../etc" } },

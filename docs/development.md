@@ -47,8 +47,8 @@ src/packages/core/fuzz/  cargo-fuzz workspace: wire parsers + semantic validator
                          (nightly + libFuzzer; see the Fuzzing section below)
 src/packages/shared/     contract types / validators / i18n (bun workspace member)
 tests/protocol/          e2e.py, adversarial.py, chaos.py - drive the real release binary
-tests/browser/           the five browser suites, run_all.ts, integration_e2e.ts
-                         (bun workspace member; isolated Chrome only)
+tests/browser/           the browser suites (run_all.ts lists them); integration_e2e.ts and
+                         presence_exchange_test.ts run apart (bun workspace member; isolated Chrome only)
 tests/interop/           the official MCP SDK client against the release binary (bun workspace member)
 tests/harness/           harness-smoke: real harness CLIs in isolated config dirs
 tests/fixtures/          HTML/CSS pages and the probe extension the browser suites load
@@ -226,7 +226,7 @@ Load `build/extension/chrome-mv3` as an unpacked extension in `chrome://extensio
 
 The protocol suites (`tests/protocol/e2e.py`, `adversarial.py`, `chaos.py`) drive the real release binary as subprocesses over the actual wire protocols, no browser needed: `moon run test-e2e` (in the gate), `test-adversarial`, `test-chaos`.
 
-The browser suites share one runner, `tests/browser/run_all.ts`, which CI's `browser.yml`, the container, and `moon run test-browser` all invoke. It builds the extension, runs every suite, then checks that each left its RAN marker:
+The browser suites listed in `tests/browser/run_all.ts` share one runner, which CI's `browser.yml`, the container, and `moon run test-browser` all invoke. It builds the extension, runs those suites, then checks that each left its RAN marker. The last row below runs apart:
 
 | Suite | What it proves |
 |-------|----------------|
@@ -235,6 +235,7 @@ The browser suites share one runner, `tests/browser/run_all.ts`, which CI's `bro
 | `security_browser_test.ts` | the browser-side half of the security model, against the same loaded extension |
 | `webauthn_test.ts` | the facts about Chrome's WebAuthn client the host's verifier assumes, with a CDP virtual authenticator standing in for Touch ID |
 | `cancel_test.ts` | a `cancel` frame from a stand-in host is consumed and never answered; not run on Windows |
+| `presence_exchange_test.ts` | the WebAuthn exchange end to end: two isolated Chromes against the real release host. Runs apart (`moon run test-presence-exchange`); `suitesFor` in `run_all.ts` says why |
 
 ```sh
 bun tests/browser/run_all.ts                           # builds the extension, then the suites

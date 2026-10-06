@@ -52,7 +52,7 @@ function ensureBinary(): void {
 // A private runtime dir keeps this suite's broker lock/socket away from any
 // real bridge instance: the lock path honors XDG_RUNTIME_DIR on macOS and
 // Linux, and lives under LOCALAPPDATA on Windows
-// (src/packages/core/src/ipc/lockfile.rs) - all three are overridden below.
+// (src/packages/core/src/ipc/runtime_dir.rs) - all three are overridden below.
 // XDG_CONFIG_HOME and (on macOS) HOME are pointed there too, mirroring
 // e2e.py's isolation, so even fallback config paths stay in the sandbox.
 let runtimeDir: string;
