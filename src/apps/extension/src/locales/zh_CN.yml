@@ -102,7 +102,7 @@ confirm:
   pf_pageEvalEnabled: "允许 page_eval (任意 JavaScript)"
   pf_confirmHighRiskClick: "确认高风险点击"
   pf_confirmPageEval: "每次 page_eval 都需确认"
-  pf_touchIdConfirm: "在确认窗口中确认 page_eval / page_upload (这两项的在场验证将随 WebAuthn 路径到来)"
+  pf_presenceConfirm: "在确认窗口中确认 page_eval / page_upload (这两项的在场验证将随 WebAuthn 路径到来)"
   pf_confirmTabClose: "确认 tab_close"
   pf_warnPreciseSnapshot: "精确快照前先提醒"
   pf_evalMask: "遮蔽 page_eval 的返回值"

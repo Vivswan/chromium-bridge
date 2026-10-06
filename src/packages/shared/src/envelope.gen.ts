@@ -275,7 +275,7 @@ export const PolicyCurrentWireSchema = z
             "handleDialogEnabled": z.union([z.boolean(), z.null()]).optional(),
             "hostReverifyMs": z.union([z.number().int().gte(0), z.null()]).optional(),
             "pageEvalEnabled": z.union([z.boolean(), z.null()]).optional(),
-            "touchIdConfirm": z.union([z.boolean(), z.null()]).optional(),
+            "presenceConfirm": z.union([z.boolean(), z.null()]).optional(),
             "warnPreciseSnapshot": z.union([z.boolean(), z.null()]).optional(),
           })
           .strict(),
@@ -563,7 +563,7 @@ export const PolicyRestrictWireSchema = z
         "handleDialogEnabled": z.union([z.boolean(), z.null()]).optional(),
         "hostReverifyMs": z.union([z.number().int().gte(0), z.null()]).optional(),
         "pageEvalEnabled": z.union([z.boolean(), z.null()]).optional(),
-        "touchIdConfirm": z.union([z.boolean(), z.null()]).optional(),
+        "presenceConfirm": z.union([z.boolean(), z.null()]).optional(),
         "warnPreciseSnapshot": z.union([z.boolean(), z.null()]).optional(),
       })
       .strict(),

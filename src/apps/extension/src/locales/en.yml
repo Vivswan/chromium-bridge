@@ -104,7 +104,7 @@ confirm:
   pf_pageEvalEnabled: "Allow page_eval (arbitrary JavaScript)"
   pf_confirmHighRiskClick: "Confirm high-risk clicks"
   pf_confirmPageEval: "Confirm every page_eval"
-  pf_touchIdConfirm: "Confirm page_eval / page_upload in the confirmation window (a presence tap comes with the WebAuthn route for these two)"
+  pf_presenceConfirm: "Confirm page_eval / page_upload in the confirmation window (a presence tap comes with the WebAuthn route for these two)"
   pf_confirmTabClose: "Confirm tab_close"
   pf_warnPreciseSnapshot: "Warn before precise snapshots"
   pf_evalMask: "Mask page_eval return values"
