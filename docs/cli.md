@@ -66,7 +66,7 @@ The CLI below registers the native-messaging host from a terminal through one en
 
 - **Idempotent re-registration:** on a fresh machine `--fix` is also the first registration, and after moving the binary it refreshes a stale one.
 - **Nothing built, downloaded, or copied:** the manifest points at this binary's own resolved path, through a small per-browser wrapper script on macOS/Linux.
-- **That wrapper** bakes in `--native-host --label <browser>`, because Chrome's manifest format has no `args` field.
+- **That wrapper** bakes in `--native-host`, because Chrome's manifest format has no `args` field, plus `--label <browser>` when one browser alone launches the manifest (`run-host-<browser>.sh`); a manifest several browsers read gets the unlabeled `run-host.sh` (the rule is `Target`'s in `registration.rs`).
 - **Overwrites a manifest another tool wrote at our host id** (the report names what it launched), refuses one it cannot read, and refuses a foreign pointer; `uninstall` leaves a foreign manifest.
 
 Selecting browsers:
@@ -84,7 +84,10 @@ chromium-bridge doctor --list                     # read-only: detection + regis
 
 The scope is the command's: `--system` writes the directories every account's browser reads (`/etc/opt/chrome/native-messaging-hosts`, `/Library/Google/Chrome/NativeMessagingHosts`, `HKLM`) and needs root, while without it a root shell is refused, since root has no browser of its own.
 
-Opera, and Brave on macOS and Linux, read Chrome's system directory rather than one of their own. For them `--system` registers Chrome's manifest and `doctor` reports it on their rows as Chrome's. That shared manifest carries no browser label (either browser may launch it), so its connections take the broker's default slot, as a `--manifest-dir` registration's do.
+Opera, and Brave on macOS and Linux, read Chrome's system directory rather than one of their own, and Brave on macOS reads Chrome's per-user directory as well. For them `doctor --fix` registers Chrome's manifest in that scope and `doctor` reports it on their rows as Chrome's.
+
+- **No label on the shared manifest:** either browser may launch it, so its connections take the broker's default slot, as a `--manifest-dir` registration's do.
+- **Own pointer per browser, per user on macOS:** Chrome and Brave each keep their own extension pointer there, so both prompt to enable the extension (machine-wide, macOS has one pointer directory for every browser).
 
 Known browser keys: `chrome`, `chromium`, `brave`, `edge`, `vivaldi`, `opera`. "Detected" means the browser is actually installed, as far as a cheap local check can tell:
 

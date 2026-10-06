@@ -16,7 +16,7 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
-use crate::browsers::{self, BaseDirs, ExtensionPointer, Os, Registration, Scope, Scoped};
+use crate::browsers::{self, BaseDirs, ExtensionPointer, Lookup, Os, Scope, Scoped};
 use crate::cli::DoctorCommand;
 use crate::identity::NATIVE_HOST_ID;
 use crate::ipc::{LockFile, RuntimeDir};
@@ -112,17 +112,17 @@ pub struct SlotStatus {
     pub state: RegState,
     pub location: String,
     /// The browser whose directory this is, when the row's browser reads another's
-    /// ([`crate::browsers::SystemRegistration::ReadsFrom`]).
+    /// ([`crate::browsers::Lookup::ReadsFrom`]).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner: Option<&'static str>,
 }
 
 impl SlotStatus {
-    fn assess(registration: &Registration, owner: Option<&'static str>) -> SlotStatus {
+    fn assess(lookup: &Lookup) -> SlotStatus {
         SlotStatus {
-            state: registration::assess(registration),
-            location: registration.location(),
-            owner,
+            state: registration::assess(lookup.registration()),
+            location: lookup.registration().location(),
+            owner: lookup.owner().map(browsers::Browser::key),
         }
     }
 
@@ -199,13 +199,10 @@ pub(crate) fn gather_manifests() -> Result<Vec<ManifestStatus>, String> {
             key: entry.browser.key(),
             detected: entry.installed(),
             manifest: Scoped {
-                user: SlotStatus::assess(&entry.user, None),
-                system: SlotStatus::assess(
-                    entry.system.registration(),
-                    entry.system.owner().map(browsers::Browser::key),
-                ),
+                user: SlotStatus::assess(&entry.manifest.user),
+                system: SlotStatus::assess(&entry.manifest.system),
             },
-            effective_scope: if registration::lookup_hit(&entry.user) {
+            effective_scope: if registration::lookup_hit(entry.manifest.user.registration()) {
                 Scope::User
             } else {
                 Scope::System
@@ -472,14 +469,8 @@ fn run_list() -> i32 {
             "not detected"
         };
         let rows = [
-            (Scope::User, SlotStatus::assess(&entry.user, None)),
-            (
-                Scope::System,
-                SlotStatus::assess(
-                    entry.system.registration(),
-                    entry.system.owner().map(browsers::Browser::key),
-                ),
-            ),
+            (Scope::User, SlotStatus::assess(&entry.manifest.user)),
+            (Scope::System, SlotStatus::assess(&entry.manifest.system)),
         ];
         for (scope, slot) in rows {
             let pointer = entry.pointer.as_ref().map_or_else(
@@ -594,14 +585,18 @@ mod tests {
                     key: "brave",
                     detected: false,
                     manifest: Scoped {
-                        user: slot(RegState::Missing, "/tmp/brave/com.vivswan.chromium_bridge.host.json", None),
+                        user: slot(
+                            RegState::Ok,
+                            "/tmp/com.vivswan.chromium_bridge.host.json",
+                            Some("chrome"),
+                        ),
                         system: slot(
                             RegState::Missing,
                             "/Library/Google/Chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json",
                             Some("chrome"),
                         ),
                     },
-                    effective_scope: Scope::System,
+                    effective_scope: Scope::User,
                     pointer: None,
                 },
             ]),
@@ -662,11 +657,15 @@ mod tests {
         assert!(text.contains("reachable (socket connect OK)"));
         // Per-browser manifest lines from the shared resolver.
         assert!(text.contains("host id com.vivswan.chromium_bridge.host"));
-        // Both scopes per browser, and a shared system directory named after its owner.
+        // Both scopes per browser, and a shared directory named after its owner in either scope (Brave on
+        // macOS reads Chrome's per-user directory too).
         assert!(text.contains("chrome    detected      user    manifest ok         /tmp/"));
         assert!(text.contains("system  manifest missing    /Library/Google/Chrome/"));
         assert!(text.contains(
             "NativeMessagingHosts/com.vivswan.chromium_bridge.host.json (reads chrome's)"
+        ));
+        assert!(text.contains(
+            "brave     not detected  user    manifest ok         /tmp/com.vivswan.chromium_bridge.host.json (reads chrome's)"
         ));
         // The pointer rows beside each manifest: state and location per scope, or why Linux has none.
         assert!(text.contains("user    pointer  ok         /tmp/External Extensions/"));

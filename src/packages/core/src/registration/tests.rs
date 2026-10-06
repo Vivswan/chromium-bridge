@@ -61,7 +61,7 @@ fn browser_target(tree: &TempTree) -> Target {
         label: Some(Browser::Chrome),
         name: "chrome".into(),
         registration: Registration::ManifestDir(tree.path("nm/chrome/NativeMessagingHosts")),
-        pointer: None,
+        pointers: Vec::new(),
     }
 }
 
@@ -75,9 +75,9 @@ fn macos_target(tree: &TempTree) -> Target {
 }
 
 fn pointer_path(target: &Target) -> PathBuf {
-    match &target.pointer {
-        Some(ExtensionPointer::File(path)) => path.clone(),
-        other => panic!("expected a pointer file, got {other:?}"),
+    match target.pointers.as_slice() {
+        [ExtensionPointer::File(path)] => path.clone(),
+        other => panic!("expected one pointer file, got {other:?}"),
     }
 }
 
@@ -94,10 +94,7 @@ fn register_writes_the_pointer_chrome_reads_and_uninstall_removes_it_with_the_ma
         fs::read_to_string(&pointer).unwrap(),
         "{\n  \"external_update_url\": \"https://clients2.google.com/service/update2/crx\"\n}\n"
     );
-    assert_eq!(
-        assess_pointer(target.pointer.as_ref().unwrap()),
-        PointerState::Ok
-    );
+    assert_eq!(assess_pointer(&target.pointers[0]), PointerState::Ok);
     assert!(
         lines.iter().any(|l| l.contains("extension pointer")),
         "{lines:?}"
@@ -117,10 +114,7 @@ fn register_writes_the_pointer_chrome_reads_and_uninstall_removes_it_with_the_ma
     );
     assert!(!pointer.exists());
     assert!(!target.registration.manifest_path().exists());
-    assert_eq!(
-        assess_pointer(target.pointer.as_ref().unwrap()),
-        PointerState::Missing
-    );
+    assert_eq!(assess_pointer(&target.pointers[0]), PointerState::Missing);
     // A second uninstall reports nothing to do, for both.
     assert_eq!(
         Registrar::uninstall(&target),
@@ -153,7 +147,7 @@ fn foreign_pointer_blocks_register_and_is_left_alone_by_uninstall() {
     );
     assert!(!target.registration.manifest_path().exists());
     assert!(matches!(
-        assess_pointer(target.pointer.as_ref().unwrap()),
+        assess_pointer(&target.pointers[0]),
         PointerState::Foreign(_)
     ));
 
@@ -367,7 +361,7 @@ fn unreadable_manifest_path_fails_closed() {
             registration: Registration::ManifestDir(
                 tree.path(&format!("nm/{case}/NativeMessagingHosts")),
             ),
-            pointer: None,
+            pointers: Vec::new(),
         };
         let manifest = target.registration.manifest_path();
         plant(&manifest);
@@ -686,9 +680,12 @@ fn system_scope_registers_into_the_system_roots_once_per_shared_directory() {
         .iter()
         .find(|e| e.browser == Browser::Brave)
         .unwrap();
-    assert_eq!(brave.system.owner(), Some(Browser::Chrome));
-    assert_eq!(assess(brave.system.registration()), RegState::Ok);
-    assert_eq!(assess(&brave.user), RegState::Missing);
+    assert_eq!(brave.manifest.system.owner(), Some(Browser::Chrome));
+    assert_eq!(assess(brave.manifest.system.registration()), RegState::Ok);
+    assert_eq!(
+        assess(brave.manifest.user.registration()),
+        RegState::Missing
+    );
 
     // uninstall --system: every known browser's system target, once per directory, then the wrappers.
     for target in browser_targets(entries.iter(), Scope::System) {
@@ -706,6 +703,126 @@ fn system_scope_registers_into_the_system_roots_once_per_shared_directory() {
     );
     assert!(!manifest.exists());
     assert!(!install_dir.exists());
+}
+
+/// A Mac with Chrome and Brave both installed: Brave's delegate reads Chrome's per-user manifest directory,
+/// so `doctor --fix` writes Chrome's manifest once, unlabeled (either browser launches it), and still writes
+/// both browsers' own extension pointers, since each prompts from its own user data root. `doctor` reports
+/// Brave's user row as Chrome's, and `uninstall` removes the manifest and both pointers.
+#[test]
+fn macos_chrome_and_brave_share_one_user_manifest_and_keep_their_own_pointers() {
+    let tree = TempTree::new("macos-shared-user");
+    fs::create_dir_all(tree.path("sys/Applications/Google Chrome.app")).unwrap();
+    fs::create_dir_all(tree.path("sys/Applications/Brave Browser.app")).unwrap();
+    let dirs = tree_dirs(&tree);
+    let entries = browsers::resolve(Os::MacOs, &dirs);
+    let app_support = tree.path("home/Library/Application Support");
+    let chrome_pointer = ExtensionPointer::File(app_support.join(format!(
+        "Google/Chrome/External Extensions/{PINNED_EXTENSION_ID}.json"
+    )));
+    let brave_pointer = ExtensionPointer::File(app_support.join(format!(
+        "BraveSoftware/Brave-Browser/External Extensions/{PINNED_EXTENSION_ID}.json"
+    )));
+
+    let targets = select_targets(&crate::cli::FixTargets::Detected, &entries, Scope::User).unwrap();
+    let [target] = targets.as_slice() else {
+        let names: Vec<&str> = targets.iter().map(|t| t.name.as_str()).collect();
+        panic!("two detected browsers, one shared manifest, got {names:?}");
+    };
+    assert_eq!(target.name, "chrome");
+    assert_eq!(target.label, None);
+    assert_eq!(
+        target.registration,
+        Registration::ManifestDir(app_support.join("Google/Chrome/NativeMessagingHosts"))
+    );
+    assert_eq!(
+        target.pointers,
+        vec![chrome_pointer.clone(), brave_pointer.clone()]
+    );
+    // Brave alone still lands in Chrome's directory, with Brave's own pointer alone.
+    let brave_only = select_targets(
+        &crate::cli::FixTargets::Browsers(vec![Browser::Brave]),
+        &entries,
+        Scope::User,
+    )
+    .unwrap();
+    assert_eq!(brave_only[0].name, "chrome");
+    assert_eq!(brave_only[0].registration, target.registration);
+    assert_eq!(brave_only[0].pointers, vec![brave_pointer.clone()]);
+
+    let reg = registrar(&tree);
+    let lines = reg.register(target).unwrap();
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|l| l.contains("extension pointer"))
+            .count(),
+        2,
+        "{lines:?}"
+    );
+    // The whole launch outcome: an unlabeled trampoline, and a manifest that launches it. The host path is
+    // quoted as the writer quotes it, so a temp dir with a quote in its name does not fail a correct run.
+    let wrapper = reg.install_dir.join("run-host.sh");
+    assert_eq!(
+        fs::read_to_string(&wrapper).unwrap(),
+        format!(
+            "#!/usr/bin/env bash\n# managed by chromium-bridge; safe to delete\nexec {} --native-host\n",
+            shell_quote(&tree.path("bin/chromium-bridge").to_string_lossy())
+        )
+    );
+    let manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(target.registration.manifest_path()).unwrap())
+            .unwrap();
+    assert_eq!(
+        manifest,
+        serde_json::json!({
+            "name": NATIVE_HOST_ID,
+            "description": "Chromium Bridge native messaging host (managed by chromium-bridge)",
+            "path": wrapper,
+            "type": "stdio",
+            "allowed_origins": [format!("chrome-extension://{PINNED_EXTENSION_ID}/")],
+        })
+    );
+    for pointer in [&chrome_pointer, &brave_pointer] {
+        assert_eq!(assess_pointer(pointer), PointerState::Ok, "{pointer:?}");
+    }
+    assert!(
+        !app_support
+            .join("BraveSoftware/Brave-Browser/NativeMessagingHosts")
+            .exists(),
+        "a manifest was written where Brave never looks"
+    );
+    // doctor rows: both user slots are the one healthy registration, Brave's named as Chrome's.
+    let brave = entries
+        .iter()
+        .find(|e| e.browser == Browser::Brave)
+        .unwrap();
+    assert_eq!(brave.manifest.user.owner(), Some(Browser::Chrome));
+    assert_eq!(assess(brave.manifest.user.registration()), RegState::Ok);
+    assert!(lookup_hit(brave.manifest.user.registration()));
+
+    let removal = Registrar::uninstall(target);
+    assert!(
+        removal.refused.is_empty() && removal.failed.is_empty(),
+        "{removal:?}"
+    );
+    assert_eq!(
+        removal
+            .lines
+            .iter()
+            .filter(|l| l.contains("removed extension pointer"))
+            .count(),
+        2,
+        "{removal:?}"
+    );
+    assert!(!target.registration.manifest_path().exists());
+    for pointer in [&chrome_pointer, &brave_pointer] {
+        assert_eq!(
+            assess_pointer(pointer),
+            PointerState::Missing,
+            "{pointer:?}"
+        );
+    }
 }
 
 /// Chromium on Windows selects a manifest through the registry key alone, so the shared store file is
@@ -1115,10 +1232,10 @@ fn registry_targets_fail_closed_off_windows() {
                 key: r"Software\Google\Chrome\NativeMessagingHosts\x".into(),
                 manifest_path: tree.path("store/x.json"),
             },
-            pointer: Some(ExtensionPointer::Registry {
+            pointers: vec![ExtensionPointer::Registry {
                 hive: Hive::CurrentUser,
                 key: r"Software\Google\Chrome\Extensions\x".into(),
-            }),
+            }],
         };
         // Refused before anything is written: no manifest, no store dir.
         assert!(reg.register(&target).is_err());
@@ -1130,7 +1247,7 @@ fn registry_targets_fail_closed_off_windows() {
         assert_eq!(removal.refused.len(), 2, "{removal:?}");
         assert!(removal.failed.is_empty(), "{removal:?}");
         assert!(matches!(
-            assess_pointer(target.pointer.as_ref().unwrap()),
+            assess_pointer(&target.pointers[0]),
             PointerState::Unreadable(_)
         ));
     }

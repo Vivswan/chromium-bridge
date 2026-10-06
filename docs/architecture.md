@@ -235,6 +235,7 @@ Registration (written by `doctor --fix` through `registration.rs`):
 
 ```
 macOS   ~/.chromium-bridge/run-host-<browser>.sh      # wrapper: exec <host> --native-host --label <browser>
+        ~/.chromium-bridge/run-host.sh                # unlabeled, for a manifest several browsers read
         ~/Library/Application Support/<Vendor>/NativeMessagingHosts/
           com.vivswan.chromium_bridge.host.json       # manifest -> that browser's wrapper
 
@@ -247,7 +248,7 @@ Windows %LOCALAPPDATA%\chromium-bridge\com.vivswan.chromium_bridge.host.json
           (Default) = absolute path of the manifest; manifest points at the exe
 ```
 
-The manifest's `path` points at the registering binary in place (through the wrapper on Unix, because the manifest format has no `args` field); nothing is built, downloaded, or copied. On Windows, Chrome appends the extension origin to the command line, which selects native-host mode.
+The manifest's `path` points at the registering binary in place (through the wrapper on Unix, because the manifest format has no `args` field); nothing is built, downloaded, or copied. The wrapper carries `--label <browser>` only when one browser alone launches that manifest; one several browsers read gets the unlabeled `run-host.sh`, per `registration.rs`. On Windows, Chrome appends the extension origin to the command line, which selects native-host mode.
 
 Runtime state, in the 0700 per-user runtime directory (macOS: `$XDG_RUNTIME_DIR/chromium-bridge` or `~/Library/Application Support/chromium-bridge`; Linux: `$XDG_RUNTIME_DIR/chromium-bridge` with XDG-cache fallback; Windows: `%LOCALAPPDATA%\chromium-bridge`):
 
@@ -446,7 +447,7 @@ Chrome force-restarts the SW about every 5 minutes, losing in-memory state; the 
 Any `chrome.debugger.attach` shows a "Started debugging this browser" banner on every tab while attached. Mitigation: the default snapshot uses a content script and never touches the debugger; `page_snapshot_precise` attaches, reads the a11y tree, and detaches in one handler (detach on the finally path), so the banner flashes for about a second.
 
 ### 7.3 The Native Messaging manifest has no args field
-The manifest's `path` must be a bare executable. Mitigation: a wrapper script per browser (`run-host-<browser>.sh`) bakes in `--native-host --label <browser>`; the label keys the broker's connection registry.
+The manifest's `path` must be a bare executable. Mitigation: a wrapper script bakes in `--native-host`, with `--label <browser>` (`run-host-<browser>.sh`) when one browser alone launches that manifest and none (`run-host.sh`) when several read it, per `registration.rs`; the label keys the broker's connection registry.
 
 ### 7.4 chrome.permissions.request requires a user gesture
 Host permissions can only be requested from a user-gesture context. Mitigation: the allowlist authorization flow goes through the popup; Allow requests the permission and records the entry together.
