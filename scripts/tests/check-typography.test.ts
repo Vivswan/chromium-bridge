@@ -1,6 +1,5 @@
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { afterAll, describe, expect, test } from "bun:test";
+import { symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   decodeStrict,
@@ -12,6 +11,10 @@ import {
   parseAllowlist,
   scanFile,
 } from "../check-typography";
+import { Scratch } from "../lib";
+
+const scratch = new Scratch();
+afterAll(() => scratch.remove());
 
 // Every character under test is written as a \u escape, so this file passes
 // its own gate (and check-cjk.ts).
@@ -97,7 +100,7 @@ describe("content sniffing", () => {
 });
 
 describe("scanFile (temp fixtures, never the repo)", () => {
-  const dir = mkdtempSync(join(tmpdir(), "check-typography-test-"));
+  const dir = scratch.dir("check-typography-test");
 
   test("fails a fixture containing an em-dash", () => {
     const path = join(dir, "dirty.md");
@@ -173,7 +176,7 @@ describe("scanFile (temp fixtures, never the repo)", () => {
 });
 
 describe("loadAllowlist (temp fixtures)", () => {
-  const dir = mkdtempSync(join(tmpdir(), "check-typography-allow-"));
+  const dir = scratch.dir("check-typography-allow");
 
   test("loads a plain UTF-8 list", () => {
     const path = join(dir, "allow");
