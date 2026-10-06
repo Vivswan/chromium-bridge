@@ -8,11 +8,15 @@
 // A path is a backticked token with a slash and an extension (or ./, ../, a trailing slash), or a
 // relative link destination; placeholders (<...>), globs, owner/repo slugs, and bare file names are
 // left alone, since a page may name files the reader will create.
+// A translated page (check-docs-locales says which) is probed for paths and links only: a whitespace
+// word count does not read CJK, so the English page carries the cap and check-docs-locales keeps the
+// translated tree mirroring it file-for-file.
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { localeOf } from "./check-docs-locales";
 import { gitEnv } from "./lib";
 import { linkFile, readPage } from "./markdown-page";
 import { realpath, withinRoot } from "./repo-paths";
@@ -383,7 +387,8 @@ export function probePage(text: string, file: string, options: ProbeOptions): Fi
   const findings: Finding[] = [];
   const pageDir = dirname(resolve(options.root, file));
   const scan = scanPage(text);
-  for (const unit of scan.units) {
+  const capped = localeOf(file) === undefined ? scan.units : [];
+  for (const unit of capped) {
     const words = wordCount(unit.text);
     if (words > options.maxWords) {
       const noun = unit.kind === "item" ? "list item" : "paragraph";
@@ -503,8 +508,8 @@ const USAGE = [
     " [--max-words <n>] [--shape-only] [--baseline <file>] <page.md | glob>...",
   "  --root        the repository root paths resolve against (default: cwd)",
   "  --base        a directory under the root that paths also resolve against (repeatable)",
-  "  --max-words   the cap on a paragraph or list item (default: 70)",
-  "  --shape-only  word counts only; skip the check that named paths exist",
+  "  --max-words   the cap on a paragraph or list item (default: 70); a locale page is probed for paths and links only",
+  "  --shape-only  word counts only; skip the check that named paths exist (refused with a locale page, which has no word count)",
   "  --baseline    a file of allowed findings (page and unit fingerprint); one that no longer fires fails too",
   "  --print-baseline  print the baseline lines for every finding of the pages, then exit 0",
   "  a page argument with a * is a glob, expanded under the root; one that matches nothing is an error",
@@ -540,7 +545,7 @@ export function expandPages(root: string, args: readonly string[]): string[] {
     }
     const matches = [...new Bun.Glob(arg).scanSync({ cwd: root, onlyFiles: true })];
     if (matches.length === 0) throw new Error(`${arg} matches no file under ${root}`);
-    for (const match of matches) pages.add(toPosix(match));
+    for (const match of matches) pages.add(pageLabel(root, match));
   }
   return [...pages].sort();
 }
@@ -590,15 +595,15 @@ export function parseArgs(argv: readonly string[]): CliOptions {
     if (!statSync(baseline, { throwIfNoEntry: false })?.isFile())
       throw new Error(`--baseline ${baseline} is not a readable file`);
   }
-  return {
-    root,
-    bases,
-    maxWords,
-    paths,
-    baseline,
-    printBaseline,
-    pages: expandPages(root, pageArgs),
-  };
+  const pages = expandPages(root, pageArgs);
+  // A locale page skips the cap, so without the path check it would pass with nothing probed.
+  const unchecked = paths ? [] : pages.filter((page) => localeOf(page) !== undefined);
+  if (unchecked.length > 0) {
+    throw new Error(
+      `--shape-only leaves a locale page with nothing to check: ${unchecked.join(", ")}`,
+    );
+  }
+  return { root, bases, maxWords, paths, baseline, printBaseline, pages };
 }
 
 if (import.meta.main) {
@@ -631,8 +636,10 @@ if (import.meta.main) {
   const { fresh, stale, allowed } = judgment;
   if (fresh.length === 0 && stale.length === 0) {
     const allowance = allowed > 0 ? `; ${allowed} finding(s) allowed by ${baselineLabel}` : "";
+    const locale = options.pages.filter((page) => localeOf(page) !== undefined).length;
+    const shapeOnly = locale > 0 ? `; ${locale} locale page(s) paths and links only` : "";
     console.log(
-      `docs-probe: ${options.pages.length} page(s) clean (cap ${options.maxWords} words)${allowance}`,
+      `docs-probe: ${options.pages.length} page(s) clean (cap ${options.maxWords} words${shapeOnly})${allowance}`,
     );
     process.exit(0);
   }

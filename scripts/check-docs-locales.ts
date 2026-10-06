@@ -23,6 +23,13 @@ export type LocaleReport =
 
 const toPosix = (path: string): string => path.split(sep).join("/");
 
+/** The locale a root-relative posix page label is a translation for: under docs/<locale>/, or the root README.<locale>.md. */
+export function localeOf(page: string): Locale | undefined {
+  return LOCALES.find(
+    (locale) => page.startsWith(`docs/${locale}/`) || page === `README.${locale}.md`,
+  );
+}
+
 const isDirectory = (path: string): boolean =>
   statSync(path, { throwIfNoEntry: false })?.isDirectory() ?? false;
 const isFile = (path: string): boolean =>
@@ -39,9 +46,7 @@ export function checkLocales(root: string): LocaleReport[] {
   if (!isDirectory(docs)) {
     throw new Error(`${docs} is not a directory; the English docs tree is the reference`);
   }
-  const english = pages(docs).filter(
-    (page) => !LOCALES.some((locale) => page.startsWith(`${locale}/`)),
-  );
+  const english = pages(docs).filter((page) => localeOf(`docs/${page}`) === undefined);
   // A reference with no page would make any locale a mirror of nothing.
   if (english.length === 0) {
     throw new Error(`${docs} holds no .md page; the English docs tree is the reference`);
