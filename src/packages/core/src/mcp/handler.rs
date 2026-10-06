@@ -370,20 +370,26 @@ mod tests {
         // rmcp's content model is the external side: an outcome's blocks must reach the client typed (an
         // image stays an image, never the stringified fallback) and tool failures stay isError results,
         // never protocol errors.
-        let text = json!([{ "type": "text", "text": "{\"tabs\":[]}" }]);
-        let image = json!([{ "type": "image", "data": "aGk=", "mimeType": "image/png" }]);
+        enum Kind {
+            Text,
+            Image,
+        }
         let cases = [
             (
                 "success text",
                 tools::Outcome::Success {
-                    content: text.clone(),
+                    content: json!([{ "type": "text", "text": "{\"tabs\":[]}" }]),
                 },
                 false,
+                Kind::Text,
             ),
             (
                 "success image",
-                tools::Outcome::Success { content: image },
+                tools::Outcome::Success {
+                    content: json!([{ "type": "image", "data": "aGk=", "mimeType": "image/png" }]),
+                },
                 false,
+                Kind::Image,
             ),
             (
                 "error",
@@ -392,9 +398,10 @@ mod tests {
                     code: "BRIDGE_KILLED",
                 },
                 true,
+                Kind::Text,
             ),
         ];
-        for (case, out, is_error) in cases {
+        for (case, out, is_error, kind) in cases {
             let result = call_tool_result(&out);
             assert_eq!(result.is_error, Some(is_error), "{case}");
             assert_eq!(
@@ -402,12 +409,11 @@ mod tests {
                 *out.content(),
                 "{case}: the blocks must survive typed"
             );
-            if case == "success image" {
-                assert!(
-                    matches!(result.content[0], ContentBlock::Image(_)),
-                    "{case}"
-                );
-            }
+            let typed = match kind {
+                Kind::Text => matches!(result.content[0], ContentBlock::Text(_)),
+                Kind::Image => matches!(result.content[0], ContentBlock::Image(_)),
+            };
+            assert!(typed, "{case}: the first block must keep its kind");
         }
     }
 

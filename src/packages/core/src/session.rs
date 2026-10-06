@@ -5,8 +5,9 @@
 //! by the caller's deadline) for one to attach; the extension re-calls `connectNative` on its own.
 //!
 //! Connections are keyed by browser label (from the handshake `Response`, trusted only after the HMAC verifies;
-//! a missing label maps to [`crate::ipc::DEFAULT_LABEL`]). A new dial-in under the SAME label supersedes that connection:
-//! the registry severs the older socket, its host exits on the EOF, and that extension life redials on its own.
+//! a missing label maps to [`crate::ipc::DEFAULT_LABEL`]). A new dial-in under the SAME label supersedes that
+//! connection: the registry severs the older socket, its host exits on the EOF, and that extension life redials
+//! on its own.
 //! Different labels coexist. [`resolve_target`] picks the connection for a request.
 //!
 //! Every connection carries a monotonic `generation` (global across labels), and a pending request is bound to
