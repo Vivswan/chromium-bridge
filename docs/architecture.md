@@ -222,9 +222,9 @@ Built on WXT (which generates the manifest, including the pinned key) with React
 | `src/apps/extension/src/entrypoints/confirm/` | The confirmation window: an extension-owned `chrome-extension://` document the page cannot read, overlay, or click |
 | `src/apps/extension/src/entrypoints/options/`, `src/apps/extension/src/entrypoints/popup/` | Settings (Zod-validated, versioned, migrated), the host-admin panels, and the authorization/status popup |
 | `src/apps/extension/src/lib/background/` | Dispatch, allowlist store, tabs/CDP backends, cookies, egress masking, kill mirror, enrollment, policy sync |
-| `src/apps/extension/src/lib/webauthn/` | The WebAuthn client half of the presence exchange: the ceremony against the browser's authenticator and the frame exchange with the host |
+| `src/apps/extension/src/lib/webauthn/` | The background half of the presence exchange: the frame exchange with the host (the ceremony itself is under `lib/shared/`) |
 | `src/apps/extension/src/lib/dom/` | The one shared DOM implementation (snapshot/refs/actions); the CDP backend ships its stringified source so the two page backends cannot diverge |
-| `src/apps/extension/src/lib/shared/` | Settings schema, message protocol types, allowlist matching |
+| `src/apps/extension/src/lib/shared/` | Settings schema, message protocol types, allowlist matching, and the page half of the presence exchange: the WebAuthn ceremony against the browser's authenticator in `webauthn-ceremony.ts` |
 | `src/apps/extension/src/locales/` | The i18n bundles, one `*.yml` per locale (en, zh_CN, zh_TW); CI enforces key parity |
 
 Trust-state isolation: the enrollment pin, kill mirror, allowlist, and audit ring live in storage confined to extension contexts (`setAccessLevel(TRUSTED_CONTEXTS)`), and the message router refuses security-relevant messages from anything but the extension's own pages.
@@ -384,7 +384,7 @@ flowchart LR
   host["src/packages/core/src/native_host.rs"]
   exchange["src/apps/extension/src/lib/webauthn/exchange.ts<br>handleWebAuthnFrame() pendingPresenceRequest() assertPresence()"]
   page["the options page, the RP page the user taps on"]
-  ceremony["src/apps/extension/src/lib/webauthn/ceremony.ts<br>requestOptions() assert() browserClient"]
+  ceremony["src/apps/extension/src/lib/shared/webauthn-ceremony.ts<br>requestOptions() assert() browserClient"]
   authenticator["the browser's WebAuthn client and the platform authenticator"]
   verify["src/packages/core/src/webauthn/verify.rs"]
   store["src/packages/core/src/webauthn/store.rs"]
@@ -404,7 +404,7 @@ flowchart LR
 
 The host is the relying party and the extension is the WebAuthn client, with the extension id as the RP ID. Enrollment runs the same exchange with `enroll_begin`, `enroll_options`, `enroll_finish`, and `enroll_result`; the first enrollment on a machine is trust on first use, every later one needs a tap from a credential already enrolled on the machine, under any browser.
 
-The options panel that runs the ceremony and answers is in progress; the background half and the browser suite are in place.
+The options page runs the ceremony and answers: it enrolls this browser's authenticator and releases the kill switch. A release is a tap on this browser's enrolled credential; when the host's request names no credential, the page asks for a confirmation instead.
 
 A `presence_confirm` from the confirmation window is accepted only when no enrolled credential could have answered, so an enrolled browser is never demoted to a click.
 
