@@ -4,6 +4,7 @@
 
 use std::fmt;
 
+use itertools::Itertools as _;
 use serde::de::value::StrDeserializer;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -364,8 +365,8 @@ impl AuditReport {
 }
 
 /// The browsers a `registration_repair` names, parsed once at the frame boundary the way `--browser` is at
-/// argv: known keys only, folded by the CLI's own [`crate::cli::distinct_browsers`], never empty. Travels as
-/// the list of keys.
+/// argv: known keys only, a repeat folded in first-seen order as `--browser chrome,brave,chrome` is, never
+/// empty. Travels as the list of keys.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepairBrowsers(Vec<crate::browsers::Browser>);
 
@@ -401,7 +402,7 @@ impl<'de> Deserialize<'de> for RepairBrowsers {
                 })
             })
             .collect::<Result<Vec<Browser>, D::Error>>()?;
-        Ok(RepairBrowsers(crate::cli::distinct_browsers(browsers)))
+        Ok(RepairBrowsers(browsers.into_iter().unique().collect()))
     }
 }
 

@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use clap::builder::ArgGroup;
 use clap::{Arg, ArgAction, ArgMatches, Args, FromArgMatches, Parser, Subcommand};
+use itertools::Itertools as _;
 
 use crate::allowlist::ClientName;
 use crate::audit::DEFAULT_AUDIT_LIMIT;
@@ -189,7 +190,7 @@ impl From<DoctorFlags> for DoctorCommand {
         let targets = if flags.all {
             FixTargets::All
         } else if !flags.browser.is_empty() {
-            FixTargets::Browsers(distinct_browsers(flags.browser))
+            FixTargets::Browsers(flags.browser.into_iter().unique().collect())
         } else if !flags.manifest_dir.is_empty() {
             FixTargets::ManifestDirs(flags.manifest_dir)
         } else {
@@ -200,18 +201,6 @@ impl From<DoctorFlags> for DoctorCommand {
             scope: scope_flag(flags.system),
         }
     }
-}
-
-/// The named browsers in first-seen order, each once: `--browser chrome,brave,chrome` and the options page's
-/// list fold the same way, so a repeat registers once on either surface.
-pub fn distinct_browsers(browsers: impl IntoIterator<Item = Browser>) -> Vec<Browser> {
-    let mut distinct: Vec<Browser> = Vec::new();
-    for browser in browsers {
-        if !distinct.contains(&browser) {
-            distinct.push(browser);
-        }
-    }
-    distinct
 }
 
 /// The one place `--system` becomes a [`Scope`].

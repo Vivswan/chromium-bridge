@@ -29,8 +29,11 @@ clap = { version = "4.6", default-features = false, features = ["std", "derive",
 getrandom = { version = "0.4", features = ["std", "sys_rng"] }
 # Hex for MACs, nonces, and image/key fingerprints.
 hex = "0.4"
-itertools = "0.14"
 hmac = "0.13"
+# First-seen-order dedupe (`unique`): the browsers `doctor --fix --browser` and the options page's repair
+# frame name (src/packages/core/src/cli.rs, protocol/control.rs), and the credentials a revoke forgets
+# (webauthn/store.rs). `use_std` alone: `unique` hashes seen items.
+itertools = { version = "0.15", default-features = false, features = ["use_std"] }
 libc = "0.2.186"
 # Safe sigmask wrapper for the signal-cleanup thread (src/packages/core/src/sys.rs): `signal`; the
 # effective-uid read behind the registration scope gate (src/packages/core/src/registration.rs): `user`.
