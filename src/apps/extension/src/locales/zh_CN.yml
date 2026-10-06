@@ -299,5 +299,4 @@ audit:
   kind_enroll_revoked: "配对已撤销 (解除配对)"
   kind_client_revoked: "受信任客户端已撤销"
   kind_kill_engaged: "已请求启用紧急停止"
-  kind_kill_released: "已请求解除紧急停止"
   kind_kill_status_changed: "紧急停止状态已变更"
