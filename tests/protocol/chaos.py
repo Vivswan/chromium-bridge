@@ -45,12 +45,10 @@ first docstring line.
 
 Run: `moon run test-chaos` (or `python -m unittest discover -s tests/protocol -p chaos.py -v`).
 """
-import json
 import os
 import struct
 import subprocess
 import sys
-import threading
 import time
 import unittest
 
@@ -217,15 +215,7 @@ class Faults(ChaosCase):
         nh = self.host()
         self.in_flight(c, nh, 51)
         h.kill(srv)
-
-        def read_resp():
-            try:
-                return ("json", c.recv())
-            except (ValueError, OSError) as e:
-                return ("eof", type(e).__name__)
-
-        outcome = self.bounded("the client's read after the server died", read_resp, 15)
-        self.assertEqual(outcome[0], "eof", f"EOF or broken pipe, not a response: {outcome}")
+        self.assertEqual(h.read_reply_or_eof(srv, 15), "", "a clean EOF, never a corrupt response")
         srv2 = self.server(clear_lock=False)
         self.assertRoundTrip(self.mcp_ready(srv2), self.host(), "C5 Recovered", 52)
 
@@ -252,14 +242,9 @@ class Faults(ChaosCase):
             h.reap(nh)
         self.assertGreaterEqual(reached, 6, "hosts reached the connect/handshake window")
         self.assertIsNone(srv.poll(), "the server survived the in-window deaths")
-        deadline = time.time() + 8
-        listing = None
-        while time.time() < deadline:
-            listing = h.tool_payload(self.bounded("list_browsers", lambda: c.call("list_browsers", {}, _id=601), 15))
-            if listing["count"] == 0:
-                break
-            time.sleep(0.2)
-        self.assertEqual(listing, {"browsers": [], "count": 0}, "no stale browser slot")
+        self.assertEventually(
+            lambda: h.browsers_listing(self.bounded("list_browsers", lambda: c.call("list_browsers", {}, _id=601), 15)),
+            {"browsers": [], "count": 0}, 8, "no stale browser slot")
         self.assertRoundTrip(c, self.host(), "C6 OK", 602)
 
     def test_c7_stale_lock_and_socket(self):
@@ -267,13 +252,12 @@ class Faults(ChaosCase):
         cleans them up, binds fresh, and actually serves."""
         self.skip_unless_unix("the filesystem socket")
         srv = self.server()
-        endpoint = srv.lock["endpoint"]
-        self.assertTrue(os.path.exists(endpoint), "the socket exists on disk")
+        self.assertTrue(os.path.exists(h.socket_path()), "the socket exists on disk")
         h.kill(srv)
-        self.assertEqual((os.path.exists(h.LOCK), os.path.exists(endpoint)), (True, True),
+        self.assertEqual((os.path.exists(h.LOCK), os.path.exists(h.socket_path())), (True, True),
                          "lock and socket left stale after SIGKILL")
         srv2 = self.server(clear_lock=False)
-        self.assertTrue(os.path.exists(srv2.lock["endpoint"]), "the next server's socket exists")
+        self.assertTrue(os.path.exists(h.socket_path()), "the next server's socket exists")
         self.assertRoundTrip(self.mcp_ready(srv2), self.host(), "C7 OK", 701)
 
 
@@ -294,11 +278,11 @@ class Coexistence(ChaosCase):
                         break
                     time.sleep(0.2)
                 self.assertEqual([s.poll() for s in servers], [None] * 6, "all instances coexist")
-                owner = next((s for s in servers if lf and s.pid == lf["pid"]), None)
-                self.assertIsNotNone(owner, "the lock names one of the instances")
+                locks = [h.lock_published_by(s) for s in servers]
+                self.assertIn(h.lock_record(lf), locks, "the lock names one of the instances")
                 if os.name != "nt":
-                    self.assertTrue(os.path.exists(lf["endpoint"]), "the broker's socket exists")
-                relay = next(s for s in servers if s is not owner)
+                    self.assertTrue(os.path.exists(h.socket_path()), "the broker's socket exists")
+                relay = next(s for s in servers if h.lock_published_by(s) != h.lock_record(lf))
                 self.assertRoundTrip(self.mcp_ready(relay), self.host(), "C4 Coexist", 400 + rnd)
             self.doCleanups()
 
@@ -321,8 +305,7 @@ class Coexistence(ChaosCase):
                 h.kill(s)
             time.sleep(0.4)
             self.assertIsNone(broker.poll(), f"cycle {cycle}: the broker survives the abrupt relay drop")
-            lf = h.wait_lock(broker, timeout=2)
-            self.assertEqual(lf and lf["pid"], broker.pid, f"cycle {cycle}: the broker still owns the lock")
+            self.assertLock(h.wait_lock(broker, timeout=2), broker, f"cycle {cycle}: the broker still owns the lock")
             self.assertRoundTrip(cb, nh, f"C9-{cycle}", 900 + cycle)
         broker.stdin.close()
         self.assertExits(broker, 10, "the broker exits once its last harness detaches")
@@ -342,7 +325,7 @@ class Enforcement(ChaosCase):
         self.assertEqual(self.bounded("the revoked call", broker.stdout.readline, 10), "",
                          "the revoked harness gets EOF")
         self.assertExits(broker, 8, "the broker for the revoked harness exits")
-        h.run_with_cli_presence(["pair-client", "--name", "pytest", "--this-parent"])
+        h.pair_client("pytest", "--this-parent")
         broker2 = self.server()
         self.assertRoundTrip(self.mcp_ready(broker2), self.host(), "C10-after", 1002)
 
@@ -364,9 +347,16 @@ class Enforcement(ChaosCase):
 
     def test_c13_audit_sink_failure_never_fails_the_decision(self):
         """With the audit file replaced by a directory every append fails, yet
-        tool calls flow, a kill engages and refuses typed; once the sink heals
-        the trail resumes and carries a dropped counter for the gap."""
+        tool calls flow, a kill engages, refuses typed, and severs the browser
+        leg; once the sink heals the trail resumes, and the broker's first
+        record carries a dropped counter for its gap."""
+        attached = len(h.audit_records(("browser_attach",)))
         broker, cb, nh = self.enrolled_broker()
+        # The broker records the attach after it has told the host it is
+        # accepted, so the host's readiness does not put the record on disk.
+        self.assertEventually(lambda: h.audit_records(("browser_attach",))[attached:],
+                              [h.audit_record("browser_attach", surface="broker", outcome="ok", name="default")],
+                              5, "the host's attach is in the trail before the sink breaks")
         self.addCleanup(h.run_with_cli_presence, ["unkill"], check=False)
         audit_path = h.runtime_file("audit.log")
         self.addCleanup(self._rmdir, audit_path)
@@ -379,21 +369,18 @@ class Enforcement(ChaosCase):
         kill = h.run_cli(["kill"])
         self.assertEqual(kill.returncode, 0, kill.stderr)
         self.assertEqual(cb.call("tab_list", {}, _id=1201), tool_error(1201, "BRIDGE_KILLED", h.BRIDGE_KILLED))
+        self.assertExits(nh, 8, "the kill severs the browser leg with the sink broken")
         h.run_with_cli_presence(["unkill"])
         os.rmdir(audit_path)
         h.run_cli(["kill"], check=True)
         h.run_with_cli_presence(["unkill"])
-        cb.call("tab_list", {}, _id=1202)
-        deadline = time.time() + 5
-        records = []
-        while not records and time.time() < deadline:
-            records = h.read_jsonl(audit_path)
-            time.sleep(0.2)
-        kinds = [rec["event_kind"] for rec in records]
-        self.assertEqual((("kill_engage" in kinds), ("kill_release" in kinds)), (True, True),
-                         f"post-heal decisions are in the trail: {kinds}")
-        self.assertTrue(any(rec.get("dropped") for rec in records),
-                        "a writer that failed earlier surfaces its gap")
+        self.assertRoundTrip(cb, self.host(), "C13-healed", 1202)
+        self.assertEqual(h.audit_records(), [
+            h.audit_record("kill_engage", surface="cli", outcome="ok"),
+            h.audit_record("kill_release", surface="cli", outcome="ok", detail="auth=tty"),
+            h.audit_record("browser_attach", surface="broker", outcome="ok", name="default", dropped=2),
+            h.tool_call_record(req=3, outcome="ok", name="default", conn=2),
+        ], "the post-heal trail: the CLI's decisions, then the broker's two failed appends counted")
 
     @staticmethod
     def _rmdir(path):

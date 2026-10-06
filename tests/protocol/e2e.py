@@ -260,17 +260,13 @@ class ControlFrames(E2ECase):
         trusted-client store, never forwarded; a stray result frame is dropped."""
         self.skip_unless_unix("the pty-driven pairing")
         env = self.private_runtime("bb-e2e-admin-")
-        h.run_with_cli_presence(["pair-client", "--name", "pytest", "--this-parent"], env=env)
-        h.run_with_cli_presence(["pair-client", "--name", "codex", "--hash", "aa" * 32], env=env)
+        pytest = h.pair_client("pytest", "--this-parent", env=env)
+        h.pair_client("codex", "--hash", "aa" * 32, env=env)
+        codex = h.client_entry("codex", "hash", "aa" * 32)
         mcp = self.server(env=env)
         nh = self.host(env=env)
-        nm_write(nh, {"type": "client_list"})
-        reply = nm_read(nh)
-        clients = sorted(reply.pop("clients"), key=lambda cl: cl["name"])
-        self.assertEqual(reply, {"type": "client_list_result", "ok": True, "enrolled": True})
-        self.assertEqual([cl["name"] for cl in clients], ["codex", "pytest"])
-        self.assertEqual({k: v for k, v in clients[0].items() if k != "added_unix"},
-                         {"name": "codex", "anchor": {"kind": "hash", "value": "aa" * 32}})
+        self.assertEqual(h.client_list_result(nh), {"type": "client_list_result", "ok": True,
+                                                    "enrolled": True, "clients": [pytest, codex]})
         nm_write(nh, {"type": "client_revoke", "name": "codex"})
         self.assertEqual(nm_read(nh), {"type": "client_revoke_result", "ok": True})
         nm_write(nh, {"type": "client_list_result", "ok": True, "enrolled": True, "clients": []})
@@ -299,6 +295,14 @@ class ControlFrames(E2ECase):
 
 
 class KillSwitch(E2ECase):
+    # The decisions the kill switch makes; attach and admit records interleave
+    # and belong to other invariants.
+    DECISIONS = ("tool_call", "kill_engage", "kill_release")
+    # The request the host opens for a release when no credential is enrolled to hint.
+    RELEASE_REQUEST = {"type": "presence_request", "action": "release the kill switch",
+                       "allowed_credential_ids": [], "challenge": h.BASE64URL.token,
+                       "nonce": h.BASE64URL.token}
+
     def test_kill_engage_refuse_release_recover(self):
         """`kill` halts the live broker with typed BRIDGE_KILLED refusals,
         severs the browser leg, and keeps a fresh host control-plane only. The
@@ -311,7 +315,7 @@ class KillSwitch(E2ECase):
         self.skip_unless_unix("the pty-driven release")
         for name in ("trust.json", "audit.log", "audit.log.1", "audit.log.lock"):
             self.addCleanup(self._remove, h.runtime_file(name))
-        already = len(h.audit_records())
+        already = len(h.audit_records(self.DECISIONS))
         mcp = self.server()
         c = self.legacy_client(mcp)
         nh = self.host()
@@ -331,8 +335,8 @@ class KillSwitch(E2ECase):
         self.assertEqual(nm_read(nh2), killed)
         nm_write(nh2, {"type": "kill_release"})
         request = nm_read_type(nh2, "presence_request")
-        self.assertEqual((request["action"], request["allowed_credential_ids"]),
-                         ("release the kill switch", []),
+        self.assertEqual(h.placeholders(request, challenge=h.BASE64URL, nonce=h.BASE64URL),
+                         self.RELEASE_REQUEST,
                          "the release opens a presence request; no credential is enrolled to hint")
         nm_write(nh2, {"type": "kill_status"})
         self.assertEqual(nm_read(nh2), killed, "the request alone releases nothing")
@@ -358,22 +362,21 @@ class KillSwitch(E2ECase):
         audit_path = h.runtime_file("audit.log")
         if os.name != "nt":
             self.assertEqual(os.stat(audit_path).st_mode & 0o777, 0o600)
-        # This test's own decisions, in order (attach/admit records interleave
-        # and belong to other invariants).
-        trail = [(rec["event_kind"], rec.get("surface"), rec.get("outcome"), rec.get("code"))
-                 for rec in h.audit_records()[already:]
-                 if rec["event_kind"] in ("tool_call", "kill_engage", "kill_release")]
+        # The killed call's route (name, conn) is left out of that one record:
+        # whether the broker's 1 s trust poll has severed the host by then is
+        # a race, not this test's fact.
+        trail = [{k: v for k, v in rec.items() if k not in ("name", "conn")}
+                 if rec.get("code") == "BRIDGE_KILLED" else rec
+                 for rec in h.audit_records(self.DECISIONS)[already:]]
         self.assertEqual(trail, [
-            ("tool_call", None, "ok", None),
-            ("kill_engage", "cli", "ok", None),
-            ("tool_call", None, "error", "BRIDGE_KILLED"),
-            ("kill_release", "extension", "refused", None),
-            ("kill_release", "extension", "ok", None),
-            ("tool_call", None, "ok", None),
+            h.tool_call_record(req=1, outcome="ok", name="default", conn=1),
+            h.audit_record("kill_engage", surface="cli", outcome="ok"),
+            h.tool_call_record(req=2, outcome="error", code="BRIDGE_KILLED"),
+            h.audit_record("kill_release", surface="extension", outcome="refused",
+                           detail="presence: the confirmation names a request that is not the outstanding one"),
+            h.audit_record("kill_release", surface="extension", outcome="ok", detail="auth=confirm_window"),
+            h.tool_call_record(req=3, outcome="ok", name="default", conn=2),
         ])
-        release = next(rec for rec in h.audit_records()[already:]
-                       if rec.get("event_kind") == "kill_release" and rec.get("outcome") == "ok")
-        self.assertIn("auth=confirm_window", release["detail"], "the release names its presence path")
         shown = h.run_cli(["audit"])
         self.assertEqual(shown.returncode, 0, shown.stderr)
         self.assertIn("kill_engage", shown.stdout)
@@ -394,7 +397,11 @@ class Isolation(unittest.TestCase):
         per-user dir; the spawn guard must judge the variable the binary reads."""
         rundir = h.new_runtime_dir("bb-e2e-nt-")
         env = h.runtime_env(rundir, platform="nt")
-        self.assertEqual(env["LOCALAPPDATA"], rundir)
+        expected = {"XDG_RUNTIME_DIR": rundir, "XDG_CONFIG_HOME": os.path.join(rundir, "config"),
+                    "LOCALAPPDATA": rundir}
+        if sys.platform == "darwin":
+            expected["HOME"] = rundir
+        self.assertEqual(env, expected, "a Windows child sees the dir through LOCALAPPDATA as well")
         saved = h.LOCK
         h.LOCK = h.lock_path(rundir)
         try:
@@ -484,7 +491,7 @@ class Broker(E2ECase):
             json.dump({"endpoint": "/nonexistent/chromium-bridge/run.sock",
                        "secret": "0" * 32, "pid": 4294967295}, f)
         mcp = self.server(clear_lock=False)
-        self.assertEqual(mcp.lock["pid"], mcp.pid, "the server replaced the dead pid's lock")
+        self.assertLock(mcp.lock, mcp, "the server replaced the dead pid's lock")
 
     def test_foreign_peer_is_refused_by_attestation(self):
         """A non-binary peer on the bridge socket is dropped before any
@@ -502,8 +509,7 @@ class Broker(E2ECase):
         second = self.instance()
         time.sleep(1.0)
         self.assertEqual((first.poll(), second.poll()), (None, None), "both stay alive")
-        still = h.wait_lock(first, timeout=2)
-        self.assertEqual(still and still["pid"], first.pid, "the lock still names the broker")
+        self.assertLock(h.wait_lock(first, timeout=2), first, "the lock still names the broker")
         self.assertEqual(normalized(McpClient(first).initialize()), rpc_result(1, h.legacy_init_result()))
         cr = McpClient(second)
         self.assertEqual(normalized(cr.initialize()), rpc_result(1, h.legacy_init_result()))
@@ -539,8 +545,7 @@ class Broker(E2ECase):
         first.stdin.close()
         time.sleep(1.0)
         self.assertIsNone(first.poll(), "the broker outlives its own harness")
-        still = h.wait_lock(first, timeout=2)
-        self.assertEqual(still and still["pid"], first.pid)
+        self.assertLock(h.wait_lock(first, timeout=2), first)
         self.assertEqual(McpClient(second).ping(_id=88), rpc_result(88, {}))
         second.stdin.close()
         self.assertExits(first, 10, "the broker exits once the last harness detaches")
@@ -559,7 +564,7 @@ class Broker(E2ECase):
                 break
             time.sleep(0.2)
         self.assertEqual([s.poll() for s in servers], [None] * 3, "all instances coexist")
-        self.assertIn(lf and lf["pid"], [s.pid for s in servers], "the lock names one instance")
+        self.assertIn(h.lock_record(lf), [h.lock_published_by(s) for s in servers], "the lock names one instance")
         nh = self.host()
         box = h.serve_bridge_loop(nh, lambda req: {"id": req["id"], "ok": True, "data": tabs("Coexist", 3)})
         for i, s in enumerate(servers):
@@ -595,8 +600,7 @@ class Browsers(E2ECase):
         chrome_box = h.serve_bridge_loop(chrome, responder_for(chrome_tabs, chrome_seen))
         brave_box = h.serve_bridge_loop(brave, responder_for(brave_tabs, brave_seen))
 
-        listing = h.tool_payload(c.call("list_browsers", {}, _id=20))
-        listing["browsers"].sort(key=lambda b: b["label"])
+        listing = h.browsers_listing(c.call("list_browsers", {}, _id=20))
         self.assertEqual(listing, {"browsers": [{"label": "brave", "tabCount": 1},
                                                 {"label": "chrome", "tabCount": 2}], "count": 2})
         self.assertEqual(c.call("tab_list", {"browser": "chrome"}, _id=21), tool_result(21, chrome_tabs))
@@ -615,13 +619,9 @@ class Browsers(E2ECase):
         self.assertEqual(brave_seen, [forwarded("tab_list", browser="brave")] * 2)
 
         h.kill(chrome)
-        deadline = time.time() + 8
-        while time.time() < deadline:
-            listing = h.tool_payload(c.call("list_browsers", {}, _id=25))
-            if listing["count"] == 1:
-                break
-            time.sleep(0.1)
-        self.assertEqual(listing, {"browsers": [{"label": "brave", "tabCount": 1}], "count": 1})
+        self.assertEventually(lambda: h.browsers_listing(c.call("list_browsers", {}, _id=25)),
+                              {"browsers": [{"label": "brave", "tabCount": 1}], "count": 1}, 8,
+                              "the departed browser leaves the listing")
         self.assertEqual(c.call("tab_list", {}, _id=26), tool_result(26, brave_tabs),
                          "an unaddressed call routes to the sole remaining browser")
         self.assertEqual(c.call("tab_list", {"browser": "chrome"}, _id=27),
