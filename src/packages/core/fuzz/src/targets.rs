@@ -18,7 +18,8 @@ use chromium_bridge_core::protocol::control::{
 };
 use chromium_bridge_core::protocol::{
     bridge_read, bridge_write, mcp_read, mcp_write, nm_read_frame, nm_write_frame, AttachRequest,
-    BridgeReq, Handshake, JsonRpc, ParsedResp, BRIDGE_MAX_LINE, MCP_MAX_LINE, NM_MAX_OUTGOING,
+    BridgeReq, BridgeResp, Handshake, JsonRpc, ParsedResp, BRIDGE_MAX_LINE, MCP_MAX_LINE,
+    NM_MAX_OUTGOING,
 };
 use chromium_bridge_core::registration::{
     fuzz_api, manifest_ownership, pointer_ownership, Ownership,
@@ -126,14 +127,85 @@ pub fn mcp_jsonrpc(data: &[u8]) {
     );
 }
 
-/// The internal bridge NDJSON envelope reader (server<->native host): arbitrary bytes decoded as a JSON
-/// value and as the two typed frames must never panic. `ParsedResp` is the session's production read
-/// path, whose `TryFrom` refuses contradictory responses; `BridgeReq` is only written by Rust (the
-/// extension parses it inbound), but its flattened command pins the shape the extension must accept.
+/// The one reading a `{ ok, data?, error? }` triple admits, or `None` for a contradictory triple; the oracle's
+/// own statement of the rule `ParsedResp`'s `TryFrom` enforces.
+fn consistent_reading(wire: &BridgeResp) -> Option<Result<Value, String>> {
+    match (wire.ok, &wire.data, &wire.error) {
+        (true, data, None) => Some(Ok(data.clone().unwrap_or(Value::Null))),
+        (false, None, Some(error)) => Some(Err(error.clone())),
+        (true, _, Some(_)) | (false, Some(_), _) | (false, None, None) => None,
+    }
+}
+
+/// The internal bridge NDJSON envelope reader (server<->native host), read three ways: as the JSON value the
+/// native host's pump relays, as the `BridgeReq` the extension parses inbound (only Rust writes it, but its
+/// flattened command pins the shape the extension must accept), and as the `ParsedResp` the session reads.
+/// Oracles: the value and the request each decode -> encode -> decode to identity, and `ParsedResp` accepts
+/// exactly the `BridgeResp` frames with a [`consistent_reading`], reads that reading, and reads the same
+/// one from the frame's re-encoding.
 pub fn bridge_envelope(data: &[u8]) {
-    let _: std::io::Result<Option<Value>> = bridge_read(&mut Cursor::new(data));
-    let _: std::io::Result<Option<BridgeReq>> = bridge_read(&mut Cursor::new(data));
-    let _: std::io::Result<Option<ParsedResp>> = bridge_read(&mut Cursor::new(data));
+    if let Ok(Some(first)) = bridge_read::<_, Value>(&mut Cursor::new(data)) {
+        let mut bytes = Vec::new();
+        bridge_write(&mut bytes, &first).expect("a decoded Value must encode");
+        // BRIDGE_MAX_LINE counts the newline the writer adds (see its doc), so exactly-cap input re-encodes over it.
+        if bytes.len() <= BRIDGE_MAX_LINE {
+            let second: Value = bridge_read(&mut Cursor::new(bytes.as_slice()))
+                .expect("the encoded line must decode")
+                .expect("the encoded line is one line");
+            assert_eq!(
+                second, first,
+                "bridge Value decode -> encode -> decode must be identity"
+            );
+        }
+    }
+    if let Ok(Some(first)) = bridge_read::<_, BridgeReq>(&mut Cursor::new(data)) {
+        let mut bytes = Vec::new();
+        bridge_write(&mut bytes, &first).expect("a decoded BridgeReq must encode");
+        if bytes.len() <= BRIDGE_MAX_LINE {
+            let second: BridgeReq = bridge_read(&mut Cursor::new(bytes.as_slice()))
+                .expect("the encoded line must decode")
+                .expect("the encoded line is one line");
+            assert_eq!(
+                serde_json::to_value(&first).expect("BridgeReq serializes"),
+                serde_json::to_value(&second).expect("BridgeReq serializes"),
+                "BridgeReq decode -> encode -> decode must be identity"
+            );
+        }
+    }
+    let wire = bridge_read::<_, BridgeResp>(&mut Cursor::new(data));
+    let parsed = bridge_read::<_, ParsedResp>(&mut Cursor::new(data));
+    match (wire, parsed) {
+        (Ok(Some(wire)), Ok(Some(parsed))) => {
+            let Some(expected) = consistent_reading(&wire) else {
+                panic!("ParsedResp accepted a contradictory response: {wire:?}");
+            };
+            assert_eq!(
+                (parsed.id, parsed.outcome.clone()),
+                (wire.id, expected),
+                "ParsedResp is the wire triple's one consistent reading"
+            );
+            let mut bytes = Vec::new();
+            bridge_write(&mut bytes, &wire).expect("a decoded BridgeResp must encode");
+            if bytes.len() <= BRIDGE_MAX_LINE {
+                let again: ParsedResp = bridge_read(&mut Cursor::new(bytes.as_slice()))
+                    .expect("the encoded line must decode")
+                    .expect("the encoded line is one line");
+                assert_eq!(
+                    (again.id, again.outcome),
+                    (parsed.id, parsed.outcome),
+                    "ParsedResp reads the same from the wire frame's re-encoding"
+                );
+            }
+        }
+        (Ok(Some(wire)), Ok(None) | Err(_)) => assert!(
+            consistent_reading(&wire).is_none(),
+            "ParsedResp refused a consistent response: {wire:?}"
+        ),
+        (Ok(None) | Err(_), Ok(Some(parsed))) => {
+            panic!("ParsedResp accepted a frame BridgeResp refused: {parsed:?}")
+        }
+        (Ok(None) | Err(_), Ok(None) | Err(_)) => {}
+    }
 }
 
 /// The authenticated-handshake frame decoder (Challenge / Response), run before the peer is trusted.
