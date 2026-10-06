@@ -50,7 +50,20 @@ const SUBMIT: ClickProbe = {
 };
 const PLAIN: ClickProbe = { tagName: "DIV", role: "", type: "", hasHref: false, name: "" };
 
-// Auto-answering provider: records what was asked and answers immediately.
+// The presence route's fake: records what was asked and stands in for the host's verdict (the service
+// refuses a window-side approve for these payloads, so the fake answers through its own verdict).
+function presenceAutoProvider(approve: boolean) {
+  const asked: ConfirmPayload[] = [];
+  installPresenceProvider({
+    present(payload) {
+      asked.push(payload);
+      return { verdict: Promise.resolve(approve), dismiss() {} };
+    },
+  });
+  return asked;
+}
+
+// Auto-answering window provider: records what was asked and answers immediately.
 function autoProvider(approve: boolean) {
   const asked: ConfirmPayload[] = [];
   installConfirmationProvider({
@@ -136,13 +149,14 @@ describe("page_press / page_select confirm on every call", () => {
 });
 
 describe("page_eval", () => {
-  // The deny baseline keeps page_eval off; these decisions run under an
-  // applied policy that grants it.
+  // The deny baseline keeps page_eval off and routes its confirmation through the presence provider
+  // (presenceConfirm defaults on); these decisions run under an applied policy that grants the op, and
+  // the presence fake answers. The window route is the presence describe's presenceConfirm=false case.
   beforeEach(() => applyPolicy({ pageEvalEnabled: true }));
 
   test("the kill switch refuses before any prompt", async () => {
     await applyPolicy({ pageEvalEnabled: false });
-    const asked = autoProvider(true);
+    const asked = presenceAutoProvider(true);
     await expect(
       preflight("page_eval", { code: "return 1;" }, TAB, fakeBackend(PLAIN)),
     ).rejects.toThrow("page_eval disabled in settings");
@@ -150,7 +164,7 @@ describe("page_eval", () => {
   });
 
   test("every eval reconfirms - approval opens NO grace window", async () => {
-    const asked = autoProvider(true);
+    const asked = presenceAutoProvider(true);
     await preflight("page_eval", { code: "return 1;" }, TAB, fakeBackend(PLAIN));
     await preflight("page_eval", { code: "return 2;" }, TAB, fakeBackend(PLAIN));
     expect(asked.length).toBe(2);
@@ -159,7 +173,7 @@ describe("page_eval", () => {
   });
 
   test("denial throws and empty code is refused", async () => {
-    autoProvider(false);
+    presenceAutoProvider(false);
     await expect(
       preflight("page_eval", { code: "return 1;" }, TAB, fakeBackend(PLAIN)),
     ).rejects.toThrow("user denied page_eval");
@@ -170,7 +184,7 @@ describe("page_eval", () => {
 
   test("confirmPageEval=false runs unprompted (explicit opt-out)", async () => {
     await applyPolicy({ pageEvalEnabled: true, confirmPageEval: false });
-    const asked = autoProvider(false);
+    const asked = presenceAutoProvider(false);
     await preflight("page_eval", { code: "return 1;" }, TAB, fakeBackend(PLAIN));
     expect(asked.length).toBe(0);
   });
@@ -211,21 +225,10 @@ describe("the presence route", () => {
   // provider receives the page's kind and origin, which the host binds into the request it mints.
   beforeEach(() => applyPolicy({ pageEvalEnabled: true }));
 
-  function presenceProvider(approve: boolean) {
-    const asked: ConfirmPayload[] = [];
-    installPresenceProvider({
-      present(payload) {
-        asked.push(payload);
-        return { verdict: Promise.resolve(approve), dismiss() {} };
-      },
-    });
-    return asked;
-  }
-
   test("presenceConfirm=true routes page_eval to the presence provider with the page's kind and origin", async () => {
     await applyPolicy({ pageEvalEnabled: true, presenceConfirm: true });
     const window = autoProvider(false); // would deny if the window were asked
-    const asked = presenceProvider(true);
+    const asked = presenceAutoProvider(true);
     await preflight("page_eval", { code: "return 1;" }, TAB, fakeBackend(PLAIN));
     expect(window.length).toBe(0);
     expect(asked.length).toBe(1);
@@ -240,7 +243,7 @@ describe("the presence route", () => {
   test("presenceConfirm=false keeps the window, consulting no presence provider", async () => {
     await applyPolicy({ pageEvalEnabled: true, presenceConfirm: false });
     const window = autoProvider(true);
-    const asked = presenceProvider(true);
+    const asked = presenceAutoProvider(true);
     await preflight("page_eval", { code: "return 1;" }, TAB, fakeBackend(PLAIN));
     expect(asked.length).toBe(0);
     expect(window.length).toBe(1);
@@ -249,7 +252,7 @@ describe("the presence route", () => {
 
   test("the presence provider's denial is the op's denial", async () => {
     await applyPolicy({ pageEvalEnabled: true, presenceConfirm: true });
-    presenceProvider(false);
+    presenceAutoProvider(false);
     await expect(
       preflight("page_eval", { code: "return 1;" }, TAB, fakeBackend(PLAIN)),
     ).rejects.toThrow("user denied page_eval");

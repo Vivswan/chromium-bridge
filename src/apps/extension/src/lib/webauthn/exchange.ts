@@ -11,7 +11,9 @@
 //   kill_release      -> the pushed presence_request is the reply; the answer to that request is settled through
 //                        claimKillRelease (kill.ts's handoff), not by presence_result
 //   presence_begin    -> the pushed presence_request is the reply (a page operation's, asked by the confirmation
-//                        service); the answer's verdict reaches the asker (beginPresence's onVerdict)
+//                        service), accepted only when it names the asked act; the answer's verdict reaches the
+//                        asker (beginPresence's onVerdict); a begin cancelled before the reply frees the
+//                        exchange at once and its late reply is dropped
 //   presence_request  -> held as the pending request; the page fetches it, runs get, answers
 //   presence_assert   -> presence_result
 //   presence_confirm  -> presence_result (the window's answer, for a browser with no enrolled credential)
@@ -61,6 +63,15 @@ export type EnrollFinishView = { ok: true; credentialId: string } | Refused;
 export type PresenceAssertView = { ok: true } | Refused;
 export type KillReleaseView = { ok: true; request: PresenceRequestFrame } | Refused;
 export type PresenceBeginView = { ok: true; request: PresenceRequestFrame } | Refused;
+
+/** One asked presence request: its outcome, and the way to withdraw it while the host has not answered. */
+export interface PresenceBegin {
+  view: Promise<PresenceBeginView>;
+  /** Give the exchange back without waiting for the host. The view resolves refused; the host's reply, if it
+   * still comes, is dropped on arrival: the host answers in order, so the next presence frame is that reply,
+   * whatever is asked in between. Nothing happens once the host has answered. */
+  cancel(): void;
+}
 export type EnrollmentNoteView = { ok: true; enrollment: WebAuthnEnrollment | null } | Refused;
 export type ForgetView = { ok: true } | Refused;
 
@@ -84,6 +95,9 @@ const ceremony = exchange<WebAuthnInboundFrame | ReleaseOutcome>(
   "a WebAuthn exchange is already in flight",
 );
 const pendingRequest = inLife<PendingRequest | null>(() => null);
+/** How many cancelled begins the host still owes a reply; the next presence frame to arrive settles one, before
+ * any correlation, since the host answers in order. */
+const cancelledBegins = inLife(() => 0);
 
 export const collaborator: PortCollaborator = {
   onAttach(c) {
@@ -91,6 +105,7 @@ export const collaborator: PortCollaborator = {
   },
   onDetach() {
     dropPending();
+    cancelledBegins.value = 0;
     ceremony.detach();
   },
   onFrame(msg) {
@@ -203,34 +218,60 @@ export function beginKillRelease(): Promise<KillReleaseView> {
 }
 
 /** Ask the host for a presence request for a page operation on `origin`, on behalf of its confirmation. The
- * reply is the request the host pushes, held for the confirmation window to answer; `onVerdict` receives the
- * host's verdict on that answer, or false once the request ends any other way (superseded, detached, or the
- * answer's exchange failed after posting). A refusal here (the host would not mint a request, the exchange is
- * busy, or the host is gone) is the view's error and calls nothing: the caller denies on it. */
+ * reply is the request the host pushes, held for the confirmation window to answer only when its action is
+ * the asked act, `<op> on <origin>` as the host spells it: a request for another act is refused and not held,
+ * so the window never shows one payload over a tap that signs another. `onVerdict` receives the host's verdict
+ * on that answer, or false once the request ends any other way (superseded, detached, or the answer's exchange
+ * failed after posting). A refusal here (the host would not mint a request, the exchange is busy, or the host
+ * is gone) is the view's error and calls nothing: the caller denies on it. */
 export function beginPresence(
   action: PresenceAction,
   origin: string,
   onVerdict: (ok: boolean) => void,
-): Promise<PresenceBeginView> {
-  return ceremony.request({ type: "presence_begin", action, origin } satisfies PresenceBeginWire, {
-    replies: ["presence_request", "presence_result"],
-    read(frame): PresenceBeginView {
-      if (frame.type === "presence_result") {
-        const result = PresenceResultFrameSchema.safeParse(frame);
-        return {
-          ok: false,
-          error:
-            result.success && !result.data.ok
-              ? result.data.reason
-              : "malformed presence_result from host",
-        };
-      }
-      const parsed = PresenceRequestFrameSchema.safeParse(frame);
-      if (!parsed.success) return { ok: false, error: "malformed presence_request from host" };
-      hold({ frame: parsed.data, asked: "page_op", onVerdict });
-      return { ok: true, request: parsed.data };
+): PresenceBegin {
+  const expected = `${action} on ${origin}`;
+  let awaiting = true;
+  const { view } = ceremony.request(
+    { type: "presence_begin", action, origin } satisfies PresenceBeginWire,
+    {
+      replies: ["presence_request", "presence_result"],
+      read(frame): PresenceBeginView {
+        awaiting = false;
+        if (frame.type === "presence_result") {
+          const result = PresenceResultFrameSchema.safeParse(frame);
+          return {
+            ok: false,
+            error:
+              result.success && !result.data.ok
+                ? result.data.reason
+                : "malformed presence_result from host",
+          };
+        }
+        const parsed = PresenceRequestFrameSchema.safeParse(frame);
+        if (!parsed.success) return { ok: false, error: "malformed presence_request from host" };
+        if (parsed.data.action !== expected) {
+          return { ok: false, error: "the host's request names another act" };
+        }
+        hold({ frame: parsed.data, asked: "page_op", onVerdict });
+        return { ok: true, request: parsed.data };
+      },
+      refused(failure): PresenceBeginView {
+        awaiting = false;
+        return { ok: false, error: failure.error };
+      },
     },
-  }).view;
+  );
+  return {
+    view,
+    cancel() {
+      if (!awaiting) return;
+      awaiting = false;
+      cancelledBegins.value += 1;
+      void ceremony
+        .claim("presence_request")
+        ?.fail("the confirmation ended before the host answered");
+    },
+  };
 }
 
 /** Forget the page-op request named by `nonce`, with no verdict: its confirmation is over (settled or past
@@ -351,29 +392,39 @@ function answerPending(
   return view;
 }
 
-/** Route one inbound WebAuthn frame: a presence request answers the kill_release or presence_begin that asked
- * for it (whose reader holds it for the page), or, pushed with nobody asking, is held and opens the page where
- * the tap happens, which shows the action before asking for it; anything else answers the outstanding exchange
- * or, with none outstanding, is dropped. */
+/** Route one inbound WebAuthn frame: a presence frame owed to a cancelled begin is dropped first; the rest
+ * answers the outstanding exchange (a presence request's reader holds it for the page); a presence request
+ * nobody asked for is a host push, held and opening the page where the tap happens, which shows the action
+ * before asking for it; anything else is dropped. */
 export function handleWebAuthnFrame(msg: WebAuthnInboundFrame): void {
-  if (msg.type === "presence_request") {
-    if (ceremony.answer(msg)) return;
-    const parsed = PresenceRequestFrameSchema.safeParse(msg);
-    if (!parsed.success) {
-      console.warn("[bb] dropping malformed presence_request");
-      return;
-    }
-    hold({ frame: parsed.data, asked: "nobody" });
-    void browser.runtime.openOptionsPage().catch((e: unknown) => {
-      console.warn("[bb] could not open the options page for the presence request", e);
-    });
+  if (
+    cancelledBegins.value > 0 &&
+    (msg.type === "presence_request" || msg.type === "presence_result")
+  ) {
+    // The reply to a begin its confirmation withdrew: the host answers in order, so it precedes the reply
+    // to whatever was asked after the withdrawal, and must not be handed to that request.
+    cancelledBegins.value -= 1;
     return;
   }
-  if (!ceremony.answer(msg)) console.warn(`[bb] dropping unsolicited ${msg.type}`);
+  if (ceremony.answer(msg)) return;
+  if (msg.type !== "presence_request") {
+    console.warn(`[bb] dropping unsolicited ${msg.type}`);
+    return;
+  }
+  const parsed = PresenceRequestFrameSchema.safeParse(msg);
+  if (!parsed.success) {
+    console.warn("[bb] dropping malformed presence_request");
+    return;
+  }
+  hold({ frame: parsed.data, asked: "nobody" });
+  void browser.runtime.openOptionsPage().catch((e: unknown) => {
+    console.warn("[bb] could not open the options page for the presence request", e);
+  });
 }
 
 /** Tests only: the first life's state again. */
 export function resetWebAuthnForTests(): void {
   ceremony.detach();
   pendingRequest.reset();
+  cancelledBegins.reset();
 }

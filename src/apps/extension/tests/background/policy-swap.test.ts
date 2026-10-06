@@ -128,7 +128,21 @@ function fakeBackend(probe: ClickProbe): PageBackend {
   };
 }
 
-// Auto-answering provider (the gate.test.ts pattern): records what was
+// The presence route's fake: records what was asked and stands in for the host's verdict. page_eval and
+// page_upload route here under the deny baseline (presenceConfirm defaults on), and a missing presence
+// provider denies rather than falling back to the window.
+function presenceStub(approve = false): ConfirmPayload[] {
+  const shown: ConfirmPayload[] = [];
+  installPresenceProvider({
+    present(payload) {
+      shown.push(payload);
+      return { verdict: Promise.resolve(approve), dismiss() {} };
+    },
+  });
+  return shown;
+}
+
+// Auto-answering window provider (the gate.test.ts pattern): records what was
 // asked and answers through the router path.
 function autoProvider(approve: boolean) {
   const asked: ConfirmPayload[] = [];
@@ -240,7 +254,7 @@ describe("the gate reads its six policy fields from the snapshot", () => {
   });
 
   test("confirmPageEval deny: the policy confirmation is enforced", async () => {
-    const asked = autoProvider(false);
+    const asked = presenceStub(false);
     await armCutover({ pageEvalEnabled: true, confirmPageEval: true });
     await expect(
       preflightPageOp(
@@ -256,7 +270,7 @@ describe("the gate reads its six policy fields from the snapshot", () => {
   });
 
   test("confirmPageEval grant: the policy opt-out skips the prompt", async () => {
-    const asked = autoProvider(false);
+    const asked = presenceStub(false);
     await armCutover({ pageEvalEnabled: true, confirmPageEval: false });
     await expect(
       preflightPageOp(
@@ -377,7 +391,7 @@ describe("the gate reads its six policy fields from the snapshot", () => {
   });
 
   test("evalToastTimeoutMs comes from the snapshot: grant (longer) and deny (shorter) than the baseline", async () => {
-    const asked = autoProvider(true);
+    const asked = presenceStub(true);
     await armCutover({ pageEvalEnabled: true, evalToastTimeoutMs: 222_000 });
     let before = Date.now();
     await preflightPageOp(
@@ -466,7 +480,7 @@ describe("pageUpload reads fileUploadEnabled and its timeout from the snapshot",
   });
 
   test("the upload confirmation timeout comes from the snapshot", async () => {
-    const asked = autoProvider(false);
+    const asked = presenceStub(false);
     await makeTab();
     await armCutover({ fileUploadEnabled: true, clickToastTimeoutMs: 111_000 });
     const before = Date.now();
@@ -590,20 +604,9 @@ describe("presence routing is decided from the per-request snapshot", () => {
   // strict schema and match the pinned scope for the record to be ACTIVE.
   const KEY_ID = "0".repeat(64);
 
-  function presenceStub(): ConfirmPayload[] {
-    const shown: ConfirmPayload[] = [];
-    installPresenceProvider({
-      present(payload) {
-        shown.push(payload);
-        return { verdict: Promise.resolve(false), dismiss() {} };
-      },
-    });
-    return shown;
-  }
-
   test("deny: policy presenceConfirm=false keeps the window path", async () => {
     pinSeam.pin = { keyId: KEY_ID, pubkeyB64: "p", pinnedAt: 1 };
-    const hw = presenceStub();
+    const presence = presenceStub();
     const asked = autoProvider(false);
     await armCutover({ pageEvalEnabled: true, presenceConfirm: false }, 1, KEY_ID);
     await expect(
@@ -616,14 +619,14 @@ describe("presence routing is decided from the per-request snapshot", () => {
         currentPanicEpoch(),
       ),
     ).rejects.toThrow("user denied page_eval");
-    expect(hw.length).toBe(0);
+    expect(presence.length).toBe(0);
     expect(asked.length).toBe(1);
     expect(asked[0] !== undefined && isPresenceGated(asked[0])).toBe(false);
   });
 
   test("grant: policy presenceConfirm=true routes to the installed presence provider", async () => {
     pinSeam.pin = { keyId: KEY_ID, pubkeyB64: "p", pinnedAt: 1 };
-    const hw = presenceStub();
+    const presence = presenceStub();
     const asked = autoProvider(false);
     await armCutover({ pageEvalEnabled: true, presenceConfirm: true }, 1, KEY_ID);
     await expect(
@@ -637,8 +640,8 @@ describe("presence routing is decided from the per-request snapshot", () => {
       ),
     ).rejects.toThrow("user denied page_eval");
     expect(asked.length).toBe(0);
-    expect(hw.length).toBe(1);
-    expect(hw[0] !== undefined && isPresenceGated(hw[0])).toBe(true);
+    expect(presence.length).toBe(1);
+    expect(presence[0] !== undefined && isPresenceGated(presence[0])).toBe(true);
   });
 });
 

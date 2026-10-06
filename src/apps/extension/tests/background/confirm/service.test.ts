@@ -299,33 +299,33 @@ describe("presence routing (the verdict travels in the request)", () => {
   // predicate itself.
   test("a true decision-time verdict presents on the presence provider, presence-marked", async () => {
     const windowShown = fakeProvider();
-    const hwShown: ConfirmPayload[] = [];
+    const presenceShown: ConfirmPayload[] = [];
     installPresenceProvider({
       present(payload) {
-        hwShown.push(payload);
+        presenceShown.push(payload);
         return { verdict: Promise.resolve(false), dismiss() {} };
       },
     });
     const verdict = confirmWithUser({ ...REQ, presenceRouting: true });
     await vi.advanceTimersByTimeAsync(0);
     expect(windowShown.length).toBe(0);
-    expect(hwShown.length).toBe(1);
-    expect(isPresenceGated(hwShown[0]!)).toBe(true);
+    expect(presenceShown.length).toBe(1);
+    expect(isPresenceGated(presenceShown[0]!)).toBe(true);
     await expect(verdict).resolves.toBe(false);
   });
 
   test("a false verdict routes to the window, consulting no presence provider", async () => {
     const windowShown = fakeProvider();
-    const hwShown: ConfirmPayload[] = [];
+    const presenceShown: ConfirmPayload[] = [];
     installPresenceProvider({
       present(payload) {
-        hwShown.push(payload);
+        presenceShown.push(payload);
         return { verdict: Promise.resolve(false), dismiss() {} };
       },
     });
     const verdict = confirmWithUser(REQ);
     await vi.advanceTimersByTimeAsync(0);
-    expect(hwShown.length).toBe(0);
+    expect(presenceShown.length).toBe(0);
     expect(windowShown.length).toBe(1);
     expect(isPresenceGated(windowShown[0]!.payload)).toBe(false);
     resolveConfirm(windowShown[0]!.payload.id, false);

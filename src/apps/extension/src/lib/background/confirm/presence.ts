@@ -9,7 +9,8 @@
 //                                           window click (the policy ledger's rule)
 //   presence_request                     -> the window opens; the host's presence_result on the window's answer
 //                                           settles the verdict and the service closes the window
-//   window closed unanswered, deadline   -> denied; the held request is forgotten
+//   window closed unanswered, deadline   -> denied; the held request is forgotten, and a begin the host has not
+//                                           answered yet is withdrawn so the exchange is free for the next act
 
 import { abandonPresence, beginPresence, type PresenceAction } from "../../webauthn/exchange";
 import type {
@@ -44,7 +45,8 @@ export class PresenceExchangeProvider implements PresenceProvider {
     const shown = new Promise<boolean>((resolve) => {
       surfaceUp = resolve;
     });
-    const verdict = beginPresence(ACTION[payload.kind], payload.origin, settle).then((view) => {
+    const begin = beginPresence(ACTION[payload.kind], payload.origin, settle);
+    const verdict = begin.view.then((view) => {
       if (!view.ok) {
         console.warn(`[bb] the host refused a presence request for ${payload.kind}: ${view.error}`);
         surfaceUp(false);
@@ -66,6 +68,7 @@ export class PresenceExchangeProvider implements PresenceProvider {
       verdict,
       shown,
       dismiss() {
+        if (phase.at === "asking") begin.cancel();
         if (phase.at === "shown") {
           phase.window.dismiss();
           abandonPresence(phase.nonce);

@@ -22,8 +22,8 @@ interface ConfirmRequestBase {
   /** Route this confirmation to the presence provider, if one is installed? Decided by the CALLER from the
    * SAME per-request policy snapshot as the rest of the decision, so a policy push landing while
    * the confirmation waits in the queue cannot re-route it. Only the "eval"/"upload" kinds honor it
-   * (providerFor); false, or no presence provider, is the off-DOM window confirmation: still
-   * confirmed, not presence-gated. */
+   * (routeFor); false is the off-DOM window confirmation: still confirmed, not presence-gated.
+   * True with no presence provider installed denies: the route never falls back to the window. */
   presenceRouting: boolean;
   /** The panic epoch captured at DECISION START (currentPanicEpoch), synchronously beside the policy
    * snapshot and BEFORE the decision's first await. Every await the decision performs (the policy read,
@@ -105,10 +105,10 @@ export function installPresenceProvider(p: PresenceProvider): void {
 
 /** The payload and the provider that shows it, for one request. "eval" and
  * "upload" go to the presence provider when the request's decision-time
- * routing verdict says so and a provider is installed, their payload marked
- * `presence` so the window answers the host's request instead of offering
- * Allow and resolveConfirm refuses a window approval; everything else (and
- * every fallback) keeps the window. Built per arm of the request union, so
+ * routing verdict says so, their payload marked `presence` so the window
+ * answers the host's request instead of offering Allow and resolveConfirm
+ * refuses a window approval; with no presence provider installed they deny.
+ * Everything else keeps the window. Built per arm of the request union, so
  * each payload carries exactly its kind's fields: `presence` exists only on
  * the two presence-gated kinds, and a policy_relax payload is structurally
  * page-less. Synchronous on purpose: no await sits between the front-of-queue
@@ -132,10 +132,11 @@ function routeFor(
     return { payload, present: window && (() => window.present(payload)) };
   }
   const page = { origin: req.origin, tabTitle: req.tabTitle, detail: req.detail };
-  if ((req.kind === "eval" || req.kind === "upload") && presence.value && req.presenceRouting) {
+  if ((req.kind === "eval" || req.kind === "upload") && req.presenceRouting) {
+    // No presence provider is a denial, never the window: the route has no fallback.
     const provider = presence.value;
     const payload: PresencePayload = { ...common, ...page, kind: req.kind, presence: true };
-    return { payload, present: () => provider.present(payload) };
+    return { payload, present: provider && (() => provider.present(payload)) };
   }
   const payload: ConfirmPayload = { ...common, ...page, kind: req.kind };
   const window = defaultProvider.value;
@@ -212,7 +213,7 @@ async function presentOne(
     deadline: Date.now() + req.timeoutMs,
   });
   if (!present) {
-    console.error("[bb] no confirmation provider installed; denying", req.kind);
+    console.error("[bb] no provider for this confirmation; denying", req.kind);
     resolve(false);
     return;
   }
@@ -241,8 +242,7 @@ async function presentOne(
         console.warn("[bb] confirmation dismiss failed", e);
       }
       // Log-after-decide: the verdict is already settled; the audit ring and the host's audit file
-      // record it, never gate it. Only a shown attempt reaches settle(), so this cid resolves
-      // exactly its own confirm_shown row.
+      // record it, never gate it.
       auditEvent(approved ? "confirm_allowed" : "confirm_denied", {
         tool: req.kind,
         name: req.origin,

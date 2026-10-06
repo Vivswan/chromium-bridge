@@ -125,7 +125,11 @@ describe("PresenceExchangeProvider", () => {
       action: "page_upload",
       origin: "https://example.com",
     });
-    handleWebAuthnFrame({ ...REQUEST, allowed_credential_ids: [] } as never);
+    handleWebAuthnFrame({
+      ...REQUEST,
+      action: "page_upload on https://example.com",
+      allowed_credential_ids: [],
+    } as never);
     await settled();
     const answered = confirmPresence(REQUEST.nonce);
     handleWebAuthnFrame({ type: "presence_result", ok: true });
@@ -177,14 +181,24 @@ describe("PresenceExchangeProvider", () => {
     expect(pendingPresenceRequest()).toBeNull();
   });
 
-  test("a dismiss before the host answers opens no window and forgets the request when it lands", async () => {
+  test("a dismiss before the host answers withdraws the begin: the exchange is free at once, and the late reply opens no window", async () => {
     const provider = new PresenceExchangeProvider(fakeSurface());
-    const shown = provider.present(PAYLOAD);
-    shown.dismiss();
+    const first = provider.present(PAYLOAD);
+    first.dismiss();
+    await expect(first.verdict).resolves.toBe(false);
+    await expect(first.shown).resolves.toBe(false);
+    // The next confirmation is not refused as busy; the host answers in order, so the first frame is the
+    // withdrawn begin's reply (dropped) and the second is this one's request.
+    const second = provider.present(PAYLOAD);
+    expect(posted).toHaveLength(2);
     handleWebAuthnFrame(REQUEST as never);
-    await expect(shown.verdict).resolves.toBe(false);
-    await expect(shown.shown).resolves.toBe(false);
+    await settled();
     expect(windows).toHaveLength(0);
     expect(pendingPresenceRequest()).toBeNull();
+    handleWebAuthnFrame({ ...REQUEST, nonce: "nonce-0003" } as never);
+    await settled();
+    expect(windows).toHaveLength(1);
+    expect(pendingPresenceRequest()).toMatchObject({ nonce: "nonce-0003" });
+    second.dismiss();
   });
 });

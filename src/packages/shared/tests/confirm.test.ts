@@ -59,11 +59,11 @@ describe("ConfirmPayloadSchema", () => {
         presence: true,
       }).success,
     ).toBe(false);
-    // And only as the literal true: the service never emits hardware:false
+    // And only as the literal true: the service never emits presence:false
     // (absence IS the not-gated state), so the dead arm is a parse error too.
     for (const kind of ["eval", "upload"] as const) {
       expect(
-        ConfirmPayloadSchema.safeParse({ ...base, ...page, kind, hardware: false }).success,
+        ConfirmPayloadSchema.safeParse({ ...base, ...page, kind, presence: false }).success,
       ).toBe(false);
     }
   });
@@ -105,8 +105,8 @@ describe("ConfirmPayloadSchema", () => {
   test("the TYPE rejects the same invalid combinations the schema does", () => {
     // Compile-time twins of the parse rejections above; each directive is a
     // type-level proof the invalid state is unrepresentable.
-    // @ts-expect-error hardware cannot ride a click payload
-    const clickHardware: ConfirmPayload = { ...base, ...page, kind: "click", presence: true };
+    // @ts-expect-error presence cannot ride a click payload
+    const clickPresence: ConfirmPayload = { ...base, ...page, kind: "click", presence: true };
     // @ts-expect-error policy_relax pins origin to ""
     const policyWithPage: ConfirmPayload = {
       ...base,
@@ -115,15 +115,15 @@ describe("ConfirmPayloadSchema", () => {
       tabTitle: "",
       detail: "x",
     };
-    const policyHardware: ConfirmPayload = {
+    const policyPresence: ConfirmPayload = {
       ...base,
       kind: "policy_relax",
       origin: "",
       tabTitle: "",
       detail: "x",
-      // @ts-expect-error policy_relax cannot claim hardware attestation
+      // @ts-expect-error policy_relax cannot claim the presence route
       presence: true,
     };
-    void [clickHardware, policyWithPage, policyHardware];
+    void [clickPresence, policyWithPage, policyPresence];
   });
 });
