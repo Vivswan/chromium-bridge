@@ -100,6 +100,13 @@ export function AuditPanel() {
   );
 }
 
+// A JS-safe integer can still lie past the range Date represents (about 8.64e15 ms either side of the
+// epoch); such a timestamp shows raw rather than as "Invalid Date".
+function localTime(epochMs: number): string {
+  const date = new Date(epochMs);
+  return Number.isNaN(date.getTime()) ? String(epochMs) : date.toLocaleString();
+}
+
 // One line of the host trail, the CLI line's three parts: the timestamp localized here, the kind and its
 // fields as the host spelled them. An unparsable line keeps its position with the host's stand-in text.
 function HostTrailLine({ entry }: { entry: AuditTrailEntry }) {
@@ -112,7 +119,7 @@ function HostTrailLine({ entry }: { entry: AuditTrailEntry }) {
   }
   return (
     <li className="flex items-baseline gap-3 py-1 font-mono text-[11px] leading-relaxed">
-      <span className="tnum shrink-0 text-text-3">{new Date(entry.ts_ms).toLocaleString()}</span>
+      <span className="tnum shrink-0 text-text-3">{localTime(entry.ts_ms)}</span>
       <span className="min-w-0">
         <span className="text-xs font-medium text-text-1">{entry.kind}</span>
         {entry.fields && <span className="ml-2 break-all text-text-3">{entry.fields}</span>}

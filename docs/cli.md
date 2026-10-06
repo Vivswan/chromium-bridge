@@ -34,7 +34,7 @@
 | `chromium-bridge lang [show \| set <value>]` | display language | Reads or sets the display language the options page shows; `lang` alone is `show`. |
 | `chromium-bridge --help` | help | Usage information. |
 
-The options page offers the same actions, with three terminal-only exceptions by design: `uninstall` (below), and the `--system` and `--manifest-dir` repair forms. The site allowlist, allow-all, and tab grouping stay on the page. They are browser-local extension storage (see the [privacy policy](./privacy-policy.md)), which no subcommand reads or writes.
+The options page offers the same actions. Terminal-only by design: `uninstall` (below), and the `--system` and `--manifest-dir` repair forms. The page's audit view is the default page alone; a longer trail is `audit --limit <n>`. The site allowlist, allow-all, and tab grouping stay on the page. They are browser-local extension storage (see the [privacy policy](./privacy-policy.md)), which no subcommand reads or writes.
 
 ## doctor / status (read-only self-check)
 

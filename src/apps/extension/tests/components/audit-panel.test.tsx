@@ -16,6 +16,8 @@ const TRAIL: AuditTrailEntry[] = [
   { entry: "record", ts_ms: 3000, kind: "pair_client", fields: "surface=cli outcome=ok" },
   { entry: "unrecognized", text: "UNRECOGNIZED RECORD (corrupt, tampered, or newer schema)" },
   { entry: "record", ts_ms: 2000, kind: "kill_release", fields: "" },
+  // A JS-safe integer past Date's range: the row shows the raw timestamp, never "Invalid Date".
+  { entry: "record", ts_ms: 8_700_000_000_000_000, kind: "kill_engage", fields: "surface=cli" },
 ];
 
 type HostReply =
@@ -76,13 +78,15 @@ describe("AuditPanel", () => {
     // The fields exactly as the CLI spells them, the kind as its wire name.
     expect(screen.getByText("surface=cli outcome=ok")).toBeInTheDocument();
     expect(screen.getByText("kill_release")).toBeInTheDocument();
+    expect(screen.getByText("8700000000000000")).toBeInTheDocument();
+    expect(screen.queryByText(/Invalid Date/)).toBeNull();
     expect(
       screen.getByText("UNRECOGNIZED RECORD (corrupt, tampered, or newer schema)"),
     ).toBeInTheDocument();
     // The host list is newest first, as the host sends it; the unparsable line keeps its position.
     const items = screen.getAllByRole("listitem").map((li) => li.textContent ?? "");
     const trail = items.filter((text) => !text.includes("Confirmation denied"));
-    expect(trail.map((text) => text.includes("pair_client"))).toEqual([true, false, false]);
+    expect(trail.map((text) => text.includes("pair_client"))).toEqual([true, false, false, false]);
     expect(sent).toEqual([{ type: "get_audit" }, { type: "get_host_audit" }]);
   });
 
