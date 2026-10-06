@@ -609,7 +609,8 @@ pub fn clear_baseline_locked(lock: &ipc::RuntimeLockToken) -> io::Result<()> {
     };
     push_history_locked(lock, &prev);
     PolicyStore::remove(lock)?;
-    // A clear is a policy change like any write: the push drops the extension to its deny baseline now.
+    // A clear is a policy change like any write: on a successful bump the push drops the extension to its deny
+    // baseline on the next tick; a failed bump (best-effort, logged) leaves it until its next connect.
     bump_policy_epoch_locked(lock);
     Ok(())
 }
