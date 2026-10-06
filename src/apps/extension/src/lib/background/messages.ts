@@ -25,8 +25,8 @@ import type { Browser } from "wxt/browser";
 import { browser } from "wxt/browser";
 import {
   assertPresence,
+  beginAct,
   beginEnrollment,
-  beginKillRelease,
   confirmPresence,
   finishEnrollment,
   forgetBrowser,
@@ -55,6 +55,7 @@ import {
   repairRegistration,
   requestDoctorReport,
   requestHostAudit,
+  requestPolicyHistory,
   requestRegistrationStatus,
   restrictPolicy,
 } from "./host-admin";
@@ -103,11 +104,14 @@ const HANDLERS: { [K in RuntimeMsgType]: Handler<K> } = {
   get_enrollment: getEnrollmentStatus,
   get_clients: requestClientList,
   revoke_client: (msg) => revokeTrustedClient(msg.name),
+  // Pairing grants capability: the host's presence request, answered by the page's tap, as `pair-client` is
+  // answered by the typed phrase.
+  pair_client: (msg) => beginAct({ type: "client_pair", name: msg.name, anchor: msg.anchor }),
   get_kill: requestKillStatus,
   // The host decides and audits the transition; this only relays a control frame. A release is the host's
   // presence request, answered by the page's tap.
   set_kill: engageKill,
-  kill_release: beginKillRelease,
+  kill_release: () => beginAct({ type: "kill_release" }),
   get_audit: async () => ({ ok: true, entries: await readRing() }),
   get_host_audit: requestHostAudit,
   // Re-derives the pending mirror through the one serialized store path: live
@@ -145,6 +149,11 @@ const HANDLERS: { [K in RuntimeMsgType]: Handler<K> } = {
   get_policy: async () => ({ ok: true, posture: await getPolicyPosture() }),
   // The host's restriction seam decides the direction and audits the verdict; this only relays.
   restrict_policy: (msg) => restrictPolicy(msg.overlay),
+  // The grant lanes `policy set` and `policy rollback` run: the host's presence request, or its refusal in
+  // the CLI's words before any request; a rollback that only tightens is applied with no request.
+  grant_policy: (msg) => beginAct({ type: "policy_set", overlay: msg.overlay }),
+  rollback_policy: (msg) => beginAct({ type: "policy_rollback", revision: msg.revision }),
+  get_policy_history: requestPolicyHistory,
   confirm_ready: (msg) => ({ ok: true, payload: getPendingConfirm(msg.id) }),
   confirm_resolve: (msg) => resolveConfirm(msg.id, msg.approved),
   confirm_deny_kill: denyAndKill,

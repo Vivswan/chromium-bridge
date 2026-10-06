@@ -10,28 +10,40 @@ import {
   handleHostAdminFrame,
   repairRegistration,
   requestHostAudit,
+  requestPolicyHistory,
   requestRegistrationStatus,
   restrictPolicy,
 } from "@/lib/background/host-admin";
+import {
+  assertPresence,
+  beginAct,
+  handleWebAuthnFrame,
+  resetWebAuthnForTests,
+  collaborator as webauthn,
+} from "@/lib/webauthn/exchange";
 import { attach } from "./fake-connection";
 
 let posted: Array<Record<string, unknown>>;
 
 function reattach(): void {
-  attach(collaborator, (frame) => {
+  const post = (frame: object) => {
     posted.push(frame as Record<string, unknown>);
     return true;
-  });
+  };
+  attach(collaborator, post);
+  attach(webauthn, post);
 }
 
 beforeEach(() => {
   posted = [];
   collaborator.onDetach();
+  resetWebAuthnForTests();
   reattach();
 });
 
 afterEach(() => {
   collaborator.onDetach();
+  resetWebAuthnForTests();
   vi.useRealTimers();
 });
 
@@ -197,8 +209,98 @@ describe("the slots are independent", () => {
   });
 });
 
+describe("the grant lanes behind the presence exchange", () => {
+  const request = {
+    type: "presence_request",
+    challenge: "cHJlc2VuY2U",
+    nonce: "nonce-0002",
+    action: "set policy: pageEvalEnabled=on",
+    allowed_credential_ids: ["Y3JlZC1h"],
+  };
+  const answer = {
+    nonce: "nonce-0002",
+    credential_id: "Y3JlZC1h",
+    authenticator_data: "YXV0aA",
+    client_data_json: "Y2Rq",
+    signature: "c2ln",
+  };
+
+  test("a grant posts the overlay, is answered by the presence request, and its verdict follows the tap", async () => {
+    const begun = beginAct({ type: "policy_set", overlay: { pageEvalEnabled: true } });
+    expect(posted).toEqual([{ type: "policy_set", overlay: { pageEvalEnabled: true } }]);
+    handleWebAuthnFrame(request as never);
+    await expect(begun).resolves.toEqual({ ok: true, request });
+    const answered = assertPresence(answer);
+    handleWebAuthnFrame({ type: "presence_result", ok: true });
+    handleHostAdminFrame({ type: "policy_set_result", ok: true });
+    await expect(answered).resolves.toEqual({ ok: true });
+  });
+
+  test("a grant the host refuses before any request resolves with the host's words", async () => {
+    const begun = beginAct({ type: "policy_set", overlay: { cdpMode: true } });
+    handleHostAdminFrame({
+      type: "policy_set_result",
+      ok: false,
+      error:
+        "no host key on this machine; a policy grant is a signed baseline and refuses without one (pair first)",
+    });
+    expect(failed(await begun).error).toBe(
+      "no host key on this machine; a policy grant is a signed baseline and refuses without one (pair first)",
+    );
+  });
+
+  test("a rollback the host applies free resolves with no request; one that relaxes waits for the tap", async () => {
+    const free = beginAct({ type: "policy_rollback", revision: 1 });
+    expect(posted).toEqual([{ type: "policy_rollback", revision: 1 }]);
+    handleHostAdminFrame({ type: "policy_rollback_result", ok: true });
+    await expect(free).resolves.toEqual({ ok: true, request: null });
+
+    const relaxing = beginAct({ type: "policy_rollback", revision: 2 });
+    const rollbackRequest = {
+      ...request,
+      action: "roll policy back to revision 2: pageEvalEnabled=on",
+    };
+    handleWebAuthnFrame(rollbackRequest as never);
+    await expect(relaxing).resolves.toEqual({ ok: true, request: rollbackRequest });
+    const answered = assertPresence(answer);
+    handleWebAuthnFrame({ type: "presence_result", ok: true });
+    handleHostAdminFrame({
+      type: "policy_rollback_result",
+      ok: false,
+      error: "the policy store changed while this write awaited its signature",
+    });
+    expect(failed(await answered).error).toContain("changed while this write awaited");
+  });
+
+  test("a verdict the typed producer cannot emit is a refusal naming the frame, never a success", async () => {
+    const begun = beginAct({ type: "policy_set", overlay: { cdpMode: true } });
+    handleHostAdminFrame({ type: "policy_set_result", ok: true, error: "boom" } as never);
+    expect(failed(await begun).error).toBe("malformed policy_set_result from host");
+  });
+});
+
+describe("policy history", () => {
+  test("round-trips the ring as the host reports it, and a refusal as its error", async () => {
+    const entries = [
+      { revision: 2, signed: true, overlay_active: false, superseded_unix: 20 },
+      { signed: false, overlay_active: true, superseded_unix: 21 },
+    ];
+    const p = requestPolicyHistory();
+    expect(posted).toEqual([{ type: "policy_history" }]);
+    handleHostAdminFrame({ type: "policy_history_result", ok: true, entries });
+    await expect(p).resolves.toEqual({ ok: true, entries });
+    const refused = requestPolicyHistory();
+    handleHostAdminFrame({
+      type: "policy_history_result",
+      ok: false,
+      error: "the policy history is unreadable",
+    });
+    expect(failed(await refused).error).toBe("the policy history is unreadable");
+  });
+});
+
 describe("fail-closed: every unanswered or unusable exchange resolves to a refusal", () => {
-  // One axis varies (how the reply fails to arrive or to parse); both exchanges take every row.
+  // One axis varies (how the reply fails to arrive or to parse); every exchange takes every row.
   const exchanges = [
     { name: "status", request: requestRegistrationStatus, reply: rowsResult },
     {
@@ -207,6 +309,11 @@ describe("fail-closed: every unanswered or unusable exchange resolves to a refus
       reply: { type: "policy_restrict_result" as const, ok: true },
     },
     { name: "audit", request: requestHostAudit, reply: trailResult },
+    {
+      name: "history",
+      request: requestPolicyHistory,
+      reply: { type: "policy_history_result" as const, ok: true, entries: [] },
+    },
   ];
   const failures = [
     {

@@ -63,6 +63,39 @@ describe("RuntimeMsgSchema", () => {
     revoke_client: [
       { name: "with a non-label name", msg: { type: "revoke_client", name: "../etc" } },
     ],
+    // The host refuses these at its frame parse without touching its pending presence slot, so the page
+    // must refuse them first (runtime-msg.ts ClientAnchorSchema says why).
+    pair_client: [
+      {
+        name: "with a hash anchor outside the digest grammar",
+        msg: { type: "pair_client", name: "codex", anchor: { kind: "hash", value: "zz" } },
+      },
+      {
+        name: "with an uppercase hash anchor",
+        msg: {
+          type: "pair_client",
+          name: "codex",
+          anchor: { kind: "hash", value: "A".repeat(40) },
+        },
+      },
+      {
+        name: "with an empty signer anchor",
+        msg: { type: "pair_client", name: "codex", anchor: { kind: "signer", value: "" } },
+      },
+      {
+        name: "with an anchor kind the host has no parser for",
+        msg: { type: "pair_client", name: "codex", anchor: { kind: "parent", value: "x" } },
+      },
+    ],
+    grant_policy: [
+      {
+        name: "with a field the catalogue does not own",
+        msg: { type: "grant_policy", overlay: { unknownField: true } },
+      },
+    ],
+    rollback_policy: [
+      { name: "with a negative revision", msg: { type: "rollback_policy", revision: -1 } },
+    ],
     set_kill: [
       {
         name: "with on: false (engage-only by shape; release is the kill_release message)",

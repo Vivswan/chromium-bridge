@@ -215,6 +215,52 @@ fn classification_matrix() {
             Malformed(Tag::ClientRevoke),
         ),
         (
+            json!({ "type": "client_pair", "name": "codex",
+                    "anchor": { "kind": "signer", "value": "TEAMID" } }),
+            Handle(HostRequest::ClientPair {
+                name: crate::allowlist::ClientName::try_from("codex").unwrap(),
+                anchor: crate::allowlist::Anchor::Signer(
+                    crate::ipc::SignerId::try_from("TEAMID").unwrap(),
+                ),
+            }),
+        ),
+        // The name grammar and the anchor grammar refuse at the parse, so the exchange never sees them.
+        (
+            json!({ "type": "client_pair", "name": "bad name!",
+                    "anchor": { "kind": "signer", "value": "TEAMID" } }),
+            Malformed(Tag::ClientPair),
+        ),
+        (
+            json!({ "type": "client_pair", "name": "codex",
+                    "anchor": { "kind": "hash", "value": "zz" } }),
+            Malformed(Tag::ClientPair),
+        ),
+        (
+            json!({ "type": "policy_set", "overlay": { "pageEvalEnabled": true } }),
+            Handle(HostRequest::PolicySet {
+                overlay: crate::policy::PolicyOverlay {
+                    page_eval_enabled: Some(true),
+                    ..Default::default()
+                },
+            }),
+        ),
+        (
+            json!({ "type": "policy_set", "overlay": { "unknownField": true } }),
+            Malformed(Tag::PolicySet),
+        ),
+        (
+            json!({ "type": "policy_history" }),
+            Handle(HostRequest::PolicyHistory {}),
+        ),
+        (
+            json!({ "type": "policy_rollback", "revision": 3 }),
+            Handle(HostRequest::PolicyRollback { revision: 3 }),
+        ),
+        (
+            json!({ "type": "policy_rollback", "revision": "3" }),
+            Malformed(Tag::PolicyRollback),
+        ),
+        (
             json!({ "type": "kill_status" }),
             Handle(HostRequest::KillStatus {}),
         ),
@@ -623,6 +669,26 @@ fn malformed_replies_match_the_request_type() {
             Frame(json!({ "type": "policy_restrict_result", "ok": false,
                           "error": "malformed policy_restrict frame" })),
         ),
+        (
+            Tag::PolicySet,
+            Frame(json!({ "type": "policy_set_result", "ok": false,
+                          "error": "malformed policy_set frame" })),
+        ),
+        (
+            Tag::PolicyRollback,
+            Frame(json!({ "type": "policy_rollback_result", "ok": false,
+                          "error": "malformed policy_rollback frame" })),
+        ),
+        (
+            Tag::PolicyHistory,
+            Frame(json!({ "type": "policy_history_result", "ok": false,
+                          "error": "malformed policy_history frame" })),
+        ),
+        (
+            Tag::ClientPair,
+            Frame(json!({ "type": "client_pair_result", "ok": false,
+                          "error": "malformed client_pair frame" })),
+        ),
         (Tag::LangGet, LangCurrent),
         (Tag::LangSet, LangCurrent),
         (
@@ -673,6 +739,10 @@ fn malformed_replies_match_the_request_type() {
         (Tag::RegistrationStatusResult, Nothing),
         (Tag::PolicyCurrent, Nothing),
         (Tag::PolicyRestrictResult, Nothing),
+        (Tag::PolicySetResult, Nothing),
+        (Tag::PolicyRollbackResult, Nothing),
+        (Tag::PolicyHistoryResult, Nothing),
+        (Tag::ClientPairResult, Nothing),
         (Tag::LangCurrent, Nothing),
     ];
     let covered: BTreeSet<HostControlTag> = table.iter().map(|(tag, _)| *tag).collect();
@@ -749,20 +819,66 @@ fn registration_and_restrict_outcomes_map_onto_the_pinned_wire_shapes() {
             want
         );
     }
+    // One verdict type answers four lanes; each lane's frame carries the error exactly when refused.
+    for (lane, tag) in [
+        (WriteLane::PolicyRestrict, "policy_restrict_result"),
+        (WriteLane::PolicySet, "policy_set_result"),
+        (WriteLane::PolicyRollback, "policy_rollback_result"),
+        (WriteLane::ClientPair, "client_pair_result"),
+    ] {
+        assert_eq!(
+            serde_json::to_value(WriteVerdict::Applied.into_frame(lane)).unwrap(),
+            json!({ "type": tag, "ok": true })
+        );
+        assert_eq!(
+            serde_json::to_value(
+                WriteVerdict::Refused {
+                    error: "relaxes the effective policy".into(),
+                }
+                .into_frame(lane)
+            )
+            .unwrap(),
+            json!({ "type": tag, "ok": false, "error": "relaxes the effective policy" })
+        );
+    }
+    // The history rows travel exactly when the ring read; a damaged entry's revision is omitted, never null.
     assert_eq!(
-        serde_json::to_value(RestrictOutcome::Applied.into_frame()).unwrap(),
-        json!({ "type": "policy_restrict_result", "ok": true })
+        serde_json::to_value(
+            HistoryReport::Entries(vec![
+                PolicyHistoryRow {
+                    revision: Some(3),
+                    signed: true,
+                    overlay_active: false,
+                    superseded_unix: 10,
+                },
+                PolicyHistoryRow {
+                    revision: None,
+                    signed: false,
+                    overlay_active: true,
+                    superseded_unix: 11,
+                },
+            ])
+            .into_frame()
+        )
+        .unwrap(),
+        json!({
+            "type": "policy_history_result",
+            "ok": true,
+            "entries": [
+                { "revision": 3, "signed": true, "overlay_active": false, "superseded_unix": 10 },
+                { "signed": false, "overlay_active": true, "superseded_unix": 11 },
+            ],
+        })
     );
     assert_eq!(
         serde_json::to_value(
-            RestrictOutcome::Refused {
-                error: "relaxes the effective policy".into(),
+            HistoryReport::Unavailable {
+                error: "ring unreadable".into()
             }
             .into_frame()
         )
         .unwrap(),
-        json!({ "type": "policy_restrict_result", "ok": false,
-                "error": "relaxes the effective policy" })
+        json!({ "type": "policy_history_result", "ok": false, "error": "ring unreadable" })
     );
 }
 

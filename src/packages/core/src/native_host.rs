@@ -5,7 +5,8 @@
 //! ```text
 //! stdin  -> socket   native-messaging frames forwarded as NDJSON lines, except the host-handled control frames
 //!                    (host-key ceremony, revocation and client admin, kill switch, WebAuthn enrollment and
-//!                    presence, policy and language), which are answered HERE and never reach the server
+//!                    presence, policy grants and restrictions, language), which are answered HERE and never
+//!                    reach the server
 //! socket -> stdout   NDJSON lines framed for Chrome, except a control frame from the server, which is an
 //!                    injection and is dropped
 //! ```
@@ -26,8 +27,9 @@ use crate::enclave::EnrollmentKey;
 use crate::ipc::{self, BrowserLabel};
 use crate::protocol::control::{
     classify_nm_frame, host_control_type, AdminControl, AuditReadLimit, AuditReport, DoctorOutcome,
-    EnclaveControl, FrameDisposition, HostRequest, KillStatus, MalformedReply, PolicyControl,
-    PolicyStatus, RegistrationReport, RegistrationRow, RepairBrowsers, RestrictOutcome,
+    EnclaveControl, FrameDisposition, HistoryReport, HostReply, HostRequest, KillStatus,
+    MalformedReply, PolicyControl, PolicyHistoryRow, PolicyStatus, RegistrationReport,
+    RegistrationRow, RepairBrowsers, WriteLane, WriteVerdict,
 };
 use crate::protocol::{bridge_read, bridge_write, nm_read_frame, nm_write_frame};
 use crate::runtime_record::RuntimeRecord as _;
@@ -226,16 +228,18 @@ fn registration_repair_reply(browsers: Option<RepairBrowsers>) -> AdminControl {
     }
 }
 
-/// Answer a `policy_restrict` frame: the result, then the freshly loaded `policy_current` when the restriction
-/// applied. The seam's epoch bump is best-effort after the store write and `confirmPageEval` is enforced in the
-/// extension's mirror alone, so the written state is pushed here; the watch's push on a successful bump duplicates it.
-fn policy_restrict_replies(overlay: crate::policy::PolicyOverlay) -> Vec<PolicyControl> {
+/// Run the free restriction lane for `overlay` and answer on `lane`: the verdict, then the freshly loaded
+/// `policy_current` when the restriction applied. The seam's epoch bump is best-effort after the store write and
+/// `confirmPageEval` is enforced in the extension's mirror alone, so the written state is pushed here; the watch's
+/// push on a successful bump duplicates it. `policy_restrict` answers on its own lane, a tightening rollback on
+/// the rollback lane.
+fn restrict_replies(overlay: crate::policy::PolicyOverlay, lane: WriteLane) -> Vec<HostReply> {
     match crate::policy::restrict(overlay, crate::audit::Surface::Extension) {
         Ok(()) => {
             log_info!("native-host", "extension applied a policy restriction");
             vec![
-                RestrictOutcome::Applied.into_frame(),
-                policy_current_reply(),
+                WriteVerdict::Applied.into_frame(lane),
+                policy_current_reply().into(),
             ]
         }
         Err(e) => {
@@ -243,12 +247,24 @@ fn policy_restrict_replies(overlay: crate::policy::PolicyOverlay) -> Vec<PolicyC
                 "native-host",
                 "extension-requested policy restriction refused: {e}"
             );
-            vec![RestrictOutcome::Refused {
+            vec![WriteVerdict::Refused {
                 error: e.to_string(),
             }
-            .into_frame()]
+            .into_frame(lane)]
         }
     }
+}
+
+/// Answer a `policy_history` frame: the superseded-revision ring as the CLI's report reads it, projected row by
+/// row; an unreadable ring is the error alone.
+fn policy_history_reply() -> PolicyControl {
+    match crate::policy::gather_history_report() {
+        Ok(report) => {
+            HistoryReport::Entries(report.entries.iter().map(PolicyHistoryRow::from).collect())
+        }
+        Err(error) => HistoryReport::Unavailable { error },
+    }
+    .into_frame()
 }
 
 // ---- kill-switch control frames and the audit-event sink ----------------------
@@ -552,10 +568,7 @@ fn watch_tick<W: Write>(
     Some(cur)
 }
 
-fn write_replies<W: Write>(
-    out: &Mutex<W>,
-    replies: Vec<crate::protocol::control::HostReply>,
-) -> io::Result<()> {
+fn write_replies<W: Write>(out: &Mutex<W>, replies: Vec<HostReply>) -> io::Result<()> {
     replies
         .iter()
         .try_for_each(|reply| write_control_reply(out, reply))
@@ -643,6 +656,9 @@ fn handle_request<W: Write>(
         HostRequest::EnclaveRevoke {} => write_control_reply(out, &revoke_host_key()),
         HostRequest::ClientList {} => write_control_reply(out, &admin_client_list()),
         HostRequest::ClientRevoke { name } => write_control_reply(out, &admin_client_revoke(&name)),
+        HostRequest::ClientPair { name, anchor } => {
+            write_replies(out, exchange.client_pair(name, anchor))
+        }
         HostRequest::KillStatus {} => write_control_reply(out, &kill_status_reply()),
         HostRequest::KillEngage {} => write_control_reply(out, &handle_kill_engage()),
         HostRequest::KillRelease {} => write_replies(out, exchange.kill_release()),
@@ -655,9 +671,14 @@ fn handle_request<W: Write>(
             write_control_reply(out, &registration_repair_reply(browsers))
         }
         HostRequest::PolicyGet {} => write_control_reply(out, &policy_current_reply()),
-        HostRequest::PolicyRestrict { overlay } => policy_restrict_replies(overlay)
-            .iter()
-            .try_for_each(|reply| write_control_reply(out, reply)),
+        HostRequest::PolicyRestrict { overlay } => {
+            write_replies(out, restrict_replies(overlay, WriteLane::PolicyRestrict))
+        }
+        HostRequest::PolicySet { overlay } => write_replies(out, exchange.policy_set(overlay)),
+        HostRequest::PolicyHistory {} => write_control_reply(out, &policy_history_reply()),
+        HostRequest::PolicyRollback { revision } => {
+            write_replies(out, exchange.policy_rollback(revision))
+        }
         HostRequest::LangGet {} => match lang_current_frame() {
             Some(reply) => write_control_reply(out, &reply),
             None => Ok(()),

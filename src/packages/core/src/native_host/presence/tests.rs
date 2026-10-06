@@ -1047,3 +1047,484 @@ fn a_presence_begin_over_an_unreadable_trust_record_is_refused_as_a_store_error(
         "{refusals:?}"
     );
 }
+
+// ---- the grant lane and client pairing from the page --------------------------------------------------------
+
+use crate::allowlist::{Anchor, ClientName};
+use crate::ipc::SignerId;
+use crate::policy::{PolicyField, PolicyOverlay, PolicyStore, PolicyValues};
+use crate::protocol::control::PolicyControl;
+use crate::trust::Clients;
+
+/// The host key a grant signs with, minted into the scratch dir's file record; the test attestation stands in
+/// for `pair`'s typed phrase.
+fn mint_host_key() {
+    crate::ipc::with_runtime_lock(|lock| {
+        Ok(crate::enclave::EnrollmentKey::mint(
+            lock,
+            crate::enclave::KeyStore::File,
+            PresenceAttestation::assume_for_tests(PresencePath::Tty),
+        ))
+    })
+    .unwrap()
+    .unwrap();
+}
+
+/// A signed baseline over `values` touching `touched`, written as the CLI writes one.
+fn sign_baseline(values: PolicyValues, touched: Vec<PolicyField>) {
+    crate::policy::set_signed(values, touched, Surface::Core, || {
+        Ok(PresenceAttestation::assume_for_tests(PresencePath::Tty))
+    })
+    .unwrap();
+}
+
+fn effective() -> PolicyValues {
+    PolicyStore::load().unwrap().unwrap().effective().unwrap()
+}
+
+fn revision() -> u64 {
+    PolicyStore::load()
+        .unwrap()
+        .unwrap()
+        .baseline_doc()
+        .unwrap()
+        .revision
+}
+
+/// `(ok, error)` of a write verdict frame, whichever lane answered.
+fn write_verdict(reply: &HostReply) -> (bool, Option<String>) {
+    match reply {
+        HostReply::Policy(PolicyControl::PolicySetResult { ok, error })
+        | HostReply::Policy(PolicyControl::PolicyRollbackResult { ok, error })
+        | HostReply::Admin(AdminControl::ClientPairResult { ok, error }) => (*ok, error.clone()),
+        other @ (HostReply::Enclave(_)
+        | HostReply::Admin(_)
+        | HostReply::Policy(_)
+        | HostReply::WebAuthn(_)) => panic!("expected a write verdict, got {other:?}"),
+    }
+}
+
+fn is_policy_current(reply: &HostReply) -> bool {
+    matches!(
+        reply,
+        HostReply::Policy(PolicyControl::PolicyCurrent { ok: true, .. })
+    )
+}
+
+fn page_eval_grant() -> PolicyOverlay {
+    PolicyOverlay {
+        page_eval_enabled: Some(true),
+        ..PolicyOverlay::default()
+    }
+}
+
+/// The CLI's up-front rule holds on the page too: with no host key the grant is refused in the CLI's words,
+/// no presence request is minted (an assertion finds nothing outstanding), the store stays empty, and the
+/// trail carries the same refused record the CLI leaves.
+#[test]
+fn a_policy_grant_from_the_page_is_refused_before_any_request_on_a_keyless_host() {
+    let _dir = scratch_runtime_dir();
+    let mut brave = Exchange::new(label("brave"));
+    let mut own = Authenticator::new(0x11);
+    enroll_tofu(&mut brave, &own);
+
+    let replies = brave.policy_set(page_eval_grant());
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    let (ok, error) = write_verdict(&replies[0]);
+    assert!(!ok);
+    assert_eq!(
+        error.as_deref(),
+        Some(
+            "no host key on this machine; a policy grant is a signed baseline and refuses without \
+             one (pair first)"
+        )
+    );
+    let replies = brave.presence_assert(&own.id_b64(), Ok(own.assert("unused")));
+    assert_eq!(
+        presence_reason(&replies[0]).as_deref(),
+        Some("no_request_outstanding"),
+        "a keyless refusal mints no request"
+    );
+    assert!(PolicyStore::load().unwrap().is_none());
+    let writes = audit_records(AuditKind::PolicyWrite);
+    assert_eq!(writes.len(), 1, "{writes:?}");
+    assert_eq!(writes[0].surface, Some(Surface::Extension));
+    assert_eq!(writes[0].outcome.as_deref(), Some("refused"));
+    assert_eq!(
+        writes[0].detail.as_deref(),
+        Some("no signing key; touched=pageEvalEnabled")
+    );
+}
+
+/// The store the tap was shown is the store the write lands over: a restriction landing while the request is
+/// outstanding refuses the grant as the conflict `policy set` would report, the restriction stands, and no
+/// request is left behind. An invalid request (nothing touched) is refused before any request exists.
+#[test]
+fn a_store_that_moves_while_the_tap_is_awaited_refuses_the_grant_as_a_conflict() {
+    let _dir = scratch_runtime_dir();
+    mint_host_key();
+    let mut brave = Exchange::new(label("brave"));
+    let mut own = Authenticator::new(0x11);
+    enroll_tofu(&mut brave, &own);
+    sign_baseline(
+        PolicyValues {
+            page_eval_enabled: true,
+            ..PolicyValues::default()
+        },
+        vec![PolicyField::PageEvalEnabled],
+    );
+
+    let replies = brave.policy_set(PolicyOverlay {
+        cdp_mode: Some(true),
+        ..PolicyOverlay::default()
+    });
+    let (challenge, _) = presence_request(&replies[0]);
+    crate::policy::restrict(
+        PolicyOverlay {
+            page_eval_enabled: Some(false),
+            ..PolicyOverlay::default()
+        },
+        Surface::Cli,
+    )
+    .unwrap();
+    let replies = brave.presence_assert(&own.id_b64(), Ok(own.assert(&challenge)));
+    assert_eq!(replies.len(), 2, "{replies:?}");
+    assert_approved(&replies[0]);
+    let (ok, error) = write_verdict(&replies[1]);
+    assert!(!ok);
+    assert!(
+        error
+            .as_deref()
+            .is_some_and(|e| e.contains("changed while this write awaited its signature")),
+        "{error:?}"
+    );
+    let written = effective();
+    assert!(!written.page_eval_enabled, "the restriction stands");
+    assert!(!written.cdp_mode, "the grant did not land");
+    assert_eq!(revision(), 1);
+
+    let replies = brave.policy_set(PolicyOverlay::default());
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    let (ok, error) = write_verdict(&replies[0]);
+    assert!(!ok);
+    assert_eq!(
+        error.as_deref(),
+        Some("invalid policy write: the touched set is empty (a write must name the fields it edits)")
+    );
+}
+
+/// A prompt shows the whole change it approves: a summary past the action bound is refused before any
+/// request exists rather than shown truncated, on both lanes that embed caller-sized text (a long tool list,
+/// an unbounded signer id), in each lane's own refusal words. A NUL byte in that text is the field's own
+/// grammar refusal, never the bound's: the statement parser refuses both with one answer. The host here is
+/// keyless: the bound is decided before the key lookup, so these refusals stay promptless and unaudited.
+#[test]
+fn a_summary_past_the_prompt_bound_is_refused_before_any_request() {
+    let _dir = scratch_runtime_dir();
+    let mut brave = Exchange::new(label("brave"));
+    enroll_tofu(&mut brave, &Authenticator::new(0x11));
+    let overlay = PolicyOverlay {
+        disabled_tools: Some((0..40).map(|i| format!("tool_{i:0>60}")).collect()),
+        ..PolicyOverlay::default()
+    };
+    let long_signer = Anchor::Signer(SignerId::try_from("A".repeat(MAX_ACTION_LEN)).unwrap());
+    let cases = [
+        (
+            brave.policy_set(overlay),
+            format!(
+                "invalid policy write: the change summary exceeds the {MAX_ACTION_LEN}-byte bound a \
+                 presence prompt can show"
+            ),
+        ),
+        (
+            brave.client_pair(ClientName::try_from("codex").unwrap(), long_signer),
+            format!(
+                "invalid pairing request: the pairing summary exceeds the {MAX_ACTION_LEN}-byte bound a \
+                 presence prompt can show"
+            ),
+        ),
+    ];
+    for (replies, want) in cases {
+        assert_eq!(replies.len(), 1, "{replies:?}");
+        assert_eq!(write_verdict(&replies[0]), (false, Some(want)));
+    }
+    let replies = brave.policy_set(PolicyOverlay {
+        disabled_tools: Some(vec!["a\0b".into()]),
+        ..PolicyOverlay::default()
+    });
+    assert_eq!(
+        write_verdict(&replies[0]),
+        (
+            false,
+            Some("invalid policy write: a disabledTools entry contains a NUL byte".into())
+        )
+    );
+    assert_eq!(
+        SignerId::try_from("a\0b").unwrap_err(),
+        "signer anchor must not contain a NUL byte"
+    );
+    assert_eq!(
+        presence_reason(&brave.presence_confirm("unused")[0]).as_deref(),
+        Some("no_request_outstanding"),
+        "neither refusal minted a request"
+    );
+    assert!(PolicyStore::load().unwrap().is_none());
+    assert!(audit_records(AuditKind::PolicyWrite).is_empty());
+    assert!(audit_records(AuditKind::PairClient).is_empty());
+}
+
+/// The grant lane from the page: the request names this browser's credential and the change in the words the
+/// tap approves (each touched field with its value, in the CLI's spellings), the answer signs the baseline
+/// through the CLI's own seam, the written state is pushed, and the trail names the credential. A replayed
+/// assertion then cannot sign a second grant, and the refused tap leaves the grant lane's own refused record
+/// beside the presence one.
+#[test]
+fn a_policy_grant_from_the_page_signs_the_baseline_behind_this_browsers_tap() {
+    let _dir = scratch_runtime_dir();
+    mint_host_key();
+    let mut brave = Exchange::new(label("brave"));
+    let mut own = Authenticator::new(0x11);
+    enroll_tofu(&mut brave, &own);
+
+    let replies = brave.policy_set(PolicyOverlay {
+        page_eval_enabled: Some(true),
+        confirm_grace_ms: Some(crate::policy::Ms::from(30_000u32)),
+        disabled_tools: Some(vec!["page_upload".into(), "tab_close".into()]),
+        ..PolicyOverlay::default()
+    });
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    let (challenge, allowed) = presence_request(&replies[0]);
+    assert_eq!(allowed, vec![own.id_b64()]);
+    assert_eq!(
+        presence_action(&replies[0]),
+        "set policy: pageEvalEnabled=on,confirmGraceMs=30000,disabledTools=[page_upload,tab_close]"
+    );
+    let assertion = own.assert(&challenge);
+    let replies = brave.presence_assert(&own.id_b64(), Ok(assertion.clone()));
+    assert_eq!(replies.len(), 3, "{replies:?}");
+    assert_approved(&replies[0]);
+    assert_eq!(write_verdict(&replies[1]), (true, None));
+    assert!(is_policy_current(&replies[2]), "{replies:?}");
+    let written = effective();
+    assert!(written.page_eval_enabled);
+    assert_eq!(written.confirm_grace_ms, crate::policy::Ms::from(30_000u32));
+    assert_eq!(written.disabled_tools, vec!["page_upload", "tab_close"]);
+    assert_eq!(revision(), 1);
+    let writes = audit_records(AuditKind::PolicyWrite);
+    assert_eq!(writes.len(), 1, "{writes:?}");
+    assert_eq!(writes[0].surface, Some(Surface::Extension));
+    assert_eq!(writes[0].outcome.as_deref(), Some("ok"));
+    assert_eq!(
+        writes[0].detail.as_deref(),
+        Some(
+            format!(
+                "auth={}; touched=pageEvalEnabled,confirmGraceMs,disabledTools",
+                own.audit_label()
+            )
+            .as_str()
+        )
+    );
+
+    // The replay: the counter already moved past this assertion.
+    let replies = brave.policy_set(PolicyOverlay {
+        confirm_page_eval: Some(false),
+        ..PolicyOverlay::default()
+    });
+    assert_eq!(
+        presence_action(&replies[0]),
+        "set policy: confirmPageEval=off"
+    );
+    let replies = brave.presence_assert(&own.id_b64(), Ok(assertion));
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    assert_eq!(
+        presence_reason(&replies[0]).as_deref(),
+        Some("sign_count_not_increased")
+    );
+    assert_eq!(revision(), 1, "nothing was signed");
+    assert!(effective().confirm_page_eval);
+    let writes = audit_records(AuditKind::PolicyWrite);
+    assert_eq!(writes.len(), 2, "{writes:?}");
+    assert_eq!(writes[1].outcome.as_deref(), Some("refused"));
+    assert!(
+        writes[1]
+            .detail
+            .as_deref()
+            .is_some_and(|d| d.starts_with("presence: assertion refused: signCount")
+                && d.ends_with("; touched=confirmPageEval")),
+        "{:?}",
+        writes[1].detail
+    );
+}
+
+/// A browser with no enrolled credential signs a grant through the window, and the trail says so.
+#[test]
+fn a_bare_browser_signs_a_grant_by_window_and_the_trail_names_the_software_path() {
+    let _dir = scratch_runtime_dir();
+    mint_host_key();
+    let mut chrome = Exchange::new(label("chrome"));
+    enroll_tofu(&mut chrome, &Authenticator::new(0x22));
+    let mut brave = Exchange::new(label("brave"));
+
+    let replies = brave.policy_set(page_eval_grant());
+    let (_, allowed) = presence_request(&replies[0]);
+    assert!(allowed.is_empty(), "{allowed:?}");
+    let nonce = presence_nonce(&replies[0]);
+    let replies = brave.presence_confirm(&nonce);
+    assert_eq!(replies.len(), 3, "{replies:?}");
+    assert_approved(&replies[0]);
+    assert_eq!(write_verdict(&replies[1]), (true, None));
+    assert!(effective().page_eval_enabled);
+    let writes = audit_records(AuditKind::PolicyWrite);
+    assert_eq!(
+        writes[0].detail.as_deref(),
+        Some("auth=confirm_window; touched=pageEvalEnabled")
+    );
+}
+
+/// A rollback from the page takes the lane the plan decides, as `policy rollback` does: a tightening rides the
+/// free lane with no request, a relaxation opens a request naming the revision and the change, a no-op answers
+/// at once, and an unknown or ambiguous revision is refused in the CLI's words.
+#[test]
+fn a_rollback_from_the_page_takes_the_lane_the_plan_decides() {
+    let _dir = scratch_runtime_dir();
+    mint_host_key();
+    let mut brave = Exchange::new(label("brave"));
+    let mut own = Authenticator::new(0x11);
+    enroll_tofu(&mut brave, &own);
+    let reverify = PolicyValues {
+        host_reverify_ms: crate::policy::Ms::from(1000u32),
+        ..PolicyValues::default()
+    };
+    sign_baseline(reverify.clone(), vec![PolicyField::HostReverifyMs]);
+    sign_baseline(
+        PolicyValues {
+            page_eval_enabled: true,
+            ..reverify
+        },
+        vec![PolicyField::PageEvalEnabled],
+    );
+    assert_eq!(revision(), 2);
+
+    // Revision 1 is tighter than the current state: free, no request, the written state pushed.
+    let replies = brave.policy_rollback(1);
+    assert_eq!(replies.len(), 2, "{replies:?}");
+    assert_eq!(write_verdict(&replies[0]), (true, None));
+    assert!(is_policy_current(&replies[1]), "{replies:?}");
+    assert!(!effective().page_eval_enabled);
+    assert_eq!(revision(), 2, "a tightening leaves the baseline alone");
+
+    // Already there: nothing to do, nothing pushed.
+    let replies = brave.policy_rollback(1);
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    assert_eq!(write_verdict(&replies[0]), (true, None));
+
+    // Revision 2 relaxes the current state: a request, then a fresh signed revision.
+    let replies = brave.policy_rollback(2);
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    assert_eq!(
+        presence_action(&replies[0]),
+        "roll policy back to revision 2: pageEvalEnabled=on"
+    );
+    let (challenge, _) = presence_request(&replies[0]);
+    let replies = brave.presence_assert(&own.id_b64(), Ok(own.assert(&challenge)));
+    assert_eq!(replies.len(), 3, "{replies:?}");
+    assert_approved(&replies[0]);
+    assert_eq!(write_verdict(&replies[1]), (true, None));
+    assert!(effective().page_eval_enabled);
+    assert_eq!(
+        revision(),
+        3,
+        "a relaxation is a fresh revision, never the old artifact"
+    );
+
+    // Revision 2 now names two superseded states (before and after its restriction); revision 9 none.
+    for (revision, needle) in [(2, "ambiguous"), (9, "no history entry at revision 9")] {
+        let replies = brave.policy_rollback(revision);
+        assert_eq!(replies.len(), 1, "{replies:?}");
+        let (ok, error) = write_verdict(&replies[0]);
+        assert!(!ok);
+        assert!(
+            error.as_deref().is_some_and(|e| e.contains(needle)),
+            "{error:?}"
+        );
+    }
+    let acts: Vec<String> = audit_records(AuditKind::PresenceAssert)
+        .iter()
+        .filter_map(|r| r.detail.clone())
+        .collect();
+    assert!(
+        acts.iter()
+            .any(|d| d.starts_with("act=policy_rollback; auth=")),
+        "{acts:?}"
+    );
+}
+
+/// Pairing a trusted client from the page runs the CLI's own seam behind this browser's tap: the request names
+/// the client and its anchor, the answer lands the entry, and the trail names the credential. A refused tap
+/// leaves the pairing lane's own refused record and no entry.
+#[test]
+fn a_client_pairing_from_the_page_lands_behind_this_browsers_tap() {
+    let _dir = scratch_runtime_dir();
+    let mut brave = Exchange::new(label("brave"));
+    let mut own = Authenticator::new(0x11);
+    enroll_tofu(&mut brave, &own);
+    let name = ClientName::try_from("codex").unwrap();
+    let anchor = Anchor::Signer(SignerId::try_from("TEAMID").unwrap());
+
+    let replies = brave.client_pair(name.clone(), anchor.clone());
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    assert_eq!(
+        presence_action(&replies[0]),
+        "pair trusted client 'codex' on signer TEAMID"
+    );
+    let (challenge, allowed) = presence_request(&replies[0]);
+    assert_eq!(allowed, vec![own.id_b64()]);
+    let assertion = own.assert(&challenge);
+    let replies = brave.presence_assert(&own.id_b64(), Ok(assertion.clone()));
+    assert_eq!(replies.len(), 2, "{replies:?}");
+    assert_approved(&replies[0]);
+    assert_eq!(write_verdict(&replies[1]), (true, None));
+    let trust = TrustState::current().unwrap();
+    let Clients::Paired(clients) = trust.clients() else {
+        panic!("the allowlist exists after a pairing: {trust:?}");
+    };
+    assert_eq!(clients.len(), 1);
+    assert_eq!(clients[0].name, name);
+    assert_eq!(clients[0].anchor, anchor);
+    let pairs = audit_records(AuditKind::PairClient);
+    assert_eq!(pairs.len(), 1, "{pairs:?}");
+    assert_eq!(pairs[0].surface, Some(Surface::Extension));
+    assert_eq!(pairs[0].outcome.as_deref(), Some("ok"));
+    assert_eq!(pairs[0].name.as_deref(), Some("codex"));
+    assert_eq!(
+        pairs[0].detail.as_deref(),
+        Some("signer TEAMID; auth=webauthn")
+    );
+
+    // The replay cannot pair a second client.
+    let other = ClientName::try_from("claude").unwrap();
+    let replies = brave.client_pair(other, anchor);
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    let replies = brave.presence_assert(&own.id_b64(), Ok(assertion));
+    assert_eq!(
+        presence_reason(&replies[0]).as_deref(),
+        Some("sign_count_not_increased")
+    );
+    let trust = TrustState::current().unwrap();
+    let Clients::Paired(clients) = trust.clients() else {
+        panic!("{trust:?}");
+    };
+    assert_eq!(clients.len(), 1, "nothing was paired");
+    let pairs = audit_records(AuditKind::PairClient);
+    assert_eq!(pairs.len(), 2, "{pairs:?}");
+    assert_eq!(pairs[1].outcome.as_deref(), Some("refused"));
+    assert_eq!(pairs[1].name.as_deref(), Some("claude"));
+    assert!(
+        pairs[1]
+            .detail
+            .as_deref()
+            .is_some_and(|d| d.starts_with("presence: assertion refused: signCount")),
+        "{:?}",
+        pairs[1].detail
+    );
+}

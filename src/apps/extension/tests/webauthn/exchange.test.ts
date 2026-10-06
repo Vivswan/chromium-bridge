@@ -10,10 +10,10 @@ import { HOST_REPLY_TIMEOUT_MS } from "@/lib/background/exchange";
 import {
   abandonPresence,
   assertPresence,
+  beginAct,
   beginEnrollment,
-  beginKillRelease,
   beginPresence,
-  claimKillRelease,
+  claimAct,
   collaborator,
   confirmPresence,
   finishEnrollment,
@@ -176,7 +176,7 @@ describe("kill release", () => {
   test("kill_release posts the frame; the pushed presence_request answers it, stays pending for the page, and opens no page", async () => {
     const open = vi.spyOn(fakeBrowser.runtime, "openOptionsPage").mockResolvedValue(undefined);
     const release = { ...presenceRequest, action: "release the kill switch" };
-    const p = beginKillRelease();
+    const p = beginAct({ type: "kill_release" });
     expect(posted).toEqual([{ type: "kill_release" }]);
     handleWebAuthnFrame(release as never);
     await expect(p).resolves.toEqual({ ok: true, request: release });
@@ -186,7 +186,7 @@ describe("kill release", () => {
     const answered = assertPresence(answer);
     expect(posted).toEqual([{ type: "kill_release" }, { type: "presence_assert", ...assertion }]);
     handleWebAuthnFrame({ type: "presence_result", ok: true });
-    claimKillRelease({ ok: true })?.({ ok: true });
+    claimAct("kill_status_result", { ok: true })?.({ ok: true });
     await expect(answered).resolves.toEqual({ ok: true });
   });
 
@@ -194,7 +194,7 @@ describe("kill release", () => {
   // the error when the write failed, so the presence verdict alone would call a still-engaged switch released.
   test("a release answer waits for the kill_status_result after presence_result ok, and a failed write is its refusal", async () => {
     vi.useFakeTimers();
-    const p = beginKillRelease();
+    const p = beginAct({ type: "kill_release" });
     handleWebAuthnFrame({ ...presenceRequest, action: "release the kill switch" } as never);
     await p;
     const answered = assertPresence(answer);
@@ -205,7 +205,10 @@ describe("kill release", () => {
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(settled).toBe(false);
-    claimKillRelease({ ok: false })?.({ ok: false, error: "trust record: permission denied" });
+    claimAct("kill_status_result", { ok: false })?.({
+      ok: false,
+      error: "trust record: permission denied",
+    });
     await expect(answered).resolves.toEqual({
       ok: false,
       error: "trust record: permission denied",
@@ -214,7 +217,7 @@ describe("kill release", () => {
 
   test("a release outcome that never arrives times out to a refusal", async () => {
     vi.useFakeTimers();
-    const p = beginKillRelease();
+    const p = beginAct({ type: "kill_release" });
     handleWebAuthnFrame({ ...presenceRequest, action: "release the kill switch" } as never);
     await p;
     const answered = assertPresence(answer);
@@ -239,9 +242,78 @@ describe("kill release", () => {
   test("a refusal handed over while another exchange is outstanding leaves that exchange alone", async () => {
     // Only a kill_release can be answered by a kill_status_result; an enroll_begin's reply is still coming.
     const p = beginEnrollment();
-    expect(claimKillRelease({ ok: false, error: "trust record unreadable" })).toBeNull();
+    expect(claimAct("kill_status_result", { ok: false })).toBeNull();
     handleWebAuthnFrame(enrollOptions as never);
     await expect(p).resolves.toEqual({ ok: true, options: enrollOptions });
+  });
+});
+
+describe("presence-gated acts beyond the release", () => {
+  const grant = { type: "policy_set" as const, overlay: { pageEvalEnabled: true } };
+
+  test("a refusal before any request settles the act with the host's words, and nothing stays pending", async () => {
+    const begun = beginAct(grant);
+    expect(posted).toEqual([grant]);
+    const settle = claimAct("policy_set_result", { ok: false });
+    expect(settle).not.toBeNull();
+    settle?.({ ok: false, error: "no host key on this machine" });
+    await expect(begun).resolves.toEqual({ ok: false, error: "no host key on this machine" });
+    expect(pendingPresenceRequest()).toBeNull();
+  });
+
+  test("a free lane's early ok settles the act with no request to answer", async () => {
+    const rollback = { type: "policy_rollback" as const, revision: 1 };
+    const begun = beginAct(rollback);
+    claimAct("policy_rollback_result", { ok: true })?.({ ok: true });
+    await expect(begun).resolves.toEqual({ ok: true, request: null });
+  });
+
+  test("an act's outcome is claimed by its own result tag alone, and the answer waits for it", async () => {
+    vi.useFakeTimers();
+    const begun = beginAct(grant);
+    handleWebAuthnFrame({ ...presenceRequest, action: "set policy: pageEvalEnabled=on" } as never);
+    await begun;
+    const answered = assertPresence(answer);
+    handleWebAuthnFrame({ type: "presence_result", ok: true });
+    // A kill push arriving now is not this act's verdict.
+    expect(claimAct("kill_status_result", { ok: true })).toBeNull();
+    let settled = false;
+    void answered.then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(false);
+    claimAct("policy_set_result", { ok: false })?.({
+      ok: false,
+      error: "the policy store changed while this write awaited its signature",
+    });
+    await expect(answered).resolves.toEqual({
+      ok: false,
+      error: "the policy store changed while this write awaited its signature",
+    });
+  });
+
+  test("posting a new act drops the request the host superseded; a refused post leaves it", async () => {
+    const begun = beginAct(grant);
+    const request = { ...presenceRequest, action: "set policy: pageEvalEnabled=on" };
+    handleWebAuthnFrame(request as never);
+    await begun;
+    expect(pendingPresenceRequest()).toEqual(request);
+    // The host clears its slot the moment the next request arrives, so the page's copy is stale from then on.
+    const next = beginAct({ type: "policy_rollback", revision: 9 });
+    expect(pendingPresenceRequest()).toBeNull();
+    claimAct("policy_rollback_result", { ok: false })?.({
+      ok: false,
+      error: "no history entry at revision 9",
+    });
+    await expect(next).resolves.toEqual({ ok: false, error: "no history entry at revision 9" });
+    // A post the exchange refuses (busy) never reached the host: the pending request stands.
+    vi.spyOn(fakeBrowser.runtime, "openOptionsPage").mockResolvedValue(undefined);
+    void beginEnrollment();
+    handleWebAuthnFrame(request as never);
+    const busy = await beginAct(grant);
+    expect(busy).toEqual({ ok: false, error: "a WebAuthn exchange is already in flight" });
+    expect(pendingPresenceRequest()).toEqual(request);
   });
 });
 
@@ -280,16 +352,34 @@ describe("presence exchange", () => {
     await expect(p).resolves.toEqual({ ok: false, error: "malformed presence_result from host" });
   });
 
-  test("a busy exchange refuses the assertion and keeps the request pending for a retry", async () => {
+  test("a frame posted while a request is pending supersedes it, as the host's slot does", async () => {
+    // The host takes its pending slot on every enrollment frame and every act, so once enroll_begin is on the
+    // pipe the pushed request can no longer be answered there; the worker drops its copy the moment the post
+    // succeeds.
     vi.spyOn(fakeBrowser.runtime, "openOptionsPage").mockResolvedValue(undefined);
     handleWebAuthnFrame(presenceRequest as never);
     const enrolling = beginEnrollment();
+    expect(pendingPresenceRequest()).toBeNull();
+    await expect(assertPresence(answer)).resolves.toEqual({
+      ok: false,
+      error: "no presence request is pending",
+    });
+    expect(posted).toEqual([{ type: "enroll_begin" }]);
+    handleWebAuthnFrame(enrollOptions as never);
+    await expect(enrolling).resolves.toMatchObject({ ok: true });
+  });
+
+  test("a busy exchange refuses the assertion and keeps the request pending for a retry", async () => {
+    // A request pushed while an enrollment is open (its replies are named, so the push answers nothing) stays
+    // pending through the refusal: the frame never reached the host, so the host's slot still holds it.
+    vi.spyOn(fakeBrowser.runtime, "openOptionsPage").mockResolvedValue(undefined);
+    const enrolling = beginEnrollment();
+    handleWebAuthnFrame(presenceRequest as never);
     await expect(assertPresence(answer)).resolves.toEqual({
       ok: false,
       error: "a WebAuthn exchange is already in flight",
     });
     expect(pendingPresenceRequest()).toEqual(presenceRequest);
-    expect(posted).toEqual([{ type: "enroll_begin" }]);
     handleWebAuthnFrame(enrollOptions as never);
     await expect(enrolling).resolves.toMatchObject({ ok: true });
     const p = assertPresence(answer);

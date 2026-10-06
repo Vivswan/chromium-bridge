@@ -180,7 +180,7 @@ pub enum PolicyWriteError {
     /// does not name every field the write relaxes, invalid document);
     /// refused BEFORE the presence prompt, so a bad request can never put a
     /// prompt in front of the user.
-    Invalid(&'static str),
+    Invalid(String),
     /// Presence was not attested. Terminal, already audited.
     Refused(String),
     /// No host key exists: a grant is a signed baseline, and a keyless
@@ -245,9 +245,10 @@ impl std::fmt::Display for PolicyWriteError {
 }
 
 /// Write a new signed policy baseline, the one grant path every editing surface shares; `restrict` is the free
-/// lane. `attest` is the surface's presence prompt (today the typed phrase on the CLI's terminal), run only after
-/// the request validated and the host key was found, so a malformed request or a
-/// keyless machine never puts a prompt in front of the user; the host key then signs the exact document bytes.
+/// lane. `attest` is the surface's presence prompt (the typed phrase on the CLI's terminal), run only after
+/// [`prepare_grant`] validated the request and found the host key, so a malformed request or a keyless machine
+/// never puts a prompt in front of the user; the host key then signs the exact document bytes. A surface whose
+/// prompt is asynchronous (the native host's presence request) calls the two halves itself.
 /// ```text
 /// presence refused       -> terminal, never downgraded to a softer prompt
 /// no host key            -> refused (`NoSigningKey`): the grant exists only as the signature, so a keyless
@@ -263,9 +264,65 @@ pub fn set_signed(
     surface: crate::audit::Surface,
     attest: impl FnOnce() -> Result<PresenceAttestation, PresenceError>,
 ) -> Result<PresencePath, PolicyWriteError> {
+    let prepared = prepare_grant(values, touched, surface)?;
+    let auth = attest().map_err(|e| {
+        // The refusal has already happened; the no-downgrade rule makes it terminal, never a floor.
+        prepared.audit_refused(&format!("presence: {e}"));
+        PolicyWriteError::Refused(e.to_string())
+    })?;
+    prepared.commit(auth)
+}
+
+/// A grant validated, observed, and keyed, awaiting only its presence proof: the half of [`set_signed`] that
+/// runs BEFORE the prompt. Holding it across the prompt is what makes the mid-prompt conflict guard hold on
+/// every surface: the observation it carries is the store the user is shown, and [`commit`](Self::commit)
+/// refuses to land over a store that moved since, however long the prompt took.
+#[derive(Debug)]
+pub struct PreparedGrant {
+    observed: PrePromptObservation,
+    doc_bytes: Vec<u8>,
+    key: EnrollmentKey,
+    touched: Vec<PolicyField>,
+    surface: crate::audit::Surface,
+}
+
+impl PreparedGrant {
+    /// The grant lane's refused record for this write, so a refusal at the surface's own gate leaves the
+    /// same trail entry a refusal inside the seam does.
+    pub fn audit_refused(&self, detail: &str) {
+        super::audit_grant_refused(self.surface, &self.touched, detail);
+    }
+
+    /// Sign and land the prepared document under `auth`. Consumes the attestation: one tap, one write.
+    pub fn commit(self, auth: PresenceAttestation) -> Result<PresencePath, PolicyWriteError> {
+        let key_id = self.key.public_key().fingerprint_hex();
+        let sig = self.key.sign_policy(&self.doc_bytes).map_err(|e| {
+            self.audit_refused(&format!("signing: {e}"));
+            PolicyWriteError::KeyUnusable(e.to_string())
+        })?;
+        commit_signed_baseline(
+            self.observed,
+            &self.doc_bytes,
+            base64_encode(&sig),
+            key_id,
+            &self.touched,
+            self.surface,
+            auth,
+        )
+    }
+}
+
+/// Validate a grant, observe the store it will land over, and find the key that signs it: everything a
+/// signed write does before its prompt, promptless by construction. Every refusal here is the one the CLI
+/// prints for the same request.
+pub fn prepare_grant(
+    values: PolicyValues,
+    touched: Vec<PolicyField>,
+    surface: crate::audit::Surface,
+) -> Result<PreparedGrant, PolicyWriteError> {
     if touched.is_empty() {
         return Err(PolicyWriteError::Invalid(
-            "the touched set is empty (a write must name the fields it edits)",
+            "the touched set is empty (a write must name the fields it edits)".into(),
         ));
     }
     // The pre-prompt observation the user's tap covers (PrePromptObservation), read before the prompt and
@@ -307,7 +364,8 @@ pub fn set_signed(
     {
         return Err(PolicyWriteError::Invalid(
             "an untouched field departs from the current baseline (the signed document \
-             carries baseline values on fields it does not touch)",
+             carries baseline values on fields it does not touch)"
+                .into(),
         ));
     }
     // Every field this write relaxes must be in `touched`, or the signed set under-states what the tap granted.
@@ -329,54 +387,44 @@ pub fn set_signed(
         .any(|f| field_relaxes(*f, &would_be_effective, &effective_anchor) && !touched.contains(f))
     {
         return Err(PolicyWriteError::Invalid(
-            "the touched set does not name every field this write relaxes",
+            "the touched set does not name every field this write relaxes".into(),
         ));
     }
     let doc = PolicyDoc::from_values(&values, revision, touched.clone());
-    doc.validate().map_err(PolicyWriteError::Invalid)?;
+    doc.validate()
+        .map_err(|m| PolicyWriteError::Invalid(m.into()))?;
     // Serialized ONCE: these exact bytes are what the signature signs and what the store persists.
     let doc_bytes = serde_json::to_vec(&doc)
         .map_err(io::Error::from)
         .map_err(PolicyWriteError::Io)?;
 
-    let refused = |detail: String| {
-        crate::audit::record(
-            crate::audit::AuditRecord::new(crate::audit::AuditKind::PolicyWrite)
-                .surface(surface)
-                .outcome("refused")
-                .detail(&format!("{detail}; touched={}", wire_name_list(&touched))),
-        );
-    };
-    let key = match EnrollmentKey::lookup() {
-        Ok(Some(key)) => key,
+    let key = lookup_signing_key(&touched, surface)?;
+    Ok(PreparedGrant {
+        observed,
+        doc_bytes,
+        key,
+        touched,
+        surface,
+    })
+}
+
+/// The host key a grant signs with. Promptless and audited where no usable key exists: a grant exists only as
+/// the signature, so a keyless machine has no baseline-writing path on any surface.
+fn lookup_signing_key(
+    touched: &[PolicyField],
+    surface: crate::audit::Surface,
+) -> Result<EnrollmentKey, PolicyWriteError> {
+    match EnrollmentKey::lookup() {
+        Ok(Some(key)) => Ok(key),
         Ok(None) => {
-            refused("no signing key".into());
-            return Err(PolicyWriteError::NoSigningKey);
+            super::audit_grant_refused(surface, touched, "no signing key");
+            Err(PolicyWriteError::NoSigningKey)
         }
         Err(e) => {
-            refused(format!("host key unusable: {e}"));
-            return Err(PolicyWriteError::KeyUnusable(e.to_string()));
+            super::audit_grant_refused(surface, touched, &format!("host key unusable: {e}"));
+            Err(PolicyWriteError::KeyUnusable(e.to_string()))
         }
-    };
-    let key_id = key.public_key().fingerprint_hex();
-    let auth = attest().map_err(|e| {
-        // The refusal has already happened; the no-downgrade rule makes it terminal, never a floor.
-        refused(format!("presence: {e}"));
-        PolicyWriteError::Refused(e.to_string())
-    })?;
-    let sig = key.sign_policy(&doc_bytes).map_err(|e| {
-        refused(format!("signing: {e}"));
-        PolicyWriteError::KeyUnusable(e.to_string())
-    })?;
-    commit_signed_baseline(
-        observed,
-        &doc_bytes,
-        base64_encode(&sig),
-        key_id,
-        &touched,
-        surface,
-        auth,
-    )
+    }
 }
 
 /// The store half of a [`PrePromptObservation`].
@@ -443,14 +491,14 @@ fn commit_signed_baseline(
         .detail(&format!(
             "auth={}; touched={}",
             rung.audit_label(),
-            wire_name_list(touched)
+            super::wire_names(touched)
         ));
     match &result {
         Ok(()) => crate::audit::record(record.outcome("ok")),
         Err(e) => crate::audit::record(record.outcome("error").detail(&format!(
             "auth={}; touched={}; write refused: {e}",
             rung.audit_label(),
-            wire_name_list(touched)
+            super::wire_names(touched)
         ))),
     }
     result.map(|()| rung)
@@ -520,7 +568,7 @@ pub fn restrict(
     overlay: PolicyOverlay,
     surface: crate::audit::Surface,
 ) -> Result<(), PolicyWriteError> {
-    let restricted = wire_name_list(&overlay_present_fields(&overlay));
+    let restricted = super::wire_names(&overlay_present_fields(&overlay));
     let result = match ipc::with_runtime_lock(|lock| Ok(restrict_locked(lock, overlay))) {
         Ok(inner) => inner,
         Err(e) => Err(PolicyWriteError::Io(e)),
@@ -565,7 +613,7 @@ fn restrict_locked(
     let effective_now = prev.effective().map_err(PolicyWriteError::Io)?;
     let merged = merge_overlay(&stored, overlay);
     if let Some(tools) = &merged.disabled_tools {
-        validate_disabled_tools(tools).map_err(PolicyWriteError::Invalid)?;
+        validate_disabled_tools(tools).map_err(|m| PolicyWriteError::Invalid(m.into()))?;
     }
     if !restricts_or_equal(&fold(&baseline, &merged), &effective_now) {
         return Err(PolicyWriteError::NotARestriction);
@@ -650,15 +698,6 @@ fn merge_overlay(stored: &PolicyOverlay, mut arg: PolicyOverlay) -> PolicyOverla
 /// so the store never persists a meaningless `{}`.
 fn normalize_overlay(overlay: PolicyOverlay) -> Option<PolicyOverlay> {
     (overlay != PolicyOverlay::default()).then_some(overlay)
-}
-
-/// Comma-joined wire names, for audit details.
-fn wire_name_list(fields: &[PolicyField]) -> String {
-    fields
-        .iter()
-        .map(|f| f.wire_name())
-        .collect::<Vec<_>>()
-        .join(",")
 }
 
 /// Store, history, and seam tests. Every disk-touching test points the runtime dir at its own scratch directory

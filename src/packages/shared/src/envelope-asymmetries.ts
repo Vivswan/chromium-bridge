@@ -373,6 +373,48 @@ export const ASYMMETRIES: Readonly<Record<string, Readonly<Record<string, Asymme
       },
     ),
   },
+  ...Object.fromEntries(
+    // The three write lanes the host answers from one WriteVerdict beside policy_restrict_result.
+    ["policy_set_result", "policy_rollback_result", "client_pair_result"].map((frame) => [
+      frame,
+      {
+        $: okSplit(
+          frame,
+          { required: [], forbidden: ["error"] },
+          { required: ["error"], forbidden: [] },
+          {
+            refuses: [
+              { type: frame, ok: true, error: "write failed" },
+              { type: frame, ok: false },
+            ],
+            accepts: [
+              { type: frame, ok: true },
+              { type: frame, ok: false, error: "no host key on this machine" },
+            ],
+          },
+        ),
+      },
+    ]),
+  ),
+  policy_history_result: {
+    $: okSplit(
+      "policy_history_result",
+      { required: ["entries"], forbidden: ["error"] },
+      { required: ["error"], forbidden: ["entries"] },
+      {
+        refuses: [
+          { type: "policy_history_result", ok: true },
+          { type: "policy_history_result", ok: true, entries: [], error: "e" },
+          { type: "policy_history_result", ok: false },
+          { type: "policy_history_result", ok: false, entries: [], error: "e" },
+        ],
+        accepts: [
+          { type: "policy_history_result", ok: true, entries: [] },
+          { type: "policy_history_result", ok: false, error: "the policy history is unreadable" },
+        ],
+      },
+    ),
+  },
   presence_request: {
     "$.properties.challenge": HOST_MINTED,
     "$.properties.action": HOST_MINTED,

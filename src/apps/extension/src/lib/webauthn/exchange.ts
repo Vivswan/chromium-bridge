@@ -8,8 +8,10 @@
 //                        with enrollments the host pushes presence_request and answers presence_required,
 //                        and the enroll_begin AFTER the approved presence_assert gets the options
 //   enroll_finish     -> enroll_result; an ok records the credential for the options page (recordedEnrollment)
-//   kill_release      -> the pushed presence_request is the reply; the answer to that request is settled through
-//                        claimKillRelease (kill.ts's handoff), not by presence_result
+//   kill_release, policy_set, policy_rollback, client_pair (beginAct)
+//                     -> the pushed presence_request is the reply; the answer to that request is settled through
+//                        claimAct (the handoff from the collaborator that owns the act's result frame), not by
+//                        presence_result; a result frame arriving before any request is the host's early answer
 //   presence_begin    -> the pushed presence_request is the reply (a page operation's, asked by the confirmation
 //                        service), accepted only when it names the asked act; the answer's verdict reaches the
 //                        asker (beginPresence's onVerdict); a begin cancelled or timed out before the reply
@@ -27,12 +29,15 @@ import {
   type BrowserRevokeResultFrame,
   BrowserRevokeResultFrameSchema,
   type BrowserRevokeWire,
+  type ClientPairWire,
   type EnrollBeginWire,
   type EnrollFinishWire,
   type EnrollOptionsFrame,
   EnrollOptionsFrameSchema,
   EnrollResultFrameSchema,
   type KillReleaseWire,
+  type PolicyRollbackWire,
+  type PolicySetWire,
   type PresenceAssertWire,
   type PresenceBeginWire,
   type PresenceConfirmWire,
@@ -52,8 +57,9 @@ import {
   WebAuthnInboundFrameSchema,
 } from "@chromium-bridge/shared/webauthn";
 import { browser } from "wxt/browser";
+import type { z } from "zod";
 import type { PortCollaborator } from "../background/connection";
-import { exchange } from "../background/exchange";
+import { exchange, type NamedReading } from "../background/exchange";
 import { inLife } from "../shared/in-life";
 import { readKey } from "../shared/read-key";
 
@@ -61,7 +67,6 @@ export type Refused = { ok: false; error: string };
 export type EnrollBeginView = { ok: true; options: EnrollOptionsFrame } | Refused;
 export type EnrollFinishView = { ok: true; credentialId: string } | Refused;
 export type PresenceAssertView = { ok: true } | Refused;
-export type KillReleaseView = { ok: true; request: PresenceRequestFrame } | Refused;
 export type PresenceBeginView = { ok: true; request: PresenceRequestFrame } | Refused;
 
 /** One asked presence request: its outcome, and the way to withdraw it while the host has not answered. */
@@ -78,23 +83,55 @@ export type ForgetView = { ok: true } | Refused;
 /** The page operations the host mints a presence request for; the wire spelling of presence_begin's action. */
 export type PresenceAction = "page_eval" | "page_upload";
 
-/** The reply kill.ts hands over for a release (claimKillRelease), beside the host's own frames. */
-type ReleaseOutcome = { type: "release_outcome"; view: PresenceAssertView };
+/** The acts a presence request gates, keyed by the frame that asks for one: the result frame the host answers
+ * after presence_result ok (on the collaborator that owns that frame, so the verdict crosses back here by
+ * claimAct), and whether the host may answer ok before asking for presence at all. `tap`: every ok result
+ * arriving while the request is awaited is a push (kill_status_result on a transition), never the answer.
+ * `tap-or-free`: the host applied the act on its free lane (a rollback that only tightens or changes nothing). */
+const ACTS = {
+  kill_release: { result: "kill_status_result", lanes: "tap" },
+  policy_set: { result: "policy_set_result", lanes: "tap" },
+  policy_rollback: { result: "policy_rollback_result", lanes: "tap-or-free" },
+  client_pair: { result: "client_pair_result", lanes: "tap" },
+} as const satisfies Record<string, { result: string; lanes: "tap" | "tap-or-free" }>;
+
+type ActFrame = KillReleaseWire | PolicySetWire | PolicyRollbackWire | ClientPairWire;
+type Act = (typeof ACTS)[ActFrame["type"]];
+export type ActResultTag = Act["result"];
+
+/** How an act began: the request the page must answer with a tap. */
+export type TapRequiredView = { ok: true; request: PresenceRequestFrame } | Refused;
+
+/** How an act with a free lane began: the request, or null when the host applied the act with no tap needed. */
+export type ActBegunView = { ok: true; request: PresenceRequestFrame | null } | Refused;
+
+type OutcomeTag = `${ActResultTag}_outcome`;
+const outcomeTag = (tag: ActResultTag): OutcomeTag => `${tag}_outcome`;
+
+/** The verdict a collaborator hands over for an act (claimAct), beside the host's own frames. */
+type ActOutcome = { type: OutcomeTag; view: PresenceAssertView };
 
 /** The host-pushed request awaiting the page's answer, and who asked for it: nobody (the options page answers
- * it), a kill_release (the answer's verdict is the release outcome, not the presence verdict), or a page
+ * it), an act begun here (the answer's verdict is that act's outcome, not the presence verdict), or a page
  * operation's confirmation (the answer's verdict reaches it through `onVerdict`, once, false on every path
  * that ends the request without the host's ok). */
 type PendingRequest = { frame: PresenceRequestFrame } & (
   | { asked: "nobody" }
-  | { asked: "release" }
+  | { asked: "act"; act: Act }
   | { asked: "page_op"; onVerdict: (ok: boolean) => void }
 );
 
-const ceremony = exchange<WebAuthnInboundFrame | ReleaseOutcome>(
+const ceremony = exchange<WebAuthnInboundFrame | ActOutcome>(
   "a WebAuthn exchange is already in flight",
 );
 const pendingRequest = inLife<PendingRequest | null>(() => null);
+/** One beginAct whose presence request is still coming: its own result frame arriving first is the host's
+ * early answer (a refusal before any request, or a free lane's ok where the act has one). One record per
+ * call, so a duplicate the exchange refused as busy cannot clear the admitted call's slot. */
+interface AwaitingAct {
+  act: Act;
+}
+const awaitingAct = inLife<AwaitingAct | null>(() => null);
 /** How many begins given up on (cancelled, or timed out after posting) the host still owes a reply; the next
  * presence frame to arrive settles one, before any correlation, since the host answers in order. */
 const unansweredBegins = inLife(() => 0);
@@ -105,6 +142,7 @@ export const collaborator: PortCollaborator = {
   },
   onDetach() {
     dropPending();
+    awaitingAct.value = null;
     unansweredBegins.value = 0;
     ceremony.detach();
   },
@@ -122,7 +160,7 @@ export function isWebAuthnFrame(msg: unknown): msg is WebAuthnInboundFrame {
 
 /** Ask the host for the creation options of a new credential for this browser. */
 export function beginEnrollment(): Promise<EnrollBeginView> {
-  return ceremony.request({ type: "enroll_begin" } satisfies EnrollBeginWire, {
+  return post({ type: "enroll_begin" } satisfies EnrollBeginWire, {
     replies: ["enroll_options", "enroll_result"],
     read(frame): EnrollBeginView {
       if (frame.type === "enroll_options") {
@@ -143,19 +181,16 @@ export function beginEnrollment(): Promise<EnrollBeginView> {
 /** Hand the host the `navigator.credentials.create` response the page produced. An ok is noted in storage
  * for the options page; a failed note changes nothing about the enrollment the host already recorded. */
 export async function finishEnrollment(response: RegistrationResponse): Promise<EnrollFinishView> {
-  const view = await ceremony.request(
-    { type: "enroll_finish", ...response } satisfies EnrollFinishWire,
-    {
-      replies: ["enroll_result"],
-      read(frame): EnrollFinishView {
-        const result = EnrollResultFrameSchema.safeParse(frame);
-        if (!result.success) return { ok: false, error: "malformed enroll_result from host" };
-        return result.data.ok
-          ? { ok: true, credentialId: result.data.credential_id }
-          : { ok: false, error: result.data.reason };
-      },
+  const view = await post({ type: "enroll_finish", ...response } satisfies EnrollFinishWire, {
+    replies: ["enroll_result"],
+    read(frame): EnrollFinishView {
+      const result = EnrollResultFrameSchema.safeParse(frame);
+      if (!result.success) return { ok: false, error: "malformed enroll_result from host" };
+      return result.data.ok
+        ? { ok: true, credentialId: result.data.credential_id }
+        : { ok: false, error: result.data.reason };
     },
-  ).view;
+  }).view;
   if (view.ok) {
     const note: WebAuthnEnrollment = { credentialId: view.credentialId, enrolledAt: Date.now() };
     await browser.storage.local.set({ [WEBAUTHN_ENROLLMENT_KEY]: note }).catch((e: unknown) => {
@@ -203,18 +238,99 @@ export async function forgetBrowser(): Promise<ForgetView> {
   return view;
 }
 
-/** Ask the host to release the kill switch. The reply is the presence request the host pushes for it, which
- * the page answers through assertPresence (or confirmPresence when the request admits no credential). */
-export function beginKillRelease(): Promise<KillReleaseView> {
-  return ceremony.request({ type: "kill_release" } satisfies KillReleaseWire, {
-    replies: ["presence_request"],
-    read(frame): KillReleaseView {
-      const parsed = PresenceRequestFrameSchema.safeParse(frame);
+/** Post one ceremony frame whose host handler takes the pending slot on entry (every enrollment frame and
+ * every act), so the request the page may still be looking at is dropped here the moment the post succeeds;
+ * a refused post (busy, detached) leaves it, since the host never saw the frame. */
+function post<TView, R extends (WebAuthnInboundFrame | ActOutcome)["type"]>(
+  frame: object,
+  how: NamedReading<WebAuthnInboundFrame | ActOutcome, TView, R>,
+): { posted: boolean; view: Promise<TView | Refused> } {
+  const { posted, view } = ceremony.request(frame, how);
+  if (posted) dropPending();
+  return { posted, view };
+}
+
+/** Ask the host for a presence-gated act. The reply is the presence request the host pushes for it, which the
+ * page answers through assertPresence (or confirmPresence when the request admits no credential); the host may
+ * instead answer on the act's result frame at once, refusing before any request or applying a free rollback,
+ * which claimAct carries here. */
+export function beginAct(frame: PolicyRollbackWire): Promise<ActBegunView>;
+export function beginAct(
+  frame: KillReleaseWire | PolicySetWire | ClientPairWire,
+): Promise<TapRequiredView>;
+export function beginAct(frame: ActFrame): Promise<ActBegunView> {
+  const act = ACTS[frame.type];
+  const awaiting: AwaitingAct = { act };
+  const { posted, view } = post(frame, {
+    replies: ["presence_request", outcomeTag(act.result)],
+    read(reply): ActBegunView {
+      if (awaitingAct.value === awaiting) awaitingAct.value = null;
+      // claimAct admits an early ok only on a free lane, so a tap-only act's early outcome is its refusal.
+      if (reply.type !== "presence_request") {
+        return reply.view.ok ? { ok: true, request: null } : reply.view;
+      }
+      const parsed = PresenceRequestFrameSchema.safeParse(reply);
       if (!parsed.success) return { ok: false, error: "malformed presence_request from host" };
-      hold({ frame: parsed.data, asked: "release" });
+      hold({ frame: parsed.data, asked: "act", act });
       return { ok: true, request: parsed.data };
     },
-  }).view;
+    refused(failure): Refused {
+      if (awaitingAct.value === awaiting) awaitingAct.value = null;
+      return { ok: false, error: failure.error };
+    },
+  });
+  if (posted) awaitingAct.value = awaiting;
+  return view;
+}
+
+/** The handoff from the collaborator that owns an act's result frame (kill.ts, host-admin.ts, clients.ts), the
+ * one statement of it. The host's reply to an act crosses two collaborators: a presence_request here; then,
+ * when the page's answer passes presence, the host runs the act and emits presence_result ok followed by the
+ * result frame that reports it there. Frame routing keeps claimers disjoint, so the owner calls this the moment
+ * its frame ARRIVES, before its own lane and awaits, and later settles what it claimed: a handler still
+ * writing an earlier frame's state must not settle an act that began after that frame. The slot itself is
+ * held synchronously inside the presence_result's reader (answerPending), so the frame that follows cannot
+ * find it empty.
+ *
+ *   outcome held (presence passed)                 -> claimed; the returned settle delivers the frame's verdict
+ *   this act awaiting its request                  -> the host answered before asking for presence: claimed, and the
+ *                                                     settle resolves beginAct (a refusal, or a free rollback's ok);
+ *                                                     an ok no lane answers early with is a push, left alone
+ *   anything else (a push, another exchange open)  -> null; the frame is the owner's alone */
+export function claimAct(
+  tag: ActResultTag,
+  msg: { ok: boolean },
+): ((view: PresenceAssertView) => void) | null {
+  const awaited = awaitingAct.value?.act;
+  const early = awaited?.result === tag;
+  if (early && msg.ok && awaited.lanes === "tap") return null;
+  const claimed = ceremony.claim(outcomeTag(tag));
+  if (!claimed) return null;
+  if (early) awaitingAct.value = null;
+  return (view) => {
+    void claimed.settle({ type: outcomeTag(tag), view });
+  };
+}
+
+/** Hand a write lane's result frame to the act that asked for it: the verdict as the typed producer emitted it
+ * (`schema` is the frame's ok-split reader), a malformed frame as a refusal naming it. False when no act is
+ * awaiting this tag, so the owner drops the frame as unsolicited. kill.ts hands over by claimAct itself, since
+ * its frame also moves the mirror first. */
+export function handOverVerdict(
+  tag: ActResultTag,
+  schema: z.ZodType<{ ok: true } | { ok: false; error: string }>,
+  msg: unknown,
+): boolean {
+  const parsed = schema.safeParse(msg);
+  const verdict: PresenceAssertView = parsed.success
+    ? parsed.data.ok
+      ? { ok: true }
+      : { ok: false, error: parsed.data.error }
+    : { ok: false, error: `malformed ${tag} from host` };
+  const settle = claimAct(tag, verdict);
+  if (!settle) return false;
+  settle(verdict);
+  return true;
 }
 
 /** Ask the host for a presence request for a page operation on `origin`, on behalf of its confirmation. The
@@ -301,37 +417,6 @@ function dropPending(): void {
   if (pending?.asked === "page_op") pending.onVerdict(false);
 }
 
-/** The handoff from kill.ts, the one statement of it. The host's reply to a kill_release crosses the two
- * collaborators: a presence_request here; then, when the page's answer passes presence, the host writes the
- * record and emits presence_result ok followed by the kill_status_result that reports the write there (ok
- * killed:false, or ok:false with the error). Frame routing keeps claimers disjoint, so kill.ts calls this the
- * moment a kill_status_result ARRIVES, before its own lane and awaits, and later settles what it claimed: a
- * handler still writing an earlier frame's mirror must not settle a release that began after that frame. The
- * slot itself is held synchronously inside the presence_result's reader (answerPending), so the frame that
- * follows cannot find it empty.
- *
- *   release outcome held (presence passed)         -> claimed; the returned settle delivers the answer's verdict
- *   kill_release awaiting its request, ok:false     -> the exchange fails now with the host's reason (the record was
- *                                                     unreadable before any request), nothing to settle later
- *   anything else (a status reply, a push)          -> nothing; the reply to that exchange is still coming */
-export function claimKillRelease(msg: {
-  ok: boolean;
-  error?: string;
-}): ((view: PresenceAssertView) => void) | null {
-  const outcome = ceremony.claim("release_outcome");
-  if (outcome) {
-    return (view) => {
-      void outcome.settle({ type: "release_outcome", view });
-    };
-  }
-  if (!msg.ok) {
-    void ceremony
-      .claim("presence_request")
-      ?.fail(msg.error ?? "the host could not read its kill-switch state");
-  }
-  return null;
-}
-
 /** The host-pushed presence request awaiting the user's tap, or null. The page reads it, shows the
  * action, runs `navigator.credentials.get`, and answers through assertPresence. */
 export function pendingPresenceRequest(): PresenceRequestFrame | null {
@@ -358,9 +443,9 @@ export function confirmPresence(nonce: string): Promise<PresenceAssertView> {
 
 /** The one lifecycle of an answer to the pending request, whichever frame carries it: the answer must name the
  * pending request's nonce (an answer to a superseded request answers nothing), and the request is consumed only
- * once the answer is on the pipe. A release's verdict comes through claimKillRelease, not presence_result; a
- * page op's confirmation gets the verdict through its onVerdict, false too when the posted answer's exchange
- * fails (a timeout, a detach), since that request is gone with it. */
+ * once the answer is on the pipe. An act's verdict comes through claimAct, not presence_result; a page op's
+ * confirmation gets the verdict through its onVerdict, false too when the posted answer's exchange fails (a
+ * timeout, a detach), since that request is gone with it. */
 function answerPending(
   nonce: string,
   frame: PresenceAssertWire | PresenceConfirmWire,
@@ -383,8 +468,11 @@ function answerPending(
       if (!result.success)
         return verdict({ ok: false, error: "malformed presence_result from host" });
       if (!result.data.ok) return verdict({ ok: false, error: result.data.reason });
-      if (pending.asked !== "release") return verdict({ ok: true });
-      return ceremony.hold({ replies: ["release_outcome"], read: (outcome) => outcome.view });
+      if (pending.asked !== "act") return verdict({ ok: true });
+      return ceremony.hold({
+        replies: [outcomeTag(pending.act.result)],
+        read: (outcome) => outcome.view,
+      });
     },
     refused(failure): PresenceAssertView {
       const view: PresenceAssertView = { ok: false, error: failure.error };
@@ -429,5 +517,6 @@ export function handleWebAuthnFrame(msg: WebAuthnInboundFrame): void {
 export function resetWebAuthnForTests(): void {
   ceremony.detach();
   pendingRequest.reset();
+  awaitingAct.reset();
   unansweredBegins.reset();
 }

@@ -135,6 +135,8 @@ impl TryFrom<String> for SignerId {
     fn try_from(value: String) -> Result<Self, Self::Error> {
         if value.is_empty() {
             Err("signer anchor must be non-empty".to_string())
+        } else if value.contains('\0') {
+            Err("signer anchor must not contain a NUL byte".to_string())
         } else {
             Ok(SignerId(value))
         }

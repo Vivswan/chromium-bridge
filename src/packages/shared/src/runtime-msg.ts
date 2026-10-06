@@ -9,6 +9,8 @@ import {
   AuditTrailEntrySchema,
   EnrollOptionsFrameSchema,
   HealthReportSchema,
+  PolicyHistoryRowSchema,
+  PolicyRollbackWireSchema,
   PresenceRequestFrameSchema,
   RegistrationRowSchema,
   TrustedClientSchema,
@@ -93,6 +95,32 @@ export const KillViewSchema = z.object({
 });
 
 export type KillView = z.infer<typeof KillViewSchema>;
+
+/** The host's client-name grammar (allowlist::ClientName), applied here so a malformed name never reaches
+ * the wire; the host re-checks it at the frame boundary. */
+export const ClientNameSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/);
+
+/** The host's anchor grammars (ipc::identity HashDigest: 20 or 32 bytes of lowercase hex; SignerId: non-empty,
+ * NUL-free),
+ * applied here because the host refuses a malformed anchor at its frame parse WITHOUT touching its pending
+ * presence slot, while the worker drops its copy of any pending request the moment an act frame is posted; a
+ * frame the host would refuse must therefore never be posted. */
+export const ClientAnchorSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("hash"),
+    value: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
+  }),
+  z.strictObject({
+    kind: z.literal("signer"),
+    value: z
+      .string()
+      .min(1)
+      .refine((v) => !v.includes("\u0000")),
+  }),
+]);
+
+/** The answer to a presence-gated act: the host's request, which the page settles with the tap. */
+const TapRequired = z.object({ ok: z.literal(true), request: PresenceRequestFrameSchema });
 
 // The browser-registration rows the host reports (its registration_status_result), one per known browser.
 const RegistrationViewSchema = z.object({
@@ -188,11 +216,19 @@ export const RUNTIME_CONTRACT = contract({
   },
   revoke_client: {
     gate: "extension-page",
-    req: z.strictObject({
-      type: z.literal("revoke_client"),
-      name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/),
-    }),
+    req: z.strictObject({ type: z.literal("revoke_client"), name: ClientNameSchema }),
     res: Acknowledged,
+  },
+  // Pairing GRANTS capability, so the host answers with its presence request rather than acting. The page
+  // names an explicit anchor only: a browser has no parent process to measure (`--this-parent` is the CLI's).
+  pair_client: {
+    gate: "extension-page",
+    req: z.strictObject({
+      type: z.literal("pair_client"),
+      name: ClientNameSchema,
+      anchor: ClientAnchorSchema,
+    }),
+    res: TapRequired,
   },
   get_kill: {
     gate: "extension-page",
@@ -212,7 +248,7 @@ export const RUNTIME_CONTRACT = contract({
   kill_release: {
     gate: "extension-page",
     req: z.strictObject({ type: z.literal("kill_release") }),
-    res: z.object({ ok: z.literal(true), request: PresenceRequestFrameSchema }),
+    res: TapRequired,
   },
   get_audit: {
     gate: "extension-page",
@@ -375,6 +411,27 @@ export const RUNTIME_CONTRACT = contract({
     gate: "extension-page",
     req: z.strictObject({ type: z.literal("restrict_policy"), overlay: PolicyOverlaySchema }),
     res: Acknowledged,
+  },
+  // The grant lanes `policy set` and `policy rollback` run: the host answers with its presence request, or
+  // refuses before any request in the words the CLI prints. A rollback that only tightens is applied free,
+  // with no request to answer.
+  grant_policy: {
+    gate: "extension-page",
+    req: z.strictObject({ type: z.literal("grant_policy"), overlay: PolicyOverlaySchema }),
+    res: TapRequired,
+  },
+  rollback_policy: {
+    gate: "extension-page",
+    req: z.strictObject({
+      type: z.literal("rollback_policy"),
+      revision: PolicyRollbackWireSchema.shape.revision,
+    }),
+    res: z.object({ ok: z.literal(true), request: PresenceRequestFrameSchema.nullable() }),
+  },
+  get_policy_history: {
+    gate: "extension-page",
+    req: z.strictObject({ type: z.literal("get_policy_history") }),
+    res: z.object({ ok: z.literal(true), entries: z.array(PolicyHistoryRowSchema) }),
   },
   // Enum-pinned here, at the trust boundary, so the relay can never put an
   // out-of-enum string on the wire.

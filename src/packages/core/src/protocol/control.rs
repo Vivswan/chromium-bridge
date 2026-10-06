@@ -62,14 +62,19 @@ pub enum EnclaveControl {
 /// trusted-client allowlist, the global kill switch, the audit trail, and the host's own browser
 /// registrations, and arrive only from the extension Chrome connected to this host (`allowed_origins`).
 ///
-/// List/revoke and `kill_engage` only reduce capability; `kill_release` would RESTORE it, so the host answers
-/// it with a presence request instead of acting (the [`WebAuthnControl`] roster; `native_host/presence.rs` decides).
+/// List/revoke and `kill_engage` only reduce capability; `kill_release` and `client_pair` would RESTORE or GRANT
+/// it, so the host answers them with a presence request instead of acting (the [`WebAuthnControl`] roster;
+/// `native_host/presence.rs` decides).
 ///
 /// ```text
 /// kill_release               -> presence_request naming this browser's credentials; an approved answer adds
 ///                               kill_status_result to its presence_result, a refused one answers presence_result alone,
 ///                               and a failure before the request exists (store, action, nonce) answers
 ///                               kill_status_result { ok: false }, no request
+/// client_pair                -> presence_request the same way; an approved answer adds client_pair_result to its
+///                               presence_result (the allowlist write's verdict), a failure before the request exists
+///                               answers client_pair_result { ok: false, error }, no request; `error` is the sentence
+///                               `pair-client` prints for the same refusal
 /// client_list                -> client_list_result { ok, enrolled, clients, error? }; a load failure (including
 ///                               the tamper case) is ok: false with the error text, the UI shows it and guesses nothing
 /// client_revoke              -> client_revoke_result { ok, error? }; the revocation-epoch bump shares the critical
@@ -115,6 +120,19 @@ pub enum AdminControl {
     ClientRevoke { name: String },
     /// Host -> extension: the revocation outcome.
     ClientRevokeResult {
+        ok: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    /// Extension -> host: trust an MCP client under `name`, keyed on `anchor`; the page names an explicit anchor
+    /// only, since a browser has no parent process to measure (`--this-parent` is the CLI's).
+    ClientPair {
+        name: crate::allowlist::ClientName,
+        anchor: crate::allowlist::Anchor,
+    },
+    /// Host -> extension: the pairing verdict. `error` travels exactly when not `ok`
+    /// ([`WriteVerdict::into_frame`]).
+    ClientPairResult {
         ok: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
@@ -645,6 +663,13 @@ impl PolicyStatus {
 ///                       (`crate::policy::restrict`), which refuses anything that relaxes the effective policy;
 ///                       the written state reaches the extension as the watch's next policy_current push, so
 ///                       the result frame carries the verdict alone
+/// policy_set         -> the signed GRANT lane behind a presence_request (`native_host/presence.rs`): an approved
+///                       answer adds policy_set_result and policy_current to its presence_result; a refusal before
+///                       the request exists (keyless host, invalid overlay) answers policy_set_result { ok: false,
+///                       error } alone, `error` being the sentence `policy set` prints for the same refusal
+/// policy_rollback    -> policy_rollback_result: a tightening rolls back free (then policy_current), a relaxation
+///                       opens a presence_request like policy_set, a no-op answers ok
+/// policy_history     -> policy_history_result { ok, entries?, error? }: the superseded-revision ring
 /// lang_get/lang_set  -> lang_current { value, seq }; `seq` suppresses the sender's own echo
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -674,8 +699,37 @@ pub enum PolicyControl {
         overlay: crate::policy::PolicyOverlay,
     },
     /// Host -> extension: the restriction verdict. `error` travels exactly when not `ok`
-    /// ([`RestrictOutcome::into_frame`]).
+    /// ([`WriteVerdict::into_frame`]).
     PolicyRestrictResult {
+        ok: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    /// Extension -> host: mint a fresh signed baseline carrying this overlay over the current one, behind a tap.
+    PolicySet {
+        overlay: crate::policy::PolicyOverlay,
+    },
+    /// Host -> extension: the grant verdict ([`WriteVerdict::into_frame`]).
+    PolicySetResult {
+        ok: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    /// Extension -> host: report the superseded-revision ring.
+    PolicyHistory {},
+    /// Host -> extension: the ring, oldest first. `entries` travels exactly when `ok`, `error` exactly when not
+    /// ([`HistoryReport::into_frame`]).
+    PolicyHistoryResult {
+        ok: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        entries: Option<Vec<PolicyHistoryRow>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    /// Extension -> host: re-derive `revision`'s effective policy as a fresh write.
+    PolicyRollback { revision: u64 },
+    /// Host -> extension: the rollback verdict ([`WriteVerdict::into_frame`]).
+    PolicyRollbackResult {
         ok: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
@@ -689,22 +743,84 @@ pub enum PolicyControl {
     LangCurrent { value: String, seq: u64 },
 }
 
-/// The restriction verdict as the host decides it; same discipline as [`PresenceOutcome`].
+/// A write verdict as the host decides it, the [`PresenceOutcome`] discipline applied: one typed value per
+/// producer, flattened by [`into_frame`](Self::into_frame) onto the result frame of the lane that produced it,
+/// so an `ok: true` carrying an error or a refusal without one is unconstructible. `error` is the sentence the
+/// CLI prints for the same refusal: one owner for every user-facing word.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RestrictOutcome {
+pub enum WriteVerdict {
     Applied,
     Refused { error: String },
 }
 
-impl RestrictOutcome {
+/// The host-answered writes that share the [`WriteVerdict`] shape, each with its own result frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteLane {
+    PolicyRestrict,
+    PolicySet,
+    PolicyRollback,
+    ClientPair,
+}
+
+impl WriteVerdict {
+    pub fn into_frame(self, lane: WriteLane) -> HostReply {
+        let (ok, error) = match self {
+            WriteVerdict::Applied => (true, None),
+            WriteVerdict::Refused { error } => (false, Some(error)),
+        };
+        match lane {
+            WriteLane::PolicyRestrict => PolicyControl::PolicyRestrictResult { ok, error }.into(),
+            WriteLane::PolicySet => PolicyControl::PolicySetResult { ok, error }.into(),
+            WriteLane::PolicyRollback => PolicyControl::PolicyRollbackResult { ok, error }.into(),
+            WriteLane::ClientPair => AdminControl::ClientPairResult { ok, error }.into(),
+        }
+    }
+}
+
+/// One superseded policy record as the options page lists it: the wire projection of
+/// [`crate::policy::PolicyHistoryEntryReport`], whose `revision` is `null` for a damaged ring entry; the frame
+/// omits the field instead, since the readers refuse `null` at every optional field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct PolicyHistoryRow {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<u64>,
+    pub signed: bool,
+    pub overlay_active: bool,
+    pub superseded_unix: u64,
+}
+
+impl From<&crate::policy::PolicyHistoryEntryReport> for PolicyHistoryRow {
+    fn from(entry: &crate::policy::PolicyHistoryEntryReport) -> Self {
+        PolicyHistoryRow {
+            revision: entry.revision,
+            signed: entry.signed,
+            overlay_active: entry.overlay_active,
+            superseded_unix: entry.superseded_unix,
+        }
+    }
+}
+
+/// The history ring as the host reports it, the [`RegistrationReport`] discipline applied: rows travel
+/// exactly when the ring could be read, an error exactly when not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HistoryReport {
+    Entries(Vec<PolicyHistoryRow>),
+    Unavailable { error: String },
+}
+
+impl HistoryReport {
     pub fn into_frame(self) -> PolicyControl {
         match self {
-            RestrictOutcome::Applied => PolicyControl::PolicyRestrictResult {
+            HistoryReport::Entries(entries) => PolicyControl::PolicyHistoryResult {
                 ok: true,
+                entries: Some(entries),
                 error: None,
             },
-            RestrictOutcome::Refused { error } => PolicyControl::PolicyRestrictResult {
+            HistoryReport::Unavailable { error } => PolicyControl::PolicyHistoryResult {
                 ok: false,
+                entries: None,
                 error: Some(error),
             },
         }
@@ -889,6 +1005,8 @@ pub enum HostControlTag {
     ClientListResult,
     ClientRevoke,
     ClientRevokeResult,
+    ClientPair,
+    ClientPairResult,
     KillStatus,
     KillEngage,
     KillRelease,
@@ -905,6 +1023,12 @@ pub enum HostControlTag {
     PolicyCurrent,
     PolicyRestrict,
     PolicyRestrictResult,
+    PolicySet,
+    PolicySetResult,
+    PolicyHistory,
+    PolicyHistoryResult,
+    PolicyRollback,
+    PolicyRollbackResult,
     LangGet,
     LangSet,
     LangCurrent,
@@ -938,6 +1062,7 @@ impl HostControlTag {
             | HostControlTag::EnclaveRevoke
             | HostControlTag::ClientList
             | HostControlTag::ClientRevoke
+            | HostControlTag::ClientPair
             | HostControlTag::KillStatus
             | HostControlTag::KillEngage
             | HostControlTag::KillRelease
@@ -948,6 +1073,9 @@ impl HostControlTag {
             | HostControlTag::RegistrationRepair
             | HostControlTag::PolicyGet
             | HostControlTag::PolicyRestrict
+            | HostControlTag::PolicySet
+            | HostControlTag::PolicyHistory
+            | HostControlTag::PolicyRollback
             | HostControlTag::LangGet
             | HostControlTag::LangSet
             | HostControlTag::EnrollBegin
@@ -961,12 +1089,16 @@ impl HostControlTag {
             | HostControlTag::EnclaveRevoked
             | HostControlTag::ClientListResult
             | HostControlTag::ClientRevokeResult
+            | HostControlTag::ClientPairResult
             | HostControlTag::KillStatusResult
             | HostControlTag::DoctorReportResult
             | HostControlTag::AuditReadResult
             | HostControlTag::RegistrationStatusResult
             | HostControlTag::PolicyCurrent
             | HostControlTag::PolicyRestrictResult
+            | HostControlTag::PolicySetResult
+            | HostControlTag::PolicyHistoryResult
+            | HostControlTag::PolicyRollbackResult
             | HostControlTag::LangCurrent
             | HostControlTag::EnrollOptions
             | HostControlTag::EnrollResult
@@ -1043,9 +1175,13 @@ impl HostControlTag {
                 .into_frame()
                 .into(),
             )),
-            HostControlTag::PolicyRestrict => MalformedReply::Send(Box::new(
-                RestrictOutcome::Refused {
-                    error: "malformed policy_restrict frame".into(),
+            HostControlTag::PolicyRestrict => self.malformed_write(WriteLane::PolicyRestrict),
+            HostControlTag::PolicySet => self.malformed_write(WriteLane::PolicySet),
+            HostControlTag::PolicyRollback => self.malformed_write(WriteLane::PolicyRollback),
+            HostControlTag::ClientPair => self.malformed_write(WriteLane::ClientPair),
+            HostControlTag::PolicyHistory => MalformedReply::Send(Box::new(
+                HistoryReport::Unavailable {
+                    error: "malformed policy_history frame".into(),
                 }
                 .into_frame()
                 .into(),
@@ -1097,12 +1233,16 @@ impl HostControlTag {
             | HostControlTag::EnclaveRevoked
             | HostControlTag::ClientListResult
             | HostControlTag::ClientRevokeResult
+            | HostControlTag::ClientPairResult
             | HostControlTag::KillStatusResult
             | HostControlTag::DoctorReportResult
             | HostControlTag::AuditReadResult
             | HostControlTag::RegistrationStatusResult
             | HostControlTag::PolicyCurrent
             | HostControlTag::PolicyRestrictResult
+            | HostControlTag::PolicySetResult
+            | HostControlTag::PolicyHistoryResult
+            | HostControlTag::PolicyRollbackResult
             | HostControlTag::LangCurrent
             | HostControlTag::EnrollOptions
             | HostControlTag::EnrollResult
@@ -1110,6 +1250,17 @@ impl HostControlTag {
             | HostControlTag::PresenceResult
             | HostControlTag::BrowserRevokeResult => MalformedReply::Drop,
         }
+    }
+}
+
+impl HostControlTag {
+    fn malformed_write(self, lane: WriteLane) -> MalformedReply {
+        MalformedReply::Send(Box::new(
+            WriteVerdict::Refused {
+                error: format!("malformed {self} frame"),
+            }
+            .into_frame(lane),
+        ))
     }
 }
 
@@ -1215,6 +1366,12 @@ pub enum HostRequest {
     ClientRevoke {
         name: String,
     },
+    /// Opens the presence exchange; the [`AdminControl`] roster states the replies. The name and anchor are
+    /// validated by their own parsers, so a malformed one never reaches the exchange.
+    ClientPair {
+        name: crate::allowlist::ClientName,
+        anchor: crate::allowlist::Anchor,
+    },
     KillStatus {},
     KillEngage {},
     /// Opens the presence exchange; the [`AdminControl`] roster states the replies.
@@ -1253,6 +1410,15 @@ pub enum HostRequest {
     /// The free restriction lane; the seam refuses a relaxation, so no presence gate stands here.
     PolicyRestrict {
         overlay: crate::policy::PolicyOverlay,
+    },
+    /// Opens the presence exchange for a signed write; the [`PolicyControl`] roster states the replies.
+    PolicySet {
+        overlay: crate::policy::PolicyOverlay,
+    },
+    PolicyHistory {},
+    /// Free when the target only tightens, the presence exchange when it relaxes anything.
+    PolicyRollback {
+        revision: u64,
     },
     LangGet {},
     LangSet {

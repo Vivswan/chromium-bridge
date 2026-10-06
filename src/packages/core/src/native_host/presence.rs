@@ -10,24 +10,39 @@
 //! kill_release      -> presence_request (this browser's credentials); on approval presence_result, kill_status_result
 //! presence_begin    -> presence_request for a page operation (this browser's credentials); on approval presence_result,
 //!                      and the extension runs the op it asked about
+//! policy_set        -> presence_request the same way; on approval presence_result, policy_set_result, policy_current;
+//!                      a keyless host or an invalid request is refused before any request exists
+//! policy_rollback   -> policy_rollback_result free when the target only tightens; otherwise as policy_set
+//! client_pair       -> presence_request the same way; on approval presence_result, client_pair_result
 //! presence_assert   -> presence_result, then the pending act
 //! presence_confirm  -> presence_result (the window's answer; only where the request admits no credential)
 //! browser_revoke    -> browser_revoke_result: this browser's enrollments forgotten (no proof: it removes capability)
 //! ```
+//!
+//! A grant's statement names the change it approves (`set policy: cdpMode=on,confirmGraceMs=30000`), bounded by
+//! [`MAX_ACTION_LEN`]; a change summary past the bound is refused before any request exists, since a tap must
+//! be shown what it approves in full. The pending act holds the write prepared before the request opened (the
+//! exact document bytes, the key, the store observation), bound to the tap by the single-use nonce: the
+//! extension cannot swap the values between the request and its answer, and a store that moves meanwhile (a
+//! restriction landing while the tap is awaited) refuses the write as a conflict, as it does on the CLI.
 
 use std::time::{Duration, Instant};
 
+use crate::allowlist::{self, Anchor, ClientName, PairClientError};
 use crate::audit::{self, AuditKind, AuditRecord, Surface};
 use crate::ipc::BrowserLabel;
+use crate::policy::{self, Grant, PolicyOverlay, PolicyWriteError, PreparedGrant, RollbackPlan};
 use crate::presence::request::PresenceRequest;
 use crate::presence::{PresenceAttestation, PresenceError, PresencePath};
 use crate::protocol::control::{
     EnrollOutcome, HostReply, KillStatus, PresenceOutcome, RevokeOutcome, WebAuthnControl,
+    WriteLane, WriteVerdict,
 };
 use crate::trust::TrustState;
 use crate::webauthn::{
     self, parse_registration, Action, Assertion, CredentialId, Enrollment, EnrollmentAuthority,
     Nonce, Origin, PageOp, Reason, RefusalCode, Registration, RpId, Statement, StatementDomain,
+    MAX_ACTION_LEN,
 };
 
 /// The per-connection exchange state. The label is the browser this host fronts; every statement binds it.
@@ -63,7 +78,7 @@ enum Pending {
 const APPROVAL_TTL: Duration = Duration::from_secs(60);
 
 /// What runs once presence is attested.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 enum PendingAct {
     KillRelease,
     /// A machine with enrollments asked to enroll another credential.
@@ -75,6 +90,52 @@ enum PendingAct {
         op: PageOp,
         origin: Origin,
     },
+    /// A signed policy write, prepared before its request opened, and which frame answers. Boxed: the prepared
+    /// write carries the document bytes and the key, far larger than the other acts.
+    PolicyGrant {
+        prepared: Box<PreparedGrant>,
+        lane: GrantLane,
+    },
+    /// A trusted-client pairing.
+    ClientPair {
+        name: ClientName,
+        anchor: Anchor,
+    },
+}
+
+/// Which request opened a signed write, so its verdict answers on that request's result frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GrantLane {
+    Set,
+    Rollback { revision: u64 },
+}
+
+impl GrantLane {
+    fn result(self) -> WriteLane {
+        match self {
+            GrantLane::Set => WriteLane::PolicySet,
+            GrantLane::Rollback { .. } => WriteLane::PolicyRollback,
+        }
+    }
+
+    /// What the tap approves, in the words the prompt shows.
+    fn action_text(self, grant: &Grant) -> String {
+        match self {
+            GrantLane::Set => format!("set policy: {}", grant.summary()),
+            GrantLane::Rollback { revision } => {
+                format!(
+                    "roll policy back to revision {revision}: {}",
+                    grant.summary()
+                )
+            }
+        }
+    }
+}
+
+/// The one refusal for a statement past [`MAX_ACTION_LEN`], the bound a presence prompt can show; `what` names
+/// the lane's summary. The fields' own grammars reject NUL, so a statement that fails to parse is over-long.
+fn summary_too_long(what: &str) -> String {
+    format!("the {what} summary exceeds the {MAX_ACTION_LEN}-byte bound a presence prompt can show")
 }
 
 impl PendingAct {
@@ -87,6 +148,30 @@ impl PendingAct {
             PendingAct::EnrollBegin => "act=enroll_begin".to_string(),
             PendingAct::PageOp { op, origin } => {
                 format!("act={}; origin={}", op.as_str(), origin.as_str())
+            }
+            PendingAct::PolicyGrant {
+                lane: GrantLane::Set,
+                ..
+            } => "act=policy_set".to_string(),
+            PendingAct::PolicyGrant {
+                lane: GrantLane::Rollback { .. },
+                ..
+            } => "act=policy_rollback".to_string(),
+            PendingAct::ClientPair { .. } => "act=client_pair".to_string(),
+        }
+    }
+
+    /// The act's own refused record beside the presence one, so each lane's trail reads as it does when the
+    /// CLI's gate refuses the same act.
+    fn audit_refusal(&self, e: &PresenceError) {
+        match self {
+            PendingAct::KillRelease => crate::kill::audit_refused_release(Surface::Extension, e),
+            PendingAct::EnrollBegin | PendingAct::PageOp { .. } => {}
+            PendingAct::PolicyGrant { prepared, .. } => {
+                prepared.audit_refused(&format!("presence: {e}"));
+            }
+            PendingAct::ClientPair { name, .. } => {
+                allowlist::audit_pair_refused(name, Surface::Extension, e);
             }
         }
     }
@@ -187,6 +272,105 @@ impl Exchange {
         }
     }
 
+    /// `policy_set`: the signed grant lane. The request is planned over the current baseline first, so an
+    /// unreadable store refuses here with the CLI's words and nothing pending.
+    pub(super) fn policy_set(&mut self, overlay: PolicyOverlay) -> Vec<HostReply> {
+        self.pending = None;
+        match policy::plan_grant(&overlay) {
+            Ok(grant) => self.begin_grant(grant, GrantLane::Set),
+            Err(error) => vec![refused_write(WriteLane::PolicySet, error)],
+        }
+    }
+
+    /// `policy_rollback`: the plan decides the lane exactly as `policy rollback` does. A no-op answers at once,
+    /// a tightening rides the free lane, a relaxation is a grant behind a tap.
+    pub(super) fn policy_rollback(&mut self, revision: u64) -> Vec<HostReply> {
+        self.pending = None;
+        let lane = WriteLane::PolicyRollback;
+        let inputs = match policy::rollback_inputs(revision) {
+            Ok(inputs) => inputs,
+            Err(error) => return vec![refused_write(lane, error)],
+        };
+        match inputs.plan() {
+            RollbackPlan::NoChange => vec![WriteVerdict::Applied.into_frame(lane)],
+            RollbackPlan::Tighten { overlay, .. } => super::restrict_replies(overlay, lane),
+            RollbackPlan::Relax(grant) => self.begin_grant(grant, GrantLane::Rollback { revision }),
+        }
+    }
+
+    /// Open the presence request for a grant. Refused before any request exists, with the words `policy set`
+    /// prints: an invalid request, a change summary past the action bound, a host with no usable key (the
+    /// up-front refusal), an unreadable enrollment store. The tool list is the summary's only free-form text,
+    /// so its grammar decides first: a NUL byte is its refusal, never the bound's, and the bound is decided
+    /// before the key lookup, so an oversized request on a keyless host stays the promptless refusal it is.
+    fn begin_grant(&mut self, grant: Grant, lane: GrantLane) -> Vec<HostReply> {
+        let result = lane.result();
+        if let Err(m) = policy::validate_disabled_tools(&grant.values.disabled_tools) {
+            return vec![refused_write(
+                result,
+                PolicyWriteError::Invalid(m.into()).to_string(),
+            )];
+        }
+        let Some(action) = Action::parse(&lane.action_text(&grant)) else {
+            return vec![refused_write(
+                result,
+                PolicyWriteError::Invalid(summary_too_long("change")).to_string(),
+            )];
+        };
+        let prepared = match policy::prepare_grant(grant.values, grant.touched, Surface::Extension)
+        {
+            Ok(prepared) => Box::new(prepared),
+            Err(e) => return vec![refused_write(result, e.to_string())],
+        };
+        let refused_early = |e: std::io::Error| {
+            let e = PresenceError::Store(e);
+            prepared.audit_refused(&format!("presence: {e}"));
+            vec![refused_write(
+                result,
+                PolicyWriteError::Refused(e.to_string()).to_string(),
+            )]
+        };
+        let enrolled = match enrollments() {
+            Ok(enrolled) => enrolled,
+            Err(e) => return refused_early(e),
+        };
+        match PresenceRequest::for_browser(&self.label, action, &enrolled) {
+            Ok(request) => self.await_presence(request, PendingAct::PolicyGrant { prepared, lane }),
+            Err(e) => refused_early(e),
+        }
+    }
+
+    /// `client_pair`: granting harness capability, so presence first. The name and anchor were validated by
+    /// their parsers at the frame boundary; a summary past the action bound (a long signer id) is refused here,
+    /// before any request exists.
+    pub(super) fn client_pair(&mut self, name: ClientName, anchor: Anchor) -> Vec<HostReply> {
+        self.pending = None;
+        let lane = WriteLane::ClientPair;
+        let Some(action) = Action::parse(&format!("pair trusted client '{name}' on {anchor}"))
+        else {
+            return vec![refused_write(
+                lane,
+                PairClientError::Invalid(summary_too_long("pairing")).to_string(),
+            )];
+        };
+        let refused_early = |e: std::io::Error| {
+            let e = PresenceError::Store(e);
+            allowlist::audit_pair_refused(&name, Surface::Extension, &e);
+            vec![refused_write(
+                lane,
+                PairClientError::Presence(e).to_string(),
+            )]
+        };
+        let enrolled = match enrollments() {
+            Ok(enrolled) => enrolled,
+            Err(e) => return refused_early(e),
+        };
+        match PresenceRequest::for_browser(&self.label, action, &enrolled) {
+            Ok(request) => self.await_presence(request, PendingAct::ClientPair { name, anchor }),
+            Err(e) => refused_early(e),
+        }
+    }
+
     /// `presence_assert`: close the outstanding request with an assertion, then run its act.
     pub(super) fn presence_assert(
         &mut self,
@@ -242,9 +426,7 @@ impl Exchange {
                         .outcome("refused")
                         .detail(&format!("{}; {e}", act.audit_detail())),
                 );
-                if act == PendingAct::KillRelease {
-                    crate::kill::audit_refused_release(Surface::Extension, &e);
-                }
+                act.audit_refusal(&e);
                 return vec![presence_refused(e.code())];
             }
         };
@@ -283,6 +465,48 @@ impl Exchange {
             }
             // The approval is the whole answer: the extension holds the op and runs it on the verdict.
             PendingAct::PageOp { .. } => {}
+            PendingAct::PolicyGrant { prepared, lane } => {
+                let result = lane.result();
+                match prepared.commit(auth) {
+                    Ok(path) => {
+                        log_info!(
+                            "native-host",
+                            "extension signed a policy baseline (authorized by {})",
+                            path.wire_name()
+                        );
+                        replies.push(WriteVerdict::Applied.into_frame(result));
+                        replies.push(super::policy_current_reply().into());
+                    }
+                    Err(e) => {
+                        log_warn!(
+                            "native-host",
+                            "extension-requested policy grant failed: {e}"
+                        );
+                        replies.push(refused_write(result, e.to_string()));
+                    }
+                }
+            }
+            PendingAct::ClientPair { name, anchor } => {
+                match allowlist::pair_client_with_presence(
+                    &name,
+                    anchor,
+                    Surface::Extension,
+                    |_reason| Ok(auth),
+                ) {
+                    Ok(path) => {
+                        log_info!(
+                            "native-host",
+                            "extension paired trusted client '{name}' (authorized by {})",
+                            path.wire_name()
+                        );
+                        replies.push(WriteVerdict::Applied.into_frame(WriteLane::ClientPair));
+                    }
+                    Err(e) => {
+                        log_warn!("native-host", "extension-requested pairing failed: {e}");
+                        replies.push(refused_write(WriteLane::ClientPair, e.to_string()));
+                    }
+                }
+            }
         }
         replies
     }
@@ -476,6 +700,10 @@ fn revoke_refused(reason: impl Into<Reason>) -> RevokeOutcome {
 
 fn kill_unreadable(error: String) -> HostReply {
     KillStatus::Unreadable { error }.into_frame().into()
+}
+
+fn refused_write(lane: WriteLane, error: String) -> HostReply {
+    WriteVerdict::Refused { error }.into_frame(lane)
 }
 
 #[cfg(test)]

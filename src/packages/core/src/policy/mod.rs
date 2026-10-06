@@ -17,6 +17,7 @@
 //! (`crate::protocol`).
 
 mod cli;
+mod plan;
 mod store;
 
 pub mod gating;
@@ -25,9 +26,13 @@ pub use cli::{
     gather_history_report, gather_policy_status, run_policy, PolicyErrorReport,
     PolicyHistoryEntryReport, PolicyHistoryReport, PolicyStatusReport, PolicyStoreState,
 };
+pub use plan::{
+    audit_grant_refused, plan_grant, refused_grant, rollback_inputs, wire_names, Grant,
+    RollbackInputs, RollbackPlan,
+};
 pub use store::{
-    clear_baseline_locked, restrict, set_signed, PolicyHistory, PolicyHistoryEntry, PolicyStore,
-    PolicyWriteError,
+    clear_baseline_locked, prepare_grant, restrict, set_signed, PolicyHistory, PolicyHistoryEntry,
+    PolicyStore, PolicyWriteError, PreparedGrant,
 };
 
 use serde::{Deserialize, Serialize};
@@ -72,6 +77,9 @@ pub(crate) fn validate_disabled_tools(tools: &[String]) -> Result<(), &'static s
         .any(|t| t.is_empty() || t.len() > DISABLED_TOOL_NAME_MAX_BYTES)
     {
         return Err("a disabledTools entry is empty or longer than 128 bytes");
+    }
+    if tools.iter().any(|t| t.contains('\0')) {
+        return Err("a disabledTools entry contains a NUL byte");
     }
     if tools.iter().any(|t| t.contains(',')) {
         return Err(
