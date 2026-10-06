@@ -5,12 +5,9 @@
 import type { ConfirmPayload } from "@chromium-bridge/shared/confirm";
 import { beforeEach, describe, expect, test } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
+import { currentPanicEpoch } from "@/lib/background/brake";
 import { bindOrigin, preflightPageOp, resetClickGraceWindow } from "@/lib/background/confirm/gate";
-import {
-  currentPanicEpoch,
-  installConfirmationProvider,
-  resolveConfirm,
-} from "@/lib/background/confirm/service";
+import { installConfirmationProvider, resolveConfirm } from "@/lib/background/confirm/service";
 import { withFreshPolicy } from "@/lib/background/effective-policy";
 import type { PageBackend } from "@/lib/background/page-backend";
 import type { ResolvedTab } from "@/lib/background/tabs";

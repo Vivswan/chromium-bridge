@@ -41,7 +41,7 @@ import {
 } from "./allowlist-store";
 import { readRing } from "./audit-log";
 import { requestClientList, revokeTrustedClient } from "./clients";
-import { denyAllConfirmations, getPendingConfirm, resolveConfirm } from "./confirm/service";
+import { denyActiveConfirmation, getPendingConfirm, resolveConfirm } from "./confirm/service";
 import {
   approvePending,
   getEnrollmentStatus,
@@ -146,7 +146,7 @@ const HANDLERS: { [K in RuntimeMsgType]: Handler<K> } = {
 //   panicEngage, not engageKill  -> an in-flight status query cannot get the brake refused
 //   stale id                     -> changes nothing; whatever is pending is denied and the engage still goes out
 function denyAndKill(): Promise<RuntimeResponse<"confirm_deny_kill">> {
-  denyAllConfirmations();
+  denyActiveConfirmation();
   return panicEngage().then((r) => {
     if (!r.ok) console.error("[bb] confirm-window kill engage unconfirmed", r.error);
     return r;

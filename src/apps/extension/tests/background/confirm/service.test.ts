@@ -5,10 +5,10 @@
 
 import { type ConfirmPayload, isHardwareGated } from "@chromium-bridge/shared/confirm";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { currentPanicEpoch } from "@/lib/background/brake";
 import type { Presentation } from "@/lib/background/confirm/service";
 import {
   confirmWithUser,
-  currentPanicEpoch,
   getPendingConfirm,
   installConfirmationProvider,
   installPresenceProvider,

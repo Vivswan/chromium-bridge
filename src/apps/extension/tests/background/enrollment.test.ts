@@ -255,11 +255,11 @@ describe("pin store", () => {
     const key = await genKey();
     const pin = { keyId: key.keyId, pubkeyB64: key.pubkeyB64, pinnedAt: 1 };
     store.enclavePin = pin;
-    expect(await pinStore.readPin()).toEqual({ state: "valid", pin });
+    expect(await pinStore.readPin()).toEqual({ state: "valid", value: pin });
     expect(await pinStore.getPin()).toEqual(pin);
     expect(pinStore.pinOrNull({ state: "corrupt" })).toBeNull();
     expect(pinStore.pinOrNull({ state: "absent" })).toBeNull();
-    expect(pinStore.pinOrNull({ state: "valid", pin })).toEqual(pin);
+    expect(pinStore.pinOrNull({ state: "valid", value: pin })).toEqual(pin);
   });
 
   test("a stored pin whose pubkey does not decode is not a pin", async () => {

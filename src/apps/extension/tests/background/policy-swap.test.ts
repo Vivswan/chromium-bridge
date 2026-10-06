@@ -23,9 +23,9 @@ import { POLICY_DEFAULTS, type PolicyValues } from "@chromium-bridge/shared/poli
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { browser } from "wxt/browser";
 import { fakeBrowser } from "wxt/testing/fake-browser";
+import { currentPanicEpoch } from "@/lib/background/brake";
 import { preflightPageOp, resetClickGraceWindow } from "@/lib/background/confirm/gate";
 import {
-  currentPanicEpoch,
   installConfirmationProvider,
   installPresenceProvider,
   resolveConfirm,

@@ -46,6 +46,7 @@ import { browser } from "wxt/browser";
 import type { PortCollaborator } from "../background/connection";
 import { exchange } from "../background/exchange";
 import { inLife } from "../shared/in-life";
+import { readKey } from "../shared/read-key";
 
 export type Refused = { ok: false; error: string };
 export type EnrollBeginView = { ok: true; options: EnrollOptionsFrame } | Refused;
@@ -138,13 +139,15 @@ export async function finishEnrollment(response: RegistrationResponse): Promise<
  * a refusal when a note is present but does not parse (so a damaged note never reads as "not enrolled"). The
  * host's trust record decides what the credential can still do. */
 export async function recordedEnrollment(): Promise<EnrollmentNoteView> {
-  const { [WEBAUTHN_ENROLLMENT_KEY]: value } =
-    await browser.storage.local.get(WEBAUTHN_ENROLLMENT_KEY);
-  if (value === undefined) return { ok: true, enrollment: null };
-  const parsed = WebAuthnEnrollmentSchema.safeParse(value);
-  return parsed.success
-    ? { ok: true, enrollment: parsed.data }
-    : { ok: false, error: "the stored enrollment note is malformed" };
+  const stored = await readKey(WEBAUTHN_ENROLLMENT_KEY, WebAuthnEnrollmentSchema);
+  switch (stored.state) {
+    case "absent":
+      return { ok: true, enrollment: null };
+    case "corrupt":
+      return { ok: false, error: "the stored enrollment note is malformed" };
+    case "valid":
+      return { ok: true, enrollment: stored.value };
+  }
 }
 
 /** Ask the host to release the kill switch. The reply is the presence request the host pushes for it, which
