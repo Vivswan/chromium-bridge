@@ -29,4 +29,4 @@ pre-commit:
 post-rewrite:
   jobs:
     - name: gate after a rebase
-      run: 'test {1} != rebase || {gate}'
+      run: 'test "{1}" != rebase || {gate}'
