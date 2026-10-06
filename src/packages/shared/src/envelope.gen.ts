@@ -718,7 +718,12 @@ export type RegistrationStatusWire = z.infer<typeof RegistrationStatusWireSchema
 
 export const RegistrationRepairWireSchema = z
   .object({
-    "browsers": z.union([z.array(z.string()), z.null()]).optional(),
+    "browsers": z
+      .union([
+        z.array(z.enum(["chrome", "chromium", "brave", "edge", "vivaldi", "opera"])).min(1),
+        z.null(),
+      ])
+      .optional(),
     "type": z.literal("registration_repair"),
   })
   .strict();

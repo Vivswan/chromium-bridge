@@ -168,6 +168,14 @@ describe("prepare aborts on anything that would convert weaker (G1/G3/G4/G5)", (
     expect(() => prepare({ type: "string", minimum: 1 }, "$")).toThrow("G5");
     expect(() => prepare({ type: "integer", minimum: "0" }, "$")).toThrow("G5");
     expect(() => prepare({ type: "boolean", maximum: 1 }, "$")).toThrow("G5");
+    // minItems is an array length floor and nothing else.
+    expect(() => prepare({ type: "string", minItems: 1 }, "$")).toThrow("G5");
+    expect(() => prepare({ type: "array", items: { type: "string" }, minItems: -1 }, "$")).toThrow(
+      "G5",
+    );
+    expect(() => prepare({ type: "array", items: { type: "string" }, minItems: 1.5 }, "$")).toThrow(
+      "G5",
+    );
     expect(() => prepare({ type: "integer", const: "7" }, "$")).toThrow("G5");
     expect(() => prepare({ type: ["string", "null"], const: "x" }, "$")).toThrow("G5");
     expect(() => prepare({ type: [] }, "$")).toThrow("G5");
@@ -228,6 +236,13 @@ describe("the emitted source spellings are pinned (keeps the generated file stab
     expect(convert(prepare({ type: "array", items: strictObject({}, []) }, "$"), "t")).toBe(
       "z.array(z.object({}).strict())",
     );
+    // A length floor survives, on the array arm alone of an Option<Vec<_>>.
+    expect(
+      convert(
+        prepare({ type: ["array", "null"], items: { type: "string" }, minItems: 1 }, "$"),
+        "t",
+      ),
+    ).toBe("z.union([z.array(z.string()).min(1), z.null()])");
     // A one-branch union is the branch itself.
     expect(convert(prepare({ anyOf: [{ type: "string" }] }, "$"), "t")).toBe("z.string()");
     expect(convert(prepare({ anyOf: [{ type: "string" }, { type: "null" }] }, "$"), "t")).toBe(

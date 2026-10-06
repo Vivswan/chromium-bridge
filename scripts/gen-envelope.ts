@@ -243,6 +243,7 @@ const SUPPORTED_KEYWORDS = new Set([
   "format",
   "minimum",
   "maximum",
+  "minItems",
 ]);
 
 const SUPPORTED_TYPES = new Set([
@@ -298,6 +299,16 @@ export function prepare(node: unknown, path: string): unknown {
   for (const key of ["minimum", "maximum"] as const) {
     if (key in out && typeof out[key] !== "number") {
       throw new Error(`gen-envelope: non-numeric ${key} at ${path} (G5)`);
+    }
+  }
+  // minItems is modeled only as a z.array() length floor, so it may sit only on an array node (the Option
+  // null-arm beside it is inert, as above) and must be a non-negative integer.
+  if ("minItems" in out) {
+    if (!types.includes("array")) {
+      throw new Error(`gen-envelope: "minItems" at ${path} sits on a non-array node (G5)`);
+    }
+    if (typeof out.minItems !== "number" || !Number.isInteger(out.minItems) || out.minItems < 0) {
+      throw new Error(`gen-envelope: minItems at ${path} is not a non-negative integer (G5)`);
     }
   }
 
@@ -660,8 +671,10 @@ function emitZod(node: unknown, override?: (node: unknown) => string | undefined
       const object = fields.length === 0 ? "z.object({})" : `z.object({ ${fields.join(", ")} })`;
       return node[LOOSE] === true ? `${object}.catchall(z.unknown())` : `${object}.strict()`;
     }
-    case "array":
-      return `z.array(${emitZod(node.items, override)})`;
+    case "array": {
+      const array = `z.array(${emitZod(node.items, override)})`;
+      return typeof node.minItems === "number" ? `${array}.min(${node.minItems})` : array;
+    }
     case "integer":
     case "number": {
       // schemars' integer-width formats: `integer` is already .int(); the int64 format on a plain number carries

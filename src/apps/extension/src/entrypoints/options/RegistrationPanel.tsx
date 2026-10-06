@@ -8,10 +8,10 @@ import { send } from "@/lib/messages";
 
 // The host-registration panel: the health report plain `chromium-bridge doctor` prints (rows worded by the
 // host, labels localized here), then the registration rows over the SW router's two registration messages.
-// Repair covers every detected
-// browser, as `doctor --fix` does; a browser the host did not detect gets its own register action, as
-// `--browser <key>` does. A failed repair re-asks for the rows instead of keeping the pre-repair table: the
-// host answers a failure with no rows, so the rows on screen must come from a read the host vouched for.
+// Repair covers every detected browser, as `doctor --fix` does; a browser the host did not detect gets its
+// own register action, as `--browser <key>` does. A failed repair re-asks for the rows instead of keeping
+// the pre-repair table: the host answers a failure with no rows, so the rows on screen must come from a
+// read the host vouched for.
 export function RegistrationPanel() {
   const { t } = useI18n();
   const [view, setView] = useState<RuntimeResponse<"get_registration"> | null>(null);

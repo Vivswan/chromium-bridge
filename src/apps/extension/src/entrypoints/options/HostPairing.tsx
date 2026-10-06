@@ -20,17 +20,16 @@ export function HostPairing() {
   // null until the first answer lands; a refusal renders the no-status line.
   const [st, setSt] = useState<RuntimeResponse<"get_enrollment"> | null>(null);
   // The host key's `key:` line as `chromium-bridge enclave-status` prints it (its state, and where it
-  // lives), read with the pairing status: a refusal shows nothing, since the pin above is the extension's
-  // own fact and the key line is the host's.
+  // lives). Read beside the pairing status, never awaited with it: the pin is the extension's own fact and
+  // shows at once, while the key line is the host's and may wait out the host deadline; a refusal shows no
+  // line.
   const [hostKey, setHostKey] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    const [status, doctor] = await Promise.all([
-      send({ type: "get_enrollment" }),
-      send({ type: "get_doctor" }),
-    ]);
-    setSt(status);
-    setHostKey(doctor.ok ? doctor.report.host_key : null);
+    void send({ type: "get_doctor" }).then((doctor) => {
+      setHostKey(doctor.ok ? doctor.report.host_key : null);
+    });
+    setSt(await send({ type: "get_enrollment" }));
   }, []);
 
   useEffect(() => {

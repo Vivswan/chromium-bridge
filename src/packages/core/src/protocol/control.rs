@@ -187,7 +187,7 @@ pub enum AdminControl {
     /// and `--browser` do), then report.
     RegistrationRepair {
         #[serde(skip_serializing_if = "Option::is_none")]
-        browsers: Option<Vec<String>>,
+        browsers: Option<RepairBrowsers>,
     },
     /// Host -> extension: the registration rows (the reply to both registration frames). `browsers`
     /// travels exactly when `ok`, `error` exactly when not ([`RegistrationReport::into_frame`]).
@@ -366,9 +366,34 @@ impl AuditReport {
 
 /// The browsers a `registration_repair` names, parsed once at the frame boundary the way `--browser` is at
 /// argv: known keys only, a repeat folded in first-seen order as `--browser chrome,brave,chrome` is, never
-/// empty. Travels as the list of keys.
+/// empty. Travels as the list of keys, and its schema carries the same key enum and the non-empty floor, so
+/// the generated contract states them beside the host's parse (the writer schema types the extension's
+/// frames; the parse here is what refuses).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepairBrowsers(Vec<crate::browsers::Browser>);
+
+#[cfg(feature = "envelope-schema")]
+impl schemars::JsonSchema for RepairBrowsers {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "RepairBrowsers".into()
+    }
+
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let keys: Vec<&str> = crate::browsers::Browser::ALL
+            .iter()
+            .map(|b| b.key())
+            .collect();
+        schemars::json_schema!({
+            "type": "array",
+            "items": { "type": "string", "enum": keys },
+            "minItems": 1
+        })
+    }
+}
 
 impl RepairBrowsers {
     pub fn into_targets(self) -> crate::cli::FixTargets {
@@ -412,8 +437,8 @@ pub const MAX_AUDIT_READ_LIMIT: usize = 1000;
 
 /// An `audit_read` limit, parsed once at the frame boundary into `1..=MAX_AUDIT_READ_LIMIT`: a zero or
 /// over-cap limit fails the frame parse, so the handler never sees one. Travels as the plain integer, and
-/// its schema carries the same bounds, so the extension's generated writer type refuses what the host
-/// refuses.
+/// its schema carries the same bounds, so the generated contract states them beside the host's parse (the
+/// writer schema types the extension's frames; the parse here is what refuses).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
 pub struct AuditReadLimit(usize);
@@ -1205,7 +1230,6 @@ pub enum HostRequest {
     /// --fix`; idempotent, and capability-neutral toward MCP clients (it points browsers at this binary and
     /// nothing else).
     RegistrationRepair {
-        #[cfg_attr(feature = "envelope-schema", schemars(with = "Option<Vec<String>>"))]
         #[serde(skip_serializing_if = "Option::is_none")]
         browsers: Option<RepairBrowsers>,
     },

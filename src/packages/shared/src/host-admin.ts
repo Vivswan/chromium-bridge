@@ -1,8 +1,8 @@
 // The inbound classifiers for the options page's host-admin exchanges: the browser-registration rows, the
-// policy restriction lane, the host's audit trail, and the doctor report. Kept apart from the client-admin classifier in
-// enclave.ts because clients.ts routes every frame that classifier admits to the two client exchanges, so a
-// tag shared with it would land in the wrong handler. scripts/check-envelope.ts holds these arrays to the
-// generated reader plan.
+// policy restriction lane, the host's audit trail, and the doctor report. Kept apart from the client-admin
+// classifier in enclave.ts because clients.ts routes every frame that classifier admits to the two client
+// exchanges, so a tag shared with it would land in the wrong handler. scripts/check-envelope.ts holds these
+// arrays to the generated reader plan.
 
 import { z } from "zod";
 
