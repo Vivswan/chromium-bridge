@@ -1,22 +1,27 @@
+import type { RefusalCode } from "@chromium-bridge/shared/refusals.gen";
 import type { MessageKey } from "@/lib/i18n";
 
 // The sentences the options page shows for a refused WebAuthn step. The host's presence_result and
-// enroll_result carry a stable snake_case code (src/packages/core/src/presence/mod.rs, webauthn/refusal.rs,
-// native_host/presence.rs), sometimes followed by ": <detail>"; the browser's own ceremony failures are
-// DOMException names. Both end here as one lowercase phrase that fits after "Enrollment refused:" or
-// "Release refused:". tests/entrypoints/refusals.test.ts holds this table to the host's roster, so a code the
-// host can emit never reaches the user bare.
+// enroll_result carry a code from the generated RefusalCode roster, sometimes followed by ": <detail>"; the
+// browser's own ceremony failures are the CeremonyCode names ceremonyFailure mints. Both end here as one
+// lowercase phrase that fits after "Enrollment refused:" or "Release refused:". The table is a Record over both
+// unions, so a code the host gains has no sentence until its row lands here, and that is a type error.
 //
 //   store_error: disk full          -> the store sentence, "(disk full)" appended
 //   authdata_reserved_flags         -> the malformed-answer sentence, naming the code
-//   some_future_code                -> "the host refused with code some_future_code"
+//   some_future_code                -> "the host refused with code some_future_code" (a host newer than this
+//                                      extension; the two ship separately)
 //   native host not connected       -> as it came: the worker's own refusals are phrases already
+
+/** The codes ceremonyCode mints for Chrome's WebAuthn client failures; a fourth literal there has no row here
+ * until this union and the table gain it together. */
+type CeremonyCode = "prompt_dismissed" | "credential_exists" | "no_webauthn";
 
 const MALFORMED_ANSWER: MessageKey = "webauthn.reason_malformed_answer";
 const WRONG_ORIGIN: MessageKey = "webauthn.reason_wrong_origin";
 
-const REASON_KEYS: Readonly<Record<string, MessageKey>> = {
-  // presence/mod.rs PresenceError::code and native_host/presence.rs
+const REASON_KEYS: Readonly<Record<RefusalCode | CeremonyCode, MessageKey>> = {
+  // the presence gate and the exchange itself
   presence_required: "webauthn.reason_presence_required",
   software_confirmation_not_allowed: "webauthn.reason_software_confirmation_not_allowed",
   request_mismatch: "webauthn.reason_request_mismatch",
@@ -30,7 +35,7 @@ const REASON_KEYS: Readonly<Record<string, MessageKey>> = {
   not_interactive: "webauthn.reason_terminal",
   declined: "webauthn.reason_terminal",
   io_error: "webauthn.reason_terminal",
-  // webauthn/refusal.rs Refusal::code
+  // the verifier
   sign_count_not_increased: "webauthn.reason_sign_count_not_increased",
   challenge_mismatch: "webauthn.reason_challenge_mismatch",
   signature_invalid: "webauthn.reason_signature_invalid",
@@ -63,6 +68,9 @@ const REASON_KEYS: Readonly<Record<string, MessageKey>> = {
   no_webauthn: "webauthn.reason_no_webauthn",
 };
 
+// The runtime lookup over the typed table: a reason off the wire is a plain string until it is found here.
+const REASON_KEY_BY_CODE: ReadonlyMap<string, MessageKey> = new Map(Object.entries(REASON_KEYS));
+
 const CODE = /^[a-z][a-z0-9_]*$/;
 
 type Translate = (key: MessageKey, substitutions?: string[]) => string;
@@ -72,7 +80,7 @@ export function refusalSentence(t: Translate, reason: string): string {
   const colon = reason.indexOf(": ");
   const code = colon === -1 ? reason : reason.slice(0, colon);
   const detail = colon === -1 ? "" : reason.slice(colon + 2);
-  const key = REASON_KEYS[code];
+  const key = REASON_KEY_BY_CODE.get(code);
   if (key) {
     const sentence = t(key, [code]);
     return detail ? `${sentence} (${detail})` : sentence;
@@ -80,20 +88,19 @@ export function refusalSentence(t: Translate, reason: string): string {
   return CODE.test(reason) ? t("webauthn.reason_unknown_code", [reason]) : reason;
 }
 
-/** Whether `reason` is one the table names; the roster test reads it. */
-export function hasRefusalSentence(code: string): boolean {
-  return code in REASON_KEYS;
-}
-
 /** The code for a `navigator.credentials` failure: the names Chrome's WebAuthn client throws for the user
  * dismissing the prompt and for an authenticator that already holds an excluded credential, and a browser
- * with no WebAuthn API at all (the ceremony's static helpers are missing). */
+ * with no WebAuthn API at all (the ceremony's static helpers are missing). Anything else is its message. */
 export function ceremonyFailure(e: unknown): string {
+  return ceremonyCode(e) ?? (e instanceof Error ? e.message : String(e));
+}
+
+function ceremonyCode(e: unknown): CeremonyCode | undefined {
   if (e instanceof DOMException) {
     if (e.name === "NotAllowedError") return "prompt_dismissed";
     if (e.name === "InvalidStateError") return "credential_exists";
-    return e.message;
+    return undefined;
   }
   if (e instanceof ReferenceError || e instanceof TypeError) return "no_webauthn";
-  return e instanceof Error ? e.message : String(e);
+  return undefined;
 }

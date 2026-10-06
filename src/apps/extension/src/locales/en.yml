@@ -58,10 +58,10 @@ popup:
   pair_cli_hint: "Or run"
   kill_note_pair: "cuts every client off now; survives restarts"
   kill_note_denies: "also denies this request"
-  kill_note_release: "release is `chromium-bridge unkill`"
+  kill_note_release: "release is a tap in settings or `chromium-bridge unkill`"
   killed_line: "Kill switch is engaged."
   killed_consequence: "Every client is cut off. In-flight actions were stopped and logged. Your sites list is kept."
-  killed_release_note: "This popup can only engage, never release. Release with `chromium-bridge unkill`."
+  killed_release_note: "This popup can only engage, never release. Release from settings with a tap on this browser's enrolled authenticator, or with the typed confirmation of `chromium-bridge unkill`."
   pair_foot: "Until you pair, this extension does nothing."
   open_settings: "Open settings"
   ext_version: "ext $1"
@@ -119,7 +119,7 @@ confirm:
   hardware_note: "No Allow button: approval is this device's authenticator itself, so nothing on screen - and no remote client - can press it for you."
   touchid_wait: "Waiting for this device's authenticator"
   request_id: "request $1"
-  kill_note: "Denies this request and cuts every client off every browser. Release is `chromium-bridge unkill`."
+  kill_note: "Denies this request and cuts every client off every browser. Release is a tap in settings or `chromium-bridge unkill`."
 
 options:
   title: "Chromium Bridge settings"

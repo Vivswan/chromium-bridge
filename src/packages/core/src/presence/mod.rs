@@ -23,7 +23,7 @@ use std::io::{self, BufRead, IsTerminal, Write};
 use sha2::{Digest, Sha256};
 
 use crate::ipc::BrowserLabel;
-use crate::webauthn::{CredentialId, Refusal};
+use crate::webauthn::{CredentialId, Refusal, RefusalCode};
 
 /// Which path vouched for the user. Recorded in the audit trail (`auth=<label>`) for every act, granted or
 /// refused.
@@ -120,17 +120,19 @@ pub enum PresenceError {
 
 impl PresenceError {
     /// The stable snake_case code a `presence_result` carries.
-    pub fn code(&self) -> &'static str {
+    pub fn code(&self) -> RefusalCode {
         match self {
-            PresenceError::NotInteractive => "not_interactive",
-            PresenceError::Declined => "declined",
-            PresenceError::Io(_) => "io_error",
+            PresenceError::NotInteractive => RefusalCode::NotInteractive,
+            PresenceError::Declined => RefusalCode::Declined,
+            PresenceError::Io(_) => RefusalCode::IoError,
             PresenceError::Refused(refusal) => refusal.code(),
-            PresenceError::CredentialNotEnrolled => "credential_not_enrolled",
-            PresenceError::WrongBrowser { .. } => "wrong_browser_label",
-            PresenceError::SoftwareConfirmationNotAllowed => "software_confirmation_not_allowed",
-            PresenceError::RequestMismatch => "request_mismatch",
-            PresenceError::Store(_) => "store_error",
+            PresenceError::CredentialNotEnrolled => RefusalCode::CredentialNotEnrolled,
+            PresenceError::WrongBrowser { .. } => RefusalCode::WrongBrowserLabel,
+            PresenceError::SoftwareConfirmationNotAllowed => {
+                RefusalCode::SoftwareConfirmationNotAllowed
+            }
+            PresenceError::RequestMismatch => RefusalCode::RequestMismatch,
+            PresenceError::Store(_) => RefusalCode::StoreError,
         }
     }
 }
@@ -268,6 +270,6 @@ mod tests {
         ));
         let err = tty_verdict(false, || panic!("must not read a non-terminal stdin")).unwrap_err();
         assert!(matches!(err, PresenceError::NotInteractive));
-        assert_eq!(err.code(), "not_interactive");
+        assert_eq!(err.code().to_string(), "not_interactive");
     }
 }

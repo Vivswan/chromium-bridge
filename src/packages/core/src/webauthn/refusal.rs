@@ -1,6 +1,8 @@
 //! Every way an assertion or a registration is refused, each a named variant with a stable wire code the
 //! extension can show. A refusal is never a boolean: the audit trail and the user see which check failed.
 
+use std::fmt;
+
 use super::authenticator_data::AuthDataError;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -53,42 +55,134 @@ pub enum Refusal {
 
 impl Refusal {
     /// The stable snake_case code the result frames carry.
-    pub fn code(&self) -> &'static str {
+    pub fn code(&self) -> RefusalCode {
         match self {
-            Refusal::Encoding { .. } => "encoding",
-            Refusal::AuthenticatorData(AuthDataError::TooShort { .. }) => "authdata_too_short",
-            Refusal::AuthenticatorData(AuthDataError::ReservedFlags { .. }) => {
-                "authdata_reserved_flags"
+            Refusal::Encoding { .. } => RefusalCode::Encoding,
+            Refusal::AuthenticatorData(AuthDataError::TooShort { .. }) => {
+                RefusalCode::AuthdataTooShort
             }
-            Refusal::AuthenticatorData(AuthDataError::Extensions) => "authdata_extensions",
+            Refusal::AuthenticatorData(AuthDataError::ReservedFlags { .. }) => {
+                RefusalCode::AuthdataReservedFlags
+            }
+            Refusal::AuthenticatorData(AuthDataError::Extensions) => {
+                RefusalCode::AuthdataExtensions
+            }
             Refusal::AuthenticatorData(AuthDataError::BackupStateWithoutEligibility) => {
-                "authdata_backup_state_without_eligibility"
+                RefusalCode::AuthdataBackupStateWithoutEligibility
             }
             Refusal::AuthenticatorData(AuthDataError::AttestedCredentialTruncated) => {
-                "authdata_attested_truncated"
+                RefusalCode::AuthdataAttestedTruncated
             }
-            Refusal::AuthenticatorData(AuthDataError::CredentialId(_)) => "credential_id_invalid",
-            Refusal::AuthenticatorData(AuthDataError::PublicKey(_)) => "public_key_invalid",
+            Refusal::AuthenticatorData(AuthDataError::CredentialId(_)) => {
+                RefusalCode::CredentialIdInvalid
+            }
+            Refusal::AuthenticatorData(AuthDataError::PublicKey(_)) => {
+                RefusalCode::PublicKeyInvalid
+            }
             Refusal::AuthenticatorData(AuthDataError::TrailingBytes { .. }) => {
-                "authdata_trailing_bytes"
+                RefusalCode::AuthdataTrailingBytes
             }
-            Refusal::UnexpectedAttestedCredential => "unexpected_attested_credential",
-            Refusal::RpIdMismatch => "rp_id_mismatch",
-            Refusal::UserNotPresent => "user_not_present",
-            Refusal::SignCountNotIncreased { .. } => "sign_count_not_increased",
-            Refusal::BackupEligibilityChanged { .. } => "backup_eligibility_changed",
-            Refusal::ClientDataMalformed => "client_data_malformed",
-            Refusal::ClientDataType { .. } => "client_data_type",
-            Refusal::ChallengeMismatch => "challenge_mismatch",
-            Refusal::OriginMismatch { .. } => "origin_mismatch",
-            Refusal::CrossOrigin => "cross_origin",
-            Refusal::SignatureMalformed => "signature_malformed",
-            Refusal::SignatureInvalid => "signature_invalid",
-            Refusal::AttestationMalformed => "attestation_malformed",
-            Refusal::AttestationTrailingBytes { .. } => "attestation_trailing_bytes",
-            Refusal::AttestationFormat { .. } => "attestation_format",
-            Refusal::AttestationStatementNotEmpty => "attestation_statement_not_empty",
-            Refusal::NoAttestedCredential => "no_attested_credential",
+            Refusal::UnexpectedAttestedCredential => RefusalCode::UnexpectedAttestedCredential,
+            Refusal::RpIdMismatch => RefusalCode::RpIdMismatch,
+            Refusal::UserNotPresent => RefusalCode::UserNotPresent,
+            Refusal::SignCountNotIncreased { .. } => RefusalCode::SignCountNotIncreased,
+            Refusal::BackupEligibilityChanged { .. } => RefusalCode::BackupEligibilityChanged,
+            Refusal::ClientDataMalformed => RefusalCode::ClientDataMalformed,
+            Refusal::ClientDataType { .. } => RefusalCode::ClientDataType,
+            Refusal::ChallengeMismatch => RefusalCode::ChallengeMismatch,
+            Refusal::OriginMismatch { .. } => RefusalCode::OriginMismatch,
+            Refusal::CrossOrigin => RefusalCode::CrossOrigin,
+            Refusal::SignatureMalformed => RefusalCode::SignatureMalformed,
+            Refusal::SignatureInvalid => RefusalCode::SignatureInvalid,
+            Refusal::AttestationMalformed => RefusalCode::AttestationMalformed,
+            Refusal::AttestationTrailingBytes { .. } => RefusalCode::AttestationTrailingBytes,
+            Refusal::AttestationFormat { .. } => RefusalCode::AttestationFormat,
+            Refusal::AttestationStatementNotEmpty => RefusalCode::AttestationStatementNotEmpty,
+            Refusal::NoAttestedCredential => RefusalCode::NoAttestedCredential,
+        }
+    }
+}
+
+/// Every reason code a refused `presence_result` or `enroll_result` can carry: the one vocabulary the
+/// options page keys its sentences on (src/apps/extension/src/entrypoints/options/refusals.ts, typed from
+/// the roster `emit_contract` walks). The host mints a reason from a variant alone, so a code the page has
+/// no sentence for cannot leave this crate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::Display, strum::VariantArray)]
+#[strum(serialize_all = "snake_case")]
+pub enum RefusalCode {
+    // the verifier ([`Refusal`])
+    Encoding,
+    AuthdataTooShort,
+    AuthdataReservedFlags,
+    AuthdataExtensions,
+    AuthdataBackupStateWithoutEligibility,
+    AuthdataAttestedTruncated,
+    AuthdataTrailingBytes,
+    CredentialIdInvalid,
+    PublicKeyInvalid,
+    UnexpectedAttestedCredential,
+    RpIdMismatch,
+    UserNotPresent,
+    SignCountNotIncreased,
+    BackupEligibilityChanged,
+    ClientDataMalformed,
+    ClientDataType,
+    ChallengeMismatch,
+    OriginMismatch,
+    CrossOrigin,
+    SignatureMalformed,
+    SignatureInvalid,
+    AttestationMalformed,
+    AttestationTrailingBytes,
+    AttestationFormat,
+    AttestationStatementNotEmpty,
+    NoAttestedCredential,
+    // the presence gate (`crate::presence::PresenceError`)
+    NotInteractive,
+    Declined,
+    IoError,
+    CredentialNotEnrolled,
+    WrongBrowserLabel,
+    SoftwareConfirmationNotAllowed,
+    RequestMismatch,
+    StoreError,
+    // the exchange itself (`crate::native_host::presence`)
+    PresenceRequired,
+    Nonce,
+    NoRequestOutstanding,
+    NoEnrollmentOutstanding,
+    MachineAlreadyEnrolled,
+}
+
+impl RefusalCode {
+    /// This code with the host's own detail after it (an io::Error's text, the nonce failure).
+    pub fn detailed(self, detail: impl fmt::Display) -> Reason {
+        Reason {
+            code: self,
+            detail: Some(detail.to_string()),
+        }
+    }
+}
+
+/// The `reason` a refused result frame carries: the code, then `: <detail>` when the host has one. The
+/// options page splits at the first `: `, so the detail may hold anything.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reason {
+    code: RefusalCode,
+    detail: Option<String>,
+}
+
+impl From<RefusalCode> for Reason {
+    fn from(code: RefusalCode) -> Self {
+        Reason { code, detail: None }
+    }
+}
+
+impl fmt::Display for Reason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.detail {
+            Some(detail) => write!(f, "{}: {detail}", self.code),
+            None => write!(f, "{}", self.code),
         }
     }
 }

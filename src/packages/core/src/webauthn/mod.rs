@@ -39,7 +39,7 @@ pub use base64url::{decode as base64url_decode, encode as base64url_encode};
 pub use credential::{
     CosePublicKey, Credential, CredentialId, CredentialIdError, KeyRefusal, RpId,
 };
-pub use refusal::Refusal;
+pub use refusal::{Reason, Refusal, RefusalCode};
 pub use registration::{parse_registration, Registered, Registration};
 pub use statement::{
     Action, Challenge, Nonce, Statement, StatementDomain, ENROLL_DOMAIN, MAX_ACTION_LEN,

@@ -63,6 +63,15 @@ impl Nonce {
 pub struct Action(String);
 
 impl Action {
+    // The host's own two acts: literals inside the bound, so neither can fail `parse`.
+    pub fn enroll() -> Self {
+        Action("enroll".to_string())
+    }
+
+    pub fn release_kill_switch() -> Self {
+        Action("release the kill switch".to_string())
+    }
+
     pub fn parse(s: &str) -> Option<Self> {
         nul_free_bounded(s, MAX_ACTION_LEN).then(|| Action(s.to_string()))
     }
