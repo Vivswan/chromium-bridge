@@ -55,6 +55,8 @@ export const BUNDLE_TOKEN = /(?<![\w.-])attestation\.[\w.-]*\w/g;
  * the family check. */
 export const RELEASE_BUNDLE_NAME = "attestation.json";
 
+export const CHROME_VERSION_TOKEN = /\bChrom(?:e|ium) \d+\b/g;
+
 /** FAMILY check: every match of `family` in the doc must be in `allowed`. */
 export function familyViolations(
   doc: string,
@@ -333,7 +335,7 @@ if (import.meta.main) {
     {
       // The manifest's floor is the only Chrome version the living docs name, so any other is a stale copy.
       label: "minimum Chrome version",
-      family: /\bChrom(?:e|ium) \d{3}\b/g,
+      family: CHROME_VERSION_TOKEN,
       allowed: new Set([`Chrome ${MINIMUM_CHROME_VERSION}`, `Chromium ${MINIMUM_CHROME_VERSION}`]),
     },
   ];

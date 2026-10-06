@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   BUNDLE_TOKEN,
   bridgeVersionLineViolations,
+  CHROME_VERSION_TOKEN,
   envTableViolations,
   familyViolations,
   listPresenceViolation,
@@ -67,6 +68,27 @@ describe("release attestation bundle", () => {
         LABEL,
       ),
     ).toBeNull();
+  });
+});
+
+describe("minimum Chrome version", () => {
+  test("a stale version of any digit width is flagged; the floor passes in either spelling", () => {
+    const allowed = new Set(["Chrome 134", "Chromium 134"]);
+    const text = [
+      "needs Chrome 134 or later; Chromium 134 behaves the same",
+      "Chrome 99 was the old floor",
+      "Chromium 1000 is not a release",
+      "Chrome 116 or later",
+    ].join("\n");
+    expect(
+      familyViolations("d.md", text, "minimum Chrome version", CHROME_VERSION_TOKEN, allowed).map(
+        (v) => [v.line, v.message],
+      ),
+    ).toEqual([
+      [2, 'stale minimum Chrome version "Chrome 99" (canonical: Chrome 134, Chromium 134)'],
+      [3, 'stale minimum Chrome version "Chromium 1000" (canonical: Chrome 134, Chromium 134)'],
+      [4, 'stale minimum Chrome version "Chrome 116" (canonical: Chrome 134, Chromium 134)'],
+    ]);
   });
 });
 
