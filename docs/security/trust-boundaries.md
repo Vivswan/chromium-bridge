@@ -93,7 +93,7 @@ host    verify: rpIdHash, the user-present flag, the challenge echoed in clientD
 ```
 
 - **Who may answer:** one request is outstanding per browser connection and a newer one supersedes it. A kill release accepts only a credential enrolled under this browser's label (`wrong_browser_label` otherwise); enrolling another credential accepts any enrolled credential, which is what lets a second browser enroll; an unknown credential is `credential_not_enrolled`.
-- **The window:** the extension's confirmation window may answer, echoing the request's nonce, only when the browser has no enrolled credential (`software_confirmation_not_allowed` otherwise). An enrolled browser is never demoted to a click.
+- **The window:** the extension's confirmation window may answer, echoing the request's nonce, only when no enrolled credential satisfies the request's rule as the enrollments stand at the answer (`software_confirmation_not_allowed` otherwise). A browser's own act: no credential under its label. An enrollment: no credential on the machine, so a second browser enrolls by another's tap, never a click.
 - **The counter:** the sign counter must advance once either side counts, persisted under the trust-record lock, so a replay or a cloned counting authenticator fails closed. An authenticator that never counts reports zero on both sides, and the counter does not catch a clone of one.
 - **Enrollment:** `navigator.credentials.create` is accepted with `attestation: "none"` only, ES256 (P-256) only; the credential key comes from the attested credential data and no attestation chain is trusted. The first enrollment on a machine with none is trust on first use, re-checked under the lock at the write; every later one needs an assertion from an enrolled credential.
 - **A failed assertion** is refused and audited, the request is consumed, and the credential stays enrolled. The attestation that results from a verified answer is a linear witness only the presence module mints, so the release path cannot run with presence unchecked.
@@ -107,14 +107,14 @@ Residuals at this hop:
   - **What it cannot forge:** a WebAuthn assertion from the browser's authenticator. It can forge the revocation push and fail a pinned bridge closed: a denial of service against the user's own bridge that grants nothing. A substituted host that skips its own verification is the same-user process the IPC layer already does not defend against.
 - **The host key is a software key.** A same-user reader of the key can sign a policy baseline the pin verifies, without the terminal confirmation the CLI demands. This is the narrowing accepted when per-use presence moved to the browser's authenticator, which exists on every platform; the key identifies the installation and nothing stronger.
 - **The hardware behind the tap is the authenticator's.** The user verification is the platform authenticator's (a biometric, a PIN, a security key), and the browser suite's virtual authenticator proves the protocol, not the hardware.
-- **The floors attest intent, not hardware.** The window for a browser with no credential and the terminal for the CLI stop silent, scripted, and accidental grants, not a same-user process that drives a pty. Every audited act records the path that authorized it (`auth=tty`, `auth=confirm_window`, `auth=webauthn:<fingerprint>`), so a software-attested grant is always distinguishable.
+- **The floors attest intent, not hardware.** The window for a request no enrolled credential may answer and the terminal for the CLI stop silent, scripted, and accidental grants, not a same-user process that drives a pty. Every audited act records the path that authorized it (`auth=tty`, `auth=confirm_window`, `auth=webauthn:<fingerprint>`), so a software-attested grant is always distinguishable.
 - **`pair` leaves no audit record of its own.** Its evidence is the extension's re-pin; for `--reset`, the revoke record and the epoch bump.
 - **Key disposal's epoch bump is best-effort.** `revoke` and `pair --reset` clear the signed baseline and bump the host-key epoch in the disposal critical section, but the epoch write can fail: disposal warns at once, other surfaces notice only at their next key verification, and a first-write baseline signed mid-disposal can then land.
   - **Bounds:** landing it still costs a presence attestation, and the next pairing's pre-mint baseline clear removes it before a new key exists; that clear is itself best-effort and warns on failure.
 - **A credential-store entry the store would not answer for outlives a file-store pairing.** `pair --reset --file-store` and `revoke` proceed when the store does not answer (a locked or absent Secret Service), warning that an entry it may hold stays behind; the file key shadows it only while the file exists.
   - **Sequence:** the store becomes unreachable, the user pairs into a file, later revokes that file key while the store is still unreachable, and the store comes back: the old key is live again.
   - **Bounds:** an extension that re-pinned to the file key holds no pin the resurfaced key matches. One still pinned to the old store key (the re-pin never finished, or the revocation push was withheld because the host pushes it only on a clean absence) trusts it again.
-  - **Either way** the CLI's status subcommand reports a key the user believed gone, and `policy set` signs with it, until `revoke` runs again once the store answers.
+  - **Either way** `chromium-bridge enclave-status` reports a key the user believed gone, and `policy set` signs with it, until `revoke` runs again once the store answers.
 - **Registration repair is not presence-gated.** The options page's repair frame re-registers the detected browsers through the same seam as `doctor --fix`: idempotent, pointing browsers at this binary and nothing else, the same posture as the CLI path, which has no gate either. A compromised extension gains only what any same-user process already has.
 
 ## Boundary 4: Extension <-> web page  (Chrome API / content script / DOM)
@@ -163,8 +163,9 @@ On Windows there is no mode branch: the file inherits the per-user runtime direc
 
 | Field | Meaning | Writers |
 | --- | --- | --- |
-| `epoch` | bumped by every write; a change notice the watchers compare for inequality, never an authority | every writer |
-| `killed` | the global kill latch, flipped with its epoch bump in one atomic write | `kill` and `unkill` on the CLI; the extension's engage and release frames |
+| `epoch` | bumped by every write: the record's global ordering, the value a scoped marker copies when its scope changes. Never an authority: no decision or push keys on it (the broker reads it only to deduplicate a log line), and every decision is re-read from the record | every writer |
+| `kill_epoch`, `host_key_epoch`, `policy_epoch`, `lang_epoch` | the `epoch` of the last change in that scope (0 = never). The native host's watch compares each between polls and pushes only that scope's frame (kill status, revocation, `policy_current`, `lang_current`), so a client or enrollment write, which stamps none, triggers no push. The revocation push also needs the store to confirm the key is gone, so a scribbled marker cannot fake one | the writer of that scope's change |
+| `killed` | the global kill latch, flipped with its `kill_epoch` stamp in one atomic write | `kill` and `unkill` on the CLI; the extension's engage and release frames |
 | `clients` | `null` means never paired (admission not enforced); a list, even empty, means enrolled and locked | `pair-client` and `revoke-client` on the CLI; the extension's host-mediated client revoke frame (its client list frame only reads) |
 | `enrollments` | the WebAuthn credential each browser enrolled, under its label, with its sign counter | the enrollment exchange at boundary 3; the presence verifier, advancing a credential's counter on every accepted assertion |
 
@@ -176,7 +177,7 @@ On Windows there is no mode branch: the file inherits the per-user runtime direc
 Residuals of the record:
 
 - **A same-user writer owns the record.** A same-user process that can run our CLI can pair itself, plant an enrollment, or flip the latch, exactly as it can delete the record. Deleting `trust.json` reverts to the ERROR-logged bootstrap: the irreducible same-user residual, since no user-space marker survives a writer who can delete any file we can write.
-- **Tampering with the epoch** can force a spurious push or fail every read closed, but cannot admit anyone the paired list, the host key, or the enrollments do not.
+- **Tampering with the epoch or a scoped marker** can force a spurious push or fail every read closed, but cannot admit anyone the paired list, the host key, or the enrollments do not.
 - **Engagement has a sub-second window** (one watcher tick) for in-flight work, which the severed sockets then drain. Nothing clears the latch on its own: no timeout, restart, or reconnect; a refused assertion never falls back to the window, and both transitions refuse on an unreadable record, because releasing from an unknown state would fail open.
 
 ## Host-owned policy residual ledger
