@@ -8,7 +8,7 @@ import { once } from "node:events";
 import { lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setTimeout } from "node:timers/promises";
+import { setTimeout as sleep } from "node:timers/promises";
 
 /** Names the creating process in each dir; the sweep judges staleness by it. */
 export const OWNER_FILE = "harness.pid";
@@ -44,7 +44,7 @@ export function removeAllOwnedDirs(): string[] {
 }
 
 /** Whether a process `pid` exists. Only "no such process" reads as dead: another user's process, or any other probe failure, keeps the dir. */
-export function pidAlive(pid: number): boolean {
+function pidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
@@ -168,7 +168,7 @@ async function killOwnedChildren(): Promise<void> {
     running.map((child) => {
       const exited = once(child, "exit");
       child.kill("SIGKILL");
-      return Promise.race([exited, setTimeout(CHILD_EXIT_WAIT_MS)]);
+      return Promise.race([exited, sleep(CHILD_EXIT_WAIT_MS)]);
     }),
   );
 }
