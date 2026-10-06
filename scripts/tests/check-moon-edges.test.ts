@@ -165,6 +165,7 @@ const graph: TaskGraph = {
       script: "bu\\\nnx fixture-tool\nbun scripts/c.ts \\\n\nbunx other-tool",
       deps: [],
     },
+    "unparsable-script": { command: "bun", script: "bun scripts/x.ts ${X", deps: [] },
     "process-substitutes-bunx": {
       command: "bun",
       script: "bun scripts/a.ts <(bunx fixture-tool)",
@@ -209,6 +210,7 @@ describe("auditGraph", () => {
         "root:substitutes-bunx: runs bunx (bun's global cache stands in for a missing package)",
         "root:process-substitutes-bunx: runs bunx (bun's global cache stands in for a missing package)",
         "root:continues-a-word: runs bunx (bun's global cache stands in for a missing package)",
+        "root:unparsable-script: unparsable script (Bad substitution: X)",
         "root:reads-glob-build: declares the glob input build/web-pdf/**/*; a reader under build/ declares the file or directory it reads",
         "root:writes-glob: declares the glob output build/report-*/**/*; a writer under build/ declares the directory it writes",
         "root:reads-under-glob-writer: names build/report-html/index.html, which no task's outputs write",

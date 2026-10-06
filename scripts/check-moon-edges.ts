@@ -127,12 +127,10 @@ const buildGlobs = (globs: Record<string, unknown> | null | undefined): string[]
 // relative to the task's cwd, so it counts only when that is the workspace root, and only as a relative path:
 // `/build/x` is a filesystem path, `build` alone is a task or script name. What a script opens is not in the
 // graph, so a read the task does not declare stays invisible here.
-const namedBuildPaths = (project: string, task: Task): string[] => {
+const namedBuildPaths = (project: string, task: Task, commands: string[][]): string[] => {
   const atRoot = project === ROOT_PROJECT || task.options?.runFromWorkspaceRoot === true;
   const words = atRoot
-    ? simpleCommands(task)
-        .flat()
-        .filter((word) => posix.normalize(word).startsWith(`${BUILD_DIR}/`))
+    ? commands.flat().filter((word) => posix.normalize(word).startsWith(`${BUILD_DIR}/`))
     : [];
   const inputs = Object.keys(task.inputFiles ?? {});
   return [...new Set([...words, ...inputs].map(normalized))].filter((path) =>
@@ -155,10 +153,24 @@ function buildWriters(graph: TaskGraph): { target: string; dir: string }[] {
 export function auditGraph(graph: TaskGraph): string[] {
   const findings: string[] = [];
   const writers = buildWriters(graph);
+  // A script shell-quote refuses is a finding against its task, and that task has no commands to judge.
+  const commandsOf = new Map<string, string[][]>();
   for (const [project, tasks] of Object.entries(graph)) {
     for (const [id, task] of Object.entries(tasks)) {
       const target = `${project}:${id}`;
-      if (simpleCommands(task).some(([word]) => word === "bunx")) {
+      try {
+        commandsOf.set(target, simpleCommands(task));
+      } catch (error) {
+        findings.push(`${target}: unparsable script (${(error as Error).message})`);
+        commandsOf.set(target, []);
+      }
+    }
+  }
+  for (const [project, tasks] of Object.entries(graph)) {
+    for (const [id, task] of Object.entries(tasks)) {
+      const target = `${project}:${id}`;
+      const commands = commandsOf.get(target) ?? [];
+      if (commands.some(([word]) => word === "bunx")) {
         findings.push(`${target}: runs bunx (bun's global cache stands in for a missing package)`);
       }
       for (const glob of buildGlobs(task.inputGlobs)) {
@@ -171,7 +183,7 @@ export function auditGraph(graph: TaskGraph): string[] {
           `${target}: declares the glob output ${glob}; a writer under build/ declares the directory it writes`,
         );
       }
-      for (const path of namedBuildPaths(project, task)) {
+      for (const path of namedBuildPaths(project, task, commands)) {
         // A writer of the path or a directory above it, and every writer inside a directory the task names.
         const covering = writers.filter(
           (writer) => under(writer.dir, path) || under(path, writer.dir),
@@ -198,7 +210,7 @@ export function auditGraph(graph: TaskGraph): string[] {
     const [project, id] = target.split(":") as [string, string];
     const task = graph[project]?.[id];
     if (task === undefined) continue;
-    for (const words of simpleCommands(task)) {
+    for (const words of commandsOf.get(target) ?? []) {
       const [word, ...rest] = words;
       const installer = word === "bun" ? rest.find((w) => BUN_INSTALLERS.has(w)) : undefined;
       if (installer !== undefined) {
