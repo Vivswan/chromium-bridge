@@ -27,10 +27,12 @@ export interface Host {
   log: (line: string) => void;
 }
 
-/** The chrome row of `doctor --list` once both the manifest and the pointer are in place. */
-export const chromeRegistered = /chrome\s+detected\s+manifest ok\s+pointer ok/;
+/** The chrome user-scope row of `doctor --list` once both the manifest and the pointer are in place. */
+export const chromeRegistered = /chrome\s+detected\s+user\s+manifest ok\s+pointer ok/;
 /** The same row once `uninstall` ran: both slots gone, the browser still detected. */
-export const chromeUnregistered = /chrome\s+detected\s+manifest missing\s+pointer missing/;
+export const chromeUnregistered = /chrome\s+detected\s+user\s+manifest missing\s+pointer missing/;
+/** The chrome system-scope row after the .deb's post-install; Linux writes no pointer. */
+export const chromeSystemRegistered = /chrome\s+detected\s+system\s+manifest ok\s+pointer n\/a/;
 
 const keyNotFound = /unable to find the specified registry key/;
 
@@ -99,8 +101,14 @@ function linux(installer: string, steps: Steps): void {
   steps.ok("sudo", "dpkg", "-i", installer);
   steps.version(binary);
   steps.ok("dpkg", "-s", "chromium-bridge");
+  // The postinst registered machine-wide; the runner's own account reads that row as a user would.
+  steps.outputMatches(chromeSystemRegistered, binary, "doctor", "--list");
   steps.ok("sudo", "dpkg", "-r", "chromium-bridge");
   steps.absent(binary);
+  // The prerm's `uninstall --system` ran before the binary went; its artifacts are checked by path.
+  steps.absent(`/etc/opt/chrome/native-messaging-hosts/${NATIVE_HOST_ID}.json`);
+  // Chrome's system directory is shared with Brave, so its wrapper is the unlabeled one.
+  steps.absent("/var/lib/chromium-bridge/run-host.sh");
 }
 
 function windows(installer: string, steps: Steps, host: Host, localAppData: string): void {

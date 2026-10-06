@@ -36,13 +36,30 @@ fn registrar(tree: &TempTree) -> Registrar {
     Registrar {
         host_exe: exe,
         install_dir: tree.path("install"),
+        scope: RegistrarScope::User,
+        foreign: ForeignManifest::Replace,
         extension_id: PINNED_EXTENSION_ID.to_string(),
+    }
+}
+
+/// Base dirs rooted in the tree: `home/` for the account, `sys/` for the machine (`sys/etc`, `sys/opt`,
+/// `sys/Applications`, ...), so a system-scope registration lands in the fixture, never in `/etc`.
+fn tree_dirs(tree: &TempTree) -> BaseDirs {
+    BaseDirs {
+        home: tree.path("home"),
+        xdg_config_home: None,
+        xdg_data_home: None,
+        local_app_data: None,
+        roaming_app_data: None,
+        program_files: None,
+        system_root: tree.path("sys"),
     }
 }
 
 fn browser_target(tree: &TempTree) -> Target {
     Target {
-        browser: Some(Browser::Chrome),
+        label: Some(Browser::Chrome),
+        name: "chrome".into(),
         registration: Registration::ManifestDir(tree.path("nm/chrome/NativeMessagingHosts")),
         pointer: None,
     }
@@ -51,15 +68,10 @@ fn browser_target(tree: &TempTree) -> Target {
 /// The macOS shape, through the resolver: the pointer file sits beside the
 /// manifest dir, under the browser's user data root.
 fn macos_target(tree: &TempTree) -> Target {
-    let dirs = BaseDirs {
-        home: tree.path("home"),
-        xdg_config_home: None,
-        xdg_data_home: None,
-        local_app_data: None,
-        roaming_app_data: None,
-        system_applications: tree.path("Applications"),
-    };
-    Target::for_browser(&browsers::entry(Os::MacOs, &dirs, Browser::Chrome))
+    Target::for_browser(
+        &browsers::entry(Os::MacOs, &tree_dirs(tree), Browser::Chrome),
+        Scope::User,
+    )
 }
 
 fn pointer_path(target: &Target) -> PathBuf {
@@ -93,10 +105,16 @@ fn register_writes_the_pointer_chrome_reads_and_uninstall_removes_it_with_the_ma
     // Idempotent over our own pointer.
     reg.register(&target).unwrap();
 
-    let (lines, errors) = Registrar::uninstall(&target);
-    assert!(errors.is_empty(), "{errors:?}");
-    assert!(lines[0].contains("removed manifest"), "{lines:?}");
-    assert!(lines[1].contains("removed extension pointer"), "{lines:?}");
+    let removal = Registrar::uninstall(&target);
+    assert!(
+        removal.refused.is_empty() && removal.failed.is_empty(),
+        "{removal:?}"
+    );
+    assert!(removal.lines[0].contains("removed manifest"), "{removal:?}");
+    assert!(
+        removal.lines[1].contains("removed extension pointer"),
+        "{removal:?}"
+    );
     assert!(!pointer.exists());
     assert!(!target.registration.manifest_path().exists());
     assert_eq!(
@@ -106,7 +124,10 @@ fn register_writes_the_pointer_chrome_reads_and_uninstall_removes_it_with_the_ma
     // A second uninstall reports nothing to do, for both.
     assert_eq!(
         Registrar::uninstall(&target),
-        (vec!["chrome: not registered".to_string()], vec![])
+        Removal {
+            lines: vec!["chrome: not registered".to_string()],
+            ..Removal::default()
+        }
     );
 }
 
@@ -139,12 +160,13 @@ fn foreign_pointer_blocks_register_and_is_left_alone_by_uninstall() {
     fs::remove_file(&pointer).unwrap();
     reg.register(&target).unwrap();
     fs::write(&pointer, foreign).unwrap();
-    let (lines, errors) = Registrar::uninstall(&target);
-    assert!(lines[0].contains("removed manifest"), "{lines:?}");
+    let removal = Registrar::uninstall(&target);
+    assert!(removal.lines[0].contains("removed manifest"), "{removal:?}");
     assert!(
-        errors[0].contains("refusing to remove extension pointer"),
-        "{errors:?}"
+        removal.refused[0].contains("refusing to remove extension pointer"),
+        "{removal:?}"
     );
+    assert!(removal.failed.is_empty(), "{removal:?}");
     assert!(!target.registration.manifest_path().exists());
     assert_eq!(fs::read_to_string(&pointer).unwrap(), foreign);
 }
@@ -208,19 +230,28 @@ fn register_is_idempotent_and_uninstall_reverses_it() {
     reg.register(&target).unwrap();
     assert_eq!(assess(&target.registration), RegState::Ok);
 
-    let (lines, errors) = Registrar::uninstall(&target);
-    assert!(errors.is_empty(), "{errors:?}");
-    assert!(lines[0].contains("removed manifest"), "{lines:?}");
+    let removal = Registrar::uninstall(&target);
+    assert!(
+        removal.refused.is_empty() && removal.failed.is_empty(),
+        "{removal:?}"
+    );
+    assert!(removal.lines[0].contains("removed manifest"), "{removal:?}");
     assert!(!target.registration.manifest_path().exists());
     assert_eq!(assess(&target.registration), RegState::Missing);
     // Uninstall again: cleanly reports nothing to do.
-    let (lines, errors) = Registrar::uninstall(&target);
-    assert!(errors.is_empty(), "{errors:?}");
-    assert!(lines[0].contains("not registered"), "{lines:?}");
+    let removal = Registrar::uninstall(&target);
+    assert!(
+        removal.refused.is_empty() && removal.failed.is_empty(),
+        "{removal:?}"
+    );
+    assert!(removal.lines[0].contains("not registered"), "{removal:?}");
 
-    let (removed, errors) = remove_wrappers(&tree.path("install"));
-    assert_eq!(removed.len(), 1, "{removed:?}");
-    assert!(errors.is_empty(), "{errors:?}");
+    let wrappers = remove_wrappers(&tree.path("install"));
+    assert_eq!(wrappers.lines.len(), 1, "{wrappers:?}");
+    assert!(
+        wrappers.refused.is_empty() && wrappers.failed.is_empty(),
+        "{wrappers:?}"
+    );
     assert!(!tree.path("install/run-host-chrome.sh").exists());
     // The now-empty install dir is dropped too.
     assert!(!tree.path("install").exists());
@@ -261,8 +292,11 @@ fn explicit_dir_gets_the_unlabeled_wrapper() {
     assert!(!script.contains("--label"));
 }
 
+/// The owner's rule for a manifest another tool wrote at our host id, on `Slot`: status reports it
+/// foreign, uninstall leaves it (a warning, exit 0), a repair the extension asked for refuses it and
+/// leaves it byte-identical, and the CLI's explicit --fix alone overwrites it and names what it launched.
 #[test]
-fn foreign_manifest_is_never_overwritten_or_removed() {
+fn a_foreign_manifest_reads_foreign_survives_uninstall_and_is_overwritten_only_by_the_cli() {
     let tree = TempTree::new("foreign");
     let reg = registrar(&tree);
     let target = browser_target(&tree);
@@ -272,14 +306,34 @@ fn foreign_manifest_is_never_overwritten_or_removed() {
         r#"{"name":"com.other.host","description":"someone else","path":"/x","type":"stdio"}"#;
     fs::write(&manifest_path, foreign).unwrap();
 
-    let err = reg.register(&target).unwrap_err();
+    assert!(matches!(assess(&target.registration), RegState::Foreign(_)));
+    let removal = Registrar::uninstall(&target);
+    assert!(removal.lines.is_empty(), "{removal:?}");
+    assert!(
+        removal.refused[0].contains("refusing to remove"),
+        "{removal:?}"
+    );
+    assert!(removal.failed.is_empty(), "{removal:?}");
+    assert_eq!(uninstall_exit_code(&[removal]), 0);
+    assert_eq!(fs::read_to_string(&manifest_path).unwrap(), foreign);
+
+    let refusing = Registrar {
+        foreign: ForeignManifest::Refuse,
+        ..registrar(&tree)
+    };
+    let err = refusing.register(&target).unwrap_err();
     assert!(err.contains("refusing to overwrite"), "{err}");
-    let (lines, errors) = Registrar::uninstall(&target);
-    assert!(lines.is_empty(), "{lines:?}");
-    assert!(errors[0].contains("refusing to remove"), "{errors:?}");
-    // Fail closed: the file is byte-identical afterwards.
     assert_eq!(fs::read_to_string(&manifest_path).unwrap(), foreign);
     assert!(matches!(assess(&target.registration), RegState::Foreign(_)));
+
+    let lines = reg.register(&target).unwrap();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("replaced") && l.contains("launched /x")),
+        "{lines:?}"
+    );
+    assert_eq!(assess(&target.registration), RegState::Ok);
 }
 
 #[test]
@@ -308,7 +362,8 @@ fn unreadable_manifest_path_fails_closed() {
     let planted: Vec<(&str, Plant)> = vec![("directory", directory)];
     for (case, plant) in planted {
         let target = Target {
-            browser: Some(Browser::Chrome),
+            label: Some(Browser::Chrome),
+            name: "chrome".into(),
             registration: Registration::ManifestDir(
                 tree.path(&format!("nm/{case}/NativeMessagingHosts")),
             ),
@@ -319,9 +374,12 @@ fn unreadable_manifest_path_fails_closed() {
 
         let err = reg.register(&target).unwrap_err();
         assert!(err.contains("cannot verify"), "{case}: {err}");
-        let (lines, errors) = Registrar::uninstall(&target);
-        assert!(lines.is_empty(), "{case}: {lines:?}");
-        assert!(errors[0].contains("left in place"), "{case}: {errors:?}");
+        let removal = Registrar::uninstall(&target);
+        assert!(removal.lines.is_empty(), "{case}: {removal:?}");
+        assert!(
+            removal.refused[0].contains("left in place"),
+            "{case}: {removal:?}"
+        );
         assert!(
             fs::symlink_metadata(&manifest).is_ok(),
             "{case}: entry gone"
@@ -431,9 +489,10 @@ fn foreign_wrapper_names_are_left_in_place() {
     let dir = tree.path("install");
     fs::create_dir_all(&dir).unwrap();
     fs::write(dir.join("run-host-chrome.sh"), "#!/bin/sh\nrm -rf /\n").unwrap();
-    let (removed, errors) = remove_wrappers(&dir);
-    assert!(removed.is_empty());
-    assert_eq!(errors.len(), 1);
+    let removal = remove_wrappers(&dir);
+    assert!(removal.lines.is_empty());
+    assert_eq!(removal.refused.len(), 1, "{removal:?}");
+    assert!(removal.failed.is_empty(), "{removal:?}");
     assert!(dir.join("run-host-chrome.sh").exists());
 }
 
@@ -448,24 +507,17 @@ fn fix_default_targets_only_detected_browsers_but_explicit_keys_always_work() {
     // Fixture tree: Chrome is really installed (app bundle + config
     // root); Vivaldi is a ghost (leftover config root, no app).
     let tree = TempTree::new("select");
-    fs::create_dir_all(tree.path("Applications/Google Chrome.app")).unwrap();
+    fs::create_dir_all(tree.path("sys/Applications/Google Chrome.app")).unwrap();
     fs::create_dir_all(tree.path("home/Library/Application Support/Google/Chrome")).unwrap();
     fs::create_dir_all(tree.path("home/Library/Application Support/Vivaldi")).unwrap();
-    let dirs = BaseDirs {
-        home: tree.path("home"),
-        xdg_config_home: None,
-        xdg_data_home: None,
-        local_app_data: None,
-        roaming_app_data: None,
-        system_applications: tree.path("Applications"),
-    };
+    let dirs = tree_dirs(&tree);
     let entries = browsers::resolve(Os::MacOs, &dirs);
 
     // Default --fix: only the detected browser; the ghost gets no
     // manifest written into its leftover directory.
-    let targets = select_targets(&crate::cli::FixTargets::Detected, &entries).unwrap();
+    let targets = select_targets(&crate::cli::FixTargets::Detected, &entries, Scope::User).unwrap();
     assert_eq!(
-        targets.iter().map(Target::describe).collect::<Vec<_>>(),
+        targets.iter().map(|t| t.name.clone()).collect::<Vec<_>>(),
         vec!["chrome"]
     );
 
@@ -474,24 +526,411 @@ fn fix_default_targets_only_detected_browsers_but_explicit_keys_always_work() {
     let targets = select_targets(
         &crate::cli::FixTargets::Browsers(vec![Browser::Vivaldi, Browser::Opera]),
         &entries,
+        Scope::User,
     )
     .unwrap();
     assert_eq!(
-        targets.iter().map(Target::describe).collect::<Vec<_>>(),
+        targets.iter().map(|t| t.name.clone()).collect::<Vec<_>>(),
         vec!["vivaldi", "opera"]
     );
 
     // Nothing detected at all: refuse with guidance, never guess.
     let empty_dirs = BaseDirs {
         home: tree.path("empty-home"),
-        system_applications: tree.path("empty-apps"),
+        system_root: tree.path("empty-sys"),
         ..dirs
     };
     let entries = browsers::resolve(Os::MacOs, &empty_dirs);
     assert!(matches!(
-        select_targets(&crate::cli::FixTargets::Detected, &entries),
+        select_targets(&crate::cli::FixTargets::Detected, &entries, Scope::User),
         Err(FixError::NoTargets(_))
     ));
+}
+
+/// The .deb's post-install, as root with the vendor packages under `/opt` and no browser run by root:
+/// `--fix --system` detects by the install dirs, writes one manifest per system directory into the system
+/// roots (Chrome's and Brave's rows share Chrome's directory, so Chrome's manifest once, unlabeled since
+/// either browser may launch it, while Vivaldi's own directory keeps its label), a wrapper dir every
+/// account can traverse, nothing under any home, and `uninstall --system` reverses it.
+#[test]
+fn system_scope_registers_into_the_system_roots_once_per_shared_directory() {
+    let tree = TempTree::new("system");
+    fs::create_dir_all(tree.path("sys/opt/google/chrome")).unwrap();
+    fs::create_dir_all(tree.path("sys/opt/brave.com/brave")).unwrap();
+    fs::create_dir_all(tree.path("sys/opt/vivaldi")).unwrap();
+    let dirs = tree_dirs(&tree);
+    let entries = browsers::resolve(Os::Linux, &dirs);
+    let install_dir = browsers::install_dir(Os::Linux, &dirs, Scope::System);
+    assert_eq!(install_dir, tree.path("sys/var/lib/chromium-bridge"));
+
+    let targets =
+        select_targets(&crate::cli::FixTargets::Detected, &entries, Scope::System).unwrap();
+    assert_eq!(
+        targets.iter().map(|t| t.name.clone()).collect::<Vec<_>>(),
+        vec!["chrome", "vivaldi"],
+        "Brave reads Chrome's system directory, so the three detected browsers are two manifests"
+    );
+    // The same collapse under an explicit selection, whichever order the keys come in.
+    let explicit = select_targets(
+        &crate::cli::FixTargets::Browsers(vec![Browser::Brave, Browser::Chrome, Browser::Vivaldi]),
+        &entries,
+        Scope::System,
+    )
+    .unwrap();
+    assert_eq!(
+        explicit.iter().map(|t| t.name.clone()).collect::<Vec<_>>(),
+        vec!["chrome", "vivaldi"]
+    );
+
+    let reg = Registrar {
+        scope: RegistrarScope::System {
+            root: tree.path("sys"),
+        },
+        install_dir: install_dir.clone(),
+        ..registrar(&tree)
+    };
+    for target in &targets {
+        reg.register(target).unwrap();
+    }
+    let manifest = tree
+        .path("sys/etc/opt/chrome/native-messaging-hosts/com.vivswan.chromium_bridge.host.json");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&manifest).unwrap()).unwrap();
+    // Chrome's directory has two readers, so its wrapper is unlabeled (the rule is `Target`'s); Vivaldi's
+    // own directory keeps its label.
+    let wrapper = install_dir.join("run-host.sh");
+    assert_eq!(parsed["path"], wrapper.to_string_lossy().as_ref());
+    assert!(!fs::read_to_string(&wrapper).unwrap().contains("--label"));
+    let vivaldi: serde_json::Value =
+        serde_json::from_str(
+            &fs::read_to_string(tree.path(
+                "sys/etc/vivaldi/native-messaging-hosts/com.vivswan.chromium_bridge.host.json",
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        vivaldi["path"],
+        install_dir
+            .join("run-host-vivaldi.sh")
+            .to_string_lossy()
+            .as_ref()
+    );
+    assert!(fs::read_to_string(install_dir.join("run-host-vivaldi.sh"))
+        .unwrap()
+        .contains("--label 'vivaldi'"));
+    assert_eq!(assess(&targets[0].registration), RegState::Ok);
+    assert_eq!(assess(&targets[1].registration), RegState::Ok);
+    assert!(
+        !tree.path("home").exists(),
+        "a system-scope registration wrote under the home directory"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode(&install_dir),
+            0o755,
+            "every account's browser must traverse it"
+        );
+        assert_eq!(mode(&wrapper), 0o755);
+        assert_eq!(mode(&manifest), 0o644);
+    }
+
+    // Every created manifest directory is traversable, whatever the umask of the account that ran this.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for dir in [
+            tree.path("sys/etc/opt/chrome/native-messaging-hosts"),
+            tree.path("sys/etc/opt/chrome"),
+            tree.path("sys/etc/opt"),
+        ] {
+            let mode = fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o755, "{}", dir.display());
+        }
+    }
+
+    // A system directory someone else made unreachable is refused before any write, never loosened.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let edge = tree.path("sys/etc/opt/edge");
+        fs::create_dir_all(&edge).unwrap();
+        fs::set_permissions(&edge, fs::Permissions::from_mode(0o700)).unwrap();
+        let target = Target::for_browser(
+            entries.iter().find(|e| e.browser == Browser::Edge).unwrap(),
+            Scope::System,
+        );
+        let err = reg.register(&target).unwrap_err();
+        assert!(err.contains("not traversable by other accounts"), "{err}");
+        assert!(!edge.join("native-messaging-hosts").exists());
+        assert!(
+            !install_dir.join("run-host-edge.sh").exists(),
+            "a refused registration wrote its wrapper"
+        );
+        fs::set_permissions(&edge, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    // On Windows every browser's manifest is the one store file, so the identity is the registry key:
+    // nothing collapses there but Opera, which reads Chrome's key.
+    let windows = browser_targets(browsers::resolve(Os::Windows, &dirs).iter(), Scope::System);
+    assert_eq!(
+        windows.iter().map(|t| t.name.clone()).collect::<Vec<_>>(),
+        vec!["chrome", "chromium", "brave", "edge", "vivaldi"]
+    );
+
+    // doctor rows: Brave's system slot is Chrome's, reported under Chrome's name.
+    let brave = entries
+        .iter()
+        .find(|e| e.browser == Browser::Brave)
+        .unwrap();
+    assert_eq!(brave.system.owner(), Some(Browser::Chrome));
+    assert_eq!(assess(brave.system.registration()), RegState::Ok);
+    assert_eq!(assess(&brave.user), RegState::Missing);
+
+    // uninstall --system: every known browser's system target, once per directory, then the wrappers.
+    for target in browser_targets(entries.iter(), Scope::System) {
+        let removal = Registrar::uninstall(&target);
+        assert!(
+            removal.refused.is_empty() && removal.failed.is_empty(),
+            "{removal:?}"
+        );
+    }
+    let wrappers = remove_wrappers(&install_dir);
+    assert_eq!(wrappers.lines.len(), 2, "{wrappers:?}");
+    assert!(
+        wrappers.refused.is_empty() && wrappers.failed.is_empty(),
+        "{wrappers:?}"
+    );
+    assert!(!manifest.exists());
+    assert!(!install_dir.exists());
+}
+
+/// Chromium on Windows selects a manifest through the registry key alone, so the shared store file is
+/// not this browser's whatever it holds: without the key it reads missing (and so lets a machine-wide
+/// key serve), while a key without its file is ours and stale.
+#[test]
+fn a_windows_registration_is_its_key() {
+    let tree = TempTree::new("classify");
+    let launch = tree.path("bin/chromium-bridge");
+    fs::create_dir_all(launch.parent().unwrap()).unwrap();
+    fs::write(&launch, "").unwrap();
+    let ours = format!(r#"{{"path":{:?}}}"#, launch.to_string_lossy());
+    let cases: Vec<(&str, Slot, Option<Slot>, RegState)> = vec![
+        (
+            "file without the key",
+            Slot::Ours(ours.clone()),
+            Some(Slot::Absent),
+            RegState::Missing,
+        ),
+        (
+            "foreign file without the key",
+            Slot::Foreign {
+                why: "not JSON".into(),
+                launched: None,
+                shape: ForeignShape::Replaceable,
+            },
+            Some(Slot::Absent),
+            RegState::Missing,
+        ),
+        (
+            "unreadable file without the key",
+            Slot::Unreadable("a directory".into()),
+            Some(Slot::Absent),
+            RegState::Missing,
+        ),
+        (
+            "key without the file",
+            Slot::Absent,
+            Some(Slot::Ours(String::new())),
+            RegState::Stale("manifest file missing but registry key HKCU\\k present".into()),
+        ),
+        (
+            "both, launchable",
+            Slot::Ours(ours.clone()),
+            Some(Slot::Ours(String::new())),
+            RegState::Ok,
+        ),
+        (
+            "a directory registration needs no key",
+            Slot::Ours(ours),
+            None,
+            RegState::Ok,
+        ),
+        (
+            "a foreign key is reported before the file",
+            Slot::Ours(String::new()),
+            Some(Slot::Foreign {
+                why: "re-pointed".into(),
+                launched: None,
+                shape: ForeignShape::Replaceable,
+            }),
+            RegState::Foreign("re-pointed".into()),
+        ),
+    ];
+    for (case, file, key, expected) in cases {
+        assert_eq!(
+            classify(ManifestSlots { file, key }, "HKCU\\k"),
+            expected,
+            "{case}"
+        );
+    }
+}
+
+/// Chromium probes the per-user manifest with an existence check that follows symlinks, so a dangling
+/// link there is skipped and the system registration serves, while a directory or a file (ours or not)
+/// stops the lookup; `register` still refuses the dangling link as an entry nobody verified.
+#[cfg(unix)]
+#[test]
+fn lookup_hit_follows_chromiums_existence_probe() {
+    let tree = TempTree::new("lookup");
+    let dir = tree.path("nm");
+    fs::create_dir_all(&dir).unwrap();
+    let reg = Registration::ManifestDir(dir.clone());
+    let manifest = reg.manifest_path();
+    assert!(!lookup_hit(&reg), "absent");
+    std::os::unix::fs::symlink(dir.join("gone"), &manifest).unwrap();
+    assert!(!lookup_hit(&reg), "dangling link");
+    assert!(matches!(assess(&reg), RegState::Unreadable(_)));
+    fs::remove_file(&manifest).unwrap();
+    fs::write(&manifest, "not ours").unwrap();
+    assert!(lookup_hit(&reg), "a foreign file");
+    fs::remove_file(&manifest).unwrap();
+    fs::create_dir(&manifest).unwrap();
+    assert!(lookup_hit(&reg), "a directory");
+}
+
+/// What `--fix` already did before a later step failed is still reported, the displaced launch path of
+/// an overwritten foreign manifest above all: the owner's rule says that path is logged, and a pointer
+/// write failing after the manifest went in must not hide it.
+#[cfg(unix)]
+#[test]
+fn a_failure_after_the_overwrite_still_reports_what_was_displaced() {
+    use std::os::unix::fs::PermissionsExt;
+    if nix::unistd::geteuid().is_root() {
+        return;
+    }
+    let tree = TempTree::new("late-failure");
+    let reg = registrar(&tree);
+    let target = macos_target(&tree);
+    let manifest_path = target.registration.manifest_path();
+    fs::create_dir_all(manifest_path.parent().unwrap()).unwrap();
+    fs::write(
+        &manifest_path,
+        r#"{"name":"com.other.host","description":"someone else","path":"/x","type":"stdio"}"#,
+    )
+    .unwrap();
+    let pointer_dir = pointer_path(&target).parent().unwrap().to_path_buf();
+    fs::create_dir_all(&pointer_dir).unwrap();
+    fs::set_permissions(&pointer_dir, fs::Permissions::from_mode(0o555)).unwrap();
+    let err = reg.register(&target).unwrap_err();
+    fs::set_permissions(&pointer_dir, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(err.contains("could not write"), "{err}");
+    assert!(err.contains("it launched /x"), "{err}");
+    assert_eq!(assess(&target.registration), RegState::Ok);
+}
+
+/// Every directory a system-scope registration needs is judged before any is made: on macOS the Edge
+/// manifest tree and the shared External Extensions directory sit under different roots, and a refusal
+/// of the second (0700, not traversable) must not leave the first, nor the wrapper dir, behind. The
+/// ancestors are set traversable by hand, so the refusal is the pointer directory's whatever the umask.
+#[cfg(unix)]
+#[test]
+fn a_system_scope_refusal_on_any_directory_leaves_none_of_them_made() {
+    use std::os::unix::fs::PermissionsExt;
+    let tree = TempTree::new("preflight");
+    let dirs = tree_dirs(&tree);
+    let pointer_dir =
+        tree.path("sys/Library/Application Support/Google/Chrome/External Extensions");
+    fs::create_dir_all(&pointer_dir).unwrap();
+    for ancestor in pointer_dir.ancestors().skip(1).take(4) {
+        fs::set_permissions(ancestor, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    fs::set_permissions(&pointer_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    let install_dir = browsers::install_dir(Os::MacOs, &dirs, Scope::System);
+    let reg = Registrar {
+        scope: RegistrarScope::System {
+            root: tree.path("sys"),
+        },
+        install_dir: install_dir.clone(),
+        ..registrar(&tree)
+    };
+    let target = Target::for_browser(
+        &browsers::entry(Os::MacOs, &dirs, Browser::Edge),
+        Scope::System,
+    );
+    let err = reg.register(&target).unwrap_err();
+    fs::set_permissions(&pointer_dir, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(
+        err.contains("External Extensions is not traversable by other accounts"),
+        "{err}"
+    );
+    for left in [tree.path("sys/Library/Microsoft"), install_dir] {
+        assert!(
+            !left.exists(),
+            "a refused registration created {}",
+            left.display()
+        );
+    }
+}
+
+/// A machine-wide registration launches as other accounts, so the binary must be readable and executable
+/// by them along its whole path: one under a 0700 home reads healthy to `doctor` and fails at launch.
+#[cfg(unix)]
+#[test]
+fn system_scope_refuses_a_binary_other_accounts_cannot_launch() {
+    use std::os::unix::fs::PermissionsExt;
+    let tree = TempTree::new("launchable");
+    let root = tree.path("sys");
+    let place = |rel: &str, dir_modes: &[(&str, u32)], file_mode: u32| -> PathBuf {
+        let exe = root.join(rel);
+        fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        fs::write(&exe, "").unwrap();
+        fs::set_permissions(&exe, fs::Permissions::from_mode(file_mode)).unwrap();
+        for (dir, mode) in dir_modes {
+            fs::set_permissions(root.join(dir), fs::Permissions::from_mode(*mode)).unwrap();
+        }
+        exe
+    };
+    let cases: Vec<(&str, PathBuf, Option<&str>)> = vec![
+        (
+            "a package binary",
+            place("usr/local/bin/chromium-bridge", &[("usr", 0o755)], 0o755),
+            None,
+        ),
+        (
+            "a binary under a private home",
+            place(
+                "home/user/.local/lib/chromium-bridge/chromium-bridge",
+                &[("home/user", 0o700)],
+                0o755,
+            ),
+            Some("home/user is not traversable"),
+        ),
+        (
+            "an owner-only binary in a public directory",
+            place(
+                "opt/example/chromium-bridge",
+                &[("opt/example", 0o755)],
+                0o700,
+            ),
+            Some("chromium-bridge is not readable and executable"),
+        ),
+    ];
+    for (case, exe, refusal) in cases {
+        let got = launchable_by_every_account(&exe, &root);
+        match refusal {
+            None => assert_eq!(got, Ok(()), "{case}"),
+            Some(text) => {
+                let why = got.expect_err(&format!("{case} must be refused"));
+                assert!(why.contains(text), "{case}: {why}");
+            }
+        }
+    }
+    // Restore traversal so the tree's cleanup can remove it.
+    fs::set_permissions(root.join("home/user"), fs::Permissions::from_mode(0o755)).unwrap();
 }
 
 /// The options page shows the host's reason as is, so it names what was looked for and the next step
@@ -499,17 +938,9 @@ fn fix_default_targets_only_detected_browsers_but_explicit_keys_always_work() {
 #[test]
 fn no_targets_reason_reads_as_a_page_sentence() {
     let tree = TempTree::new("no-targets-page");
-    let dirs = BaseDirs {
-        home: tree.path("home"),
-        xdg_config_home: None,
-        xdg_data_home: None,
-        local_app_data: None,
-        roaming_app_data: None,
-        system_applications: tree.path("Applications"),
-    };
-    let entries = browsers::resolve(Os::MacOs, &dirs);
+    let entries = browsers::resolve(Os::MacOs, &tree_dirs(&tree));
     let Err(FixError::NoTargets(reason)) =
-        select_targets(&crate::cli::FixTargets::Detected, &entries)
+        select_targets(&crate::cli::FixTargets::Detected, &entries, Scope::User)
     else {
         panic!("an empty machine must refuse the detected selection");
     };
@@ -518,18 +949,126 @@ fn no_targets_reason_reads_as_a_page_sentence() {
     assert!(reason.contains("install Chrome, Brave or Edge"), "{reason}");
 }
 
-/// The CLI (and the installer logs that capture it) gets the same reason with the flags a terminal
-/// can act on appended, and nothing else changes.
+/// packaging/deb/postinst accepts exactly exit 3 as "no browser on this machine yet" and lets dpkg
+/// configure the package; every other refusal, and clap's usage exit 2, must still fail the install.
 #[test]
-fn cli_guidance_appends_the_flags_to_the_reason_alone() {
-    let reason = "no browser (looked for chrome): install Chrome, then repair again".to_string();
-    let cli = cli_guidance(&FixError::NoTargets(reason.clone()));
-    assert!(cli.starts_with(&reason), "{cli}");
-    for flag in ["--browser", "--all", "--manifest-dir"] {
-        assert!(cli.contains(flag), "{cli}");
+fn nothing_detected_exits_three_and_every_other_refusal_exits_one() {
+    assert_eq!(NOTHING_TO_REGISTER, 3);
+    let cases: Vec<(FixError, i32)> = vec![
+        (FixError::NoTargets("none".into()), NOTHING_TO_REGISTER),
+        (FixError::Environment("no HOME".into()), 1),
+        (FixError::Privilege("not root".into()), 1),
+        (FixError::HostExe(std::io::Error::other("gone")), 1),
+        (FixError::Unlaunchable("0700".into()), 1),
+    ];
+    for (error, code) in cases {
+        assert_eq!(fix_exit_code(&error), code, "{error:?}");
     }
-    let other = FixError::Environment("HOME is not set".into());
-    assert_eq!(cli_guidance(&other), other.to_string());
+}
+
+/// packaging/deb/prerm runs `uninstall --system` on removal: a refusal (foreign or unverifiable, left in
+/// place) must not fail dpkg, while something of ours that could not be removed must, so the package
+/// is not reported gone with a live registration behind.
+#[cfg(unix)]
+#[test]
+fn only_an_unremovable_artifact_of_ours_fails_the_uninstall() {
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(
+        uninstall_exit_code(&[Removal {
+            refused: vec!["refusing to remove x".into()],
+            ..Removal::default()
+        }]),
+        0
+    );
+    assert_eq!(
+        uninstall_exit_code(&[
+            Removal::default(),
+            Removal {
+                failed: vec!["could not remove x".into()],
+                ..Removal::default()
+            }
+        ]),
+        1
+    );
+    // The unremovable case needs an account that a 0555 directory stops; root (the Linux CI container's
+    // user) removes through it, so the filesystem leg is skipped there.
+    if nix::unistd::geteuid().is_root() {
+        return;
+    }
+    let tree = TempTree::new("unremovable");
+    let reg = registrar(&tree);
+    let target = browser_target(&tree);
+    reg.register(&target).unwrap();
+    let dir = target
+        .registration
+        .manifest_path()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o555)).unwrap();
+    let removal = Registrar::uninstall(&target);
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(
+        removal.failed[0].contains("could not remove"),
+        "{removal:?}"
+    );
+    assert!(removal.refused.is_empty(), "{removal:?}");
+}
+
+/// Chromium's Windows lookup is the key's default value, read on its own: a missing or unreadable key or
+/// one with no default falls through to HKLM, while any default string, the empty one included (read,
+/// then rejected as a path, with no fall-through), stops the lookup there.
+#[test]
+fn registry_lookup_is_the_keys_default_value() {
+    type DefaultRead = Result<Option<String>, String>;
+    let cases: Vec<(&str, DefaultRead, bool)> = vec![
+        ("absent key", Ok(None), false),
+        ("unreadable key", Err("denied".into()), false),
+        ("empty default", Ok(Some(String::new())), true),
+        ("a default", Ok(Some(r"C:\m.json".into())), true),
+    ];
+    for (case, default, hit) in cases {
+        assert_eq!(registry_lookup_hit(&default), hit, "{case}");
+    }
+}
+
+/// The CLI (and the installer logs that capture it) gets the same reason with the flags a terminal
+/// can act on appended, and every flag offered parses beside the scope's own: `--manifest-dir` conflicts
+/// with `--system` at the argv boundary, and a hint that is a usage error is no hint. The renderer and
+/// the clap table are two files, so this is the one place their agreement is checked.
+#[test]
+fn cli_guidance_offers_the_reason_and_only_flags_the_scope_accepts() {
+    let tree = TempTree::new("guidance");
+    let dir = tree.path("nm").to_string_lossy().into_owned();
+    let reason = "no browser (looked for chrome): install Chrome, then repair again".to_string();
+    for scope in [Scope::User, Scope::System] {
+        let cli = cli_guidance(&FixError::NoTargets(reason.clone()), scope);
+        let hint = cli
+            .strip_prefix(reason.as_str())
+            .unwrap_or_else(|| panic!("{scope:?}: {cli}"));
+        let offered: Vec<&str> = hint
+            .split_whitespace()
+            .map(|w| w.trim_end_matches(','))
+            .filter(|w| w.starts_with("--"))
+            .collect();
+        assert!(offered.contains(&"--browser"), "{scope:?}: {cli}");
+        for flag in offered {
+            let mut argv = vec!["chromium-bridge", "doctor", "--fix", flag];
+            match flag {
+                "--browser" => argv.push("chrome"),
+                "--manifest-dir" => argv.push(&dir),
+                _ => {}
+            }
+            if scope == Scope::System {
+                argv.push("--system");
+            }
+            let argv: Vec<String> = argv.into_iter().map(String::from).collect();
+            crate::cli::parse(&argv)
+                .unwrap_or_else(|e| panic!("{scope:?} offers {flag}, which clap refuses: {e}"));
+        }
+        let other = FixError::Environment("HOME is not set".into());
+        assert_eq!(cli_guidance(&other, scope), other.to_string());
+    }
 }
 
 #[cfg(unix)]
@@ -543,14 +1082,23 @@ fn symlinked_install_dir_is_refused() {
     let reg = Registrar {
         host_exe: tree.path("bin/chromium-bridge"),
         install_dir: link,
+        scope: RegistrarScope::User,
+        foreign: ForeignManifest::Replace,
         extension_id: PINNED_EXTENSION_ID.to_string(),
     };
     let target = macos_target(&tree);
     let err = reg.register(&target).unwrap_err();
     assert!(err.contains("symlink"), "{err}");
-    // Nothing was written through the link, and no pointer either.
+    // Nothing was written through the link, no pointer either, and no browser directory was made on the
+    // way: an empty config root left behind would make an absent browser read as detected.
     assert!(fs::read_dir(&real).unwrap().next().is_none());
     assert!(!pointer_path(&target).exists());
+    let manifest_dir = target.registration.manifest_path();
+    assert!(
+        !manifest_dir.parent().unwrap().exists(),
+        "a refused registration created {}",
+        manifest_dir.parent().unwrap().display()
+    );
 }
 
 #[test]
@@ -560,12 +1108,15 @@ fn registry_targets_fail_closed_off_windows() {
         let tree = TempTree::new("registry");
         let reg = registrar(&tree);
         let target = Target {
-            browser: Some(Browser::Chrome),
+            label: Some(Browser::Chrome),
+            name: "chrome".into(),
             registration: Registration::Registry {
+                hive: Hive::CurrentUser,
                 key: r"Software\Google\Chrome\NativeMessagingHosts\x".into(),
                 manifest_path: tree.path("store/x.json"),
             },
             pointer: Some(ExtensionPointer::Registry {
+                hive: Hive::CurrentUser,
                 key: r"Software\Google\Chrome\Extensions\x".into(),
             }),
         };
@@ -574,9 +1125,10 @@ fn registry_targets_fail_closed_off_windows() {
         assert!(!target.registration.manifest_path().exists());
         assert!(!tree.path("store").exists());
         // The file slot is plainly absent; the two registry slots cannot be read here.
-        let (lines, errors) = Registrar::uninstall(&target);
-        assert_eq!(lines, vec!["chrome: not registered".to_string()]);
-        assert_eq!(errors.len(), 2, "{errors:?}");
+        let removal = Registrar::uninstall(&target);
+        assert_eq!(removal.lines, vec!["chrome: not registered".to_string()]);
+        assert_eq!(removal.refused.len(), 2, "{removal:?}");
+        assert!(removal.failed.is_empty(), "{removal:?}");
         assert!(matches!(
             assess_pointer(target.pointer.as_ref().unwrap()),
             PointerState::Unreadable(_)

@@ -11,10 +11,11 @@
 | `chromium-bridge` (no arguments) | MCP server | Default mode, spawned by the MCP client. The first instance becomes the broker; later instances attach to it. |
 | `chromium-bridge --native-host [--label <browser>]` | native host | Thin bridge, spawned by the browser via the host manifest. Never invoked by hand. |
 | `chromium-bridge doctor [--json]` (alias `status`) | read-only diagnostics | Environment and connectivity self-check; changes nothing. `--json` prints the report as one versioned object. |
-| `chromium-bridge doctor --list` | read-only diagnostics | One line per known browser: detection and registration state. |
+| `chromium-bridge doctor --list` | read-only diagnostics | One line per known browser and scope: detection and registration state. |
 | `chromium-bridge doctor --paths` | read-only diagnostics | Prints the runtime dir and lock path this environment resolves to, creating neither. |
-| `chromium-bridge doctor --fix` | repair / install | Registers (or re-registers) this binary as the native-messaging host. The only mutating form of doctor. |
-| `chromium-bridge uninstall` | removal | Removes exactly the registrations this project wrote, nothing else. |
+| `chromium-bridge doctor --fix` | repair / install | Registers (or re-registers) this binary as the native-messaging host for your account. The only mutating form of doctor. |
+| `chromium-bridge doctor --fix --system` | repair / install (root) | The same, machine-wide: into the root-owned directories every account's browser reads. What the `.deb` runs after install. |
+| `chromium-bridge uninstall [--system]` | removal | Removes exactly the registrations this project wrote in that scope, nothing else. |
 | `chromium-bridge pair [--reset] [--file-store]` | enrollment | Mints the host key the extension pins, behind a confirmation typed on the terminal; the key lives in the OS credential store, or in a 0600 file with `--file-store`. |
 | `chromium-bridge revoke` | enrollment | Deletes the host key; a pinning extension then fails closed. |
 | `chromium-bridge enclave-status [--json]` | read-only | Prints the host key state, where it lives, and its fingerprint. |
@@ -41,7 +42,8 @@ It reports:
 - **Lock file**: whether the bridge lock file exists in the runtime directory, and the endpoint and pid recorded in it.
 - **Server reachability**: a passive connect-and-drop probe against our own bridge socket (no bytes sent), reporting `reachable` / `not reachable`.
 - **Kill switch**: engaged, clear, or unreadable. `doctor` exits non-zero while the switch is engaged or its state cannot be read.
-- **Native-host registrations**: for each known browser (chrome, chromium, brave, edge, vivaldi, opera), whether it looks present for this user and the state of its registration for `com.vivswan.chromium_bridge.host`: `ok`, `missing`, `stale` (ours, but its launch path dangles), or not ours. The diagnosis comes from the same resolver `--fix` repairs with, so what doctor reports is exactly what `--fix` produces.
+- **Native-host registrations**: for each known browser (chrome, chromium, brave, edge, vivaldi, opera), whether it looks present on this machine and the state of its registration for `com.vivswan.chromium_bridge.host` in each scope, `user` and `system`: `ok`, `missing`, `stale` (ours, but its launch path dangles), or not ours.
+- **The verdict follows the browser's lookup order**: the per-user entry when one exists, the system one only in its absence. The diagnosis comes from the same resolver `--fix` repairs with, so what doctor reports is exactly what `--fix` produces.
 
 `doctor --json` prints the same report as one JSON object on stdout, with the same exit code. Check its `v` field first and refuse a newer value before reading anything else (fail closed), as with every `--json` report of this binary.
 
@@ -65,7 +67,7 @@ The CLI below registers the native-messaging host from a terminal through one en
 - **Idempotent re-registration:** on a fresh machine `--fix` is also the first registration, and after moving the binary it refreshes a stale one.
 - **Nothing built, downloaded, or copied:** the manifest points at this binary's own resolved path, through a small per-browser wrapper script on macOS/Linux.
 - **That wrapper** bakes in `--native-host --label <browser>`, because Chrome's manifest format has no `args` field.
-- **Refuses to overwrite** a manifest or pointer it cannot verify this project wrote.
+- **Overwrites a manifest another tool wrote at our host id** (the report names what it launched), refuses one it cannot read, and refuses a foreign pointer; `uninstall` leaves a foreign manifest.
 
 Selecting browsers:
 
@@ -76,23 +78,29 @@ chromium-bridge doctor --fix --all                # every known browser, detecte
 chromium-bridge doctor --fix --manifest-dir DIR   # exact NativeMessagingHosts dir
                                                   # (absolute; repeatable), for a Chromium
                                                   # variant we do not know by name
+sudo chromium-bridge doctor --fix --system        # machine-wide, for every account (root only)
 chromium-bridge doctor --list                     # read-only: detection + registration state
 ```
+
+The scope is the command's: `--system` writes the directories every account's browser reads (`/etc/opt/chrome/native-messaging-hosts`, `/Library/Google/Chrome/NativeMessagingHosts`, `HKLM`) and needs root, while without it a root shell is refused, since root has no browser of its own.
+
+Opera, and Brave on macOS and Linux, read Chrome's system directory rather than one of their own. For them `--system` registers Chrome's manifest and `doctor` reports it on their rows as Chrome's. That shared manifest carries no browser label (either browser may launch it), so its connections take the broker's default slot, as a `--manifest-dir` registration's do.
 
 Known browser keys: `chrome`, `chromium`, `brave`, `edge`, `vivaldi`, `opera`. "Detected" means the browser is actually installed, as far as a cheap local check can tell:
 
 | Platform | The detection check | What it means |
 | --- | --- | --- |
 | macOS | the application bundle under `/Applications` or `~/Applications` | a leftover per-user config directory alone does not count (uninstalled browsers keep those forever, and some dev tools create them); a freshly installed browser counts before its first run |
-| Linux, Windows | the per-user config (profile) directory | the best cheap signal there |
+| Linux | the per-user config directory; with `--system`, the vendor package's install directory (`/opt/google/chrome`, `/usr/lib/chromium`, and the like) | a per-user repair registers the browsers this account has run; the `.deb`'s post-install, from root, registers the ones installed for every account |
+| Windows | the per-user profile directory | the best cheap signal there |
 
 - **A non-standard install on macOS** reads as "not detected"; it can still be registered explicitly with `--browser <key>` or `--manifest-dir`.
 - **Plain `doctor` counts only detected browsers,** so a healthy explicit registration for a non-standard install keeps the summary below "OK" even though the bridge works - the per-browser lines tell the real story.
-- **Nothing detected:** `--fix` refuses and asks for an explicit selection instead of guessing.
+- **Nothing detected:** `--fix` refuses and asks for an explicit selection instead of guessing, exiting 3 rather than 1 so an installer can tell "no browser yet" from a failure.
 
-`chromium-bridge uninstall` reverses exactly what this project registers (via `--fix`): the per-browser manifests, the extension pointers, and the wrapper scripts. Re-pass any `--manifest-dir` you registered.
+`chromium-bridge uninstall` reverses exactly what this project registers (via `--fix`) in one scope: the per-browser manifests, the extension pointers, and the wrapper scripts. Re-pass any `--manifest-dir` you registered, and `--system` (as root) for a machine-wide registration.
 
-Before deleting a manifest or pointer it verifies the content is ours (our host id and description marker; the Web Store update url alone). Anything else, or anything it cannot read, is reported and left in place; the other artifacts of ours beside it still go.
+Before deleting a manifest or pointer it verifies the content is ours (our host id and description marker; the Web Store update url alone). Anything else, or anything it cannot read, is reported and left in place as a warning, never a failure, so a package removal completes; the other artifacts of ours beside it still go, and only one of ours that cannot be removed fails the command.
 
 It never touches this binary or your browsers. A browser drops the extension it installed from the pointer on its next start; an unpacked extension is yours to remove.
 
@@ -100,8 +108,8 @@ The extension pointer, beside each manifest:
 
 | OS | Where `--fix` writes it | What the browser does with it |
 | --- | --- | --- |
-| macOS | `<user data dir>/External Extensions/<extension id>.json`, naming the Web Store | asks "Enable Chromium Bridge?" on its next start |
-| Windows | `HKCU\<vendor>\Extensions\<extension id>`, value `update_url` | the same prompt |
+| macOS | `<user data dir>/External Extensions/<extension id>.json`, naming the Web Store; with `--system`, `/Library/Application Support/Google/Chrome/External Extensions/` for every browser (Chromium's one machine-wide directory) | asks "Enable Chromium Bridge?" on its next start |
+| Windows | `HKCU\<vendor>\Extensions\<extension id>`, value `update_url`; `HKLM` with `--system` | the same prompt |
 | Linux | nothing; `doctor` prints `pointer n/a` | it would install from a pointer silently, which the threat model refuses: add the extension from the Web Store yourself |
 
 Chrome's own locations come from its documentation. The other vendors are derived from the same user-data root and registry root they keep their manifests under, and Edge is pointed at the Chrome Web Store too (a residual: unverified on those browsers).
@@ -113,7 +121,7 @@ Whether the listing exists yet, and what to load until it does, is [quickstart.m
 Platform notes:
 
 - **Linux AppImage / temp paths**: a registration pointing into an AppImage's FUSE mount (or any temp dir) breaks when that path disappears. `--fix` warns when it detects this. Copy the binary to a stable location first, for example `~/.local/lib/chromium-bridge/chromium-bridge`, and run `doctor --fix` from there.
-- **Windows**: registration is an `HKCU` registry key per browser plus a manifest file under `%LOCALAPPDATA%\chromium-bridge`. The code path compiles and mirrors what the retired `install.ps1` script did, but it has not yet been verified on a real Windows machine; treat Windows registration as best-effort until then. Browser detection on Windows (per-user profile directories; Opera under the roaming profile) carries the same caveat.
+- **Windows**: registration is an `HKCU` registry key per browser plus a manifest file under `%LOCALAPPDATA%\chromium-bridge` (with `--system`, `HKLM` and `%ProgramFiles%\chromium-bridge`). The code path compiles and mirrors what the retired `install.ps1` script did, but it has not yet been verified on a real Windows machine; treat Windows registration as best-effort until then. Browser detection on Windows (per-user profile directories; Opera under the roaming profile) carries the same caveat.
 
 ## Enrollment: pair / revoke / enclave-status
 

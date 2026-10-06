@@ -31,9 +31,9 @@ getrandom = { version = "0.4", features = ["std", "sys_rng"] }
 hex = "0.4"
 hmac = "0.13"
 libc = "0.2.186"
-# Safe sigmask wrapper for the signal-cleanup thread (src/packages/core/src/sys.rs).
-# `signal` only.
-nix = { version = "0.31", default-features = false, features = ["signal"] }
+# Safe sigmask wrapper for the signal-cleanup thread (src/packages/core/src/sys.rs): `signal`; the
+# effective-uid read behind the registration scope gate (src/packages/core/src/registration.rs): `user`.
+nix = { version = "0.31", default-features = false, features = ["signal", "user"] }
 # The official MCP Rust SDK: the whole MCP protocol layer (lifecycle,
 # per-request version gate, wire model), a many-eyes library in place of
 # hand-rolled JSON-RPC dispatch. `server` only: no HTTP stack, no client, no auth tree.

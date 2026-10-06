@@ -116,6 +116,7 @@ Residuals at this hop:
   - **Bounds:** an extension that re-pinned to the file key holds no pin the resurfaced key matches. One still pinned to the old store key (the re-pin never finished, or the revocation push was withheld because the host pushes it only on a clean absence) trusts it again.
   - **Either way** `chromium-bridge enclave-status` reports a key the user believed gone, and `policy set` signs with it, until `revoke` runs again once the store answers.
 - **Registration repair is not presence-gated.** The options page's repair frame re-registers the detected browsers through the same seam as `doctor --fix`: idempotent, pointing browsers at this binary and nothing else, the same posture as the CLI path, which has no gate either. A compromised extension gains only what any same-user process already has.
+  - **The one difference:** a manifest another tool wrote at our host id is replaced by the CLI's explicit `--fix` and left by the frame.
 
 ## Boundary 4: Extension <-> web page  (Chrome API / content script / DOM)
 

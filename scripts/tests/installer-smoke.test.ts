@@ -22,12 +22,18 @@ const notFound: Finished = {
   stdout: "",
   stderr: "ERROR: The system was unable to find the specified registry key or value.\r\n",
 };
-const registered = "  chrome    detected      manifest ok         pointer ok         C:\\x\n";
-const unregistered = "  chrome    detected      manifest missing    pointer missing    C:\\x\n";
+// `doctor --list` prints a user and a system row per browser; the fake registers both (the pkg and msi the
+// user one, the deb the system one, which Linux lists without a pointer).
+const registered =
+  "  chrome    detected      user    manifest ok         pointer ok         C:\\x\n" +
+  "  chrome    detected      system  manifest ok         pointer n/a        /etc/x\n";
+const unregistered =
+  "  chrome    detected      user    manifest missing    pointer missing    C:\\x\n" +
+  "  chrome    detected      system  manifest missing    pointer n/a        /etc/x\n";
 
 /**
  * A runner on which every install, version, list, and uninstall answers as the real one should: the list
- * row reads registered until `uninstall` ran, then unregistered.
+ * rows read registered until `uninstall` (or the deb's removal, whose prerm runs it) ran, then unregistered.
  */
 function conforming(overrides: Partial<Fake> = {}): Fake {
   let uninstalled = false;
@@ -36,7 +42,7 @@ function conforming(overrides: Partial<Fake> = {}): Fake {
     made: [],
     run(argv) {
       fake.calls.push(argv);
-      if (argv.includes("uninstall")) uninstalled = true;
+      if (argv.includes("uninstall") || argv.includes("-r")) uninstalled = true;
       if (argv.includes("--version")) return ok("chromium-bridge 1.2.3\n");
       if (argv.includes("--list")) return ok(uninstalled ? unregistered : registered);
       if (argv[0] === "reg") return notFound;
@@ -86,6 +92,7 @@ describe("the command sequence per platform, against a conforming runner", () =>
         ["sudo", "dpkg", "-i", "cb.deb"],
         ["/usr/bin/chromium-bridge", "--version"],
         ["dpkg", "-s", "chromium-bridge"],
+        ["/usr/bin/chromium-bridge", "doctor", "--list"],
         ["sudo", "dpkg", "-r", "chromium-bridge"],
       ],
       [],
@@ -163,7 +170,7 @@ describe("each check fails on the one wrong answer it exists to catch", () => {
       "windows",
       answering((argv) =>
         argv.includes("--list")
-          ? ok("  chrome    detected      manifest ok         pointer missing    C:\\x\n")
+          ? ok("  chrome    detected      user    manifest ok         pointer missing    C:\\x\n")
           : undefined,
       ),
       /doctor --list printed nothing matching/,
@@ -172,7 +179,7 @@ describe("each check fails on the one wrong answer it exists to catch", () => {
       "a registration the macOS uninstall left behind",
       "macos",
       answering((argv) => (argv.includes("--list") ? ok(registered) : undefined)),
-      /doctor --list printed nothing matching \/chrome\\s\+detected\\s\+manifest missing/,
+      /doctor --list printed nothing matching \/chrome\\s\+detected\\s\+user\\s\+manifest missing/,
     ],
     [
       "a wrapper the macOS uninstall left behind, outside doctor's view",

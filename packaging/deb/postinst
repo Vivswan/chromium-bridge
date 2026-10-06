@@ -1,4 +1,7 @@
 #!/bin/sh
-# Runs as root with no user context, so the registration stays the user's to run; this line is the only
-# post-install the package has.
-echo "chromium-bridge: run 'chromium-bridge doctor --fix' once as your own user to register it with your browsers"
+# dpkg runs this as root, so the registration is the machine-wide one every account's browser reads; the
+# binary refuses the per-user scope as root and the system scope without root. No browser on the machine
+# yet is a valid install (exit 3: nothing to register, the binary prints the hint), unlike a registration
+# that failed, which leaves the package unconfigured so the failure is seen.
+set -e
+/usr/bin/chromium-bridge doctor --fix --system || test $? -eq 3

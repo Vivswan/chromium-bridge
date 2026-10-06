@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { NATIVE_HOST_ID } from "../../src/packages/shared/src/identity.gen.ts";
-import { Scratch, writeTree } from "../lib.ts";
+import { repoRoot, Scratch, writeTree } from "../lib.ts";
 import {
   allowedOrigin,
   type Browser,
@@ -27,7 +27,7 @@ const accepting: RunBinary = () => ({ exitCode: 0, stdout: "", stderr: "" });
 const refusing: RunBinary = () => ({ exitCode: 1, stdout: "", stderr: "refused\n" });
 const listing: RunBinary = () => ({
   exitCode: 0,
-  stdout: "  chrome    detected      manifest ok         pointer n/a        /x\n",
+  stdout: "  chrome    detected      user    manifest ok         pointer n/a        /x\n",
   stderr: "",
 });
 
@@ -57,6 +57,25 @@ const cases: Case[] = [
     outcome: /^chromium-bridge doctor --list exited 1, expected 0:\nrefused\n$/,
   },
   { name: "ok: exit 0 passes", binary: accepting, check: (m) => m.ok("--help"), outcome: "passes" },
+  {
+    name: "exits: the wrong code fails, with the code seen",
+    binary: refusing,
+    check: (m) => m.exits(3, /detected/, "doctor", "--fix"),
+    outcome:
+      /^chromium-bridge doctor --fix exited 1, expected 3 with stderr matching \/detected\/:\nrefused\n$/,
+  },
+  {
+    name: "exits: the right code with the wrong line fails",
+    binary: () => ({ exitCode: 3, stdout: "", stderr: "something else\n" }),
+    check: (m) => m.exits(3, /detected/, "doctor", "--fix"),
+    outcome: /expected 3 with stderr matching/,
+  },
+  {
+    name: "exits: the right code and line pass",
+    binary: () => ({ exitCode: 3, stdout: "", stderr: "no browser detected\n" }),
+    check: (m) => m.exits(3, /detected/, "doctor", "--fix"),
+    outcome: "passes",
+  },
   {
     name: "refused: exit 0 is the vacuous pass and fails the step",
     binary: accepting,
@@ -184,7 +203,7 @@ test("the binary runs against the machine's roots alone, with the rest of the en
 
 test("a binary that accepts every command and writes nothing fails both scenarios at the first check of its effect", () => {
   expect(() => freshMachine(machine(accepting))).toThrow(
-    /^chromium-bridge doctor --fix exited 0, expected a refusal$/,
+    /^chromium-bridge doctor --fix exited 0, expected 3 with stderr matching/,
   );
   expect(() => multiBrowser(machine(accepting))).toThrow(
     new RegExp(`^expected ${manifestRel} to be a regular file$`),
@@ -192,6 +211,7 @@ test("a binary that accepts every command and writes nothing fails both scenario
 });
 
 // The checks after a refusal are reachable only through a binary that passes everything before them.
+// `tamper` makes its uninstall rewrite a foreign manifest instead of leaving it.
 function conforming(tamper = false): RunBinary {
   const ours = JSON.stringify({ name: NATIVE_HOST_ID, allowed_origins: [allowedOrigin] });
   return (args, env) => {
@@ -210,11 +230,7 @@ function conforming(tamper = false): RunBinary {
     const foreign = (dir: string) => {
       const path = join(dir, manifestFile);
       if (!existsSync(path)) return false;
-      if ((JSON.parse(readFileSync(path, "utf8")) as { name?: string }).name === NATIVE_HOST_ID) {
-        return false;
-      }
-      if (tamper) writeFileSync(path, '{"name":"com.other.host","description":"rewritten"}\n');
-      return true;
+      return (JSON.parse(readFileSync(path, "utf8")) as { name?: string }).name !== NATIVE_HOST_ID;
     };
     const register = (dir: string, browser?: Browser) => {
       writeTree(dir, { [manifestFile]: `${ours}\n` });
@@ -230,14 +246,14 @@ function conforming(tamper = false): RunBinary {
     if (command === "doctor" && verb === "--list") {
       const list = detected.map(
         ([browser]) =>
-          `  ${browser}  detected  manifest ${existsSync(wrapperOf(browser)) ? "ok" : "stale"}  pointer n/a  /x`,
+          `  ${browser}  detected  user  manifest ${existsSync(wrapperOf(browser)) ? "ok" : "stale"}  pointer n/a  /x`,
       );
       return ok(`${list.join("\n")}\n`);
     }
     if (command === "doctor" && verb === "--fix") {
       const manifestDir = flag("--manifest-dir");
       if (manifestDir !== undefined) {
-        if (foreign(manifestDir)) return refused("foreign manifest\n");
+        // An explicit --fix overwrites a foreign manifest at our id.
         register(manifestDir);
         return ok();
       }
@@ -247,14 +263,26 @@ function conforming(tamper = false): RunBinary {
         : selection
           ? rows.filter(([browser]) => selection.includes(browser))
           : detected;
-      if (targets.length === 0) return refused("no browser detected\n");
+      if (targets.length === 0) {
+        return { exitCode: 3, stdout: "", stderr: "no Chromium-family browser detected\n" };
+      }
       for (const [browser, dir] of targets) register(manifestDirOf(dir), browser);
       return ok();
     }
     if (command === "uninstall") {
-      const manifestDir = flag("--manifest-dir");
-      if (manifestDir !== undefined) {
-        if (foreign(manifestDir)) return refused("foreign manifest\n");
+      for (const manifestDir of args.flatMap((a, i) =>
+        a === "--manifest-dir" ? [args[i + 1] as string] : [],
+      )) {
+        if (foreign(manifestDir)) {
+          // A foreign manifest is left in place, as a warning: exit 0.
+          if (tamper) {
+            writeFileSync(
+              join(manifestDir, manifestFile),
+              '{"name":"com.other.host","description":"rewritten"}\n',
+            );
+          }
+          continue;
+        }
         rmSync(join(manifestDir, manifestFile), { force: true });
       }
       for (const [browser, dir] of rows) {
@@ -273,9 +301,28 @@ describe("the scenarios against a conforming binary", () => {
     expect(() => multiBrowser(machine(conforming()))).not.toThrow();
   });
 
-  test("a refusal that still rewrites the foreign manifest fails at the byte-identical check", () => {
+  test("an uninstall that rewrites the foreign manifest fails at the byte-identical check", () => {
     expect(() => freshMachine(machine(conforming(true)))).toThrow(
       new RegExp(`^expected foreign/NativeMessagingHosts/${manifestFile} to be byte-identical`),
     );
+  });
+});
+
+// The postinst's acceptance rule is shell, so it is checked as shell: the real script with the binary
+// path pointed at a stub that exits as told. 0 and 3 (nothing to register) configure the package; 1 (a
+// failed registration) and 2 (clap's usage error) must not.
+describe("packaging/deb/postinst accepts exactly exit 0 and 3 from doctor --fix --system", () => {
+  const postinst = readFileSync(join(repoRoot, "packaging/deb/postinst"), "utf8");
+  test.each([
+    [0, 0],
+    [3, 0],
+    [1, 1],
+    [2, 1],
+  ])("the binary exits %i, the postinst exits %i", (binaryExit, expected) => {
+    const stub = join(scratch.dir("postinst-stub"), "chromium-bridge");
+    writeFileSync(stub, `#!/bin/sh\nexit ${binaryExit}\n`);
+    chmodSync(stub, 0o755);
+    const run = Bun.spawnSync(["sh", "-c", postinst.replaceAll("/usr/bin/chromium-bridge", stub)]);
+    expect(run.exitCode === 0 ? 0 : 1).toBe(expected);
   });
 });

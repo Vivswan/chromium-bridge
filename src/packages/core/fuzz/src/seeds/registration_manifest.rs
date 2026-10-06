@@ -6,7 +6,8 @@ use std::path::Path;
 
 use chromium_bridge_core::identity::PINNED_EXTENSION_ID;
 use chromium_bridge_core::registration::{
-    fuzz_api, manifest_ownership, pointer_json, pointer_ownership, Ownership, Registrar,
+    fuzz_api, manifest_ownership, pointer_json, pointer_ownership, ForeignManifest, Ownership,
+    Registrar, RegistrarScope,
 };
 use serde_json::{json, Value};
 
@@ -32,6 +33,8 @@ pub(super) fn directory() -> Directory {
     let registrar = Registrar {
         host_exe: "/opt/example/chromium-bridge".into(),
         install_dir: "/opt/example".into(),
+        scope: RegistrarScope::User,
+        foreign: ForeignManifest::Replace,
         extension_id: PINNED_EXTENSION_ID.into(),
     };
     let written = registrar
