@@ -33,7 +33,10 @@ describe("prepare accepts the shapes schemars actually emits", () => {
       { id: { type: "integer", format: "uint64", minimum: 0 }, op: { type: "string" } },
       ["id", "op"],
     );
-    expect(prepare(schema, "$")).toEqual(schema);
+    // schemars' integer-width format is stripped: inert beside the safe-integers rule, unread by zod.
+    expect(prepare(schema, "$")).toEqual(
+      strictObject({ id: { type: "integer", minimum: 0 }, op: { type: "string" } }, ["id", "op"]),
+    );
   });
 
   test("annotations and defaults are stripped; a FIELD named like one is not", () => {
@@ -161,10 +164,12 @@ describe("prepare aborts on anything that would convert weaker (G1/G3/G4/G5)", (
   });
 
   test("G5: keywords in positions the emitter does not model", () => {
-    // format and bounds constrain only numeric nodes; const only strings.
+    // format belongs to an integer node only (a string format, or an integer claim on a plain number, would go
+    // unenforced); bounds constrain only numeric nodes; const only strings.
     expect(() => prepare({ type: "string", format: "uuid" }, "$")).toThrow("G5");
-    // A string arm beside a numeric one would still give format a
-    // string-format meaning the emitter does not model.
+    expect(() => prepare({ type: "number", format: "int64" }, "$")).toThrow("G5");
+    // A string arm beside the integer arm would give format a string-format meaning.
+    expect(() => prepare({ type: ["integer", "string"], format: "uuid" }, "$")).toThrow("G5");
     expect(() => prepare({ type: ["string", "number"], format: "uuid" }, "$")).toThrow("G5");
     expect(() => prepare({ type: "string", minimum: 1 }, "$")).toThrow("G5");
     expect(() => prepare({ type: "integer", minimum: "0" }, "$")).toThrow("G5");
@@ -183,7 +188,6 @@ describe("prepare aborts on anything that would convert weaker (G1/G3/G4/G5)", (
     // The Option null-arm beside a numeric type is inert and stays allowed.
     expect(prepare({ type: ["integer", "null"], format: "int64" }, "$")).toEqual({
       type: ["integer", "null"],
-      format: "int64",
     });
   });
 
@@ -248,9 +252,6 @@ describe("the emitted source spellings are pinned (keeps the generated file stab
     expect(convert(prepare({ anyOf: [{ type: "string" }] }, "$"), "t")).toBe("z.string()");
     expect(convert(prepare({ anyOf: [{ type: "string" }, { type: "null" }] }, "$"), "t")).toBe(
       "z.union([z.string(), z.null()])",
-    );
-    expect(convert(prepare({ type: "number", format: "int64", maximum: 10 }, "$"), "t")).toBe(
-      "z.number().int().lte(10)",
     );
     expect(convert(prepare({}, "$"), "t")).toBe("z.unknown()");
   });

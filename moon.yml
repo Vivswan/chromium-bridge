@@ -450,7 +450,7 @@ tasks:
     script: |
       set -e
       bun scripts/check-gen.ts
-      bun test scripts/tests/check-gen.test.ts scripts/tests/gen-envelope.test.ts
+      bun test scripts/tests/check-gen.test.ts scripts/tests/gen-envelope.test.ts scripts/tests/gen-schema.test.ts
     env:
       RUSTUP_AUTO_INSTALL: '0'
     options:

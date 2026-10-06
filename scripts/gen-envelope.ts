@@ -288,13 +288,20 @@ export function prepare(node: unknown, path: string): unknown {
     }
   }
 
-  // G5 placement: format is modeled only as schemars' integer-width claim and the numeric bounds only as
-  // z.number() bounds, so both may sit only on a numeric node (JSON Schema scopes them per instance type: the
-  // Option null-arm beside a numeric type is inert and stays allowed, but a string arm would give `format` a
-  // string-format meaning - uuid, email, ... - that this emitter does not model).
+  // G5 placement: `format` is schemars' integer-width annotation (uint64, int32, ...), inert beside the
+  // safe-integers rule and unread by zod, so it is stripped from an integer node and refused anywhere else (on a
+  // string it would name a string format - uuid, email - and on a plain number an integer claim, neither of
+  // which the reader would enforce). The numeric bounds may sit only on a numeric node (JSON Schema scopes
+  // them per instance type: the Option null-arm beside a numeric type is inert and stays allowed).
+  if ("format" in out) {
+    if (!types.includes("integer") || !types.every((t) => t === "integer" || t === "null")) {
+      throw new Error(`gen-envelope: "format" at ${path} sits on a non-integer node (G5)`);
+    }
+    delete out.format;
+  }
   const numeric = types.includes("integer") || types.includes("number");
   const numericOrNull = numeric && types.every((t) => t !== "string" && t !== "boolean");
-  for (const key of ["format", "minimum", "maximum"] as const) {
+  for (const key of ["minimum", "maximum"] as const) {
     if (key in out && !numericOrNull) {
       throw new Error(`gen-envelope: "${key}" at ${path} sits on a non-numeric node (G5)`);
     }
@@ -680,11 +687,8 @@ function emitZod(node: unknown, override?: (node: unknown) => string | undefined
     }
     case "integer":
     case "number": {
-      // schemars' integer-width formats: `integer` is already .int(); the int64 format on a plain number carries
-      // the same integer claim. Other formats (uint64, double, ...) add nothing beyond the type and the explicit
-      // bounds. z.number().int() is a JS-safe integer, the safe-integers rule of the asymmetry table.
-      let out =
-        node.type === "integer" || node.format === "int64" ? "z.number().int()" : "z.number()";
+      // z.number().int() is a JS-safe integer, the safe-integers rule of the asymmetry table.
+      let out = node.type === "integer" ? "z.number().int()" : "z.number()";
       if (typeof node.minimum === "number") out += `.gte(${JSON.stringify(node.minimum)})`;
       if (typeof node.maximum === "number") out += `.lte(${JSON.stringify(node.maximum)})`;
       return out;
