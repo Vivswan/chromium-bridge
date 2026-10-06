@@ -21,6 +21,9 @@ no dependencies is what makes these suites catch framing and encoding bugs the
 Rust types cannot see. Never add a package.
 """
 import atexit
+import base64
+import binascii
+import hashlib
 import json
 import os
 import re
@@ -486,9 +489,16 @@ def browser_not_found(label, labels):
 
 
 def tool_payload(reply):
-    """The parsed data of a tool result (for a reply whose envelope was already
-    asserted, or whose payload carries nondeterministic fields)."""
+    """The parsed data of a tool result whose payload needs normalizing before
+    a whole assert."""
     return json.loads(reply["result"]["content"][0]["text"])
+
+
+def browsers_listing(reply):
+    """The list_browsers payload with its browsers in label order: the server
+    lists them in registry order, which the hosts' connect race decides."""
+    payload = tool_payload(reply)
+    return {**payload, "browsers": sorted(payload["browsers"], key=lambda b: b["label"])}
 
 
 class McpClient:
@@ -854,9 +864,152 @@ def read_jsonl(path):
         return []
 
 
+# ---------------------------------------------------------------------------
+# Whole-record expectations for the records the binary keeps (lock, trust,
+# audit) and the volatile fields in them
+# ---------------------------------------------------------------------------
+
+class Volatile:
+    """A field no expectation can spell (a timestamp, a nonce, a secret): in a
+    whole-record assert its `token` stands in for any value `shape` accepts,
+    so the record still fails on a malformed one."""
+
+    def __init__(self, token, shape):
+        self.token = token
+        self.shape = shape
+
+    def __call__(self, value):
+        return self.token if self.shape(value) else Malformed(value)
+
+
+class Malformed:
+    """A value its Volatile's shape refused, kept distinct from the token: a
+    raw value spelled like the token must not pass."""
+
+    def __init__(self, value):
+        self.value = value
+
+    def __eq__(self, other):
+        return isinstance(other, Malformed) and other.value == self.value
+
+    def __repr__(self):
+        return f"Malformed({self.value!r})"
+
+
+def _hex(digits):
+    return lambda v: isinstance(v, str) and re.fullmatch(f"[0-9a-f]{{{digits}}}", v) is not None
+
+
+def _int(minimum):
+    return lambda v: type(v) is int and v >= minimum
+
+
+def _base64url_bytes(count):
+    """Canonical unpadded base64url of exactly `count` bytes: the engine in
+    webauthn/base64url.rs refuses nonzero trailing bits, so a round trip must
+    reproduce the text."""
+    def accepts(v):
+        if not isinstance(v, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", v):
+            return False
+        try:
+            raw = base64.urlsafe_b64decode(v + "=" * (-len(v) % 4))
+        except (binascii.Error, ValueError):
+            return False
+        return len(raw) == count and base64.urlsafe_b64encode(raw).rstrip(b"=").decode() == v
+    return accepts
+
+
+UNIX_SECS = Volatile("<unix>", _int(1))
+UNIX_MS = Volatile("<unix_ms>", _int(1))
+DURATION_MS = Volatile("<ms>", _int(0))
+SECRET = Volatile("<secret>", _hex(32))
+BASE64URL = Volatile("<base64url>", _base64url_bytes(32))
+
+
+def pipe_endpoint(pid):
+    """The Windows endpoint, PipeName::for_broker in ipc/platform/windows/mod.rs:
+    the runtime dir's path hashed (SHA-256, first 16 bytes) then the broker's
+    pid. The harness sets LOCALAPPDATA itself, so the binary's runtime dir is
+    dirname(LOCK) byte for byte and the name is pinned exactly."""
+    leaf = hashlib.sha256(os.path.dirname(LOCK).encode()).hexdigest()[:32]
+    return rf"\\.\pipe\chromium-bridge-{leaf}-{pid}"
+
+
+def placeholders(obj, **volatile):
+    """A deep copy of `obj` with each named key's value replaced by its
+    Volatile's token wherever the key appears."""
+    if isinstance(obj, dict):
+        return {k: volatile[k](v) if k in volatile else placeholders(v, **volatile)
+                for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [placeholders(v, **volatile) for v in obj]
+    return obj
+
+
+def socket_path():
+    # Mirrors RuntimeDir::socket_path() in src/packages/core/src/ipc/runtime_dir.rs.
+    return os.path.join(os.path.dirname(LOCK), "run.sock")
+
+
+def lock_published_by(proc):
+    """The whole lock a live server `proc` publishes (ipc/lockfile.rs): the
+    socket beside the lock (a named pipe on Windows), a per-run secret, its
+    pid."""
+    endpoint = pipe_endpoint(proc.pid) if os.name == "nt" else socket_path()
+    return {"endpoint": endpoint, "secret": SECRET.token, "pid": proc.pid}
+
+
+def lock_record(lf):
+    """A lock as read, its secret as the placeholder, for comparing with
+    lock_published_by."""
+    return placeholders(lf, secret=SECRET)
+
+
+# migrations/trust.rs LADDER; a rung added there re-pins this by hand.
+TRUST_VERSION = 0
+
+
+def trust_record(epoch, clients, killed=False, kill_epoch=0):
+    """The whole trust record (trust.rs) after `epoch` mutations: `clients` is
+    None before any pairing, else the entries in pairing order."""
+    return {"version": TRUST_VERSION, "epoch": epoch, "killed": killed, "kill_epoch": kill_epoch,
+            "host_key_epoch": 0, "policy_epoch": 0, "lang_epoch": 0, "clients": clients,
+            "enrollments": []}
+
+
+def client_entry(name, kind, value):
+    """One trusted client as the trust record and client_list carry it."""
+    return {"name": name, "anchor": {"kind": kind, "value": value}, "added_unix": UNIX_SECS.token}
+
+
+# The anchor runs to the presence suffix: a signer is any non-empty string, spaces included.
+PAIRED = re.compile(r"^paired trusted client '[^']+' on (hash|signer) (.+) \(user presence: \w+\)$", re.M)
+
+
+def pair_client(name, *anchor, env=None):
+    """Pair `name` through the CLI presence floor; `anchor` is the --hash,
+    --signer, or --this-parent choice. Returns the entry as the CLI reports
+    it: with --this-parent the anchor is measured, so only the CLI can
+    spell it."""
+    out = run_with_cli_presence(["pair-client", "--name", name, *anchor], env=env).stdout
+    m = PAIRED.search(out)
+    if m is None:
+        raise AssertionError(f"pair-client reported no pairing:\n{out}")
+    return client_entry(name, m[1], m[2])
+
+
 def read_trust():
+    """The trust record on disk, pairing times as the placeholder, for
+    comparing with trust_record."""
     with open(runtime_file("trust.json")) as f:
-        return json.load(f)
+        return placeholders(json.load(f), added_unix=UNIX_SECS)
+
+
+def client_list_result(nh):
+    """Ask the host `nh` for its trusted-client list; the whole reply, pairing
+    times as the placeholder."""
+    nm_write(nh, {"type": "client_list"})
+    return placeholders(nm_read(nh), added_unix=UNIX_SECS)
 
 
 def reset_enrollment():
@@ -870,10 +1023,37 @@ def reset_enrollment():
         pass
 
 
-def audit_records():
-    """Every record in the audit trail, the rotated file first, exactly as the
-    CLI reader joins them."""
-    return read_jsonl(runtime_file("audit.log.1")) + read_jsonl(runtime_file("audit.log"))
+# audit.rs AUDIT_VERSION.
+AUDIT_VERSION = 1
+
+
+def audit_record(event_kind, **fields):
+    """One expected audit.log record (audit.rs AuditRecord): the kind and the
+    fields that kind carries; the timestamp is the placeholder."""
+    return {"v": AUDIT_VERSION, "ts_ms": UNIX_MS.token, "event_kind": event_kind, **fields}
+
+
+def tool_call_record(req, outcome, code=None, tool="tab_list", **route):
+    """The audit record of one tool call: its process-wide request number, the
+    verdict, and the browser `route` (name, conn) when the test pins it; the
+    duration is the placeholder."""
+    rec = audit_record("tool_call", outcome=outcome, tool=tool, req=req, dur_ms=DURATION_MS.token,
+                       **route)
+    if code is not None:
+        rec["code"] = code
+    return rec
+
+
+def audit_records(kinds=None):
+    """Every record in the audit trail, the rotated file first, as the CLI
+    reader joins them, timestamps and durations as placeholders. `kinds`
+    keeps only those event kinds: attach and admit records interleave with
+    the decisions a test is about."""
+    records = read_jsonl(runtime_file("audit.log.1")) + read_jsonl(runtime_file("audit.log"))
+    records = placeholders(records, ts_ms=UNIX_MS, dur_ms=DURATION_MS)
+    if kinds is not None:
+        records = [rec for rec in records if rec["event_kind"] in kinds]
+    return records
 
 
 # ---------------------------------------------------------------------------
@@ -919,7 +1099,7 @@ class BridgeCase(unittest.TestCase):
         self.addCleanup(reap, proc)
         if wait:
             proc.lock = wait_lock(proc)
-            self.assertIsNotNone(proc.lock, f"the server wrote its lock file; stderr: {server_stderr(proc)}")
+            self.assertLock(proc.lock, proc, f"the server published its lock; stderr: {server_stderr(proc)}")
         return proc
 
     def instance(self, env=None):
@@ -974,6 +1154,21 @@ class BridgeCase(unittest.TestCase):
         self.assertTrue(finished, f"{label} did not complete within {secs}s")
         return value
 
+    def assertLock(self, lf, proc, msg=None):
+        """`lf` is the whole lock the live server `proc` publishes."""
+        self.assertEqual(lock_record(lf), lock_published_by(proc), msg)
+
+    def assertEventually(self, read, expected, timeout, msg=None):
+        """`read()` comes to equal `expected` within `timeout` seconds (a state
+        the binary reaches asynchronously); the last reading is asserted
+        whole, so a timeout fails with the diff."""
+        deadline = time.time() + timeout
+        value = read()
+        while value != expected and time.time() < deadline:
+            time.sleep(0.1)
+            value = read()
+        self.assertEqual(value, expected, msg)
+
     def assertToolsList(self, reply, _id, envelope):
         """The whole tools/list reply: the full catalogue literal plus
         `envelope` as everything else in the result. Returns the served tools."""
@@ -988,7 +1183,7 @@ class BridgeCase(unittest.TestCase):
         self.skip_unless_unix("harness attestation")
         reset_enrollment()
         self.addCleanup(reset_enrollment)
-        run_with_cli_presence(["pair-client", "--name", "pytest", "--this-parent"])
+        pair_client("pytest", "--this-parent")
         srv = self.server()
         c = client(srv)
         nh = self.host()

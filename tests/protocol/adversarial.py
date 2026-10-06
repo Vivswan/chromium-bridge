@@ -58,8 +58,8 @@ import sys
 import unittest
 
 import harness as h
-from harness import (BridgeCase, McpClient, Served, nm_read, nm_write, normalized, rpc_error,
-                     rpc_result, tool_error, tool_result)
+from harness import (BridgeCase, McpClient, Served, nm_read, nm_write, normalized, pair_client,
+                     rpc_error, rpc_result, tool_error, tool_result)
 
 
 def setUpModule():
@@ -84,11 +84,6 @@ def copy_of_binary(name):
     shutil.copy2(h.BIN, path)
     os.chmod(path, 0o755)
     return path
-
-
-def pair(*args, env=None):
-    """Pair a trusted client through the CLI presence floor."""
-    h.run_with_cli_presence(["pair-client", *args], env=env)
 
 
 class AdversarialCase(BridgeCase):
@@ -245,7 +240,6 @@ class Surface(AdversarialCase):
         env = dict(os.environ, BB_LOG="debug")
         srv = self.server(env=env)
         secret = srv.lock["secret"]
-        self.assertRegex(secret, r"^[0-9a-f]{32}$")
         c = self.legacy_client(srv)
         reply = ""
         nh = None
@@ -274,7 +268,7 @@ class Admission(AdversarialCase):
         self.skip_unless_unix("harness attestation")
         h.reset_enrollment()
         self.addCleanup(h.reset_enrollment)
-        pair("--name", "decoy", "--hash", "00" * 20)
+        pair_client("decoy", "--hash", "00" * 20)
         self.assertRefusedToStart(self.server(wait=False), ALLOWLIST_REFUSAL)
 
     def test_a15_spoofed_client_name_is_not_authorization(self):
@@ -284,7 +278,7 @@ class Admission(AdversarialCase):
         self.skip_unless_unix("harness attestation")
         h.reset_enrollment()
         self.addCleanup(h.reset_enrollment)
-        pair("--name", "trusted", "--hash", "11" * 20)
+        pair_client("trusted", "--hash", "11" * 20)
         # BB_LOG pinned to info: an ambient warn/error level would hide the audit line.
         env = dict(os.environ, CHROMIUM_BRIDGE_CLIENT_NAME="trusted", BB_LOG="info")
         srv = self.server(env=env, wait=False)
@@ -306,9 +300,9 @@ class Revocation(AdversarialCase):
         its next request (EOF, no service), exits, and a re-attach is refused."""
         srv, c, nh = self.enrolled_broker()
         self.assertRoundTrip(c, nh, 50)
-        before = h.read_trust()["epoch"]
         h.run_cli(["revoke-client", "--name", "pytest"], check=True)
-        self.assertGreater(h.read_trust()["epoch"], before, "the epoch moved with the allowlist")
+        self.assertEqual(h.read_trust(), h.trust_record(2, []),
+                         "one write emptied the allowlist and moved the epoch")
         c.send({"jsonrpc": "2.0", "id": 51, "method": "tools/call",
                 "params": {"name": "tab_list", "arguments": {}}})
         self.assertEqual(self.bounded("the revoked call", srv.stdout.readline, 10), "",
@@ -323,21 +317,18 @@ class Revocation(AdversarialCase):
         self.skip_unless_unix("harness attestation")
         h.reset_enrollment()
         self.addCleanup(h.reset_enrollment)
-        pair("--name", "pytest", "--this-parent")
-        pair("--name", "victim", "--hash", "22" * 32)
+        pytest = pair_client("pytest", "--this-parent")
+        pair_client("victim", "--hash", "22" * 32)
+        victim = h.client_entry("victim", "hash", "22" * 32)
         srv = self.server()
         c = self.legacy_client(srv)
         nh = self.host()
-        nm_write(nh, {"type": "client_list"})
-        reply = nm_read(nh)
-        clients = reply.pop("clients")
-        self.assertEqual(reply, {"type": "client_list_result", "ok": True, "enrolled": True})
-        self.assertEqual(sorted(cl["name"] for cl in clients), ["pytest", "victim"])
-        before = h.read_trust()["epoch"]
+        self.assertEqual(h.client_list_result(nh), {"type": "client_list_result", "ok": True,
+                                                    "enrolled": True, "clients": [pytest, victim]})
         nm_write(nh, {"type": "client_revoke", "name": "victim"})
         self.assertEqual(nm_read(nh), {"type": "client_revoke_result", "ok": True})
-        self.assertEqual([cl["name"] for cl in h.read_trust()["clients"]], ["pytest"])
-        self.assertGreater(h.read_trust()["epoch"], before)
+        self.assertEqual(h.read_trust(), h.trust_record(3, [pytest]),
+                         "one write dropped the victim and moved the epoch")
         self.assertRoundTrip(c, nh, 60)
         nm_write(nh, {"type": "client_revoke", "name": "ghost"})
         self.assertEqual(nm_read(nh), {"type": "client_revoke_result", "ok": False,
@@ -351,7 +342,7 @@ class Revocation(AdversarialCase):
         self.skip_unless_unix("harness attestation")
         h.reset_enrollment()
         self.addCleanup(h.reset_enrollment)
-        pair("--name", "pytest", "--this-parent")
+        pair_client("pytest", "--this-parent")
         h.reset_enrollment()
         srv = self.server()
         self.assertIn("harness admitted WITHOUT attestation enforcement", h.server_stderr(srv))
@@ -365,9 +356,9 @@ class KillSwitch(AdversarialCase):
         srv, c, nh = self.enrolled_broker()
         self.addCleanup(h.run_with_cli_presence, ["unkill"], check=False)
         self.assertRoundTrip(c, nh, 60)
+        enrolled = h.read_trust()
         h.run_cli(["kill"], check=True)
-        rev = h.read_trust()
-        self.assertEqual((rev["killed"], rev["kill_epoch"]), (True, rev["epoch"]),
+        self.assertEqual(h.read_trust(), {**enrolled, "epoch": 2, "killed": True, "kill_epoch": 2},
                          "the kill landed with its epoch bump in one record")
         self.assertEqual(c.call("tab_list", {}, _id=61), tool_error(61, "BRIDGE_KILLED", h.BRIDGE_KILLED))
         self.assertEqual(c.ping(_id=62), rpc_result(62, {}), "the harness connection carries refusals")
@@ -385,6 +376,7 @@ class KillSwitch(AdversarialCase):
         drops its harness, a fresh instance refuses to start, unkill refuses
         (audited as an error with its presence rung), doctor reports it."""
         srv, c, nh = self.enrolled_broker()
+        already = len(h.audit_records(("kill_release",)))
         # Drain the fire-and-forget initialized notification before corrupting:
         # the guard runs on every inbound message.
         self.assertEqual(c.ping(_id=69), rpc_result(69, {}))
@@ -398,11 +390,10 @@ class KillSwitch(AdversarialCase):
         unkill = h.run_with_cli_presence(["unkill"], check=False)
         self.assertEqual(unkill.returncode, 1, unkill.stderr)
         self.assertIn("fail open", unkill.stderr)
-        errored = [rec for rec in h.audit_records()
-                   if rec["event_kind"] == "kill_release" and rec.get("outcome") == "error"]
-        self.assertEqual(len(errored), 1, "the errored release attempt is audited once")
-        self.assertIn("auth=tty", errored[0]["detail"])
-        self.assertIn("write refused", errored[0]["detail"])
+        self.assertEqual(h.audit_records(("kill_release",))[already:], [
+            h.audit_record("kill_release", surface="cli", outcome="error",
+                           detail="auth=tty; write refused: trust.json: key must be a string at line 1 column 3"),
+        ], "the errored release attempt is audited once, with its presence rung")
         doc = h.run_cli(["doctor"])
         self.assertEqual(doc.returncode, 1, doc.stdout)
         self.assertIn("UNREADABLE", doc.stdout)
@@ -414,24 +405,29 @@ class KillSwitch(AdversarialCase):
         self.skip_unless_unix("the pty-driven confirmation")
         self.addCleanup(h.run_with_cli_presence, ["unkill"], check=False)
         h.remove_lock()
-        already = len(h.audit_records())
+        h.reset_enrollment()
+        already = len(h.audit_records(("kill_release",)))
         h.run_cli(["kill"], check=True)
-        self.assertIs(h.read_trust()["killed"], True)
+        engaged = h.trust_record(1, None, killed=True, kill_epoch=1)
+        self.assertEqual(h.read_trust(), engaged)
         piped = h.run_cli(["unkill"], input="release\n")
         self.assertEqual(piped.returncode, 1, piped.stderr)
         self.assertIn("not a terminal", piped.stderr)
-        self.assertIs(h.read_trust()["killed"], True, "engaged after the piped attempt")
+        self.assertEqual(h.read_trust(), engaged, "engaged after the piped attempt")
         wrong = h.run_with_cli_presence(["unkill"], phrase="yes", check=False)
         self.assertEqual(wrong.returncode, 1, wrong.stderr)
-        self.assertIs(h.read_trust()["killed"], True, "engaged after the declined prompt")
+        self.assertEqual(h.read_trust(), engaged, "engaged after the declined prompt")
         ok = h.run_with_cli_presence(["unkill"])
         self.assertEqual(ok.returncode, 0, ok.stderr)
-        self.assertIs(h.read_trust()["killed"], False)
-        releases = [rec for rec in h.audit_records()[already:] if rec["event_kind"] == "kill_release"]
-        self.assertEqual([rec["outcome"] for rec in releases], ["refused", "refused", "ok"])
-        for rec in releases[:2]:
-            self.assertIn("presence", rec["detail"], "the refusal names the presence gate")
-        self.assertIn("auth=tty", releases[2]["detail"])
+        self.assertEqual(h.read_trust(), h.trust_record(2, None, killed=False, kill_epoch=2))
+        self.assertEqual(h.audit_records(("kill_release",))[already:], [
+            h.audit_record("kill_release", surface="cli", outcome="refused",
+                           detail="presence: stdin is not a terminal; this action restores or grants "
+                                  "capability and requires an interactive confirmation (run it from a terminal)"),
+            h.audit_record("kill_release", surface="cli", outcome="refused",
+                           detail="presence: the confirmation phrase was not entered; nothing was changed"),
+            h.audit_record("kill_release", surface="cli", outcome="ok", detail="auth=tty"),
+        ], "each refusal names the presence gate; the release names its rung")
 
 
 class Versions(AdversarialCase):
