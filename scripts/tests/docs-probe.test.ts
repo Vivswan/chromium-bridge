@@ -133,6 +133,27 @@ describe("probePage", () => {
   });
 });
 
+// Which pages are translations is check-docs-locales' call (docs/<locale>/ and the root README), so a
+// zh-cn segment deeper in the tree, or a locale-suffixed name elsewhere, is an English page under the cap.
+describe("a locale page skips the word cap and keeps its path and link findings", () => {
+  const pages: ReadonlyArray<readonly [page: string, capped: boolean]> = [
+    ["docs/zh-cn/p.md", false],
+    ["README.zh-tw.md", false],
+    ["docs/guides/zh-cn/x.md", true],
+    ["docs/README.zh-cn.md", true],
+  ];
+  test.each(pages)("%s", (page, capped) => {
+    const root = scratch.dir("docs-probe-locale");
+    const text = "one two three four five six.\n\nSee [x](./missing.md) and `docs/gone.md`.\n";
+    writeTree(root, { "docs/real.md": "# Real\n", [page]: text });
+    expect(seen(probePage(text, page, { root, maxWords: CAP, paths: true }))).toEqual([
+      ...(capped ? [{ file: page, line: 1, message: over("paragraph", 6) }] : []),
+      { file: page, line: 3, message: "`docs/gone.md` does not exist" },
+      { file: page, line: 3, message: "link target ./missing.md does not exist" },
+    ]);
+  });
+});
+
 // A built icon or a tool cache exists after a build and not on a fresh clone, so a page naming one
 // got a different verdict in two worktrees of the same commit (one had built the extension, one had
 // not). A path git ignores is not a repository file wherever the probe runs, built or fresh, and a
@@ -276,6 +297,31 @@ test("the baseline keys on the unit, so a line shift keeps it valid and an edit 
       `  ${key}: no finding fires for this unit any more; remove the line from exact`,
       "",
     ].join("\n"),
+  });
+
+  writeTree(root, {
+    "docs/a.md": "# A\n\none two three four.\n",
+    "docs/zh-cn/a.md": "# A\n\none two three four five six.\n",
+  });
+  expect(run("--baseline", "exact", "docs/**/*.md")).toEqual({
+    status: 0,
+    stdout:
+      "docs-probe: 2 page(s) clean (cap 3 words; 1 locale page(s) paths and links only); 1 finding(s) allowed by exact\n",
+    stderr: "",
+  });
+  // A glob spelled with ./ names the same pages, so the labels, the allowances, and the locale count hold.
+  expect(run("--baseline", "exact", "./docs/**/*.md")).toEqual({
+    status: 0,
+    stdout:
+      "docs-probe: 2 page(s) clean (cap 3 words; 1 locale page(s) paths and links only); 1 finding(s) allowed by exact\n",
+    stderr: "",
+  });
+  // Without the path check a locale page would pass with nothing probed, so the pair is refused.
+  expect(run("--shape-only", "docs/**/*.md")).toEqual({
+    status: 2,
+    stdout: "",
+    stderr:
+      "docs-probe: --shape-only leaves a locale page with nothing to check: docs/zh-cn/a.md\n",
   });
 
   expect(run("--baseline", "exact", "nowhere/**/*.md")).toEqual({
