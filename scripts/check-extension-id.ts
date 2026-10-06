@@ -4,8 +4,9 @@
 // re-derives the extension id from the key and checks the host id's charset while regenerating), and
 // src/apps/extension/tests/shared/manifest.test.ts asserts the manifest SOURCE (wxt.config.ts).
 //
-//   built manifest   -> the shipped artifact keeps the pinned key, the exact permission set, no install-time
-//                       host access, and no manifest-declared content scripts; skipped loudly without a build
+//   built manifest   -> the shipped artifact keeps the pinned key, the exact permission set, the Chrome floor,
+//                       no install-time host access, and no manifest-declared content scripts; skipped loudly
+//                       without a build
 //   core/src         -> identity.rs is the only file that DEFINES an identity constant, by name (a shadowing
 //                       PINNED_EXTENSION_ID in browsers.rs would feed registration a different allowed_origins
 //                       while the generated TS, emitted from identity.rs, stayed green) or by value. Only a
@@ -15,7 +16,10 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { MANIFEST_PERMISSIONS } from "../src/apps/extension/src/lib/shared/manifest-permissions";
+import {
+  MANIFEST_PERMISSIONS,
+  MINIMUM_CHROME_VERSION,
+} from "../src/apps/extension/src/lib/shared/manifest-surface";
 import {
   EXTENSION_MANIFEST_KEY,
   NATIVE_HOST_ID,
@@ -30,6 +34,7 @@ if (existsSync(builtManifestPath)) {
   const built = JSON.parse(readFileSync(builtManifestPath, "utf8")) as {
     key?: unknown;
     permissions?: unknown;
+    minimum_chrome_version?: unknown;
     host_permissions?: unknown;
     optional_host_permissions?: unknown;
     content_scripts?: unknown;
@@ -39,6 +44,11 @@ if (existsSync(builtManifestPath)) {
   }
   if (JSON.stringify(built.permissions) !== JSON.stringify(MANIFEST_PERMISSIONS)) {
     problems.push(`built permissions drifted: ${JSON.stringify(built.permissions)}`);
+  }
+  if (built.minimum_chrome_version !== MINIMUM_CHROME_VERSION) {
+    problems.push(
+      `built minimum_chrome_version drifted: ${JSON.stringify(built.minimum_chrome_version)}`,
+    );
   }
   if (JSON.stringify(built.host_permissions) !== "[]") {
     problems.push(

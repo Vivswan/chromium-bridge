@@ -2,9 +2,10 @@
 
 // Docs-literal parity gate: the living docs must state the canonical identifiers, paths, and protocol
 // versions exactly as the code defines them, or a rename in the code leaves the troubleshooting and
-// security docs quietly wrong. Every value comes from the generated contract modules (check-gen keeps
-// those equal to the Rust core), so no cargo is needed here; the one exception is the fleet's release
-// bundle name, which no file in this repository carries.
+// security docs quietly wrong. The values come from the generated contract modules (check-gen keeps
+// those equal to the Rust core), so no cargo is needed here, plus two the Rust core does not own: the
+// fleet's release bundle name, which no file in this repository carries, and the extension manifest's
+// Chrome floor.
 //
 //   FAMILY    every doc token shaped like an identifier must be a current canonical value  -> the stale copy a rename leaves
 //   PRESENCE  a doc whose job is to state a value must contain the current one              -> the doc that never got the new value
@@ -13,6 +14,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { MINIMUM_CHROME_VERSION } from "../src/apps/extension/src/lib/shared/manifest-surface";
 import { CHALLENGE_DOMAIN } from "../src/packages/shared/src/enclave.gen";
 import {
   AUDIT_DEFAULT_LIMIT,
@@ -328,6 +330,12 @@ if (import.meta.main) {
       family: BUNDLE_TOKEN,
       allowed: new Set([RELEASE_BUNDLE_NAME]),
     },
+    {
+      // The manifest's floor is the only Chrome version the living docs name, so any other is a stale copy.
+      label: "minimum Chrome version",
+      family: /\bChrom(?:e|ium) \d{3}\b/g,
+      allowed: new Set([`Chrome ${MINIMUM_CHROME_VERSION}`, `Chromium ${MINIMUM_CHROME_VERSION}`]),
+    },
   ];
   for (const doc of docs) {
     const text = readDoc(doc);
@@ -355,6 +363,10 @@ if (import.meta.main) {
     ["docs/release.md", `currently \`${bridgeVersion}\``, "bridge protocol version row"],
     ["docs/security/trust-boundaries.md", CLIENT_NAME_ENV, "client-name env var"],
     ["README.md", MCP_PROTOCOL_VERSION, "MCP protocol version"],
+    // The pages that walk a user through loading the extension, and the platform-support statement.
+    ["README.md", `Chrome ${MINIMUM_CHROME_VERSION}`, "minimum Chrome version"],
+    ["docs/quickstart.md", `Chrome ${MINIMUM_CHROME_VERSION}`, "minimum Chrome version"],
+    [".github/SECURITY.md", `Chrome ${MINIMUM_CHROME_VERSION}`, "minimum Chrome version"],
     ["docs/development.md", LOG_LEVEL_ENV, "log env var name"],
     // Since --help interpolates these consts, docs/cli.md holds the only
     // hand-written copies of the audit --limit default and the browser key list.
@@ -404,8 +416,9 @@ if (import.meta.main) {
     console.error(
       `\ncheck-docs-literals: ${violations.length} stale or missing doc literal(s). ` +
         "The canonical values are the generated contract modules in src/packages/shared/src " +
-        "(identity, enclave, protocol, host .gen.ts, each emitted from the Rust core) and " +
-        "RELEASE_BUNDLE_NAME (this script, mirroring the fleet's publish leg); update the docs to match.",
+        "(identity, enclave, protocol, host .gen.ts, each emitted from the Rust core), " +
+        "RELEASE_BUNDLE_NAME (this script, mirroring the fleet's publish leg), and the extension's " +
+        "manifest surface (src/apps/extension/src/lib/shared/manifest-surface.ts); update the docs to match.",
     );
     process.exit(1);
   }
@@ -414,6 +427,6 @@ if (import.meta.main) {
       `literals (host id, extension id, keychain label, ${LOCK_FILENAME}, enclave domains, ` +
       `MCP ${MCP_PROTOCOL_VERSION}, bridge v${bridgeVersion}, ${LOG_LEVEL_ENV}/${LOG_FORMAT_ENV}, ` +
       `audit --limit ${auditLimit}, browser keys ${BROWSER_KEYS.join(",")}, ` +
-      `release bundle ${RELEASE_BUNDLE_NAME})`,
+      `release bundle ${RELEASE_BUNDLE_NAME}, Chrome ${MINIMUM_CHROME_VERSION}+)`,
   );
 }

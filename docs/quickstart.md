@@ -4,6 +4,8 @@ This guide gets chromium-bridge from a download to a working "list my browser ta
 
 Before you start, read the security summary in the [README](../README.md#security-first): this tool drives the browser you are logged into, and the confirmations it shows you are the safety model, not friction.
 
+The extension needs Chrome 134 or later; an older browser refuses to load it.
+
 ## The CLI (macOS, Linux, Windows)
 
 The CLI needs nothing but the binary, on desktops, headless machines, and CI alike. The one exception today is pairing on macOS (step 5), which needs a build codesigned with an application identifier.

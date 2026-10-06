@@ -60,6 +60,8 @@ Out of scope:
 
 The bridge guarantees hold on macOS, Linux, and Windows; the mechanism behind each differs per OS. The gates are the [ledger's boundary 2](../docs/security/trust-boundaries.md#boundary-2-rust-mcp-server---native-host--bridge-socket-ndjson); this table is the per-OS state.
 
+The extension installs on Chrome 134 or later (the manifest's `minimum_chrome_version`, the floor the WebAuthn presence ceremony is supported on); the browser refuses an older install, so nothing below the floor degrades.
+
 | Mechanism | macOS and Linux | Windows |
 |-----------|-----------------|---------|
 | Transport | Unix-domain socket, no listening port, created 0600 inside a 0700 per-user directory | Named pipe in the local pipe namespace, no listening port; every instance carries a security descriptor only the current user can open, and remote clients are rejected |

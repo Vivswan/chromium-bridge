@@ -9,7 +9,7 @@ import { ContentMsgSchema } from "@chromium-bridge/shared/content-msg";
 import { OP_NAMES, TOOL_META } from "@chromium-bridge/shared/ops.gen";
 import { describe, expect, test } from "vitest";
 import { SW_OPS } from "@/lib/background/dispatch";
-import { MANIFEST_PERMISSIONS } from "@/lib/shared/manifest-permissions";
+import { MANIFEST_PERMISSIONS } from "@/lib/shared/manifest-surface";
 import { PAGE_OPS } from "@/lib/shared/page-ops";
 
 // Ops answered by the MCP server itself (scope "server"): they never reach
