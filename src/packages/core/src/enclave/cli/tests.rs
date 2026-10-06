@@ -10,7 +10,6 @@ use crate::ipc::{BrowserLabel, HashDigest};
 use crate::presence::{PresenceAttestation, PresencePath};
 use crate::runtime_record::RuntimeRecord as _;
 use crate::test_support::scratch_runtime_dir;
-use crate::trust::Clients;
 use crate::webauthn::{CosePublicKey, Credential, CredentialId};
 
 fn enrollment(browser: &str, seed: u8) -> Enrollment {
@@ -109,9 +108,10 @@ fn revoke_all_on_a_never_paired_machine_keeps_the_bootstrap_posture() {
 
     let reset = dispose_everything(Surface::Cli).unwrap();
 
-    let (enrollments, clients) = reset.pairings.unwrap();
-    assert_eq!(enrollments.len(), 2);
-    assert!(clients.is_empty());
+    let forgotten = reset.pairings.unwrap();
+    assert_eq!(forgotten.enrollments.len(), 2);
+    assert!(forgotten.clients.is_empty());
+    assert_eq!(*forgotten.trust.clients(), Clients::NeverPaired);
     assert_eq!(
         *TrustState::current().unwrap().clients(),
         Clients::NeverPaired

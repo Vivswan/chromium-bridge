@@ -11,7 +11,7 @@ use super::{EnclaveError, KEY_LABEL};
 use crate::allowlist::ClientEntry;
 use crate::audit::Surface;
 use crate::presence::{self, TerminalStdin};
-use crate::trust::{Scope, Trust, TrustState};
+use crate::trust::{Clients, Scope, Trust, TrustState};
 use crate::webauthn::Enrollment;
 
 /// `chromium-bridge pair [--reset] [--file-store]`: mint the host identity key and print the fingerprint the
@@ -146,29 +146,38 @@ pub fn run_revoke_all() -> i32 {
     let reset = match dispose_everything(Surface::Cli) {
         Ok(reset) => reset,
         Err(e) => {
-            println!("revoke --all failed: {e}");
+            eprintln!("revoke --all failed: {e}");
             return 1;
         }
     };
     let mut code = 0;
     match &reset.pairings {
-        Ok((enrollments, clients)) => {
+        Ok(forgotten) => {
             println!(
                 "forgot {} browser credential{} and {} trusted client{}",
-                enrollments.len(),
-                if enrollments.len() == 1 { "" } else { "s" },
-                clients.len(),
-                if clients.len() == 1 { "" } else { "s" }
+                forgotten.enrollments.len(),
+                if forgotten.enrollments.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+                forgotten.clients.len(),
+                if forgotten.clients.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                }
             );
             println!("the next browser enrollment is first-time (trust on first use)");
-            if !clients.is_empty() {
-                println!(
+            match forgotten.trust.clients() {
+                Clients::Paired(_) => println!(
                     "no MCP client is admitted until `chromium-bridge pair-client` trusts one again"
-                );
+                ),
+                Clients::NeverPaired => {}
             }
         }
         Err(e) => {
-            println!(
+            eprintln!(
                 "the trust record could not be rewritten ({e}): the browsers' enrollments and the trusted \
                  clients stay as they were"
             );
@@ -181,13 +190,13 @@ pub fn run_revoke_all() -> i32 {
         }
         Ok(false) => {}
         Err(e) => {
-            println!("the policy record could not be cleared ({e}); it stays in place");
+            eprintln!("the policy record could not be cleared ({e}); it stays in place");
             code = 1;
         }
     }
     match &reset.revoked.store {
         StoreOutcome::Unanswered(e) if !reset.revoked.file => {
-            println!("revoke --all could not consult the credential store: {e}");
+            eprintln!("revoke --all could not consult the credential store: {e}");
             return 1;
         }
         StoreOutcome::Unanswered(e) => println!(
@@ -218,10 +227,18 @@ pub fn run_revoke_all() -> i32 {
 /// What `revoke --all` did, each part on its own: the key and what the store said, the policy record clear
 /// (`true` when one existed), and the record rewrite that forgets the pairings (an error there means nothing
 /// was forgotten).
-pub struct Reset {
-    pub revoked: Revoked,
-    pub baseline: io::Result<bool>,
-    pub pairings: io::Result<(Vec<Enrollment>, Vec<ClientEntry>)>,
+struct Reset {
+    revoked: Revoked,
+    baseline: io::Result<bool>,
+    pairings: io::Result<Forgotten>,
+}
+
+/// The pairings the record forgot, and the record as it stands after: the posture the user is told about is
+/// read from that snapshot, not inferred from the counts.
+struct Forgotten {
+    trust: TrustState,
+    enrollments: Vec<Enrollment>,
+    clients: Vec<ClientEntry>,
 }
 
 /// The shared disposal seam: `pair --reset` and the extension-originated `enclave_revoke` route here, under
@@ -256,13 +273,19 @@ pub fn dispose_enrollment_and_policy_baseline() -> Result<Revoked, EnclaveError>
 /// enrollment and client pairing ([`Trust::forget_pairings`]). Nothing is best-effort here: each part's
 /// outcome is returned for the caller to report. Audited HERE under `surface`, after the lock (the key, then
 /// one record per forgotten credential and client), so the trail is written whatever the caller does next.
-pub fn dispose_everything(surface: Surface) -> Result<Reset, EnclaveError> {
+fn dispose_everything(surface: Surface) -> Result<Reset, EnclaveError> {
     let disposal = with_lock(|lock| dispose_locked(lock, Trust::forget_pairings))?;
     audit_host_key_revoke(surface, &disposal.revoked);
-    let pairings = disposal.trust.map(|(_, forgotten)| forgotten);
-    if let Ok((enrollments, clients)) = &pairings {
-        crate::webauthn::audit_browsers_revoked(surface, enrollments);
-        for client in clients {
+    let pairings = disposal
+        .trust
+        .map(|(trust, (enrollments, clients))| Forgotten {
+            trust,
+            enrollments,
+            clients,
+        });
+    if let Ok(forgotten) = &pairings {
+        crate::webauthn::audit_browsers_revoked(surface, &forgotten.enrollments);
+        for client in &forgotten.clients {
             crate::allowlist::audit_client_revoked(surface, client.name.as_str());
         }
     }

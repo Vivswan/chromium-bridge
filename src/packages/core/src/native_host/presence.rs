@@ -239,12 +239,13 @@ impl Exchange {
         replies
     }
 
-    /// `browser_revoke`: forget every authenticator enrolled from this browser. The label is the host's own, so
-    /// a browser forgets itself and no other. Whatever was outstanding is void once the store holds nothing
+    /// `browser_revoke`: forget every authenticator enrolled under this host's label. The frame names no label,
+    /// so the reach is exactly this host's: one browser, or every browser sharing an unlabelled manifest
+    /// (`default`). Whatever was outstanding is void once the store holds nothing
     /// for this browser; a store that refused changed nothing, so the request stays for the worker's answer.
     pub(super) fn browser_revoke(&mut self) -> Vec<HostReply> {
         let outcome = match webauthn::revoke_browser(&self.label, Surface::Extension) {
-            Ok(Some(revoked)) => {
+            Ok(revoked) => {
                 log_info!(
                     "native-host",
                     "browser '{}' forgot its {} enrolled credential(s)",
@@ -253,8 +254,10 @@ impl Exchange {
                 );
                 RevokeOutcome::Forgotten
             }
-            Ok(None) => revoke_refused(RefusalCode::NotEnrolled),
-            Err(e) => {
+            Err(webauthn::RevokeBrowserError::NotEnrolled { .. }) => {
+                revoke_refused(RefusalCode::NotEnrolled)
+            }
+            Err(webauthn::RevokeBrowserError::Io(e)) => {
                 return vec![revoke_refused(RefusalCode::StoreError.detailed(e))
                     .into_frame()
                     .into()]

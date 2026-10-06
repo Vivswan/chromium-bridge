@@ -162,7 +162,7 @@ webauthn:
   btn_enroll: "Enroll this browser"
   btn_enroll_another: "Enroll another authenticator"
   btn_forget: "Forget this browser"
-  forget_confirm: "Forget this browser's enrolled authenticator? Its tap no longer counts for this bridge; enroll again to restore it. On a machine with no other enrolled browser, the next enrollment is first-time."
+  forget_confirm: "Forget the authenticators enrolled under this browser's host label? Browsers sharing one host manifest share the label and are forgotten together. Their taps no longer count for this bridge; enroll again to restore. With no other enrolled browser left, the next enrollment is first-time."
   btn_approve: "Approve with an enrolled authenticator"
   step_asking: "Asking the host..."
   step_creating: "Waiting for this browser's authenticator to create the credential..."

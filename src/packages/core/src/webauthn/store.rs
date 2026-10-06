@@ -101,29 +101,40 @@ pub struct BrowserRevoked {
     pub trust: TrustState,
 }
 
-/// Forget every enrollment under `label`; `None` when none carried it, and then nothing is written. Not
-/// presence-gated: forgetting an authenticator only removes capability, and the browser enrolls again from
-/// its options page (first use when it was the last one). Audited HERE, log-after-decide, so no surface can
-/// forget an enrollment without a trail entry.
+/// Why a browser was not forgotten. Either way nothing was written.
+#[derive(Debug, thiserror::Error)]
+pub enum RevokeBrowserError {
+    /// No enrollment carries the label; `enrolled` names the labels that are present, in record order, so
+    /// the user sees which browser the record knows (a shared manifest's browsers all enroll as `default`).
+    #[error("no browser is enrolled under that label")]
+    NotEnrolled { enrolled: Vec<BrowserLabel> },
+    #[error("trust record: {0}")]
+    Io(#[from] io::Error),
+}
+
+/// Forget every enrollment under `label`. Not presence-gated: forgetting an authenticator only removes
+/// capability, and the browser enrolls again from its options page (first use when it was the last one).
+/// Audited HERE, log-after-decide, so no surface can forget an enrollment without a trail entry.
 pub fn revoke_browser(
     label: &BrowserLabel,
     surface: Surface,
-) -> io::Result<Option<BrowserRevoked>> {
+) -> Result<BrowserRevoked, RevokeBrowserError> {
     let revoked = ipc::with_runtime_lock(|lock| {
-        if !TrustState::current()?
-            .enrollments()
-            .iter()
-            .any(|e| &e.label == label)
-        {
-            return Ok(None);
+        let current = TrustState::current()?;
+        if !current.enrollments().iter().any(|e| &e.label == label) {
+            let mut enrolled: Vec<BrowserLabel> = Vec::new();
+            for e in current.enrollments() {
+                if !enrolled.contains(&e.label) {
+                    enrolled.push(e.label.clone());
+                }
+            }
+            return Ok(Err(RevokeBrowserError::NotEnrolled { enrolled }));
         }
         let (trust, forgotten) =
             Trust::mutate_locked_with(lock, Scope::Enrollments, |t| t.revoke_browser(label))?;
-        Ok(Some(BrowserRevoked { forgotten, trust }))
-    })?;
-    if let Some(revoked) = &revoked {
-        audit_browsers_revoked(surface, &revoked.forgotten);
-    }
+        Ok(Ok(BrowserRevoked { forgotten, trust }))
+    })??;
+    audit_browsers_revoked(surface, &revoked.forgotten);
     Ok(revoked)
 }
 

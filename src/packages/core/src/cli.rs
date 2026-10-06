@@ -185,7 +185,8 @@ fn scope_flag(system: bool) -> Scope {
 /// `revoke` as exactly one of its two forms; a bare `revoke` is refused with the usage.
 #[derive(Debug, PartialEq, Eq)]
 pub enum RevokeTarget {
-    /// `revoke <browser>`: forget every authenticator enrolled under that label. Not presence-gated.
+    /// `revoke <browser>`: forget every authenticator enrolled under that label, the host manifest's `--label`
+    /// (`default` for every browser sharing an unlabelled manifest). Not presence-gated.
     Browser(BrowserLabel),
     /// `revoke --all`: the host key, the signed policy baseline, every enrollment, every client pairing.
     All,
@@ -709,6 +710,10 @@ mod tests {
             (
                 vec!["revoke", "brave"],
                 Command::Revoke(RevokeTarget::Browser(BrowserLabel::parse("brave").unwrap())),
+            ),
+            (
+                vec!["revoke", "default"],
+                Command::Revoke(RevokeTarget::Browser(BrowserLabel::default_label())),
             ),
             (vec!["revoke", "--all"], Command::Revoke(RevokeTarget::All)),
             (

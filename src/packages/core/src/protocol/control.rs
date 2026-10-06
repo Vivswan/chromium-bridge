@@ -407,8 +407,9 @@ impl RestrictOutcome {
 ///                      base64url(sha256(statement)), the action the user is approving, the nonce, and the
 ///                      credential ids enrolled from this browser (the allowCredentials list)
 /// presence_assert   -> presence_result { ok, reason? }; every refusal is a webauthn::Refusal code
-/// browser_revoke    -> browser_revoke_result { ok, reason? }: this browser's enrollments forgotten; the host's
-///                      own label, so a browser forgets itself and no other, and no proof (it removes capability)
+/// browser_revoke    -> browser_revoke_result { ok, reason? }: the enrollments under this host's label forgotten
+///                      (the frame names none, so the reach is the host's: one browser, or the browsers sharing
+///                      an unlabelled manifest); no proof, since it removes capability
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]

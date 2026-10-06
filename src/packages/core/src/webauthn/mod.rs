@@ -50,6 +50,6 @@ pub use statement::{
 pub(crate) use store::audit_browsers_revoked;
 pub use store::{
     advance_sign_count, counter_advances, record, revoke_browser, BrowserRevoked, CounterError,
-    Enrollment, EnrollmentAuthority,
+    Enrollment, EnrollmentAuthority, RevokeBrowserError,
 };
 pub use verify::{verify_assertion, Assertion, Verified};

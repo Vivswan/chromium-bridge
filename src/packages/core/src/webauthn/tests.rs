@@ -1058,72 +1058,91 @@ mod revoke_browser {
     }
 
     /// Forgetting a browser takes every enrollment under its label and nothing else: the other browsers'
-    /// survive byte for byte, only the epoch moves, and the trail carries one record per credential.
+    /// survive byte for byte, only the epoch moves, the trail carries one record per credential, and a second
+    /// forget names the labels still present. The same for `default`, the label every browser on a shared
+    /// unlabelled manifest enrolls as, so `revoke default` forgets all of them.
     #[test]
     fn forgets_every_enrollment_under_the_label_and_leaves_the_rest_byte_for_byte() {
-        let _dir = scratch_runtime_dir();
-        plant(&[
-            ("brave", 0x31),
-            ("chrome", 0x41),
-            ("brave", 0x32),
-            ("edge", 0x51),
-        ]);
-        let before = TrustState::current().unwrap();
-        let (gone, kept): (Vec<&Enrollment>, Vec<&Enrollment>) = before
-            .enrollments()
-            .iter()
-            .partition(|e| e.label.as_str() == "brave");
+        for target in ["brave", BrowserLabel::default_label().as_str()] {
+            let _dir = scratch_runtime_dir();
+            plant(&[
+                (target, 0x31),
+                ("chrome", 0x41),
+                (target, 0x32),
+                ("edge", 0x51),
+            ]);
+            let before = TrustState::current().unwrap();
+            let (gone, kept): (Vec<&Enrollment>, Vec<&Enrollment>) = before
+                .enrollments()
+                .iter()
+                .partition(|e| e.label.as_str() == target);
 
-        let revoked = revoke_browser(&label("brave"), Surface::Cli)
-            .unwrap()
-            .expect("brave was enrolled");
+            let revoked = revoke_browser(&label(target), Surface::Cli).unwrap();
 
-        let after = TrustState::current().unwrap();
-        assert_eq!(
-            *revoked.trust, *after,
-            "the returned snapshot is the record"
-        );
-        assert_eq!(
-            json(&revoked.forgotten),
-            gone.iter()
-                .map(|e| serde_json::to_string(e).unwrap())
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(
-            json(after.enrollments()),
-            kept.iter()
-                .map(|e| serde_json::to_string(e).unwrap())
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(after.epoch(), before.epoch() + 1);
-        assert_eq!(
-            (
-                after.killed(),
-                after.kill_epoch(),
-                after.host_key_epoch(),
-                after.policy_epoch(),
-                after.lang_epoch(),
-                after.clients(),
-            ),
-            (
-                before.killed(),
-                before.kill_epoch(),
-                before.host_key_epoch(),
-                before.policy_epoch(),
-                before.lang_epoch(),
-                before.clients(),
-            ),
-            "nothing but the enrollments and the epoch moved"
-        );
-        assert_eq!(
-            revoke_records(),
-            [0x31, 0x32]
-                .map(|seed| (
-                    "brave".to_string(),
-                    format!("credential={}", fingerprint(seed))
-                ))
-                .to_vec()
-        );
+            let after = TrustState::current().unwrap();
+            assert_eq!(
+                *revoked.trust, *after,
+                "the returned snapshot is the record"
+            );
+            assert_eq!(
+                json(&revoked.forgotten),
+                gone.iter()
+                    .map(|e| serde_json::to_string(e).unwrap())
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                json(after.enrollments()),
+                kept.iter()
+                    .map(|e| serde_json::to_string(e).unwrap())
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(after.epoch(), before.epoch() + 1);
+            assert_eq!(
+                (
+                    after.killed(),
+                    after.kill_epoch(),
+                    after.host_key_epoch(),
+                    after.policy_epoch(),
+                    after.lang_epoch(),
+                    after.clients(),
+                ),
+                (
+                    before.killed(),
+                    before.kill_epoch(),
+                    before.host_key_epoch(),
+                    before.policy_epoch(),
+                    before.lang_epoch(),
+                    before.clients(),
+                ),
+                "nothing but the enrollments and the epoch moved"
+            );
+            assert_eq!(
+                revoke_records(),
+                [0x31, 0x32]
+                    .map(|seed| (
+                        target.to_string(),
+                        format!("credential={}", fingerprint(seed))
+                    ))
+                    .to_vec()
+            );
+            let Err(RevokeBrowserError::NotEnrolled { enrolled }) =
+                revoke_browser(&label(target), Surface::Cli)
+            else {
+                panic!("{target}: a second forget must name the labels present")
+            };
+            assert_eq!(
+                enrolled
+                    .iter()
+                    .map(BrowserLabel::as_str)
+                    .collect::<Vec<_>>(),
+                ["chrome", "edge"]
+            );
+            assert_eq!(
+                revoke_records().len(),
+                2,
+                "a refused forget writes no record"
+            );
+        }
     }
 
     /// The last enrolled browser can be forgotten too, and the machine is then back on first use: the next
@@ -1133,9 +1152,7 @@ mod revoke_browser {
         let _dir = scratch_runtime_dir();
         plant(&[("brave", 0x31)]);
 
-        let revoked = revoke_browser(&label("brave"), Surface::Cli)
-            .unwrap()
-            .expect("brave was enrolled");
+        let revoked = revoke_browser(&label("brave"), Surface::Cli).unwrap();
 
         assert_eq!(revoked.forgotten.len(), 1);
         assert!(revoked.trust.enrollments().is_empty());

@@ -3,13 +3,13 @@
 use crate::audit::Surface;
 use crate::ipc::BrowserLabel;
 
-use super::store::revoke_browser;
+use super::store::{revoke_browser, RevokeBrowserError};
 
 /// `chromium-bridge revoke <browser>`: forget that browser's enrolled authenticators. Returns a process exit
 /// code.
 pub fn run_revoke_browser(label: &BrowserLabel) -> i32 {
     match revoke_browser(label, Surface::Cli) {
-        Ok(Some(revoked)) => {
+        Ok(revoked) => {
             println!(
                 "forgot browser '{label}' ({} enrolled credential{})",
                 revoked.forgotten.len(),
@@ -30,11 +30,23 @@ pub fn run_revoke_browser(label: &BrowserLabel) -> i32 {
             }
             0
         }
-        Ok(None) => {
+        Err(RevokeBrowserError::NotEnrolled { enrolled }) => {
             eprintln!("revoke: no browser is enrolled under '{label}'");
+            if enrolled.is_empty() {
+                eprintln!("no browser is enrolled at all");
+            } else {
+                eprintln!(
+                    "enrolled labels: {} (a browser on a shared host manifest enrolls as 'default')",
+                    enrolled
+                        .iter()
+                        .map(BrowserLabel::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
             1
         }
-        Err(e) => {
+        Err(RevokeBrowserError::Io(e)) => {
             eprintln!("revoke: could not write the trust record: {e}");
             1
         }
