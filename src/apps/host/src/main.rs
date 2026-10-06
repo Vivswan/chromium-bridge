@@ -6,7 +6,7 @@
 
 use chromium_bridge_core::cli::{parse, Command, RevokeTarget};
 use chromium_bridge_core::{
-    allowlist, audit, doctor, enclave, kill, mcp_server, native_host, policy, registration,
+    allowlist, audit, doctor, enclave, kill, lang, mcp_server, native_host, policy, registration,
     webauthn,
 };
 
@@ -32,6 +32,7 @@ fn main() {
         Command::Unkill => kill::run_unkill(),
         Command::Audit { limit } => audit::run_audit(limit),
         Command::Policy(policy) => policy::run_policy(policy),
+        Command::Lang(lang) => lang::run_lang(lang),
         Command::McpServer => mcp_server::run(),
     };
     std::process::exit(code);

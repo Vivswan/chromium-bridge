@@ -521,7 +521,7 @@ fn an_applied_restrict_pushes_policy_current_even_when_the_epoch_bump_fails() {
 #[test]
 fn lang_get_answers_the_current_language() {
     let _dir = scratch_runtime_dir();
-    crate::lang::set("zh_TW").unwrap();
+    crate::lang::set(crate::lang::UiLang::parse("zh_TW").unwrap()).unwrap();
     let reply = lang_current_frame().unwrap();
     let PolicyControl::LangCurrent { value, seq } = reply else {
         panic!("lang_get must answer lang_current: {reply:?}");
@@ -551,7 +551,7 @@ fn an_out_of_enum_lang_set_replies_the_unchanged_current() {
     // previous value stands - the reply is lang_current with the
     // UNCHANGED value+seq, and the store is untouched.
     let _dir = scratch_runtime_dir();
-    crate::lang::set("zh_CN").unwrap();
+    crate::lang::set(crate::lang::UiLang::parse("zh_CN").unwrap()).unwrap();
     let reply = handle_lang_set("fr".into()).unwrap();
     let PolicyControl::LangCurrent { value, seq } = reply else {
         panic!("a refused lang_set must reply the unchanged current: {reply:?}");

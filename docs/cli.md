@@ -31,6 +31,7 @@
 | `chromium-bridge policy history [--json]` | read-only | Prints the superseded-revision ring. |
 | `chromium-bridge policy rollback --revision <n> [--json]` | policy | Re-derives a past revision's effective policy as a FRESH write, never a replay. |
 | `chromium-bridge audit [--limit <n>]` | read-only audit | Prints the on-disk audit trail, oldest first (default: the last 200 records). |
+| `chromium-bridge lang [show \| set <value>]` | display language | Reads or sets the display language the options page shows; `lang` alone is `show`. |
 | `chromium-bridge --help` | help | Usage information. |
 
 ## doctor / status (read-only self-check)
@@ -233,6 +234,19 @@ chromium-bridge policy rollback --revision <n> [--json]
 **`--json` contracts.** `show`, `history`, `set`, and `rollback` accept `--json`, which swaps the prose for a versioned report on stdout (and, for the write lanes, a versioned error object on refusal). Check the `v` field first and refuse a newer value before reading anything else (fail closed).
 
 Every policy transition is audited with the surface and, for grants, the presence path that authorized the signature (`auth=tty`).
+
+## Display language (lang)
+
+The extension's display language is shared state the host keeps (`lang.json` in the runtime directory) and pushes to every connected browser, so one choice reaches them all. The options page sets it with the Display language picker in its header; the terminal twin is:
+
+```text
+chromium-bridge lang              # the current value (same as `lang show`)
+chromium-bridge lang set zh_TW    # one of: auto, en, zh_CN, zh_TW
+```
+
+- **Language is not policy:** not signed, not ratcheted, and unable to affect any security decision, which is why it needs no confirmation on either surface.
+- **A value outside the list is refused** at argv and at the page's frame alike, and the previous value stands; setting the current value changes nothing and pushes nothing.
+- **A connected browser swaps on the host's next push** (within its poll interval); an offline one adopts the value when it next connects.
 
 ## Logging and audit (BB_LOG / BB_LOG_FORMAT)
 

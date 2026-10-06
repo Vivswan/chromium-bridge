@@ -13,8 +13,10 @@
 //! applies a push only when its `seq` is strictly greater than the last it
 //! applied, and a `lang_set` that does not change the stored value does not
 //! bump `seq` - so a set-apply-set cycle has nothing to ride on. Values
-//! outside [`UI_LANGUAGES`] are refused and the previous value stands.
+//! outside [`UI_LANGUAGES`] are refused at both boundaries (the frame, argv) by
+//! the one parse into [`UiLang`], and the previous value stands.
 
+use std::fmt;
 use std::io;
 
 use serde::{Deserialize, Serialize};
@@ -39,9 +41,28 @@ pub const UI_LANGUAGES: &[&str] = &["auto", "en", "zh_CN", "zh_TW"];
 /// would default to.
 const DEFAULT_LANG: &str = "en";
 
-/// Whether `value` is one of the accepted [`UI_LANGUAGES`].
-pub fn is_valid_lang(value: &str) -> bool {
-    UI_LANGUAGES.contains(&value)
+/// One of the accepted [`UI_LANGUAGES`], parsed once at a boundary (the `lang_set` frame, `lang set`'s
+/// argv); [`set`] takes nothing else, so no handler re-checks the enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UiLang(&'static str);
+
+impl UiLang {
+    pub fn parse(value: &str) -> Option<UiLang> {
+        UI_LANGUAGES
+            .iter()
+            .find(|accepted| **accepted == value)
+            .map(|accepted| UiLang(accepted))
+    }
+
+    pub fn as_str(self) -> &'static str {
+        self.0
+    }
+}
+
+impl fmt::Display for UiLang {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.0)
+    }
 }
 
 /// The persisted shared-language state (`lang.json`). `value` is one of [`UI_LANGUAGES`]; `seq` is a
@@ -66,7 +87,7 @@ impl Record for LangStore {
 
 fn de_ui_language<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
     let value = String::deserialize(d)?;
-    if !is_valid_lang(&value) {
+    if UiLang::parse(&value).is_none() {
         return Err(serde::de::Error::custom(format!(
             "out-of-enum uiLanguage {value:?}"
         )));
@@ -97,18 +118,33 @@ pub fn load_current() -> io::Result<(String, u64)> {
     }
 }
 
-/// Apply a language change and return the resulting
-/// `(value, seq)`. The caller must have validated `value` against
-/// [`is_valid_lang`] first (an out-of-enum value is refused at the frame
-/// boundary, where the previous value stands). Under ONE runtime-lock hold:
-/// read the current value; if `value` is unchanged, return it with the seq
-/// untouched (NO seq bump, NO epoch bump, so a set-apply-set cycle cannot
-/// echo); otherwise bump the seq (refused at the JS-safe bound rather than
-/// wrapped), write the store, and bump the language epoch so the native
-/// host's watch pushes `lang_current` on its next tick.
-pub fn set(value: &str) -> io::Result<(String, u64)> {
-    debug_assert!(is_valid_lang(value), "set() requires an in-enum value");
-    ipc::with_runtime_lock(|lock| set_locked(lock, value))
+/// Apply a language change and return the resulting `(value, seq)`. Under ONE runtime-lock hold: read the
+/// current value; if `value` is unchanged, return it with the seq untouched (NO seq bump, NO epoch bump, so
+/// a set-apply-set cycle cannot echo); otherwise bump the seq (refused at the JS-safe bound rather than
+/// wrapped), write the store, and bump the language epoch so the native host's watch pushes `lang_current`
+/// on its next tick.
+pub fn set(value: UiLang) -> io::Result<(String, u64)> {
+    ipc::with_runtime_lock(|lock| set_locked(lock, value.as_str()))
+}
+
+/// `chromium-bridge lang [show | set <value>]`: the shared display language, the twin of the options page's
+/// Display language picker. `show` reads it; `set` applies it through the same seam the page's `lang_set`
+/// frame uses, so a connected browser swaps on the host's next push. Returns the process exit code.
+pub fn run_lang(command: crate::cli::LangCommand) -> i32 {
+    let result = match command {
+        crate::cli::LangCommand::Show => load_current(),
+        crate::cli::LangCommand::Set { value } => set(value),
+    };
+    match result {
+        Ok((value, _)) => {
+            println!("language: {value}");
+            0
+        }
+        Err(e) => {
+            eprintln!("lang: {e}");
+            1
+        }
+    }
 }
 
 fn set_locked(lock: &ipc::RuntimeLockToken, value: &str) -> io::Result<(String, u64)> {
@@ -155,6 +191,10 @@ mod tests {
         crate::trust::TrustState::current().unwrap().lang_epoch()
     }
 
+    fn lang(value: &str) -> UiLang {
+        UiLang::parse(value).unwrap()
+    }
+
     #[test]
     fn absent_store_reads_the_default() {
         let _dir = scratch_runtime_dir();
@@ -166,14 +206,14 @@ mod tests {
     fn a_changing_set_round_trips_and_bumps_seq_and_epoch() {
         let _dir = scratch_runtime_dir();
         let before = lang_epoch();
-        let (value, seq) = set("zh_CN").unwrap();
+        let (value, seq) = set(lang("zh_CN")).unwrap();
         assert_eq!(value, "zh_CN");
         assert_eq!(seq, 1);
         assert_eq!(load_current().unwrap(), ("zh_CN".to_string(), 1));
         assert!(lang_epoch() > before, "a changing set bumps the lang epoch");
 
         // A second, different value bumps again.
-        let (value, seq) = set("zh_TW").unwrap();
+        let (value, seq) = set(lang("zh_TW")).unwrap();
         assert_eq!(value, "zh_TW");
         assert_eq!(seq, 2);
     }
@@ -181,11 +221,11 @@ mod tests {
     #[test]
     fn a_noop_set_does_not_bump_seq_or_epoch() {
         let _dir = scratch_runtime_dir();
-        set("zh_CN").unwrap();
+        set(lang("zh_CN")).unwrap();
         let epoch_after_change = lang_epoch();
         // Re-setting the same value is a no-op: seq stands, epoch stands, so a
         // set-apply-set cycle has nothing to ride on.
-        let (value, seq) = set("zh_CN").unwrap();
+        let (value, seq) = set(lang("zh_CN")).unwrap();
         assert_eq!(value, "zh_CN");
         assert_eq!(seq, 1);
         assert_eq!(lang_epoch(), epoch_after_change);
@@ -197,7 +237,7 @@ mod tests {
         let before = lang_epoch();
         // The host's implicit value is the default "en"; setting "en" changes
         // nothing, so seq stays 0 and nothing propagates.
-        let (value, seq) = set("en").unwrap();
+        let (value, seq) = set(lang("en")).unwrap();
         assert_eq!(value, "en");
         assert_eq!(seq, 0);
         assert!(LangStore::load().unwrap().is_none());

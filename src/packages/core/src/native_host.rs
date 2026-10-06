@@ -342,14 +342,14 @@ fn lang_current_frame() -> Option<PolicyControl> {
 /// `lang_current`); a valid value is applied, bumping the sequence only if it changed, and the resulting
 /// `lang_current` is the reply. `None` only when the store is unreadable (see [`lang_current_frame`]).
 fn handle_lang_set(value: String) -> Option<PolicyControl> {
-    if !crate::lang::is_valid_lang(&value) {
+    let Some(value) = crate::lang::UiLang::parse(&value) else {
         log_warn!(
             "native-host",
             "refusing out-of-enum lang_set {value:?}; the previous language stands"
         );
         return lang_current_frame();
-    }
-    match crate::lang::set(&value) {
+    };
+    match crate::lang::set(value) {
         Ok((value, seq)) => Some(PolicyControl::LangCurrent { value, seq }),
         Err(e) => {
             log_warn!(
