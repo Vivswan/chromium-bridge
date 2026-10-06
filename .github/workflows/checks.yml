@@ -99,9 +99,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      # Full history on every job that runs moon: with CI=true moon resolves the default branch
-      # to list the touched files (even without --affected) and errors when `main` is unknown,
-      # as it is in a depth-1 pull-request checkout.
+      # Full history on every job that runs moon: in a pull request, `moon run` diffs HEAD against GITHUB_BASE_REF
+      # even without --affected, and that `git diff main HEAD` fails when `main` is unknown, as in a depth-1 checkout.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
