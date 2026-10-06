@@ -268,7 +268,7 @@ pub fn set_signed(
             "the touched set is empty (a write must name the fields it edits)",
         ));
     }
-    // The pre-prompt observation the user's tap covers ([`PrePromptObservation`]), read before the prompt and
+    // The pre-prompt observation the user's tap covers (PrePromptObservation), read before the prompt and
     // failing closed on an unreadable record: no sheet for a write that cannot land.
     let host_key_epoch = crate::trust::TrustState::current()
         .map_err(PolicyWriteError::Io)?

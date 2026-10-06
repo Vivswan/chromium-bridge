@@ -181,7 +181,7 @@ impl Connection {
         if !expects_reply {
             return Ok(None);
         }
-        // Taken, leaving Spent; restored only by a whole successful exchange ([`Service`]).
+        // Taken, leaving Spent; restored only by a whole successful exchange (Service).
         let wire = match std::mem::replace(&mut self.service, Service::Spent) {
             Service::Spent => return Err(io::Error::other("mcp service already ended")),
             Service::Opening { verdict, task } => self.first_reply(msg, verdict, task)?,
