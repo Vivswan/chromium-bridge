@@ -30,6 +30,8 @@ use chromium_bridge_core::webauthn::{
     parse_registration, verify_assertion, Action, Assertion, AuthenticatorData, CosePublicKey,
     Credential, CredentialId, Nonce, Registration, RpId, Statement, StatementDomain,
 };
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use serde_json::Value;
 
 /// One byte-input target: its binary and seed-directory name, and the body the binary runs.
@@ -75,6 +77,30 @@ pub const WEBAUTHN_AUTHDATA: Target = Target {
     name: "webauthn_authdata",
     run: webauthn_authdata,
 };
+
+/// The identity oracle over the bridge framing, shared by the handshake, attach, and envelope targets.
+/// Compared through `Value`, so a `T` without `PartialEq` qualifies. An over-cap re-encoding is not a
+/// finding: BRIDGE_MAX_LINE counts the newline the writer adds (see its doc), so exactly-cap input
+/// re-encodes over it.
+fn bridge_round_trips<T: Serialize + DeserializeOwned>(data: &[u8], label: &str) {
+    let Ok(Some(first)) = bridge_read::<_, T>(&mut Cursor::new(data)) else {
+        return;
+    };
+    let mut bytes = Vec::new();
+    bridge_write(&mut bytes, &first)
+        .unwrap_or_else(|e| panic!("a decoded {label} must encode: {e}"));
+    if bytes.len() > BRIDGE_MAX_LINE {
+        return;
+    }
+    let second: T = bridge_read(&mut Cursor::new(bytes.as_slice()))
+        .expect("the encoded line must decode")
+        .expect("the encoded line is one line");
+    assert_eq!(
+        serde_json::to_value(&first).unwrap_or_else(|e| panic!("{label} serializes: {e}")),
+        serde_json::to_value(&second).unwrap_or_else(|e| panic!("{label} serializes: {e}")),
+        "{label} decode -> encode -> decode must be identity"
+    );
+}
 
 /// The Chrome Native-Messaging frame decoder (4-byte LE length prefix + JSON) on the extension<->host
 /// boundary. Oracle: a decoded frame re-encodes to a frame that decodes to the same value, and the
@@ -144,34 +170,8 @@ fn consistent_reading(wire: &BridgeResp) -> Option<Result<Value, String>> {
 /// exactly the `BridgeResp` frames with a [`consistent_reading`], reads that reading, and reads the same
 /// one from the frame's re-encoding.
 pub fn bridge_envelope(data: &[u8]) {
-    if let Ok(Some(first)) = bridge_read::<_, Value>(&mut Cursor::new(data)) {
-        let mut bytes = Vec::new();
-        bridge_write(&mut bytes, &first).expect("a decoded Value must encode");
-        // BRIDGE_MAX_LINE counts the newline the writer adds (see its doc), so exactly-cap input re-encodes over it.
-        if bytes.len() <= BRIDGE_MAX_LINE {
-            let second: Value = bridge_read(&mut Cursor::new(bytes.as_slice()))
-                .expect("the encoded line must decode")
-                .expect("the encoded line is one line");
-            assert_eq!(
-                second, first,
-                "bridge Value decode -> encode -> decode must be identity"
-            );
-        }
-    }
-    if let Ok(Some(first)) = bridge_read::<_, BridgeReq>(&mut Cursor::new(data)) {
-        let mut bytes = Vec::new();
-        bridge_write(&mut bytes, &first).expect("a decoded BridgeReq must encode");
-        if bytes.len() <= BRIDGE_MAX_LINE {
-            let second: BridgeReq = bridge_read(&mut Cursor::new(bytes.as_slice()))
-                .expect("the encoded line must decode")
-                .expect("the encoded line is one line");
-            assert_eq!(
-                serde_json::to_value(&first).expect("BridgeReq serializes"),
-                serde_json::to_value(&second).expect("BridgeReq serializes"),
-                "BridgeReq decode -> encode -> decode must be identity"
-            );
-        }
-    }
+    bridge_round_trips::<Value>(data, "bridge Value");
+    bridge_round_trips::<BridgeReq>(data, "BridgeReq");
     let wire = bridge_read::<_, BridgeResp>(&mut Cursor::new(data));
     let parsed = bridge_read::<_, ParsedResp>(&mut Cursor::new(data));
     match (wire, parsed) {
@@ -212,45 +212,13 @@ pub fn bridge_envelope(data: &[u8]) {
 /// Oracle: a decoded frame re-encodes to a frame that decodes to the same value, so the MAC and label
 /// a verifier reads are the ones the peer wrote.
 pub fn handshake(data: &[u8]) {
-    let Ok(Some(first)) = bridge_read::<_, Handshake>(&mut Cursor::new(data)) else {
-        return;
-    };
-    let mut bytes = Vec::new();
-    bridge_write(&mut bytes, &first).expect("a decoded Handshake must encode");
-    // BRIDGE_MAX_LINE counts the newline the writer adds (see its doc), so exactly-cap input re-encodes over it.
-    if bytes.len() > BRIDGE_MAX_LINE {
-        return;
-    }
-    let second: Handshake = bridge_read(&mut Cursor::new(bytes.as_slice()))
-        .expect("the encoded frame must decode")
-        .expect("the encoded frame is one line");
-    assert_eq!(
-        serde_json::to_value(&first).expect("Handshake serializes"),
-        serde_json::to_value(&second).expect("Handshake serializes"),
-        "Handshake decode -> encode -> decode must be identity"
-    );
+    bridge_round_trips::<Handshake>(data, "Handshake");
 }
 
 /// The post-handshake role-declaration frame decoder (`AttachRequest`): a malformed or hostile frame
 /// must fail closed, never panic the broker. Oracle: decode -> encode -> decode is identity.
 pub fn attach(data: &[u8]) {
-    let Ok(Some(first)) = bridge_read::<_, AttachRequest>(&mut Cursor::new(data)) else {
-        return;
-    };
-    let mut bytes = Vec::new();
-    bridge_write(&mut bytes, &first).expect("a decoded AttachRequest must encode");
-    // BRIDGE_MAX_LINE counts the newline the writer adds (see its doc), so exactly-cap input re-encodes over it.
-    if bytes.len() > BRIDGE_MAX_LINE {
-        return;
-    }
-    let second: AttachRequest = bridge_read(&mut Cursor::new(bytes.as_slice()))
-        .expect("the encoded frame must decode")
-        .expect("the encoded frame is one line");
-    assert_eq!(
-        serde_json::to_value(&first).expect("AttachRequest serializes"),
-        serde_json::to_value(&second).expect("AttachRequest serializes"),
-        "AttachRequest decode -> encode -> decode must be identity"
-    );
+    bridge_round_trips::<AttachRequest>(data, "AttachRequest");
 }
 
 /// The tag `type_field` spells, by serde's own reading of the string, or `None`.

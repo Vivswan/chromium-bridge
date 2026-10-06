@@ -345,6 +345,7 @@ dependencies = [
  "arbitrary",
  "chromium-bridge-core",
  "libfuzzer-sys",
+ "serde",
  "serde_json",
  "tempfile",
 ]
