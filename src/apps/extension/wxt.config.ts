@@ -2,7 +2,7 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "wxt";
 import { EXTENSION_MANIFEST_KEY } from "../../packages/shared/src/identity.gen";
-import { MANIFEST_PERMISSIONS } from "./src/lib/shared/manifest-permissions";
+import { MANIFEST_PERMISSIONS, MINIMUM_CHROME_VERSION } from "./src/lib/shared/manifest-surface";
 
 // The pinned manifest `key` comes from the Rust core's identity constants
 // (src/packages/core/src/identity.rs, via the generated identity.gen.ts). The
@@ -80,10 +80,7 @@ export default defineConfig({
     default_locale: "en",
     description: "__MSG_extDescription__",
     key: EXTENSION_MANIFEST_KEY,
-    // 116 is the supported minimum. storage.local.setAccessLevel (Chrome 102+) need not be encoded in the
-    // floor: if a browser lacks it the call throws and the enrollment gate fails closed rather than degrading
-    // (lib/background/trusted-storage.ts).
-    minimum_chrome_version: "116",
+    minimum_chrome_version: MINIMUM_CHROME_VERSION,
     permissions: [...MANIFEST_PERMISSIONS],
     host_permissions: [],
     optional_host_permissions: ["<all_urls>"],
