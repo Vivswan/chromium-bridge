@@ -469,6 +469,25 @@ describe("a page operation's presence request", () => {
     expect(open).toHaveBeenCalledTimes(1);
   });
 
+  test("a begin whose exchange times out owes the host's late reply the same drop as a cancelled one", async () => {
+    vi.useFakeTimers();
+    const open = vi.spyOn(fakeBrowser.runtime, "openOptionsPage").mockResolvedValue(undefined);
+    const begin = beginPresence("page_eval", "https://example.com", () => {});
+    await vi.advanceTimersByTimeAsync(HOST_REPLY_TIMEOUT_MS + 1);
+    await expect(begin.view).resolves.toEqual({
+      ok: false,
+      error: "no reply from the native host (timed out)",
+    });
+    // The host's reply, late, is the timed-out begin's: dropped, held for nobody, no page opened.
+    handleWebAuthnFrame(pageOp as never);
+    expect(pendingPresenceRequest()).toBeNull();
+    expect(open).not.toHaveBeenCalled();
+    // The debt is one reply deep: the next push is a push.
+    handleWebAuthnFrame(pageOp as never);
+    expect(pendingPresenceRequest()).toEqual(pageOp);
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+
   test("a posted answer whose exchange times out ends the asker's request with false", async () => {
     vi.useFakeTimers();
     const verdicts: boolean[] = [];

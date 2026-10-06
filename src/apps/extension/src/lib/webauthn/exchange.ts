@@ -12,8 +12,8 @@
 //                        claimKillRelease (kill.ts's handoff), not by presence_result
 //   presence_begin    -> the pushed presence_request is the reply (a page operation's, asked by the confirmation
 //                        service), accepted only when it names the asked act; the answer's verdict reaches the
-//                        asker (beginPresence's onVerdict); a begin cancelled before the reply frees the
-//                        exchange at once and its late reply is dropped
+//                        asker (beginPresence's onVerdict); a begin cancelled or timed out before the reply
+//                        leaves the exchange free and its late reply is dropped
 //   presence_request  -> held as the pending request; the page fetches it, runs get, answers
 //   presence_assert   -> presence_result
 //   presence_confirm  -> presence_result (the window's answer, for a browser with no enrolled credential)
@@ -95,9 +95,9 @@ const ceremony = exchange<WebAuthnInboundFrame | ReleaseOutcome>(
   "a WebAuthn exchange is already in flight",
 );
 const pendingRequest = inLife<PendingRequest | null>(() => null);
-/** How many cancelled begins the host still owes a reply; the next presence frame to arrive settles one, before
- * any correlation, since the host answers in order. */
-const cancelledBegins = inLife(() => 0);
+/** How many begins given up on (cancelled, or timed out after posting) the host still owes a reply; the next
+ * presence frame to arrive settles one, before any correlation, since the host answers in order. */
+const unansweredBegins = inLife(() => 0);
 
 export const collaborator: PortCollaborator = {
   onAttach(c) {
@@ -105,7 +105,7 @@ export const collaborator: PortCollaborator = {
   },
   onDetach() {
     dropPending();
-    cancelledBegins.value = 0;
+    unansweredBegins.value = 0;
     ceremony.detach();
   },
   onFrame(msg) {
@@ -257,6 +257,9 @@ export function beginPresence(
       },
       refused(failure): PresenceBeginView {
         awaiting = false;
+        // The exchange gave up on a posted begin: the host's reply is still coming and must not be taken
+        // for a push (or for the next request's reply), the same debt a cancel records.
+        if (failure.why === "timed-out") unansweredBegins.value += 1;
         return { ok: false, error: failure.error };
       },
     },
@@ -266,7 +269,7 @@ export function beginPresence(
     cancel() {
       if (!awaiting) return;
       awaiting = false;
-      cancelledBegins.value += 1;
+      unansweredBegins.value += 1;
       void ceremony
         .claim("presence_request")
         ?.fail("the confirmation ended before the host answered");
@@ -392,18 +395,18 @@ function answerPending(
   return view;
 }
 
-/** Route one inbound WebAuthn frame: a presence frame owed to a cancelled begin is dropped first; the rest
+/** Route one inbound WebAuthn frame: a presence frame owed to a begin given up on is dropped first; the rest
  * answers the outstanding exchange (a presence request's reader holds it for the page); a presence request
  * nobody asked for is a host push, held and opening the page where the tap happens, which shows the action
  * before asking for it; anything else is dropped. */
 export function handleWebAuthnFrame(msg: WebAuthnInboundFrame): void {
   if (
-    cancelledBegins.value > 0 &&
+    unansweredBegins.value > 0 &&
     (msg.type === "presence_request" || msg.type === "presence_result")
   ) {
-    // The reply to a begin its confirmation withdrew: the host answers in order, so it precedes the reply
-    // to whatever was asked after the withdrawal, and must not be handed to that request.
-    cancelledBegins.value -= 1;
+    // The reply to a begin given up on: the host answers in order, so it precedes the reply to whatever was
+    // asked after, and must not be handed to that request or held as a push.
+    unansweredBegins.value -= 1;
     return;
   }
   if (ceremony.answer(msg)) return;
@@ -426,5 +429,5 @@ export function handleWebAuthnFrame(msg: WebAuthnInboundFrame): void {
 export function resetWebAuthnForTests(): void {
   ceremony.detach();
   pendingRequest.reset();
-  cancelledBegins.reset();
+  unansweredBegins.reset();
 }
