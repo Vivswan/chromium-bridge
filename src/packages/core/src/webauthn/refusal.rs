@@ -154,6 +154,10 @@ pub enum RefusalCode {
     MachineAlreadyEnrolled,
     /// `browser_revoke` from a browser with nothing enrolled.
     NotEnrolled,
+    /// A `presence_begin` named something other than the two page operations the host mints requests for.
+    InvalidAction,
+    /// A `presence_begin` named an origin not shaped as a browser serializes one (an opaque `null` included).
+    InvalidOrigin,
 }
 
 impl RefusalCode {

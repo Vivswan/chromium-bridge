@@ -630,6 +630,12 @@ export const EnrollFinishWireSchema = z
 
 export type EnrollFinishWire = z.infer<typeof EnrollFinishWireSchema>;
 
+export const PresenceBeginWireSchema = z
+  .object({ "action": z.string(), "origin": z.string(), "type": z.literal("presence_begin") })
+  .strict();
+
+export type PresenceBeginWire = z.infer<typeof PresenceBeginWireSchema>;
+
 export const PresenceAssertWireSchema = z
   .object({
     "authenticator_data": z.string(),
@@ -669,6 +675,7 @@ export const GENERATED_WRITER_FRAMES = {
   webauthn: [
     "enroll_begin",
     "enroll_finish",
+    "presence_begin",
     "presence_assert",
     "presence_confirm",
     "browser_revoke",

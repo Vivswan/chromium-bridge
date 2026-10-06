@@ -76,6 +76,93 @@ impl Action {
         nul_free_bounded(s, MAX_ACTION_LEN).then(|| Action(s.to_string()))
     }
 
+    /// The action of a page operation's request: `<op> on <origin>`, so the signature covers the page the
+    /// act lands on, and a tap minted for one origin cannot vouch for another. Always within bounds: the op
+    /// is a fixed word and the origin is bounded by [`MAX_ORIGIN_LEN`].
+    pub fn page_op(op: PageOp, origin: &Origin) -> Self {
+        Action(format!("{} on {}", op.as_str(), origin.as_str()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// The page operations whose confirmation the policy may route to the authenticator, spelled as the tool
+/// names the extension's gate knows them by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageOp {
+    PageEval,
+    PageUpload,
+}
+
+impl PageOp {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "page_eval" => Some(PageOp::PageEval),
+            "page_upload" => Some(PageOp::PageUpload),
+            _ => None,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            PageOp::PageEval => "page_eval",
+            PageOp::PageUpload => "page_upload",
+        }
+    }
+}
+
+/// Bound on an origin the extension names. A serialized origin is a scheme, a host of at most 253 bytes, and a
+/// port, so 300 admits every real one; the bound also keeps a presence record's act, origin, and auth path
+/// together inside the audit field cap.
+pub const MAX_ORIGIN_LEN: usize = 300;
+
+/// The web origin a page operation lands on, as the extension's URL parser serializes it: `scheme://host[:port]`,
+/// ASCII, with no path, query, fragment, or userinfo. [`parse`](Self::parse) is the wire boundary; an opaque
+/// origin (`null`) or anything shaped differently is refused, so no statement is ever minted for a page the user
+/// cannot be shown. The host rule is the URL Standard's own (no forbidden domain code point), not a guess at
+/// what hostnames look like, so a host a browser serves a page from is never refused here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Origin(String);
+
+impl Origin {
+    pub fn parse(s: &str) -> Option<Self> {
+        if s.is_empty() || s.len() > MAX_ORIGIN_LEN || !s.is_ascii() {
+            return None;
+        }
+        let (scheme, authority) = s.split_once("://")?;
+        let mut scheme_bytes = scheme.bytes();
+        let scheme_ok = scheme_bytes.next().is_some_and(|b| b.is_ascii_lowercase())
+            && scheme_bytes.all(|b| {
+                b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'+' | b'-' | b'.')
+            });
+        // A bracketed IPv6 literal keeps its colons; otherwise the first colon starts the port.
+        let port = if let Some(literal) = authority.strip_prefix('[') {
+            let (literal, rest) = literal.split_once(']')?;
+            literal.parse::<std::net::Ipv6Addr>().ok()?;
+            match rest.strip_prefix(':') {
+                Some(port) => Some(port),
+                None if rest.is_empty() => None,
+                None => return None,
+            }
+        } else {
+            let (host, port) = match authority.split_once(':') {
+                Some((host, port)) => (host, Some(port)),
+                None => (authority, None),
+            };
+            if host.is_empty() || host.bytes().any(forbidden_domain_code_point) {
+                return None;
+            }
+            port
+        };
+        // Digits first: u16's parser would also take a sign.
+        let port_ok = port.is_none_or(|p| {
+            !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) && p.parse::<u16>().is_ok()
+        });
+        (scheme_ok && port_ok).then(|| Origin(s.to_string()))
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -83,6 +170,28 @@ impl Action {
 
 fn nul_free_bounded(s: &str, max: usize) -> bool {
     !s.is_empty() && s.len() <= max && !s.contains('\0')
+}
+
+/// The URL Standard's forbidden domain code points, restricted to ASCII (the caller has refused the rest): a
+/// C0 control, space, `#`, `%`, `/`, `:`, `<`, `>`, `?`, `@`, `[`, `\`, `]`, `^`, `|`, or DEL.
+fn forbidden_domain_code_point(b: u8) -> bool {
+    b.is_ascii_control()
+        || matches!(
+            b,
+            b' ' | b'#'
+                | b'%'
+                | b'/'
+                | b':'
+                | b'<'
+                | b'>'
+                | b'?'
+                | b'@'
+                | b'['
+                | b'\\'
+                | b']'
+                | b'^'
+                | b'|'
+        )
 }
 
 /// The statement one WebAuthn signature covers. Every field is a validated newtype, so a statement that

@@ -71,14 +71,18 @@ pub enum AuditKind {
     RevokeClient,
     /// The enclave enrollment key was revoked.
     HostKeyRevoke,
+    /// CLI: `pair` minted the host key. Names the store the key went to, whether a reset preceded the mint,
+    /// and the presence path that authorized it (`auth=tty`). Host-recorded only.
+    HostKeyPair,
     /// The global kill switch was engaged.
     KillEngage,
     /// The global kill switch was released.
     KillRelease,
     /// Host: one answer to a host-minted presence request - the extension's WebAuthn assertion or its
     /// window's confirmation. `ok` names the act and the auth path (`auth=webauthn:<fingerprint>` or
-    /// `auth=confirm_window`); `refused` names the act and the refusal. Host-recorded only: the extension
-    /// cannot forge it through the `audit_event` frame.
+    /// `auth=confirm_window`); `refused` names the act and the refusal, or, for a `presence_begin` the
+    /// host would not mint a request for, the act `presence_begin` and the reason. Host-recorded only: the
+    /// extension cannot forge it through the `audit_event` frame.
     PresenceAssert,
     /// Host: one WebAuthn enrollment write (`enroll_finish`). `ok` names the browser label, the credential
     /// fingerprint, and whether first use or an approved assertion authorized it; `refused` names the
@@ -766,6 +770,7 @@ mod tests {
             "presence_assert",
             "enroll",
             "policy_write",
+            "host_key_pair",
         ] {
             assert_eq!(extension_kind(host_only), None, "{host_only}");
         }

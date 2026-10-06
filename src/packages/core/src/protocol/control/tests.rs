@@ -389,6 +389,22 @@ fn classification_matrix() {
             }),
         ),
         (
+            json!({ "type": "presence_begin", "action": "page_eval", "origin": "https://example.com" }),
+            Handle(HostRequest::PresenceBegin {
+                action: "page_eval".into(),
+                origin: "https://example.com".into(),
+            }),
+        ),
+        (
+            json!({ "type": "presence_begin", "action": "page_eval" }),
+            Malformed(Tag::PresenceBegin),
+        ),
+        (
+            json!({ "type": "presence_begin", "action": "page_eval", "origin": "https://example.com",
+                    "nonce": "n" }),
+            Malformed(Tag::PresenceBegin),
+        ),
+        (
             json!({ "type": "presence_confirm", "nonce": "n" }),
             Handle(HostRequest::PresenceConfirm { nonce: "n".into() }),
         ),
@@ -567,6 +583,11 @@ fn malformed_replies_match_the_request_type() {
             Tag::EnrollFinish,
             Frame(json!({ "type": "enroll_result", "ok": false,
                           "reason": "malformed enroll_finish frame" })),
+        ),
+        (
+            Tag::PresenceBegin,
+            Frame(json!({ "type": "presence_result", "ok": false,
+                          "reason": "malformed presence_begin frame" })),
         ),
         (
             Tag::PresenceAssert,

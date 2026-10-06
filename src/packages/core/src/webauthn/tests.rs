@@ -923,6 +923,80 @@ fn statement_fields_refuse_what_would_break_injectivity() {
 }
 
 #[test]
+fn a_page_op_action_names_the_op_and_an_origin_shaped_like_one() {
+    // The action a page operation's tap signs: the op's tool name and the page's origin, so the signature
+    // covers where the act lands. The origin is admitted only in the `scheme://host[:port]` shape the
+    // extension's URL parser emits; an opaque origin, a path, userinfo, a query, or a non-ASCII host is
+    // refused before any statement names it.
+    let origin = Origin::parse("https://example.com").unwrap();
+    assert_eq!(
+        Action::page_op(PageOp::PageEval, &origin).as_str(),
+        "page_eval on https://example.com"
+    );
+    assert_eq!(
+        Action::page_op(
+            PageOp::PageUpload,
+            &Origin::parse("http://[::1]:8080").unwrap()
+        )
+        .as_str(),
+        "page_upload on http://[::1]:8080"
+    );
+    assert_eq!(PageOp::parse("page_eval"), Some(PageOp::PageEval));
+    assert_eq!(PageOp::parse("page_upload"), Some(PageOp::PageUpload));
+    assert_eq!(PageOp::parse("page_click"), None);
+    for accepted in [
+        "https://example.com",
+        "http://localhost:3000",
+        "https://sub.example-site.co.uk:8443",
+        "https://under_score.example.com",
+        "http://a!b~c.localhost:3000",
+        "http://127.0.0.1",
+        "http://[2001:db8::1]",
+        "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+    ] {
+        assert!(Origin::parse(accepted).is_some(), "{accepted}");
+    }
+    let long_host = format!("https://{}.com", "a".repeat(MAX_ORIGIN_LEN));
+    let longest_real = format!(
+        "https://{}.{}.{}.{}.example:65535",
+        "a".repeat(63),
+        "b".repeat(63),
+        "c".repeat(63),
+        "d".repeat(53)
+    );
+    assert_eq!(longest_real.len(), 8 + 253 + 6);
+    assert!(Origin::parse(&longest_real).is_some());
+    for refused in [
+        "",
+        "null",
+        "example.com",
+        "https://",
+        "https://example.com/",
+        "https://example.com/path",
+        "https://example.com?q=1",
+        "https://example.com#frag",
+        "https://user@example.com",
+        "https://example.com:",
+        "https://example.com:99999",
+        "https://example.com:+80",
+        "https://example.com:80a",
+        "HTTPS://example.com",
+        "https://exa mple.com",
+        "https://exa%20mple.com",
+        "https://exa|mple.com",
+        "https://ex\u{e4}mple.com",
+        "https://[::1",
+        "https://[]",
+        "https://[dead]",
+        "https://[::1]x",
+        "https://a\0b.com",
+        long_host.as_str(),
+    ] {
+        assert!(Origin::parse(refused).is_none(), "{refused:?}");
+    }
+}
+
+#[test]
 fn credential_storage_spelling_round_trips_and_validates_on_read() {
     // The stored form is what trust.json will carry; a read parses, so a damaged record is refused rather
     // than loaded as a key the verifier would trust.

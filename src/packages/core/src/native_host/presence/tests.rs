@@ -813,3 +813,207 @@ fn a_refused_forget_keeps_the_outstanding_request() {
     std::fs::write(crate::trust::Trust::path().unwrap(), b"{ not a record").unwrap();
     request_kept(&mut brave, "store_error: ");
 }
+
+/// The page-op action the extension's `presence_begin` carries, as the pushed request spells it.
+fn presence_action(reply: &HostReply) -> String {
+    let WebAuthnControl::PresenceRequest { action, .. } = unwrap_webauthn(reply) else {
+        panic!("expected presence_request, got {reply:?}")
+    };
+    action.clone()
+}
+
+/// A page operation's request: the statement names the op and the page's origin, only this browser's
+/// credential is hinted, an assertion over its challenge is the whole answer (no second frame: the extension
+/// runs the op), the request is consumed, and the trail names the op, the origin, and the credential.
+#[test]
+fn a_page_op_request_binds_the_origin_and_is_answered_by_this_browsers_credential() {
+    let _dir = scratch_runtime_dir();
+    let mut brave = Exchange::new(label("brave"));
+    let mut own = Authenticator::new(0x11);
+    enroll_tofu(&mut brave, &own);
+
+    let replies = brave.presence_begin("page_eval", "https://example.com");
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    assert_eq!(
+        presence_action(&replies[0]),
+        "page_eval on https://example.com"
+    );
+    let (challenge, allowed) = presence_request(&replies[0]);
+    assert_eq!(allowed, vec![own.id_b64()]);
+    let replies = brave.presence_assert(&own.id_b64(), Ok(own.assert(&challenge)));
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    assert_approved(&replies[0]);
+    let replies = brave.presence_confirm("anything");
+    assert_eq!(
+        presence_reason(&replies[0]).as_deref(),
+        Some("no_request_outstanding"),
+        "the answer consumed the request"
+    );
+    let records = audit_records(AuditKind::PresenceAssert);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0].outcome.as_deref(), Some("ok"));
+    assert_eq!(records[0].surface, Some(Surface::Extension));
+    assert_eq!(
+        records[0].detail.as_deref(),
+        Some(
+            format!(
+                "act=page_eval; origin=https://example.com; auth={}",
+                own.audit_label()
+            )
+            .as_str()
+        )
+    );
+}
+
+/// Every answer a page-op request refuses, each named by its code: the window on an enrolled browser, a
+/// credential enrolled under another browser, one the host never saw, an assertion over a superseded
+/// request's challenge, and a confirmation naming a superseded nonce. Each refusal consumes the request it
+/// answered, so none of them leaves anything the next answer could ride.
+#[test]
+fn a_page_op_request_refuses_the_window_and_every_misdirected_or_stale_answer() {
+    let _dir = scratch_runtime_dir();
+    let mut brave = Exchange::new(label("brave"));
+    let mut own = Authenticator::new(0x11);
+    enroll_tofu(&mut brave, &own);
+    let mut chrome = Exchange::new(label("chrome"));
+    let mut other_browser = Authenticator::new(0x22);
+    {
+        let challenge = approve_enrollment(&mut chrome, &mut own);
+        chrome.enroll_finish(Ok(other_browser.register(&challenge)));
+    }
+    let mut unenrolled = Authenticator::new(0x33);
+    let begin = |brave: &mut Exchange| {
+        let replies = brave.presence_begin("page_upload", "https://files.example.com:8443");
+        (presence_request(&replies[0]).0, presence_nonce(&replies[0]))
+    };
+
+    let (_, nonce) = begin(&mut brave);
+    let replies = brave.presence_confirm(&nonce);
+    assert_eq!(
+        presence_reason(&replies[0]).as_deref(),
+        Some("software_confirmation_not_allowed")
+    );
+
+    let (challenge, _) = begin(&mut brave);
+    let replies = brave.presence_assert(
+        &other_browser.id_b64(),
+        Ok(other_browser.assert(&challenge)),
+    );
+    assert_eq!(
+        presence_reason(&replies[0]).as_deref(),
+        Some("wrong_browser_label")
+    );
+
+    let (challenge, _) = begin(&mut brave);
+    let replies = brave.presence_assert(&unenrolled.id_b64(), Ok(unenrolled.assert(&challenge)));
+    assert_eq!(
+        presence_reason(&replies[0]).as_deref(),
+        Some("credential_not_enrolled")
+    );
+
+    // A newer request supersedes the older: the older's challenge and nonce answer nothing.
+    let (stale_challenge, stale_nonce) = begin(&mut brave);
+    let (challenge, nonce) = begin(&mut brave);
+    assert_ne!(stale_challenge, challenge);
+    let replies = brave.presence_assert(&own.id_b64(), Ok(own.assert(&stale_challenge)));
+    assert_eq!(
+        presence_reason(&replies[0]).as_deref(),
+        Some("challenge_mismatch")
+    );
+    let (_, nonce_after) = begin(&mut brave);
+    assert_ne!(nonce, nonce_after);
+    let replies = brave.presence_confirm(&stale_nonce);
+    assert_eq!(
+        presence_reason(&replies[0]).as_deref(),
+        Some("request_mismatch")
+    );
+
+    let refusals: Vec<String> = audit_records(AuditKind::PresenceAssert)
+        .into_iter()
+        .filter(|r| r.outcome.as_deref() == Some("refused"))
+        .map(|r| r.detail.unwrap())
+        .collect();
+    assert_eq!(refusals.len(), 5, "{refusals:?}");
+    assert!(
+        refusals
+            .iter()
+            .all(|d| d.starts_with("act=page_upload; origin=https://files.example.com:8443; ")),
+        "{refusals:?}"
+    );
+}
+
+/// A browser with no credential of its own answers a page-op request with the window, the trail names the
+/// software path beside the op and origin, and the request is consumed.
+#[test]
+fn a_bare_browser_answers_a_page_op_request_by_window_and_the_trail_names_the_software_path() {
+    let _dir = scratch_runtime_dir();
+    let mut chrome = Exchange::new(label("chrome"));
+    enroll_tofu(&mut chrome, &Authenticator::new(0x22));
+    let mut brave = Exchange::new(label("brave"));
+
+    let replies = brave.presence_begin("page_eval", "http://localhost:3000");
+    let (_, allowed) = presence_request(&replies[0]);
+    assert!(allowed.is_empty(), "{allowed:?}");
+    let nonce = presence_nonce(&replies[0]);
+    let replies = brave.presence_confirm(&nonce);
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    assert_approved(&replies[0]);
+    let records = audit_records(AuditKind::PresenceAssert);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(
+        records[0].detail.as_deref(),
+        Some("act=page_eval; origin=http://localhost:3000; auth=confirm_window")
+    );
+    let replies = brave.presence_confirm(&nonce);
+    assert_eq!(
+        presence_reason(&replies[0]).as_deref(),
+        Some("no_request_outstanding")
+    );
+}
+
+/// A `presence_begin` naming an unknown action or a malformed origin is refused before anything is pending:
+/// the outstanding request stays answerable exactly as it was, and the trail names each reason.
+#[test]
+fn a_refused_presence_begin_leaves_the_outstanding_request_as_it_was() {
+    let _dir = scratch_runtime_dir();
+    let mut brave = Exchange::new(label("brave"));
+
+    let replies = brave.presence_begin("page_eval", "https://example.com");
+    let nonce = presence_nonce(&replies[0]);
+    for (action, origin, reason) in [
+        ("page_click", "https://example.com", "invalid_action"),
+        (
+            "release the kill switch",
+            "https://example.com",
+            "invalid_action",
+        ),
+        ("page_eval", "null", "invalid_origin"),
+        ("page_eval", "", "invalid_origin"),
+        ("page_upload", "https://example.com/path", "invalid_origin"),
+    ] {
+        let replies = brave.presence_begin(action, origin);
+        assert_eq!(replies.len(), 1, "{replies:?}");
+        assert_eq!(
+            presence_reason(&replies[0]).as_deref(),
+            Some(reason),
+            "{action:?} on {origin:?}"
+        );
+    }
+    // The outstanding request survived every refusal.
+    assert_approved(&brave.presence_confirm(&nonce)[0]);
+    let refusals: Vec<String> = audit_records(AuditKind::PresenceAssert)
+        .into_iter()
+        .filter(|r| r.outcome.as_deref() == Some("refused"))
+        .map(|r| r.detail.unwrap())
+        .collect();
+    assert_eq!(
+        refusals,
+        [
+            "act=presence_begin; invalid_action",
+            "act=presence_begin; invalid_action",
+            "act=presence_begin; invalid_origin",
+            "act=presence_begin; invalid_origin",
+            "act=presence_begin; invalid_origin",
+        ]
+    );
+}

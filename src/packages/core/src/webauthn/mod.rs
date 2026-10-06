@@ -44,8 +44,8 @@ pub use credential::{
 pub use refusal::{Reason, Refusal, RefusalCode};
 pub use registration::{parse_registration, Registered, Registration};
 pub use statement::{
-    Action, Challenge, Nonce, Statement, StatementDomain, ENROLL_DOMAIN, MAX_ACTION_LEN,
-    MAX_NONCE_LEN, PRESENCE_DOMAIN,
+    Action, Challenge, Nonce, Origin, PageOp, Statement, StatementDomain, ENROLL_DOMAIN,
+    MAX_ACTION_LEN, MAX_NONCE_LEN, MAX_ORIGIN_LEN, PRESENCE_DOMAIN,
 };
 pub(crate) use store::audit_browsers_revoked;
 pub use store::{
