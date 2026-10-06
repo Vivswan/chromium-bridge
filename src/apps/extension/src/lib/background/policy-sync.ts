@@ -34,7 +34,7 @@ import {
   policyValuesFrom,
   relaxedPolicyFields,
 } from "@chromium-bridge/shared/policy-compare";
-import { UI_LANGUAGES, type UiLanguageValue } from "@chromium-bridge/shared/settings";
+import { SettingsSchema, type UiLanguageValue } from "@chromium-bridge/shared/settings";
 import { unreachable } from "@chromium-bridge/shared/util";
 import pLimit from "p-limit";
 import { browser } from "wxt/browser";
@@ -179,7 +179,8 @@ async function langLanePinned(): Promise<boolean> {
   return (await currentScope()).pinned;
 }
 
-const UiLanguageSchema = z.enum(UI_LANGUAGES);
+// Its default never fires here: readKey classifies an absent record before parsing, and a frame value is a string.
+const UiLanguageSchema = SettingsSchema.shape.uiLanguage;
 
 /** The frame schema pins only the shape, so the enum check is the consumer's job: out-of-enum is refused and the
  * current value stands. */
