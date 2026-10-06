@@ -4,6 +4,7 @@
 // have no mechanical census: what a script spawns and which files a tool opens are not in the task graph.
 
 import { posix } from "node:path";
+import { type ParseEntry, parse } from "shell-quote";
 import { die, repoRoot } from "./lib.ts";
 
 /** moon's resolved task graph (`moon query tasks`), project -> task id -> task; only the fields read here. */
@@ -63,20 +64,34 @@ const unalias = (words: string[]): string[] => {
   return x === -1 ? words : ["bunx", ...words.slice(x + 1)];
 };
 
+/** Operators that end a simple command; `<(` and `(` open a nested one, whose words are its own command. */
+const SEPARATORS = new Set([";", ";;", "&", "&&", "|", "|&", "||", "(", ")", "<("]);
+
+// shell-quote parses one command line: a newline separates nothing and a `#` runs to the end of the text, so the
+// script is split into lines first, after joining `\`-continued ones. A variable is kept by name in braces, since
+// moon has already substituted its own tokens and a shell variable's value is not the auditor's to guess. A
+// redirection's file stays a word: the command reads or writes it, which is what the build/ rule asks.
 function simpleCommands(task: Task): string[][] {
   if (task.script == null) return [unalias([task.command, ...(task.args ?? [])])];
-  return task.script
-    .replace(/\\\n\s*/g, " ")
-    .split(/[\n;&|()]+/)
-    .map((command) =>
-      command
-        .trim()
-        .split(/\s+/)
-        .map((word) => word.replace(/^["']|["']$/g, ""))
-        .filter((word) => word.length > 0),
-    )
-    .filter((words) => words.length > 0 && !words[0]?.startsWith("#"))
-    .map(unalias);
+  const commands: string[][] = [];
+  for (const line of task.script.replace(/\\\n/g, "").split("\n")) {
+    let words: string[] = [];
+    const entries: ParseEntry[] = parse(line, (name) => `\${${name}}`);
+    for (const entry of entries) {
+      if (typeof entry === "string") {
+        words.push(entry);
+      } else if ("comment" in entry) {
+        break;
+      } else if (entry.op === "glob") {
+        words.push(entry.pattern);
+      } else if (SEPARATORS.has(entry.op)) {
+        if (words.length > 0) commands.push(unalias(words));
+        words = [];
+      }
+    }
+    if (words.length > 0) commands.push(unalias(words));
+  }
+  return commands;
 }
 
 function closure(graph: TaskGraph, start: string): { reached: string[]; unknown: string[] } {

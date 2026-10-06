@@ -134,6 +134,42 @@ const graph: TaskGraph = {
       command: "set",
       script: "set -e\n# bun test would be wrong here\necho bun test",
     },
+    "comments-build-path": {
+      command: "set",
+      script: "set -e\nbun scripts/check.ts # build/extension/chrome-mv3/manifest.json\n",
+      deps: [],
+    },
+    "reads-spaced-path": {
+      command: "bun",
+      script: 'bun scripts/read.ts "build/report html/index.json"',
+      deps: [{ target: "root:writes-spaced" }],
+    },
+    "writes-spaced": { command: "bun", deps: [], outputFiles: { "build/report html": {} } },
+    "reads-spaced-path-without-dependency": {
+      command: "bun",
+      script: 'bun scripts/read.ts "build/report html/index.json"',
+      deps: [],
+    },
+    "reads-redirected-build": {
+      command: "bun",
+      script: "bun scripts/read.ts < build/extension/result.json",
+      deps: [],
+    },
+    "substitutes-bunx": {
+      command: "bun",
+      script: "bun scripts/b.ts $(bunx fixture-tool)",
+      deps: [],
+    },
+    "continues-a-word": {
+      command: "bu",
+      script: "bu\\\nnx fixture-tool\nbun scripts/c.ts \\\n\nbunx other-tool",
+      deps: [],
+    },
+    "process-substitutes-bunx": {
+      command: "bun",
+      script: "bun scripts/a.ts <(bunx fixture-tool)",
+      deps: [],
+    },
   },
   extension: {
     build: {
@@ -168,6 +204,11 @@ describe("auditGraph", () => {
       [
         "root:reads-built-without-dependency: names build/extension/chrome-mv3/manifest.json without depending on extension:build, which writes build/extension",
         "root:reads-dotted-path: names build/extension/chrome-mv3/manifest.json without depending on extension:build, which writes build/extension",
+        "root:reads-spaced-path-without-dependency: names build/report html/index.json without depending on root:writes-spaced, which writes build/report html",
+        "root:reads-redirected-build: names build/extension/result.json without depending on extension:build, which writes build/extension",
+        "root:substitutes-bunx: runs bunx (bun's global cache stands in for a missing package)",
+        "root:process-substitutes-bunx: runs bunx (bun's global cache stands in for a missing package)",
+        "root:continues-a-word: runs bunx (bun's global cache stands in for a missing package)",
         "root:reads-glob-build: declares the glob input build/web-pdf/**/*; a reader under build/ declares the file or directory it reads",
         "root:writes-glob: declares the glob output build/report-*/**/*; a writer under build/ declares the directory it writes",
         "root:reads-under-glob-writer: names build/report-html/index.html, which no task's outputs write",

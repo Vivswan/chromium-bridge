@@ -23,6 +23,7 @@
         "@types/bun": "^1.4.0",
         "oxc-parser": "^0.152.0",
         "remark-parse": "^11.0.0",
+        "shell-quote": "^1.10.0",
         "unified": "^11.0.5",
         "unist-util-visit": "^5.0.0",
         "web-ext-run": "^0.2.4",
