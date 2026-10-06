@@ -550,8 +550,7 @@ pub fn restrict(
     result
 }
 
-/// The critical section of [`restrict`]: load, merge, direction-check
-/// against the current effective policy, push history, write.
+/// The critical section of [`restrict`]; history trails the store write as in [`write_baseline_locked`].
 fn restrict_locked(
     lock: &ipc::RuntimeLockToken,
     overlay: PolicyOverlay,

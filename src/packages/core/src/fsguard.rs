@@ -49,7 +49,6 @@ fn open_private(opts: fs::OpenOptions, path: &Path) -> io::Result<fs::File> {
         opts
     };
     let f = opts.open(path)?;
-    // A file we cannot tighten (planted by a more-privileged writer) is refused, never written through.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
