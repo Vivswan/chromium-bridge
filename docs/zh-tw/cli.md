@@ -11,12 +11,14 @@
 | `chromium-bridge` (不帶引數) | MCP 伺服器 | 預設模式, 由 MCP 用戶端啟動。第一個執行個體成為中介 (broker); 之後的執行個體接入它。 |
 | `chromium-bridge --native-host [--label <browser>]` | 原生訊息主機 | 輕量橋接, 由瀏覽器透過主機資訊清單啟動。絕不手動呼叫。 |
 | `chromium-bridge doctor [--json]` (別名 `status`) | 唯讀診斷 | 環境與連線自我檢查; 不改變任何東西。`--json` 以單一帶版本的物件印出報告。 |
-| `chromium-bridge doctor --list` | 唯讀診斷 | 每個已知瀏覽器一行: 偵測與註冊狀態。 |
+| `chromium-bridge doctor --list` | 唯讀診斷 | 每個已知瀏覽器與範圍一行: 偵測與註冊狀態。 |
 | `chromium-bridge doctor --paths` | 唯讀診斷 | 印出此環境解析出的執行階段目錄與鎖定檔路徑, 兩者都不建立。 |
-| `chromium-bridge doctor --fix` | 修復 / 安裝 | 將此執行檔註冊 (或重新註冊) 為原生訊息主機。doctor 唯一會修改狀態的形式。 |
-| `chromium-bridge uninstall` | 移除 | 只移除本專案寫入的註冊, 別無其他。 |
+| `chromium-bridge doctor --fix` | 修復 / 安裝 | 為你的帳戶將此執行檔註冊 (或重新註冊) 為原生訊息主機。doctor 唯一會修改狀態的形式。 |
+| `chromium-bridge doctor --fix --system` | 修復 / 安裝 (root) | 同樣的動作, 但是機器層級: 寫入每個帳戶的瀏覽器都會讀取的、由 root 擁有的目錄。`.deb` 安裝後執行的就是它。 |
+| `chromium-bridge uninstall [--system]` | 移除 | 只移除本專案在該範圍寫入的註冊, 別無其他。 |
 | `chromium-bridge pair [--reset] [--file-store]` | 登記 | 在終端機輸入確認之後, 產生擴充功能所固定的主機金鑰; 金鑰存放在作業系統的憑證存放區, 或在使用 `--file-store` 時存放在一個 0600 檔案中。 |
-| `chromium-bridge revoke` | 登記 | 刪除主機金鑰; 固定了該金鑰的擴充功能隨即失敗即關閉。 |
+| `chromium-bridge revoke <browser>` | 登記 | 忘記該瀏覽器已登記的認證器; 不需要證明, 該瀏覽器可從其選項頁面重新登記。 |
+| `chromium-bridge revoke --all` | 登記 | 從頭來過: 刪除主機金鑰與已簽署的策略基準, 忘記每一個瀏覽器與每一個受信任用戶端。不帶引數的 `revoke` 會被拒絕並顯示用法。 |
 | `chromium-bridge enclave-status [--json]` | 唯讀 | 印出主機金鑰的狀態、所在位置及其指紋。 |
 | `chromium-bridge pair-client --name <label> (--this-parent \| --hash <hex> \| --signer <id>)` | 受信任用戶端 | 將一個 MCP 用戶端程式 (harness) 加入受信任用戶端允許清單; 需在場驗證。 |
 | `chromium-bridge revoke-client --name <label>` | 受信任用戶端 | 移除一個用戶端; 執行中的中介會立即將其斷開。 |
@@ -29,7 +31,10 @@
 | `chromium-bridge policy history [--json]` | 唯讀 | 印出已被取代的修訂環。 |
 | `chromium-bridge policy rollback --revision <n> [--json]` | 策略 | 將過去某個修訂的有效策略重新推導為一次全新寫入, 絕非重放。 |
 | `chromium-bridge audit [--limit <n>]` | 唯讀稽核 | 印出磁碟上的稽核日誌, 最舊的在前 (預設: 最後 200 筆記錄)。 |
+| `chromium-bridge lang [show \| set <value>]` | 顯示語言 | 讀取或設定選項頁面顯示的語言; 單獨的 `lang` 等同於 `show`。 |
 | `chromium-bridge --help` | 說明 | 用法資訊。 |
+
+選項頁面提供同樣的動作。依設計只在終端機上: `uninstall` (見下文), 以及 `--system` 與 `--manifest-dir` 兩種修復形式。選項頁面的稽核檢視只有預設的那一頁; 更長的日誌用 `audit --limit <n>`。網站允許清單、全部允許與分頁分組留在選項頁面上。它們是瀏覽器本機的擴充功能儲存空間 (見[隱私權政策](./privacy-policy.md)), 沒有任何子命令讀寫它們。
 
 ## doctor / status (唯讀自我檢查)
 
@@ -41,7 +46,10 @@
 - **鎖定檔**: 執行階段目錄中是否存在橋接鎖定檔, 以及其中記錄的端點與 pid。
 - **伺服器可達性**: 對我們自己的橋接 socket 做一次被動的連上即斷開的探測 (不送出任何位元組), 回報 `reachable` / `not reachable`。
 - **緊急開關**: 已啟用、已清除或無法讀取。開關啟用期間或其狀態無法讀取時, `doctor` 以非零結束碼結束。
-- **原生訊息主機註冊**: 對每個已知瀏覽器 (chrome、chromium、brave、edge、vivaldi、opera), 回報它對此使用者看起來是否存在, 以及它對 `com.vivswan.chromium_bridge.host` 的註冊狀態: `ok`、`missing`、`stale` (是我們的, 但其啟動路徑已失效) 或不是我們的。診斷結果來自 `--fix` 修復時所用的同一個解析器, 所以 doctor 回報的正是 `--fix` 會產生的結果。
+- **原生訊息主機註冊**: 對每個已知瀏覽器 (chrome、chromium、brave、edge、vivaldi、opera), 回報它在這台機器上看起來是否存在, 以及它對 `com.vivswan.chromium_bridge.host` 在 `user` 與 `system` 兩個範圍各自的註冊狀態: `ok`、`missing`、`stale` (是我們的, 但其啟動路徑已失效) 或不是我們的。
+- **判定遵循瀏覽器的查找順序**: 有每使用者條目時取它, 沒有時才取系統條目。診斷結果來自 `--fix` 修復時所用的同一個解析器, 所以 doctor 回報的正是 `--fix` 會產生的結果。
+
+選項頁面的「主機註冊」區段顯示同樣的幾列 (鎖定檔、伺服器、緊急開關、策略基準、判定), 措辭來自主機; 其身分區段顯示主機金鑰存放在哪裡, 與 `enclave-status` 印出的一致。
 
 `doctor --json` 在 stdout 上以單一 JSON 物件印出同一份報告, 結束碼相同。先檢查它的 `v` 欄位, 遇到更新的值就拒絕, 然後才讀取其他內容 (失敗即關閉); 此執行檔的每一份 `--json` 報告都適用這條規則。
 
@@ -64,8 +72,8 @@
 
 - **冪等的重新註冊:** 在全新機器上 `--fix` 同時也是首次註冊; 移動執行檔之後, 它會更新過期的註冊。
 - **不建置、不下載、不複製任何東西:** 資訊清單指向此執行檔自身解析出的路徑, 在 macOS/Linux 上經由一個小型的每瀏覽器包裝指令碼。
-- **該包裝指令碼** 內建了 `--native-host --label <browser>`, 因為 Chrome 的資訊清單格式沒有 `args` 欄位。
-- **拒絕覆寫** 任何它無法驗證為本專案所寫的資訊清單或指標。
+- **該包裝指令碼** 內建了 `--native-host`, 因為 Chrome 的資訊清單格式沒有 `args` 欄位; 當只有一個瀏覽器會啟動該資訊清單時再加上 `--label <browser>` (`run-host-<browser>.sh`); 多個瀏覽器共讀的資訊清單得到不帶標籤的 `run-host.sh` (規則由 `registration.rs` 中的 `Target` 負責)。
+- **會覆寫另一個工具以我們的主機 id 寫下的資訊清單** (報告會指名它原本啟動的是什麼), 拒絕無法讀取的資訊清單, 也拒絕外來的指標; `uninstall` 會留下外來的資訊清單。
 
 選擇瀏覽器:
 
@@ -76,32 +84,44 @@ chromium-bridge doctor --fix --all                # every known browser, detecte
 chromium-bridge doctor --fix --manifest-dir DIR   # exact NativeMessagingHosts dir
                                                   # (absolute; repeatable), for a Chromium
                                                   # variant we do not know by name
+sudo chromium-bridge doctor --fix --system        # machine-wide, for every account (root only)
 chromium-bridge doctor --list                     # read-only: detection + registration state
 ```
+
+範圍屬於命令: `--system` 寫入每個帳戶的瀏覽器都會讀取的目錄 (`/etc/opt/chrome/native-messaging-hosts`、`/Library/Google/Chrome/NativeMessagingHosts`、`HKLM`), 需要 root; 不帶它時 root shell 會被拒絕, 因為 root 沒有自己的瀏覽器。
+
+Opera, 以及 macOS 與 Linux 上的 Brave, 讀取的是 Chrome 的系統目錄而非自己的目錄, 而 macOS 上的 Brave 還會讀取 Chrome 的每使用者目錄。對它們而言, `doctor --fix` 在該範圍註冊 Chrome 的資訊清單, `doctor` 則在它們那幾列上把它回報為 Chrome 的。
+
+- **共用的資訊清單不帶標籤:** 任一瀏覽器都可能啟動它, 所以它的連線占用中介的預設槽位, 與 `--manifest-dir` 註冊的連線一樣。
+- **每個瀏覽器各自的指標, 在 macOS 上每使用者一份:** Chrome 與 Brave 在那裡各自保有自己的擴充功能指標, 所以兩者都會提示啟用擴充功能 (機器層級時, macOS 為所有瀏覽器只有一個指標目錄)。
 
 已知的瀏覽器鍵: `chrome`、`chromium`、`brave`、`edge`、`vivaldi`、`opera`。「已偵測到」表示就一次廉價的本機檢查所能判斷, 該瀏覽器確實已安裝:
 
 | 平台 | 偵測檢查 | 意義 |
 | --- | --- | --- |
 | macOS | `/Applications` 或 `~/Applications` 下的應用程式套件 | 只剩下一個每使用者設定目錄並不算數 (已解除安裝的瀏覽器會永遠留著這些目錄, 有些開發工具也會建立它們); 剛安裝、尚未首次執行的瀏覽器則算數 |
-| Linux、Windows | 每使用者設定 (設定檔) 目錄 | 在那裡能取得的最佳廉價訊號 |
+| Linux | 每使用者設定目錄; 帶 `--system` 時為廠商套件的安裝目錄 (`/opt/google/chrome`、`/usr/lib/chromium` 之類) | 每使用者的修復註冊此帳戶執行過的瀏覽器; `.deb` 的安裝後步驟以 root 身分註冊為所有帳戶安裝的瀏覽器 |
+| Windows | 每使用者設定檔目錄 | 在那裡能取得的最佳廉價訊號 |
 
 - **macOS 上的非標準安裝** 會被判為「未偵測到」; 仍可用 `--browser <key>` 或 `--manifest-dir` 明確註冊。
 - **不帶參數的 `doctor` 只計入已偵測到的瀏覽器,** 所以非標準安裝即使有健康的明確註冊, 下方的摘要仍會低於「OK」, 儘管橋接可以運作 - 各瀏覽器那幾行才說明真實情況。
-- **什麼都沒偵測到:** `--fix` 拒絕執行並要求明確選擇, 而不是猜測。
+- **什麼都沒偵測到:** `--fix` 拒絕執行並要求明確選擇, 而不是猜測, 並以結束碼 3 而非 1 結束, 讓安裝程式能分辨「還沒有瀏覽器」與失敗。
+- **選項頁面的「主機註冊」區段**以同樣的兩種方式為此帳戶修復: 每個偵測到的瀏覽器, 或從其所在列指名的一個瀏覽器。`--manifest-dir` 與 `--system` 留在終端機: 目錄要輸入, root 要持有, 而選項頁面兩者都沒有。
 
-`chromium-bridge uninstall` 精確反轉本專案 (透過 `--fix`) 註冊的內容: 各瀏覽器的資訊清單、擴充功能指標與包裝指令碼。你註冊時傳過的任何 `--manifest-dir` 都要再傳一次。
+`chromium-bridge uninstall` 在一個範圍內精確反轉本專案 (透過 `--fix`) 註冊的內容: 各瀏覽器的資訊清單、擴充功能指標與包裝指令碼。你註冊時傳過的任何 `--manifest-dir` 都要再傳一次, 機器層級的註冊則 (以 root 身分) 再傳 `--system`。
 
-刪除資訊清單或指標之前, 它會驗證內容是我們的 (我們的主機 id 與描述標記; 單憑 Web Store 更新 url)。其他任何內容, 或任何無法讀取的內容, 都會被回報並原地保留; 旁邊屬於我們的其他產物仍會移除。
+刪除資訊清單或指標之前, 它會驗證內容是我們的 (我們的主機 id 與描述標記; 單憑 Web Store 更新 url)。其他任何內容, 或任何無法讀取的內容, 都會被回報並原地保留, 作為警告而非失敗, 這樣套件的移除才能完成; 旁邊屬於我們的其他產物仍會移除, 只有屬於我們卻無法移除的東西才會讓命令失敗。
 
 它絕不碰此執行檔或你的瀏覽器。瀏覽器會在下次啟動時卸除它從指標安裝的擴充功能; 未封裝的擴充功能則由你自行移除。
+
+`uninstall` 依設計沒有選項頁面上的對應物。請求它的那個訊框, 會刪除啟動了正在回應它的主機的那份資訊清單。
 
 擴充功能指標, 位於每份資訊清單旁邊:
 
 | 作業系統 | `--fix` 寫到哪裡 | 瀏覽器如何處理它 |
 | --- | --- | --- |
-| macOS | `<user data dir>/External Extensions/<extension id>.json`, 指名 Web Store | 下次啟動時詢問「Enable Chromium Bridge?」 |
-| Windows | `HKCU\<vendor>\Extensions\<extension id>`, 值為 `update_url` | 同樣的提示 |
+| macOS | `<user data dir>/External Extensions/<extension id>.json`, 指名 Web Store; 帶 `--system` 時為所有瀏覽器寫入 `/Library/Application Support/Google/Chrome/External Extensions/` (Chromium 唯一的機器層級目錄) | 下次啟動時詢問「Enable Chromium Bridge?」 |
+| Windows | `HKCU\<vendor>\Extensions\<extension id>`, 值為 `update_url`; 帶 `--system` 時為 `HKLM` | 同樣的提示 |
 | Linux | 不寫; `doctor` 印出 `pointer n/a` | 它會從指標無聲地安裝, 而威脅模型拒絕這種行為: 請自行從 Web Store 加入擴充功能 |
 
 Chrome 自己的位置來自其文件。其他廠商的位置是從它們存放資訊清單所用的同一個使用者資料根目錄與登錄根目錄推導而來, Edge 也被指向 Chrome 線上應用程式商店 (一項殘餘風險: 在那些瀏覽器上尚未驗證)。
@@ -113,7 +133,7 @@ Chrome 自己的位置來自其文件。其他廠商的位置是從它們存放�
 平台注意事項:
 
 - **Linux AppImage / 暫存路徑**: 指向 AppImage 的 FUSE 掛載點 (或任何暫存目錄) 的註冊, 會在該路徑消失時失效。`--fix` 偵測到這種情況時會警告。請先把執行檔複製到穩定位置, 例如 `~/.local/lib/chromium-bridge/chromium-bridge`, 再從那裡執行 `doctor --fix`。
-- **Windows**: 註冊是每個瀏覽器一個 `HKCU` 登錄機碼, 加上 `%LOCALAPPDATA%\chromium-bridge` 下的一份資訊清單檔案。這段程式碼可以編譯, 且仿照已退役的 `install.ps1` 指令碼的做法, 但尚未在真實的 Windows 機器上驗證; 在那之前請把 Windows 註冊視為盡力而為。Windows 上的瀏覽器偵測 (每使用者設定檔目錄; Opera 在漫遊設定檔下) 也有同樣的但書。
+- **Windows**: 註冊是每個瀏覽器一個 `HKCU` 登錄機碼, 加上 `%LOCALAPPDATA%\chromium-bridge` 下的一份資訊清單檔案 (帶 `--system` 時為 `HKLM` 與 `%ProgramFiles%\chromium-bridge`)。這段程式碼可以編譯, 且仿照已退役的 `install.ps1` 指令碼的做法, 但尚未在真實的 Windows 機器上驗證; 在那之前請把 Windows 註冊視為盡力而為。Windows 上的瀏覽器偵測 (每使用者設定檔目錄; Opera 在漫遊設定檔下) 也有同樣的但書。
 
 ## 登記: pair / revoke / enclave-status
 
@@ -121,11 +141,20 @@ Chrome 自己的位置來自其文件。其他廠商的位置是從它們存放�
 
 - `chromium-bridge pair` 要求你在終端機輸入一段確認 (以管線輸入的 stdin 在任何提示出現之前就被拒絕), 產生一把 P-256 主機金鑰, 把它存放在作業系統的憑證存放區 (鑰匙圈、認證管理員或 Secret Service), 並印出金鑰的 SHA-256 指紋。把這個指紋與擴充功能登記畫面顯示的指紋比對; 不一致表示兩者之間夾了別的東西。
 - `chromium-bridge pair --file-store` 改為把金鑰存放在執行階段目錄中的一個 0600 檔案, 供沒有可用憑證存放區的機器使用。這個選擇是明確的: 存放區失敗會被回報, 絕不會悄悄改寫到檔案。
-- `chromium-bridge pair --reset` 先要求確認, 然後移除先前的金鑰 (不論哪個存放區持有它) 並產生一把新的; 擴充功能必須重新固定。當憑證存放區沒有回應時, `--file-store` 的重置會繼續進行, 並警告存放區中可能仍留有一筆項目; 等存放區恢復回應後再執行一次 `revoke`。
-- `chromium-bridge revoke` 刪除金鑰並確認它已不存在。主機向擴充功能推送撤銷, 擴充功能隨即失敗即關閉。
+- `chromium-bridge pair --reset` 先要求確認, 然後移除先前的金鑰 (不論哪個存放區持有它) 並產生一把新的; 擴充功能必須重新固定。瀏覽器登記與用戶端配對維持不變。
+- 當憑證存放區沒有回應時, `--file-store` 的重置會繼續進行, 並警告存放區中可能仍留有一筆項目。等存放區恢復回應後再執行一次 `pair --reset`; `revoke --all` 也可以, 但它還會忘記每一個瀏覽器與用戶端。
 - `chromium-bridge enclave-status [--json]` 以唯讀方式回報目前狀態: 是否存在金鑰、哪個存放區持有它, 以及它的指紋。
 
-瀏覽器自身動作 (解除緊急開關、登記第二個瀏覽器) 的使用者在場證明, 是在瀏覽器認證器上的一次 WebAuthn 觸碰, 由主機驗證。選項頁面尚未提供執行登記與應答的面板 (這項交換可以從背景處理常式與瀏覽器測試套件觸及)。
+瀏覽器自身動作 (解除緊急開關、登記第二個瀏覽器) 的使用者在場證明, 是在瀏覽器認證器上的一次 WebAuthn 觸碰, 由主機驗證。選項頁面的身分區段登記該認證器, 其緊急開關面板以這次觸碰應答主機的在場請求。
+
+忘記操作沒有額外門檻, 因為它只移除能力:
+
+- `chromium-bridge revoke <browser>` 忘記在該標籤下登記的每一個認證器。該瀏覽器的動作回退到確認視窗, 直到它從自己的選項頁面重新登記; 當它是最後一個已登記的瀏覽器時, 下一次登記重新成為首次登記。
+- 標籤是瀏覽器主機資訊清單的 `--label` (`brave`、`chrome`); 共用一份未設定標籤的資訊清單的所有瀏覽器 (Windows、共用的 Chrome 資訊清單) 都使用 `default`, 所以 `revoke default` 會把它們全部忘記。未知的標籤會被拒絕, 並列出記錄中持有的標籤。
+- 選項頁面為它自己的瀏覽器提供同樣的動作: 身分區段認證器區塊中的「忘記這個瀏覽器」。它作用於該主機的標籤, 所以共用一份資訊清單的瀏覽器會被一起忘記。
+- `chromium-bridge revoke --all` 一步從頭來過: 刪除主機金鑰, 策略記錄隨之消失 (已簽署的基準與任何限制覆蓋層), 忘記每一個瀏覽器, 撤銷每一個受信任用戶端, 所以已配對的機器在 `pair-client` 再次信任某個用戶端之前不准入任何用戶端。緊急開關不受影響; 用 `unkill` 解除它。
+- `revoke --all` 之後, 已連線的擴充功能無論如何都失敗即關閉: 當憑證存放區確認金鑰已消失且記錄寫入落地時, 透過撤銷推送; 否則在它下一次金鑰驗證時。`revoke <browser>` 不碰主機金鑰與固定。
+- 不帶引數的 `chromium-bridge revoke` 兩者都沒有指名, 會被拒絕並顯示用法。
 
 CLI 從不發出那個提示: 它自己的授予 (`pair`、`pair-client`、`unkill`、`policy set`) 由在真實終端機上輸入的片語確認。
 
@@ -155,7 +184,7 @@ chromium-bridge revoke-client --name codex
 - 即時的瀏覽器連線在約一秒內被切斷, 新連線被拒絕。進行中的工具呼叫以 `CONNECTION_LOST` 快速失敗。
 - 之後來自每個已接入用戶端的每一次工具呼叫, 都以穩定的 `BRIDGE_KILLED` 錯誤碼拒絕。用戶端保持連線, 以便向你顯示拒絕訊息, 而不是無聲地死掉。
 - 狀態會持久化 (寫在鎖定檔旁邊的 `trust.json` 中), 在重新啟動、重新連線與重開機後都保留。
-- 擴充功能的選項頁面會顯示該狀態; 從任何介面都能啟用開關。從擴充功能解除時, 主機會以一次在場請求應答 (WebAuthn 觸碰, 或在沒有已登記憑證的瀏覽器上用確認視窗); 選項頁面尚未提供該控制項, 所以今天的解除屬於 CLI (網頁看不到也碰不到其中任何東西)。
+- 擴充功能的選項頁面會顯示該狀態; 從任何介面都能啟用開關。從選項頁面解除時, 主機會以一次在場請求應答, 頁面以 WebAuthn 觸碰 (或只在沒有已登記憑證的瀏覽器上提供的軟體確認) 完成它; 網頁看不到也碰不到其中任何東西。
 
 沒有任何東西會自行解除開關。解除在兩種介面上都要求證明使用者在場:
 
@@ -182,7 +211,7 @@ chromium-bridge policy history [--json]           # read-only: superseded revisi
 chromium-bridge policy rollback --revision <n> [--json]
 ```
 
-**欄位旗標。** `set` 與 `restrict` 共用同一組旗標, 每個策略欄位一個, 寫法是其 camelCase 線路名稱的 kebab-case 形式: `--cdp-mode`、`--file-upload`、`--handle-dialog`、`--page-eval`、`--confirm-high-risk-click`、`--confirm-page-eval`、`--touch-id-confirm`、`--confirm-tab-close`、`--warn-precise-snapshot`、`--eval-mask`、`--host-reverify-ms`、`--confirm-grace-ms`、`--click-toast-timeout-ms`、`--eval-toast-timeout-ms` 與 `--disabled-tools`。
+**欄位旗標。** `set` 與 `restrict` 共用同一組旗標, 每個策略欄位一個, 寫法是其 camelCase 線路名稱的 kebab-case 形式: `--cdp-mode`、`--file-upload`、`--handle-dialog`、`--page-eval`、`--confirm-high-risk-click`、`--confirm-page-eval`、`--presence-confirm`、`--confirm-tab-close`、`--warn-precise-snapshot`、`--eval-mask`、`--host-reverify-ms`、`--confirm-grace-ms`、`--click-toast-timeout-ms`、`--eval-toast-timeout-ms` 與 `--disabled-tools`。
 
 | 旗標種類 | 值 |
 | --- | --- |
@@ -210,6 +239,19 @@ chromium-bridge policy rollback --revision <n> [--json]
 
 每次策略轉換都會記入稽核, 附上介面, 授予時還附上授權該簽章的在場路徑 (`auth=tty`)。
 
+## 顯示語言 (lang)
+
+擴充功能的顯示語言是由主機保存的共用狀態 (執行階段目錄中的 `lang.json`), 並推送給每一個已連線的瀏覽器, 所以一次選擇會到達它們全部。選項頁面在其頁首用「顯示語言」選擇器設定它; 終端機上的對應物是:
+
+```text
+chromium-bridge lang              # the current value (same as `lang show`)
+chromium-bridge lang set zh_TW    # one of: auto, en, zh_CN, zh_TW
+```
+
+- **語言不是策略:** 不簽署、不棘輪, 也無法影響任何安全決策, 這正是它在兩種介面上都不需要確認的原因。
+- **清單之外的值會被拒絕**, 在 argv 與選項頁面的訊框上一樣, 先前的值維持不變; 設定為目前的值什麼都不改變, 也不推送任何東西。
+- **已連線的瀏覽器在主機的下一次推送時切換** (在其輪詢間隔內); 離線的瀏覽器在下次連線時採用該值。
+
 ## 日誌與稽核 (BB_LOG / BB_LOG_FORMAT)
 
 兩種模式的診斷輸出都送到 **stderr** (stdout 承載協定訊框)。兩個環境變數控制輸出:
@@ -223,7 +265,7 @@ chromium-bridge policy rollback --revision <n> [--json]
 
 同樣的事件會以嚴格的 JSON 記錄附加到一份持久、有大小上限的 `audit.log` (0600, 位於執行階段目錄中鎖定檔旁邊), 它比寫入它的那些短命程序活得更久。每筆記錄在 `event_kind` 中指名其事件; stderr 的 JSON 形式把記錄包在 `"kind":"audit"` 封套裡, 所以收集器以 `kind` 為鍵, 從 `event_kind` 讀取事件。
 
-- **不記錄任何敏感內容:** 沒有頁面文字、cookie 或儲存空間的值、eval 的回傳值或表單填入值; 遮罩在擴充功能那一側進行 ([威脅模型](./security/threat-model.md))。
+- **不記錄任何敏感內容:** 沒有頁面文字、cookie 或儲存空間的值、eval 的回傳值或表單填入值; 遮罩在擴充功能那一側進行 ([信任邊界](./security/trust-boundaries.md))。
 - **關聯:** 一行工具呼叫帶有其請求 id (`req`) 以及該呼叫被路由到的瀏覽器連線的世代 (`conn`); 每次重新接入時世代遞增, 所以一次重新連線會開始一個新的 `conn`。
 - **兩種只存在於擴充功能本機的事件種類絕不會進入 `audit.log`:** `policy_refused` 與 `policy_compromised` 依設計留在擴充功能自己的稽核環中, 不在轉送允許清單內; 主機則把每次策略轉換記錄為 `policy_write`。
 
@@ -244,6 +286,8 @@ $ chromium-bridge audit --limit 20
 ```
 
 讀取器無法解析的記錄會顯示為 `UNRECOGNIZED RECORD` 並計數, 絕不猜測; `dropped=n` 欄位標記因寫入失敗 (例如磁碟已滿) 而遺失的記錄。記錄過程絕不阻塞或導致操作失敗: 稽核日誌觀察決定, 不把關決定。
+
+選項頁面讀取同一份日誌: 其「近期活動」區段在這個瀏覽器的本機決策環旁邊列出主機日誌 (上文的預設頁, 每行都是主機自己的措辭)。
 
 錯誤碼與錯誤分類見 [architecture.md 第 11.1 節](./architecture.md#111-錯誤分類-error_specs)。
 

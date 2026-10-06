@@ -4,6 +4,8 @@
 
 开始之前, 请先阅读 [README](../../README.zh-cn.md#安全优先) 中的安全摘要: 本工具操作的是你已登录的浏览器, 它向你展示的确认就是安全模型本身, 而不是阻碍。
 
+扩展需要 Chrome 134 或更新版本; 更旧的浏览器会拒绝加载它。
+
 ## CLI (macOS、Linux、Windows)
 
 CLI 只需要二进制本身, 在桌面机、无头机器和 CI 上都一样。今天唯一的例外是 macOS 上的配对 (第 5 步), 它需要一个以应用标识符代码签名的构建。
@@ -14,13 +16,13 @@ CLI 只需要二进制本身, 在桌面机、无头机器和 CI 上都一样。�
    | --- | --- | --- |
    | macOS `.pkg` | 右键, 打开 (目前未签名) | 安装 `/usr/local/bin/chromium-bridge`, 并替你完成第 3 步 |
    | Windows `.msi` | 双击 (目前未签名; SmartScreen 会警告) | 为你的账户安装到 `%LOCALAPPDATA%\Programs\chromium-bridge`, 把它加入你的 PATH, 并替你完成第 3 步 |
-   | Linux `.deb` | `sudo dpkg -i chromium-bridge-<tag>-linux-x64.deb` | 安装 `/usr/bin/chromium-bridge`; 第 3 步需自行运行 |
+   | Linux `.deb` | `sudo dpkg -i chromium-bridge-<tag>-linux-x64.deb` | 安装 `/usr/bin/chromium-bridge`, 并替你完成第 3 步, 机器级 |
    | Homebrew | `brew install vivswan/tap/chromium-bridge`, 待 tap 就绪后 ([release.md](./release.md#homebrew-tap)) | 安装二进制, 并替你完成第 3 步 |
    | 压缩包 | 解压 `chromium-bridge-<tag>-<platform>-<arch>.tar.gz` (Windows 上为 `.zip`) | 得到二进制与 `extension/dist`; 第 2、3 步需自行完成 |
 
    或者用 `cargo build --release` 从源码构建。Windows 上的注册尚未在用户机器上试过 ([cli.md 的 Windows 说明](./cli.md#doctor---fix--uninstall-原生消息注册))。
 2. **仅压缩包: 放到稳定的位置。** 注册指向二进制所在的位置, 所以要选一个不会消失的路径: Linux 上是 `~/.local/lib/chromium-bridge/`, macOS 上是你主目录下的任意位置。AppImage 挂载点或临时目录都不稳定, 你若这样做, `doctor --fix` 会发出警告。
-3. **向你的浏览器注册。** .pkg、.msi 和 Homebrew 已经做过了; .deb 和压缩包需要这一步 (对压缩包, 请在解压目录中以 `./` 前缀运行二进制):
+3. **向你的浏览器注册。** .pkg、.msi 和 Homebrew 已经做过了, .deb 也为安装时已有的浏览器做过了; 压缩包需要这一步 (请在解压目录中以 `./` 前缀运行二进制):
 
    ```sh
    chromium-bridge doctor --fix                       # every detected browser
@@ -61,7 +63,7 @@ CLI 只需要二进制本身, 在桌面机、无头机器和 CI 上都一样。�
 
 - `chromium-bridge pair-client` 创建受信任客户端白名单。它一旦存在, 只有代码身份经证明且获你批准的 MCP 客户端才会得到服务, 并且任何一个界面都能随时吊销其中一个。
 
-两者均在 [cli.md](./cli.md) 与[威胁模型](./security/threat-model.md)中有说明。
+两者均在 [cli.md](./cli.md) 与[安全页面](./security.md)中有说明。
 
 ## 卸载
 
@@ -75,4 +77,4 @@ CLI 只需要二进制本身, 在桌面机、无头机器和 CI 上都一样。�
 | Homebrew | `brew uninstall chromium-bridge` |
 | 压缩包 | 删除解压出的目录 |
 
-登记状态是独立的: `chromium-bridge revoke` 删除 Secure Enclave 密钥, 扩展的选项页清除其固定的指纹。
+登记状态是独立的: `chromium-bridge revoke --all` 删除主机密钥并忘记每一个浏览器和受信任客户端, 扩展的选项页清除其固定的指纹。

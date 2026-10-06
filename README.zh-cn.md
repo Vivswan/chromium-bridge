@@ -12,14 +12,14 @@
 
 这种能力同时也是风险。安装前请先阅读[安全优先](#安全优先)。
 
-本项目给自己定下的标准线: 你安装的程序无法在你不知情的情况下使用你的浏览器; 这条线今天在 macOS、Linux 和 Windows 上都成立 ([安全标准线](./docs/zh-cn/security/security-bar.md)阐述了它, 以及它止步于何处)。
+本项目给自己定下的标准线: 你安装的程序无法在你不知情的情况下使用你的浏览器; 这条线今天在 macOS、Linux 和 Windows 上都成立 ([安全页面](./docs/zh-cn/security.md)阐述了它, 以及它止步于何处)。
 
 ## 安全优先
 
 chromium-bridge 操作的是一个真实的、已通过身份验证的浏览器。它可以读取页面内容、Cookie (包括 `httpOnly`) 和 Web 存储, 还可以在你的页面中运行 JavaScript。护栏如下:
 
 - **批准每一个站点。** 新的源 (origin) 会触发提示; 未经你批准的站点上什么都不会运行。
-- **确认高风险操作。** 提交点击、按键、关闭标签页、文件上传, 以及每一次 `page_eval`, 都要在一个由扩展拥有、页面既看不到也点不到的窗口上确认。在通过 Touch ID 登记过的 Mac 上, `page_eval` 和 `page_upload` 的批准是一次 Secure Enclave 用户在场检查 (Touch ID 或登录密码), 任何页面都无法伪造; 同一用户下的程序围绕这次触碰仍能做什么, 见[威胁模型的残余风险](./docs/zh-cn/security/threat-model.md#残余风险-已接受已跟踪)。
+- **确认高风险操作。** 提交点击、按键、关闭标签页、文件上传, 以及每一次 `page_eval`, 都要在一个由扩展拥有、页面既看不到也点不到的窗口上确认。`page_eval` 和 `page_upload` 每次调用都重新确认。同一用户下的程序围绕这个窗口仍能做什么, 见[信任边界台账](./docs/zh-cn/security/trust-boundaries.md#边界-4-扩展---网页-chrome-api--内容脚本--dom)。
 - **门禁默认开启。** 每一道门禁都是有文档记录的设置, 放宽任何一道都是一次明确、知情的选择 ([SECURITY.md](./.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe))。
 - **凭据只读。** Cookie 和存储可以读取 (始终脱敏: JWT、长十六进制串、长数字串), 但永远不能写入。按设计就没有 `cookie_set` 或 `storage_set`。
 - **经过身份验证与证明的桥接。** 在 macOS 和 Linux 上, 主机进程之间通过一个私有的 Unix 域套接字通信 (没有监听端口)。每个连接都必须通过内核对端 UID 检查、由内核证明的可执行文件身份, 以及基于每次运行密钥的 HMAC 质询。
@@ -33,7 +33,7 @@ chromium-bridge 操作的是一个真实的、已通过身份验证的浏览器�
 | macOS、Linux | 私有 Unix 域套接字, 无监听端口 | 对端 UID 检查、内核证明、HMAC 质询 |
 | Windows | 只有你的用户能打开的命名管道, 无监听端口 | 管道的描述符 (内核强制)、双向证明、HMAC 质询 |
 
-完整细节: [SECURITY.md](./.github/SECURITY.md)、[威胁模型](./docs/zh-cn/security/threat-model.md)、[信任边界](./docs/zh-cn/security/trust-boundaries.md)、[逐工具风险矩阵](./docs/zh-cn/security/tool-risk-matrix.md)。
+完整细节: [SECURITY.md](./.github/SECURITY.md)、[安全页面](./docs/zh-cn/security.md)、[信任边界](./docs/zh-cn/security/trust-boundaries.md)、[逐工具风险矩阵](./docs/zh-cn/security/tool-risk-matrix.md)。
 
 ## 使用 CLI 快速入门 (macOS、Linux、Windows)
 
@@ -57,7 +57,7 @@ CLI 除了二进制本身不需要任何东西, 在桌面机、无头机器和 C
 
    把二进制放在一个稳定的路径上 (它是就地注册的)。在 Linux 上, `~/.local/lib/chromium-bridge/` 是个不错的位置。`chromium-bridge uninstall` 会精确撤销所注册的内容。
 
-3. 加载扩展: 在 `chrome://extensions` 开启开发者模式, 点「加载已解压的扩展程序」, 选择压缩包里的 `extension/dist` 目录。然后重启浏览器。
+3. 加载扩展: 在 `chrome://extensions` 开启开发者模式, 点「加载已解压的扩展程序」, 选择压缩包里的 `extension/dist` 目录。然后重启浏览器。扩展需要 Chrome 134 或更新版本; 更旧的浏览器会拒绝加载它。
 
 4. 在 macOS 上进行配对: 运行 `chromium-bridge pair` (Touch ID), 然后在扩展的选项页上批准指纹; 扩展默认要求在那里完成登记。Linux 和 Windows 跳过这一步。
 
@@ -249,7 +249,7 @@ chromium-bridge doctor    # or: chromium-bridge status
 |-----|--------------|
 | [docs/quickstart.md](./docs/zh-cn/quickstart.md) | 安装与首次使用 |
 | [docs/architecture.md](./docs/zh-cn/architecture.md) | 组件、数据流、协议、安全模型、关键约束 |
-| [docs/security/](./docs/zh-cn/security/) | 威胁模型、信任边界、工具风险矩阵、事件响应 |
+| [docs/security/](./docs/zh-cn/security/) | 信任边界台账、工具风险矩阵、设计依据、事件响应; 面向读者的页面是 [docs/security.md](./docs/zh-cn/security.md) |
 | [docs/cli.md](./docs/zh-cn/cli.md) | 完整的 CLI: doctor/--fix、uninstall、配对、吊销、紧急开关、审计 |
 | [docs/troubleshooting.md](./docs/zh-cn/troubleshooting.md) | 逐个症状排查: doctor 各行、紧急开关记录恢复、版本不一致、两种 WSL 模式 |
 | [docs/release.md](./docs/zh-cn/release.md) | release-please 发布、预构建压缩包 + 校验和、SBOM、哪个版本何时变动 |

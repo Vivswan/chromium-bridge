@@ -635,7 +635,7 @@ tasks:
       runInCI: false
 
   check-docs-locales:
-    description: 'docs/zh-cn and docs/zh-tw, once present, mirror the English docs tree file-for-file with their README; absent locales pass'
+    description: 'docs/zh-cn and docs/zh-tw, once present, mirror the English docs tree file-for-file with their README, each mirrored page holding the English generated regions byte for byte and the English structure (headings, fences, table rows, inline code); absent locales pass'
     script: |
       set -e
       bun scripts/check-docs-locales.ts

@@ -4,6 +4,8 @@
 
 開始之前, 請先閱讀 [README](../../README.zh-tw.md#安全優先) 中的安全摘要: 這個工具操作的是你已經登入的瀏覽器, 它顯示給你的確認視窗就是安全模型本身, 而不是阻礙。
 
+擴充功能需要 Chrome 134 或更新版本; 更舊的瀏覽器會拒絕載入它。
+
 ## CLI (macOS、Linux、Windows)
 
 CLI 只需要執行檔本身, 在桌面、無頭機器與 CI 上都一樣。今天唯一的例外是 macOS 上的配對 (步驟 5), 它需要一個以應用程式識別碼完成程式碼簽署的建置。
@@ -14,13 +16,13 @@ CLI 只需要執行檔本身, 在桌面、無頭機器與 CI 上都一樣。今�
    | --- | --- | --- |
    | macOS `.pkg` | 右鍵點擊, 開啟 (目前尚未簽署) | 安裝 `/usr/local/bin/chromium-bridge`, 並替你執行步驟 3 |
    | Windows `.msi` | 雙擊 (目前尚未簽署; SmartScreen 會警告) | 為你的帳戶安裝到 `%LOCALAPPDATA%\Programs\chromium-bridge`, 加入你的 PATH, 並替你執行步驟 3 |
-   | Linux `.deb` | `sudo dpkg -i chromium-bridge-<tag>-linux-x64.deb` | 安裝 `/usr/bin/chromium-bridge`; 步驟 3 需自行執行 |
+   | Linux `.deb` | `sudo dpkg -i chromium-bridge-<tag>-linux-x64.deb` | 安裝 `/usr/bin/chromium-bridge`, 並替你執行步驟 3, 機器層級 |
    | Homebrew | `brew install vivswan/tap/chromium-bridge`, 待 tap 建立後 ([release.md](./release.md#homebrew-tap)) | 安裝執行檔, 並替你執行步驟 3 |
    | 壓縮檔 | 解壓 `chromium-bridge-<tag>-<platform>-<arch>.tar.gz` (Windows 上為 `.zip`) | 取得執行檔與 `extension/dist`; 步驟 2 與 3 需自行完成 |
 
    或者用 `cargo build --release` 從原始碼建置。Windows 的註冊尚未在使用者的機器上實際試過 ([cli.md 的 Windows 注意事項](./cli.md#doctor---fix--uninstall-原生訊息註冊))。
 2. **僅限壓縮檔: 放到穩定的位置。** 註冊會直接指向執行檔所在的路徑, 所以要挑一個不會消失的路徑: Linux 上是 `~/.local/lib/chromium-bridge/`, macOS 上則是家目錄下的任何位置。AppImage 掛載點或暫存目錄都不穩定, 若你這麼做, `doctor --fix` 會提出警告。
-3. **向你的瀏覽器註冊。** .pkg、.msi 與 Homebrew 已經替你做了; .deb 與壓縮檔需要自行執行 (若使用壓縮檔, 請在解壓出來的目錄中以 `./` 前綴執行執行檔):
+3. **向你的瀏覽器註冊。** .pkg、.msi 與 Homebrew 已經替你做了, .deb 也替安裝當時已有的瀏覽器做了; 壓縮檔需要自行執行 (請在解壓出來的目錄中以 `./` 前綴執行執行檔):
 
    ```sh
    chromium-bridge doctor --fix                       # every detected browser
@@ -61,7 +63,7 @@ CLI 只需要執行檔本身, 在桌面、無頭機器與 CI 上都一樣。今�
 
 - `chromium-bridge pair-client` 建立受信任用戶端允許清單。清單一旦存在, 只有程式碼身分經過證明且獲你核准的 MCP 用戶端才會獲得服務, 而且任何介面都能隨時撤銷其中一個。
 
-兩者都在 [cli.md](./cli.md) 與[威脅模型](./security/threat-model.md)中有說明。
+兩者都在 [cli.md](./cli.md) 與[安全頁面](./security.md)中有說明。
 
 ## 解除安裝
 
@@ -75,4 +77,4 @@ CLI 只需要執行檔本身, 在桌面、無頭機器與 CI 上都一樣。今�
 | Homebrew | `brew uninstall chromium-bridge` |
 | 壓縮檔 | 刪除解壓出來的目錄 |
 
-登記狀態是分開的: `chromium-bridge revoke` 刪除 Secure Enclave 金鑰, 擴充功能的選項頁面則清除其固定的金鑰。
+登記狀態是分開的: `chromium-bridge revoke --all` 刪除主機金鑰並忘記每一個瀏覽器與受信任用戶端, 擴充功能的選項頁面則清除其固定的金鑰。

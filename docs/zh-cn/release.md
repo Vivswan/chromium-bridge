@@ -51,12 +51,13 @@ update-release.yml 在一个矩阵上构建 `binaries` 作业 (目前为 `macos-
 | 环节 | 资产 | 安装到 | 安装后步骤 |
 | --- | --- | --- | --- |
 | macos-arm64 | `chromium-bridge-<tag>-macos-arm64.pkg` | `/usr/local/bin/chromium-bridge` | 以控制台登录用户 (`/dev/console` 的所有者) 的身份运行 `doctor --fix`, 在 Installer.app 和 `sudo installer` 下都一样; 没有人登录时失败 |
-| linux-x64 | `chromium-bridge-<tag>-linux-x64.deb` | `/usr/bin/chromium-bridge` | 打印一行 `chromium-bridge doctor --fix` 供用户自行运行 |
+| linux-x64 | `chromium-bridge-<tag>-linux-x64.deb` | `/usr/bin/chromium-bridge` | 以 root 身份运行 `doctor --fix --system`: 每个账户的浏览器都会读取的机器级注册, 通过厂商软件包的安装目录检测; 还没有浏览器时打印提示, 安装照样成功; `dpkg -r` 会先运行 `uninstall --system` |
 | windows-x64 | `chromium-bridge-<tag>-windows-x64.msi` | `%LOCALAPPDATA%\Programs\chromium-bridge\` (按用户安装, 无需提权, 加入用户的 PATH) | 以安装用户身份运行 `doctor --fix`; 首次安装失败时用 `uninstall` 回滚其注册, 升级失败时恢复之前的配置; 卸载时运行 `chromium-bridge uninstall` |
 
-- **.deb 的安装后步骤只打印那一行**, 因为 Debian 维护者脚本以 root 身份运行且没有用户上下文, 不得写入家目录。为它提供系统级作用域是后续工作。
+- **.deb 做机器级注册**, 因为 Debian 维护者脚本以 root 身份运行且没有用户上下文, 不得写入家目录; 二进制在 root 下拒绝按用户作用域 ([cli.md](./cli.md#doctor---fix--uninstall-原生消息注册))。
 - **未检测到浏览器会导致 .pkg 和 .msi 安装失败**, 安装程序日志中会记录 `doctor --fix` 给出的原因。请先安装一个 Chromium 系浏览器, 或改用压缩包。
-- **源码:** `packaging/pkg/scripts/postinstall`、`packaging/deb/postinst`、`packaging/msi/chromium-bridge.wxs`, 以及 `src/apps/host/Cargo.toml` 中的 `[package.metadata.deb]` 表。`scripts/release-package.ts installer` 运行 pkgbuild、cargo-deb (`--no-build --no-strip`, 这样 .deb 携带的是经过证明的字节) 以及 WiX 3 的 candle 和 light。
+- **这种情况下 .deb 照样安装** (`doctor --fix` 退出码 3, 没有可注册的东西), 因为失败的维护者脚本会让 dpkg 停在半配置状态, 比 .pkg 的拒绝更糟; 因其他原因失败的注册仍会让安装失败。
+- **源码:** `packaging/pkg/scripts/postinstall`、`packaging/deb/{postinst,prerm}`、`packaging/msi/chromium-bridge.wxs`, 以及 `src/apps/host/Cargo.toml` 中的 `[package.metadata.deb]` 表。`scripts/release-package.ts installer` 运行 pkgbuild、cargo-deb (`--no-build --no-strip`, 这样 .deb 携带的是经过证明的字节) 以及 WiX 3 的 candle 和 light。
 - **每个拉取请求上的验证:** `.github/workflows/installers.yml` 由 `checks.yml` 在 all-green 门禁内调用, 从分支构建全部三种安装程序, 并通过 `scripts/installer-smoke.ts` 在各自的运行器上安装。Windows 环节是 HKCU 注册真正运行的地方, 也是迄今唯一运行过的地方。
 
 **目前未签名。** Gatekeeper 会要求用户右键点击并打开 .pkg, SmartScreen 会对 .msi 发出警告。签名只需加入两个仓库密钥以及使用它们的步骤, 这些目前都还不存在:
@@ -132,5 +133,5 @@ SBOM 工具故障仍然**绝不阻塞**二进制发布: 该作业是 `continue-o
 | --- | --- |
 | `page_eval` 执行任意 JS (被拒风险最高) | 一个开发者工具, 每次调用都在扩展自有窗口中确认; 考虑让商店版构建默认禁用该工具 |
 | `page_snapshot_precise` 使用的 `chrome.debugger` | 一个敏感权限, 需要单独说明 |
-| 宽泛的主机权限和可选权限, 加上原生消息 | 桥接仅限 localhost, 由每次运行的密钥保护, 站点逐个授权; 链接到[威胁模型](./security/threat-model.md) |
+| 宽泛的主机权限和可选权限, 加上原生消息 | 桥接仅限 localhost, 由每次运行的密钥保护, 站点逐个授权; 链接到[安全页面](./security.md) |
 | 「是否使用远程代码」 | `page_eval` 运行用户提供的 JS, 绝不运行远程获取的代码; 表单措辞要精确 |

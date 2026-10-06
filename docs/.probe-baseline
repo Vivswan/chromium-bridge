@@ -2,10 +2,3 @@
 # `bun scripts/docs-probe.ts --print-baseline <the pages of moon.yml check-docs-probe>`.
 CONTRIBUTING.md 3ca2c172  # path: .worktrees/
 docs/quickstart.md 03c4d19c  # list item: On macOS, pair. Run chromium-bridge pair
-docs/zh-cn/security/threat-model.md 763ce3cc  # list item
-docs/zh-cn/security/threat-model.md cc34237e  # list item
-docs/zh-cn/security/threat-model.md 90de7b73  # list item
-docs/zh-tw/security/threat-model.md 5c8e4c07  # list item
-docs/zh-tw/security/threat-model.md 52d96a76  # list item
-docs/zh-tw/security/threat-model.md 8946eecf  # list item
-docs/zh-tw/security/threat-model.md e9463765  # list item

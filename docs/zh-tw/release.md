@@ -51,12 +51,13 @@ update-release.yml 在一個矩陣上建置 `binaries` 工作 (目前是 `macos-
 | 分支 | 資產 | 安裝到 | 安裝後步驟 |
 | --- | --- | --- | --- |
 | macos-arm64 | `chromium-bridge-<tag>-macos-arm64.pkg` | `/usr/local/bin/chromium-bridge` | 以主控台登入的使用者身分 (`/dev/console` 的擁有者) 執行 `doctor --fix`, 在 Installer.app 與 `sudo installer` 下皆然; 無人登入時失敗 |
-| linux-x64 | `chromium-bridge-<tag>-linux-x64.deb` | `/usr/bin/chromium-bridge` | 印出那一行 `chromium-bridge doctor --fix` 讓使用者自行執行 |
+| linux-x64 | `chromium-bridge-<tag>-linux-x64.deb` | `/usr/bin/chromium-bridge` | 以 root 身分執行 `doctor --fix --system`: 每個帳戶的瀏覽器都會讀取的機器層級註冊, 以廠商套件的安裝目錄偵測; 還沒有瀏覽器時印出提示, 安裝照樣成功; `dpkg -r` 會先執行 `uninstall --system` |
 | windows-x64 | `chromium-bridge-<tag>-windows-x64.msi` | `%LOCALAPPDATA%\Programs\chromium-bridge\` (每位使用者各自安裝, 不需提升權限, 位於使用者的 PATH 上) | 以安裝的使用者身分執行 `doctor --fix`; 首次安裝失敗時以 `uninstall` 回復其註冊, 升級失敗時還原先前的設定; 解除安裝時執行 `chromium-bridge uninstall` |
 
-- **.deb 的安裝後步驟只印出那一行**, 因為 Debian 維護者指令碼以 root 執行且沒有使用者情境, 不得寫入家目錄。為它提供系統層級的範圍是後續工作。
+- **.deb 做機器層級的註冊**, 因為 Debian 維護者指令碼以 root 執行且沒有使用者情境, 不得寫入家目錄; 執行檔在 root 下拒絕每使用者範圍 ([cli.md](./cli.md#doctor---fix--uninstall-原生訊息註冊))。
 - **沒有偵測到任何瀏覽器會使 .pkg 與 .msi 安裝失敗**, 安裝程式日誌中會有 `doctor --fix` 給出的原因。請先安裝一個 Chromium 瀏覽器, 或改用壓縮檔。
-- **來源:** `packaging/pkg/scripts/postinstall`、`packaging/deb/postinst`、`packaging/msi/chromium-bridge.wxs`, 以及 `src/apps/host/Cargo.toml` 中的 `[package.metadata.deb]` 表。`scripts/release-package.ts installer` 執行 pkgbuild、cargo-deb (`--no-build --no-strip`, 所以 .deb 攜帶的是經過證明的位元組) 以及 WiX 3 的 candle 與 light。
+- **這種情況下 .deb 照樣安裝** (`doctor --fix` 結束碼 3, 沒有可註冊的東西), 因為失敗的維護者指令碼會讓 dpkg 停在半設定狀態, 比 .pkg 的拒絕更糟; 因其他原因失敗的註冊仍會讓安裝失敗。
+- **來源:** `packaging/pkg/scripts/postinstall`、`packaging/deb/{postinst,prerm}`、`packaging/msi/chromium-bridge.wxs`, 以及 `src/apps/host/Cargo.toml` 中的 `[package.metadata.deb]` 表。`scripts/release-package.ts installer` 執行 pkgbuild、cargo-deb (`--no-build --no-strip`, 所以 .deb 攜帶的是經過證明的位元組) 以及 WiX 3 的 candle 與 light。
 - **每個 pull request 上的證明:** `.github/workflows/installers.yml` 由 `checks.yml` 在 all-green 閘門內呼叫, 從分支建置全部三種安裝程式, 並透過 `scripts/installer-smoke.ts` 在各自的執行器上安裝。Windows 分支是 HKCU 註冊真正執行的地方, 也是迄今唯一執行過的地方。
 
 **目前未簽章。** Gatekeeper 會要求使用者右鍵點選並開啟 .pkg, SmartScreen 則會對 .msi 發出警告。簽章只需切換兩個儲存庫機密以及使用它們的步驟, 而這些目前都還不存在:
@@ -132,5 +133,5 @@ SBOM 工具失敗仍然**永遠不會阻擋**執行檔的發行: 這個工作是
 | --- | --- |
 | `page_eval` 執行任意 JS (被拒絕風險最高) | 這是一個開發人員工具, 每次呼叫都在擴充功能擁有的視窗中確認; 考慮讓商店版本預設停用這個工具 |
 | `page_snapshot_precise` 使用的 `chrome.debugger` | 一項需要單獨說明的敏感權限 |
-| 廣泛的主機權限與選用權限加上 Native Messaging | 橋接僅限 localhost 並以每次執行的機密保護, 網站逐一授權; 連結[威脅模型](./security/threat-model.md) |
+| 廣泛的主機權限與選用權限加上 Native Messaging | 橋接僅限 localhost 並以每次執行的機密保護, 網站逐一授權; 連結[安全頁面](./security.md) |
 | 「是否使用遠端程式碼」 | `page_eval` 執行使用者提供的 JS, 絕非遠端擷取的程式碼; 表單措辭要精確 |

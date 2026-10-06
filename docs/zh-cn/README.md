@@ -15,7 +15,7 @@ Chromium Bridge 让 MCP 客户端通过一个浏览器扩展和一个原生消�
 | 阅读日志与审计日志 | [CLI: 日志与审计](cli.md#日志与审计-bb_log--bb_log_format) |
 | 读懂一行意料之外的 `doctor` 输出, 或恢复不可读的紧急开关记录 | [故障排除](troubleshooting.md) |
 | 在 WSL 中使用本桥接 | [故障排除: 在 WSL 下运行](troubleshooting.md#在-wsl-下运行) |
-| 了解本桥接承诺攻击者做不到什么, 以及这一承诺止步于何处 | [安全标准线](security/security-bar.md#一句话说清标准线) |
+| 了解本桥接承诺攻击者做不到什么, 以及这一承诺止步于何处 | [安全: 标准线](security.md#一句话说清标准线) |
 | 查看每个工具能触及什么、会触发哪种确认 | [工具风险矩阵](security/tool-risk-matrix.md) |
 | 报告安全问题 | [事件响应: 报告](security/incident-response.md#报告渠道) |
 | 在修改某项安全决策之前理解它为何如此 | [安全设计依据](security/rationale.md) |
@@ -41,21 +41,20 @@ Chromium Bridge 让 MCP 客户端通过一个浏览器扩展和一个原生消�
 
 ### 安全
 
-5. [安全标准线](security/security-bar.md): 一句话承诺、它所应对的攻击者、止步之处, 按操作系统分述。
-6. [威胁模型](security/threat-model.md): 资产、参与者、威胁、缓解措施、残余风险。
-7. [信任边界](security/trust-boundaries.md): 每一个协议跳转及其强制执行机制。
-8. [工具风险矩阵](security/tool-risk-matrix.md): 每个工具的影响范围与保护措施。
-9. [事件响应](security/incident-response.md): 报告、分诊、缓解、披露。
-10. [安全设计依据](security/rationale.md): 每项决策为何如此, 以及它否决了什么。
-11. [审查标准](../../.github/SECURITY.md): 需要额外审查的区域、失败即安全的默认值, 以及在做安全相关改动前应读什么。
+5. [安全](security.md): 一句话承诺、利害所在与谁受信任、四跳及各由什么把守、你要确认什么、止步之处, 按操作系统分述。
+6. [信任边界](security/trust-boundaries.md): 评审者的台账, 按跳分述: 机制细节、每一项已接受的残余风险、策略台账、不变量。
+7. [工具风险矩阵](security/tool-risk-matrix.md): 每个工具的影响范围与保护措施。
+8. [事件响应](security/incident-response.md): 报告、分诊、缓解、披露。
+9. [安全设计依据](security/rationale.md): 每项决策为何如此, 以及它否决了什么。
+10. [审查标准](../../.github/SECURITY.md): 需要额外审查的区域、失败即安全的默认值, 以及在做安全相关改动前应读什么。
 
 ### 参考
 
-12. [架构](architecture.md): 组件、协议、数据流、安全模型、关键约束、技术选型, 以及 Rust 核心生成的契约。
+11. [架构](architecture.md): 组件、协议、数据流、安全模型、关键约束、技术选型, 以及 Rust 核心生成的契约。
 
 ### 贡献
 
-13. [开发](development.md): 工具链、目录布局、moon 任务、测试、容器、模糊测试。
-14. [发布](release.md): release-please 流水线、带校验和与来源证明的预构建压缩包、SBOM、何时推动哪个版本号, 以及 Chrome 应用商店的决定。
-15. [CONTRIBUTING](../../CONTRIBUTING.md): 开发流程, 从分支、提交与同步规则到压缩合并。
-16. [测试](../../tests/README.md): 各测试套件, 以及浏览器测试只针对隔离的 Chrome、绝不针对你日常浏览器的规则。
+12. [开发](development.md): 工具链、目录布局、moon 任务、测试、容器、模糊测试。
+13. [发布](release.md): release-please 流水线、带校验和与来源证明的预构建压缩包、SBOM、何时推动哪个版本号, 以及 Chrome 应用商店的决定。
+14. [CONTRIBUTING](../../CONTRIBUTING.md): 开发流程, 从分支、提交与同步规则到压缩合并。
+15. [测试](../../tests/README.md): 各测试套件, 以及浏览器测试只针对隔离的 Chrome、绝不针对你日常浏览器的规则。

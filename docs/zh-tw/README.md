@@ -15,7 +15,7 @@ Chromium Bridge 讓 MCP 用戶端透過瀏覽器擴充功能與原生訊息主�
 | 閱讀日誌與稽核日誌 | [CLI: 日誌與稽核](cli.md#日誌與稽核-bb_log--bb_log_format) |
 | 解讀一列出乎意料的 `doctor` 輸出, 或復原無法讀取的緊急開關記錄 | [疑難排解](troubleshooting.md) |
 | 從 WSL 使用這座橋接 | [疑難排解: 在 WSL 下執行](troubleshooting.md#在-wsl-下執行) |
-| 知道這座橋接承諾攻擊者做不到什麼, 以及承諾止於何處 | [安全標準線](security/security-bar.md#一句話說清標準線) |
+| 知道這座橋接承諾攻擊者做不到什麼, 以及承諾止於何處 | [安全: 標準線](security.md#一句話說清標準線) |
 | 查看每個工具能觸及什麼、會觸發哪種確認 | [工具風險矩陣](security/tool-risk-matrix.md) |
 | 回報安全問題 | [事件回應: 回報](security/incident-response.md#回報管道) |
 | 在修改某項安全決策前, 先理解當初為何這樣決定 | [安全設計依據](security/rationale.md) |
@@ -41,21 +41,20 @@ Chromium Bridge 讓 MCP 用戶端透過瀏覽器擴充功能與原生訊息主�
 
 ### 安全
 
-5. [安全標準線](security/security-bar.md): 一句話的承諾、它應對的攻擊者、止於何處, 按作業系統分述。
-6. [威脅模型](security/threat-model.md): 資產、參與者、威脅、緩解措施、殘餘風險。
-7. [信任邊界](security/trust-boundaries.md): 每一個協定跳點, 以及強制執行它的機制。
-8. [工具風險矩陣](security/tool-risk-matrix.md): 每個工具的影響範圍與保護措施。
-9. [事件回應](security/incident-response.md): 回報、分級處理、緩解、揭露。
-10. [安全設計依據](security/rationale.md): 每項決策為何這樣做, 以及否決了什麼。
-11. [審查標準](../../.github/SECURITY.md): 需要額外審查的部分、失敗即安全的預設值, 以及在做安全相關變更前該讀什麼。
+5. [安全](security.md): 一句話的承諾、利害所在與誰受信任、四個跳點及各由什麼把守、你要確認什麼、止於何處, 按作業系統分述。
+6. [信任邊界](security/trust-boundaries.md): 審查者的帳冊, 按跳點分述: 機制細節、每一項已接受的殘餘風險、策略帳冊、不變量。
+7. [工具風險矩陣](security/tool-risk-matrix.md): 每個工具的影響範圍與保護措施。
+8. [事件回應](security/incident-response.md): 回報、分級處理、緩解、揭露。
+9. [安全設計依據](security/rationale.md): 每項決策為何這樣做, 以及否決了什麼。
+10. [審查標準](../../.github/SECURITY.md): 需要額外審查的部分、失敗即安全的預設值, 以及在做安全相關變更前該讀什麼。
 
 ### 參考
 
-12. [架構](architecture.md): 元件、協定、資料流、安全模型、關鍵限制、技術選型, 以及 Rust 核心產生的契約。
+11. [架構](architecture.md): 元件、協定、資料流、安全模型、關鍵限制、技術選型, 以及 Rust 核心產生的契約。
 
 ### 貢獻
 
-13. [開發](development.md): 工具鏈、目錄配置、moon 工作、測試、容器、模糊測試。
-14. [發行](release.md): release-please 管線、附帶總和檢查碼與來源證明的預先建置壓縮檔、SBOM、何時推動哪個版本, 以及 Chrome 線上應用程式商店的決定。
-15. [CONTRIBUTING](../../CONTRIBUTING.md): 開發流程, 從分支、提交與同步規則到壓縮合併。
-16. [測試](../../tests/README.md): 各測試套件, 以及瀏覽器測試只對隔離的 Chrome 執行、絕不對你日常使用的瀏覽器執行的規則。
+12. [開發](development.md): 工具鏈、目錄配置、moon 工作、測試、容器、模糊測試。
+13. [發行](release.md): release-please 管線、附帶總和檢查碼與來源證明的預先建置壓縮檔、SBOM、何時推動哪個版本, 以及 Chrome 線上應用程式商店的決定。
+14. [CONTRIBUTING](../../CONTRIBUTING.md): 開發流程, 從分支、提交與同步規則到壓縮合併。
+15. [測試](../../tests/README.md): 各測試套件, 以及瀏覽器測試只對隔離的 Chrome 執行、絕不對你日常使用的瀏覽器執行的規則。

@@ -221,10 +221,10 @@ flowchart LR
 | `src/apps/extension/src/entrypoints/content.ts` | 内容脚本入口: 注入守卫、将操作分发到共享 DOM 层 |
 | `src/apps/extension/src/entrypoints/confirm/` | 确认窗口: 扩展自有的 `chrome-extension://` 文档, 页面无法读取、覆盖或点击 |
 | `src/apps/extension/src/entrypoints/options/`, `src/apps/extension/src/entrypoints/popup/` | 设置 (经 Zod 校验、带版本、可迁移)、主机管理面板, 以及授权/状态弹出窗口 |
-| `src/apps/extension/src/lib/background/` | 分发、白名单存储、标签页/CDP 后端、Cookie、出口脱敏、紧急开关镜像、登记、策略同步 |
-| `src/apps/extension/src/lib/webauthn/` | 在场交换中的 WebAuthn 客户端一半: 面向浏览器认证器的仪式, 以及与主机之间的帧交换 |
+| `src/apps/extension/src/lib/background/` | 分发、白名单存储、标签页/CDP 后端、Cookie、出口脱敏、紧急开关镜像、登记、策略同步, 以及 `exchange.ts`: 唯一的单飞主机往返 (认领、截止时间、事后撤销、应答路由、脱离即失败), 客户端管理、紧急开关、主机管理与 WebAuthn 交换都搭载其上 |
+| `src/apps/extension/src/lib/webauthn/` | 在场交换的后台一半: 与主机之间的帧交换 (仪式本身位于 `lib/shared/` 之下) |
 | `src/apps/extension/src/lib/dom/` | 唯一的共享 DOM 实现 (快照/引用/操作); CDP 后端携带其字符串化的源码, 使两个页面后端不可能分叉 |
-| `src/apps/extension/src/lib/shared/` | 设置 schema、消息协议类型、白名单匹配 |
+| `src/apps/extension/src/lib/shared/` | 设置 schema、消息协议类型、白名单匹配, 以及在场交换的页面一半: `webauthn-ceremony.ts` 中面向浏览器认证器的 WebAuthn 仪式 |
 | `src/apps/extension/src/locales/` | i18n 语言包, 每个语言环境一个 `*.yml` (en、zh_CN、zh_TW); CI 强制键的一致性 |
 
 信任状态隔离: 登记固定值、紧急开关镜像、白名单与审计环都保存在仅限扩展上下文访问的存储中 (`setAccessLevel(TRUSTED_CONTEXTS)`), 消息路由器拒绝来自扩展自有页面之外任何来源的安全相关消息。
@@ -235,6 +235,7 @@ flowchart LR
 
 ```
 macOS   ~/.chromium-bridge/run-host-<browser>.sh      # wrapper: exec <host> --native-host --label <browser>
+        ~/.chromium-bridge/run-host.sh                # unlabeled, for a manifest several browsers read
         ~/Library/Application Support/<Vendor>/NativeMessagingHosts/
           com.vivswan.chromium_bridge.host.json       # manifest -> that browser's wrapper
 
@@ -247,7 +248,7 @@ Windows %LOCALAPPDATA%\chromium-bridge\com.vivswan.chromium_bridge.host.json
           (Default) = absolute path of the manifest; manifest points at the exe
 ```
 
-清单的 `path` 就地指向执行注册的二进制 (Unix 上经由包装脚本, 因为清单格式没有 `args` 字段); 不构建、不下载、不复制任何东西。在 Windows 上, Chrome 会把扩展的源追加到命令行, 由此选中原生消息主机模式。
+清单的 `path` 就地指向执行注册的二进制 (Unix 上经由包装脚本, 因为清单格式没有 `args` 字段); 不构建、不下载、不复制任何东西。包装脚本只在只有一个浏览器会启动该清单时携带 `--label <browser>`; 多个浏览器共读的清单得到不带标签的 `run-host.sh`, 以 `registration.rs` 为准。在 Windows 上, Chrome 会把扩展的源追加到命令行, 由此选中原生消息主机模式。
 
 运行时状态, 位于 0700 的每用户运行时目录中 (macOS: `$XDG_RUNTIME_DIR/chromium-bridge` 或 `~/Library/Application Support/chromium-bridge`; Linux: `$XDG_RUNTIME_DIR/chromium-bridge`, 回退到 XDG 缓存目录; Windows: `%LOCALAPPDATA%\chromium-bridge`):
 
@@ -317,8 +318,12 @@ Extension onDisconnect -> scheduleReconnect(2s)
 connectNative() -> browser re-spawns the host -> host reads the lock file
   -> connects to the socket -> kernel checks + HMAC + attach(label)
 Broker accepts -> session re-attaches that label (generation-guarded:
-  pending calls of the old connection drain as Disconnected)
+  the superseded connection is severed, so a host still alive on it exits
+  and its worker life redials; pending calls of the old connection drain
+  as Disconnected)
 ```
+
+同标识的接入总是获胜, 并关闭它所取代的连接。当一个浏览器同时让扩展的两个 worker 生命存活时, 两者大约每 2 s 轮流占据该槽位, 每一次重拨都关闭另一方, 直到其中一个生命结束。
 
 ### 5.3 第二个 MCP 客户端接入
 
@@ -334,7 +339,7 @@ Broker exits when the last attached harness detaches.
 
 ## 6. 安全模型
 
-完整论述见 [docs/security/](./security/); 这里是导览图。
+完整论述见 [docs/security.md](./security.md); 这里是导览图。
 
 | 边界 | 机制 | 依据 |
 |------|------|-----|
@@ -380,7 +385,7 @@ flowchart LR
   host["src/packages/core/src/native_host.rs"]
   exchange["src/apps/extension/src/lib/webauthn/exchange.ts<br>handleWebAuthnFrame() pendingPresenceRequest() assertPresence()"]
   page["the options page, the RP page the user taps on"]
-  ceremony["src/apps/extension/src/lib/webauthn/ceremony.ts<br>requestOptions() assert() browserClient"]
+  ceremony["src/apps/extension/src/lib/shared/webauthn-ceremony.ts<br>requestOptions() assert() browserClient"]
   authenticator["the browser's WebAuthn client and the platform authenticator"]
   verify["src/packages/core/src/webauthn/verify.rs"]
   store["src/packages/core/src/webauthn/store.rs"]
@@ -400,7 +405,7 @@ flowchart LR
 
 主机是依赖方, 扩展是 WebAuthn 客户端, 以扩展 id 作为 RP ID。登记走同一套交换流程, 使用 `enroll_begin`、`enroll_options`、`enroll_finish` 与 `enroll_result`; 一台机器上的首次登记是首次使用即信任, 此后的每次登记都需要来自本机已登记凭据的一次触碰, 不限浏览器。
 
-运行该仪式并作答的选项页面板尚在开发中; 后台一半与浏览器测试套件已就位。
+选项页运行该仪式并作答: 它登记本浏览器的认证器, 并解除紧急开关。它的「忘记此浏览器」操作发送 `browser_revoke`, 主机随即忘记在该连接自身标识下登记的凭据, 与 `chromium-bridge revoke <browser>` 是同一个操作。一次解除是在本浏览器已登记凭据上的一次轻触; 当主机的请求没有指名任何凭据时, 页面改为请求一次确认。
 
 只有在没有任何已登记凭据能够作答时, 才接受来自确认窗口的 `presence_confirm`, 因此已登记的浏览器绝不会被降级为一次点击。
 
@@ -442,7 +447,7 @@ Chrome 大约每 5 分钟强制重启一次 SW, 内存状态随之丢失; Port �
 任何 `chrome.debugger.attach` 在附加期间都会在每个标签页上显示「Started debugging this browser」横幅。缓解: 默认快照使用内容脚本, 从不触碰调试器; `page_snapshot_precise` 在一个处理函数中完成附加、读取无障碍树、分离 (在 finally 路径上分离), 因此横幅只闪现大约一秒。
 
 ### 7.3 Native Messaging 清单没有 args 字段
-清单的 `path` 必须是一个裸可执行文件。缓解: 每个浏览器一个包装脚本 (`run-host-<browser>.sh`), 把 `--native-host --label <browser>` 固化进去; 该标签是中介连接注册表的键。
+清单的 `path` 必须是一个裸可执行文件。缓解: 一个包装脚本把 `--native-host` 固化进去, 当只有一个浏览器会启动该清单时带 `--label <browser>` (`run-host-<browser>.sh`), 多个浏览器共读时则不带 (`run-host.sh`), 以 `registration.rs` 为准; 该标签是中介连接注册表的键。
 
 ### 7.4 chrome.permissions.request 需要用户手势
 主机权限只能在用户手势上下文中请求。缓解: 白名单授权流程经由弹出窗口完成; 点击「允许」会同时请求权限并记录条目。
@@ -480,8 +485,8 @@ panic 消息默认输出到 stdout, 会破坏 NM 帧与 MCP NDJSON。缓解: rel
 
 1. **快照准确性**: 内容脚本的无障碍树是近似的 (shadow DOM、复杂的 ARIA); `page_snapshot_precise` 是权威的回退方案。
 2. **跨源 iframe**: 内容脚本无法读取它们。
-3. **Windows 上按路径测量镜像**: 管道对端的镜像按其文件路径进行哈希, 这是[威胁模型](./security/threat-model.md#残余风险-已接受已跟踪)所认领的残余风险; 门禁本身 (仅限当前用户的管道、双向证明、HMAC、客户端程序准入) 在那里与 Unix 上一样成立。见 [SECURITY.md](../../.github/SECURITY.md#platform-support)。
-4. **运行我们自己二进制的同用户攻击者**: 内核证明区分的是二进制而非意图; 见[威胁模型](./security/threat-model.md)中的残余风险。
+3. **Windows 上按路径测量镜像**: 管道对端的镜像按其文件路径进行哈希, 这是[信任边界台账](./security/trust-boundaries.md#边界-2-rust-mcp-服务器---原生消息主机-桥接套接字-ndjson)所认领的残余风险; 门禁本身 (仅限当前用户的管道、双向证明、HMAC、客户端程序准入) 在那里与 Unix 上一样成立。见 [SECURITY.md](../../.github/SECURITY.md#platform-support)。
+4. **运行我们自己二进制的同用户攻击者**: 内核证明区分的是二进制而非意图; 见[信任边界](./security/trust-boundaries.md)中的残余风险。
 5. **到扩展的吊销延迟**: 套接字链路是即时的; 扩展对主机密钥吊销的反映最迟在下一次 Service Worker 唤醒时完成。
 
 ## 10. 扩展点
@@ -580,7 +585,7 @@ flowchart LR
 - `policy_restrict { overlay }` (扩展 -> 主机) 与 `policy_restrict_result { ok, error? }` (主机 -> 扩展): 选项页的策略编辑器通过未签名的限制接缝收紧有效策略, 该接缝拒绝任何放宽; 应用成功的限制之后会跟一个携带已写入状态的 `policy_current`, 因此结果帧只携带裁决。放宽仍然是签名写入 (`chromium-bridge policy set`)。
 - `lang_get {}` / `lang_set { value }` (扩展 -> 主机) 与 `lang_current { value, seq }` (主机 -> 扩展): 共享的 `uiLanguage` 偏好 (`runtime_dir()/lang.json`), 刻意置于签名策略文档之外 - 不签名、不棘轮、无法影响任何安全决策 - 并以序号做回声抑制。
 
-执行契约在设计上就是不对称的: 授予能力的策略携带主机密钥对精确字节的签名, 并且在写入时消耗了一次在场证明; 而只移除能力的策略则作为未签名的覆盖层自由传递。同用户进程能对主机密钥做什么, 是[威胁模型](./security/threat-model.md#残余风险-已接受已跟踪)点名的残余风险。
+执行契约在设计上就是不对称的: 授予能力的策略携带主机密钥对精确字节的签名, 并且在写入时消耗了一次在场证明; 而只移除能力的策略则作为未签名的覆盖层自由传递。同用户进程能对主机密钥做什么, 是[信任边界台账](./security/trust-boundaries.md#边界-3-chrome---原生消息主机-native-messaging-帧格式)点名的残余风险。
 
 没有主机密钥的机器没有授予面: 在 `pair` 铸造出密钥之前, `policy set` 会预先拒绝。
 
@@ -609,7 +614,7 @@ graph TD
   extension_confirm["src/apps/extension/src/entrypoints/confirm/"]
   extension_options["src/apps/extension/src/entrypoints/options/"]
   extension_popup["src/apps/extension/src/entrypoints/popup/"]
-  extension_ui["src/apps/extension/src/components/<br>src/apps/extension/src/hooks/<br>src/apps/extension/src/lib/cn.ts<br>src/apps/extension/src/lib/theme.ts<br>src/apps/extension/src/lib/i18n.ts<br>src/apps/extension/src/lib/native-language-names.ts"]
+  extension_ui["src/apps/extension/src/components/<br>src/apps/extension/src/hooks/<br>src/apps/extension/src/lib/cn.ts<br>src/apps/extension/src/lib/theme.ts<br>src/apps/extension/src/lib/i18n.ts<br>src/apps/extension/src/lib/native-language-names.ts<br>src/apps/extension/src/lib/refusals.ts"]
   extension_lib["src/apps/extension/src/lib/shared/<br>src/apps/extension/src/lib/dom/<br>src/apps/extension/src/lib/messages.ts"]
   scripts["scripts/"]
   extension_background --> shared

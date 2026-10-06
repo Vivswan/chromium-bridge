@@ -221,10 +221,10 @@ flowchart LR
 | `src/apps/extension/src/entrypoints/content.ts` | 內容指令碼進入點: 注入守衛、把 op 分派進共用的 DOM 層 |
 | `src/apps/extension/src/entrypoints/confirm/` | 確認視窗: 一份擴充功能擁有的 `chrome-extension://` 文件, 頁面無法讀取、覆蓋或點擊 |
 | `src/apps/extension/src/entrypoints/options/`, `src/apps/extension/src/entrypoints/popup/` | 設定 (Zod 驗證、有版本、可遷移)、主機管理面板, 以及授權/狀態彈出視窗 |
-| `src/apps/extension/src/lib/background/` | 分派、允許清單儲存、分頁/CDP 後端、cookie、出站遮罩、緊急開關鏡像、登記、策略同步 |
-| `src/apps/extension/src/lib/webauthn/` | 在場交換的 WebAuthn 用戶端那一半: 對瀏覽器驗證器進行的儀式, 以及與主機的訊框交換 |
+| `src/apps/extension/src/lib/background/` | 分派、允許清單儲存、分頁/CDP 後端、cookie、出站遮罩、緊急開關鏡像、登記、策略同步, 以及 `exchange.ts`: 唯一的單飛主機往返 (認領、期限、事後復原、回覆路由、卸離即失敗), 用戶端管理、緊急開關、主機管理與 WebAuthn 交換都搭載其上 |
+| `src/apps/extension/src/lib/webauthn/` | 在場交換的背景那一半: 與主機的訊框交換 (儀式本身位於 `lib/shared/` 之下) |
 | `src/apps/extension/src/lib/dom/` | 唯一的共用 DOM 實作 (快照/參照/動作); CDP 後端隨附其字串化的原始碼, 所以兩個頁面後端不可能分歧 |
-| `src/apps/extension/src/lib/shared/` | 設定 schema、訊息協定型別、允許清單比對 |
+| `src/apps/extension/src/lib/shared/` | 設定 schema、訊息協定型別、允許清單比對, 以及在場交換的頁面那一半: `webauthn-ceremony.ts` 中對瀏覽器認證器進行的 WebAuthn 儀式 |
 | `src/apps/extension/src/locales/` | i18n 語言包, 每個語系一個 `*.yml` (en、zh_CN、zh_TW); CI 強制鍵的一致 |
 
 信任狀態隔離: 登記固定值、緊急開關鏡像、允許清單與稽核環都放在只限擴充功能情境存取的儲存空間 (`setAccessLevel(TRUSTED_CONTEXTS)`), 訊息路由器拒絕任何非擴充功能自身頁面送來的安全相關訊息。
@@ -235,6 +235,7 @@ flowchart LR
 
 ```
 macOS   ~/.chromium-bridge/run-host-<browser>.sh      # wrapper: exec <host> --native-host --label <browser>
+        ~/.chromium-bridge/run-host.sh                # unlabeled, for a manifest several browsers read
         ~/Library/Application Support/<Vendor>/NativeMessagingHosts/
           com.vivswan.chromium_bridge.host.json       # manifest -> that browser's wrapper
 
@@ -247,7 +248,7 @@ Windows %LOCALAPPDATA%\chromium-bridge\com.vivswan.chromium_bridge.host.json
           (Default) = absolute path of the manifest; manifest points at the exe
 ```
 
-資訊清單的 `path` 就地指向進行註冊的執行檔 (在 Unix 上經由包裝指令碼, 因為資訊清單格式沒有 `args` 欄位); 不建置、不下載、不複製任何東西。在 Windows 上, Chrome 會把擴充功能來源附加到命令列, 藉此選擇原生主機模式。
+資訊清單的 `path` 就地指向進行註冊的執行檔 (在 Unix 上經由包裝指令碼, 因為資訊清單格式沒有 `args` 欄位); 不建置、不下載、不複製任何東西。包裝指令碼只在只有一個瀏覽器會啟動該資訊清單時帶上 `--label <browser>`; 多個瀏覽器共讀的資訊清單得到不帶標籤的 `run-host.sh`, 以 `registration.rs` 為準。在 Windows 上, Chrome 會把擴充功能來源附加到命令列, 藉此選擇原生主機模式。
 
 執行階段狀態, 位於 0700 的每使用者執行階段目錄 (macOS: `$XDG_RUNTIME_DIR/chromium-bridge` 或 `~/Library/Application Support/chromium-bridge`; Linux: `$XDG_RUNTIME_DIR/chromium-bridge`, 退而求其次用 XDG 快取目錄; Windows: `%LOCALAPPDATA%\chromium-bridge`):
 
@@ -317,8 +318,12 @@ Extension onDisconnect -> scheduleReconnect(2s)
 connectNative() -> browser re-spawns the host -> host reads the lock file
   -> connects to the socket -> kernel checks + HMAC + attach(label)
 Broker accepts -> session re-attaches that label (generation-guarded:
-  pending calls of the old connection drain as Disconnected)
+  the superseded connection is severed, so a host still alive on it exits
+  and its worker life redials; pending calls of the old connection drain
+  as Disconnected)
 ```
+
+同標籤的接入總是獲勝, 並關閉它所取代的連線。當一個瀏覽器同時讓擴充功能的兩個 worker 生命存活時, 兩者大約每 2 秒輪流占據該槽位, 每一次重撥都關閉另一方, 直到其中一個生命結束。
 
 ### 5.3 第二個 MCP 用戶端接入
 
@@ -334,7 +339,7 @@ Broker exits when the last attached harness detaches.
 
 ## 6. 安全模型
 
-完整的論述在 [docs/security/](./security/); 這裡是地圖。
+完整的論述在 [docs/security.md](./security.md); 這裡是地圖。
 
 | 邊界 | 機制 | 依據 |
 |------|------|-----|
@@ -380,7 +385,7 @@ flowchart LR
   host["src/packages/core/src/native_host.rs"]
   exchange["src/apps/extension/src/lib/webauthn/exchange.ts<br>handleWebAuthnFrame() pendingPresenceRequest() assertPresence()"]
   page["the options page, the RP page the user taps on"]
-  ceremony["src/apps/extension/src/lib/webauthn/ceremony.ts<br>requestOptions() assert() browserClient"]
+  ceremony["src/apps/extension/src/lib/shared/webauthn-ceremony.ts<br>requestOptions() assert() browserClient"]
   authenticator["the browser's WebAuthn client and the platform authenticator"]
   verify["src/packages/core/src/webauthn/verify.rs"]
   store["src/packages/core/src/webauthn/store.rs"]
@@ -400,7 +405,7 @@ flowchart LR
 
 主機是信賴方, 擴充功能是 WebAuthn 用戶端, 以擴充功能 id 作為 RP ID。登記以 `enroll_begin`、`enroll_options`、`enroll_finish` 與 `enroll_result` 走同一套交換; 一台機器上的第一次登記採首次使用即信任, 之後每一次都需要本機上任一瀏覽器下已登記憑證的輕觸。
 
-執行儀式並作答的選項面板仍在開發中; 背景那一半與瀏覽器測試套件已經就位。
+選項頁面執行儀式並作答: 它登記這個瀏覽器的認證器, 並解除緊急開關。它的「忘記這個瀏覽器」動作送出 `browser_revoke`, 主機隨即忘記在該連線自身標籤下登記的憑證, 與 `chromium-bridge revoke <browser>` 是同一個動作。一次解除是在這個瀏覽器已登記憑證上的一次觸碰; 當主機的請求沒有指名任何憑證時, 頁面改為請求一次確認。
 
 來自確認視窗的 `presence_confirm` 只在沒有任何已登記憑證能夠作答時才被接受, 所以已登記的瀏覽器永遠不會被降級為一次點擊。
 
@@ -442,7 +447,7 @@ Chrome 約每 5 分鐘強制重啟 SW 一次, 記憶體中的狀態隨之丟失;
 任何 `chrome.debugger.attach` 在附加期間都會在每個分頁上顯示「Started debugging this browser」橫幅。緩解: 預設快照使用內容指令碼, 從不碰偵錯工具; `page_snapshot_precise` 在同一個處理常式中附加、讀取 a11y 樹、再分離 (在 finally 路徑上分離), 所以橫幅只會閃現約一秒。
 
 ### 7.3 Native Messaging 資訊清單沒有 args 欄位
-資訊清單的 `path` 必須是純執行檔。緩解: 每個瀏覽器一個包裝指令碼 (`run-host-<browser>.sh`), 把 `--native-host --label <browser>` 寫死在裡面; 標籤是中介連線登錄表的鍵。
+資訊清單的 `path` 必須是純執行檔。緩解: 一個包裝指令碼把 `--native-host` 寫死在裡面, 當只有一個瀏覽器會啟動該資訊清單時帶 `--label <browser>` (`run-host-<browser>.sh`), 多個瀏覽器共讀時則不帶 (`run-host.sh`), 以 `registration.rs` 為準; 標籤是中介連線登錄表的鍵。
 
 ### 7.4 chrome.permissions.request 需要使用者手勢
 主機權限只能在使用者手勢的情境中請求。緩解: 允許清單的授權流程走彈出視窗; 「允許」一併請求權限並記錄項目。
@@ -480,8 +485,8 @@ panic 訊息預設輸出到 stdout, 會損毀 NM 訊框與 MCP NDJSON。緩解: 
 
 1. **快照準確度**: 內容指令碼的 a11y 樹是近似值 (shadow DOM、複雜的 ARIA); `page_snapshot_precise` 是權威的後備方案。
 2. **跨來源 iframe**: 內容指令碼無法讀取它們。
-3. **Windows 以路徑量測映像**: 管道對端的映像是從其檔案路徑雜湊而來, 這是[威脅模型](./security/threat-model.md#殘餘風險-已接受已追蹤)所承擔的殘餘風險; 閘門本身 (僅限使用者的管道、雙向證明、HMAC、用戶端程式准入) 在那裡與在 Unix 上同樣成立。見 [SECURITY.md](../../.github/SECURITY.md#platform-support)。
-4. **同一使用者的攻擊者執行我們自己的執行檔**: 核心證明區分的是執行檔, 不是意圖; 見[威脅模型](./security/threat-model.md)的殘餘風險。
+3. **Windows 以路徑量測映像**: 管道對端的映像是從其檔案路徑雜湊而來, 這是[信任邊界帳冊](./security/trust-boundaries.md#邊界-2-rust-mcp-伺服器---原生訊息主機-橋接-socket-ndjson)所承擔的殘餘風險; 閘門本身 (僅限使用者的管道、雙向證明、HMAC、用戶端程式准入) 在那裡與在 Unix 上同樣成立。見 [SECURITY.md](../../.github/SECURITY.md#platform-support)。
+4. **同一使用者的攻擊者執行我們自己的執行檔**: 核心證明區分的是執行檔, 不是意圖; 見[信任邊界](./security/trust-boundaries.md)的殘餘風險。
 5. **撤銷傳到擴充功能的延遲**: socket 那一段是即時的; 擴充功能反映主機金鑰撤銷的時間以下一次 Service Worker 喚醒為界。
 
 ## 10. 擴充點
@@ -580,7 +585,7 @@ flowchart LR
 - `policy_restrict { overlay }` (擴充功能 -> 主機) 與 `policy_restrict_result { ok, error? }` (主機 -> 擴充功能): 選項頁面的策略編輯器透過未簽章的限制接縫收緊有效策略, 該接縫拒絕任何放寬; 套用的限制之後會跟著一個攜帶已寫入狀態的 `policy_current`, 所以結果只帶裁決。放寬仍然是簽章寫入 (`chromium-bridge policy set`)。
 - `lang_get {}` / `lang_set { value }` (擴充功能 -> 主機) 與 `lang_current { value, seq }` (主機 -> 擴充功能): 共用的 `uiLanguage` 偏好 (`runtime_dir()/lang.json`), 刻意放在簽章策略文件之外 - 不簽章、不棘輪、無法影響任何安全決策 - 以序號做回音抑制。
 
-強制執行契約刻意不對稱: 授予能力的策略帶有主機金鑰對精確位元組的簽章, 且寫入時消耗了一次在場證明; 只移除能力的策略則以未簽章覆蓋層的形式自由傳遞。同一使用者的程序能對主機金鑰做什麼, 是[威脅模型](./security/threat-model.md#殘餘風險-已接受已追蹤)點名的殘餘風險。
+強制執行契約刻意不對稱: 授予能力的策略帶有主機金鑰對精確位元組的簽章, 且寫入時消耗了一次在場證明; 只移除能力的策略則以未簽章覆蓋層的形式自由傳遞。同一使用者的程序能對主機金鑰做什麼, 是[信任邊界帳冊](./security/trust-boundaries.md#邊界-3-chrome---原生訊息主機-native-messaging-訊框格式)點名的殘餘風險。
 
 沒有主機金鑰的機器沒有授予面: `policy set` 一開始就拒絕, 直到 `pair` 鑄造出一把為止。
 
@@ -609,7 +614,7 @@ graph TD
   extension_confirm["src/apps/extension/src/entrypoints/confirm/"]
   extension_options["src/apps/extension/src/entrypoints/options/"]
   extension_popup["src/apps/extension/src/entrypoints/popup/"]
-  extension_ui["src/apps/extension/src/components/<br>src/apps/extension/src/hooks/<br>src/apps/extension/src/lib/cn.ts<br>src/apps/extension/src/lib/theme.ts<br>src/apps/extension/src/lib/i18n.ts<br>src/apps/extension/src/lib/native-language-names.ts"]
+  extension_ui["src/apps/extension/src/components/<br>src/apps/extension/src/hooks/<br>src/apps/extension/src/lib/cn.ts<br>src/apps/extension/src/lib/theme.ts<br>src/apps/extension/src/lib/i18n.ts<br>src/apps/extension/src/lib/native-language-names.ts<br>src/apps/extension/src/lib/refusals.ts"]
   extension_lib["src/apps/extension/src/lib/shared/<br>src/apps/extension/src/lib/dom/<br>src/apps/extension/src/lib/messages.ts"]
   scripts["scripts/"]
   extension_background --> shared

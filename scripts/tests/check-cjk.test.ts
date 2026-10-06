@@ -42,7 +42,7 @@ describe("checkCjk", () => {
   test("a translated page under a docs locale tree or a root README translation is allowed; the English page beside it is not", () => {
     const dir = repo({
       [CONTROL_FILE]: `title: ${HAN}\n`,
-      "docs/zh-cn/security/threat-model.md": `# ${HAN}\n`,
+      "docs/zh-cn/security/trust-boundaries.md": `# ${HAN}\n`,
       "docs/zh-tw/cli.md": `# ${HAN}\n`,
       "README.zh-cn.md": `# ${HAN}\n`,
       "README.zh-tw.md": `# ${HAN}\n`,

@@ -12,14 +12,14 @@
 
 這份能力同時也是風險。安裝前請先閱讀[安全優先](#安全優先)。
 
-本專案對自己的要求: 你安裝的程式無法在你不知情的情況下使用你的瀏覽器; 這條標準今天在 macOS、Linux 與 Windows 上都成立 ([安全標準線](./docs/zh-tw/security/security-bar.md) 陳述了這條標準, 以及它止步之處)。
+本專案對自己的要求: 你安裝的程式無法在你不知情的情況下使用你的瀏覽器; 這條標準今天在 macOS、Linux 與 Windows 上都成立 ([安全頁面](./docs/zh-tw/security.md) 陳述了這條標準, 以及它止步之處)。
 
 ## 安全優先
 
 chromium-bridge 操作的是一個真實、已通過身分驗證的瀏覽器。它能讀取頁面內容、Cookie (包含 `httpOnly`) 與網頁儲存空間, 也能在你的頁面中執行 JavaScript。護欄如下:
 
 - **核准每一個網站。** 新的來源 (origin) 會觸發提示; 在你尚未核准的網站上, 什麼都不會執行。
-- **確認高風險動作。** 送出表單的點擊、按鍵、關閉分頁、檔案上傳, 以及每一次 `page_eval`, 都要在一個頁面看不到也點不到的、由擴充功能持有的視窗上確認。在透過 Touch ID 登記的 Mac 上, `page_eval` 與 `page_upload` 的核准是一次 Secure Enclave 的使用者在場檢查 (Touch ID 或登入密碼), 任何頁面都無法偽造; 同一使用者的程式在這次觸碰前後仍能做到的事, 寫在[威脅模型的殘餘風險](./docs/zh-tw/security/threat-model.md#殘餘風險-已接受已追蹤)裡。
+- **確認高風險動作。** 送出表單的點擊、按鍵、關閉分頁、檔案上傳, 以及每一次 `page_eval`, 都要在一個頁面看不到也點不到的、由擴充功能持有的視窗上確認。`page_eval` 與 `page_upload` 每次呼叫都重新確認。同一使用者的程式在這個視窗前後仍能做到的事, 寫在[信任邊界帳冊](./docs/zh-tw/security/trust-boundaries.md#邊界-4-擴充功能---網頁-chrome-api--內容指令碼--dom)裡。
 - **閘門預設開啟。** 每一道閘門都是有文件記載的設定, 放寬任何一道都是明確且知情的選擇 ([SECURITY.md](./.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe))。
 - **憑證唯讀。** Cookie 與儲存空間可以讀取 (一律遮罩: JWT、長十六進位字串、長數字串), 但永遠不能寫入。刻意不提供 `cookie_set` 或 `storage_set`。
 - **經過驗證與證明的橋接。** 在 macOS 與 Linux 上, 主機程序透過一個私有的 Unix domain socket 通訊 (沒有監聽連接埠)。每一條連線都必須通過核心的對端 UID 檢查、由核心證明的執行檔身分, 以及以每次執行的秘密為基礎的 HMAC 挑戰。
@@ -33,7 +33,7 @@ chromium-bridge 操作的是一個真實、已通過身分驗證的瀏覽器。�
 | macOS、Linux | 私有 Unix domain socket, 無監聽連接埠 | 對端 UID 檢查、核心證明、HMAC 挑戰 |
 | Windows | 只有你的使用者能開啟的具名管道, 無監聽連接埠 | 管道的描述元 (由核心強制執行)、相互證明、HMAC 挑戰 |
 
-完整細節: [SECURITY.md](./.github/SECURITY.md)、[威脅模型](./docs/zh-tw/security/threat-model.md)、[信任邊界](./docs/zh-tw/security/trust-boundaries.md)、[各工具風險矩陣](./docs/zh-tw/security/tool-risk-matrix.md)。
+完整細節: [SECURITY.md](./.github/SECURITY.md)、[安全頁面](./docs/zh-tw/security.md)、[信任邊界](./docs/zh-tw/security/trust-boundaries.md)、[各工具風險矩陣](./docs/zh-tw/security/tool-risk-matrix.md)。
 
 ## 使用 CLI 快速入門 (macOS、Linux、Windows)
 
@@ -57,7 +57,7 @@ CLI 除了執行檔本身之外不需要任何東西, 在桌面、無頭機器�
 
    請把執行檔放在穩定的路徑 (它是就地註冊的)。在 Linux 上, `~/.local/lib/chromium-bridge/` 是個合適的位置。`chromium-bridge uninstall` 會精確還原所註冊的內容。
 
-3. 載入擴充功能: 透過 `chrome://extensions`, 開啟開發人員模式, 點「載入未封裝項目」, 選擇壓縮檔中的 `extension/dist` 目錄。重新啟動瀏覽器。
+3. 載入擴充功能: 透過 `chrome://extensions`, 開啟開發人員模式, 點「載入未封裝項目」, 選擇壓縮檔中的 `extension/dist` 目錄。重新啟動瀏覽器。擴充功能需要 Chrome 134 或更新版本; 更舊的瀏覽器會拒絕載入它。
 
 4. 在 macOS 上進行配對: 執行 `chromium-bridge pair` (Touch ID), 然後在擴充功能的選項頁面核准指紋; 擴充功能預設要求在那裡完成登記。Linux 與 Windows 跳過這一步。
 
@@ -249,7 +249,7 @@ chromium-bridge doctor    # or: chromium-bridge status
 |-----|--------------|
 | [docs/quickstart.md](./docs/zh-tw/quickstart.md) | 安裝與首次使用 |
 | [docs/architecture.md](./docs/zh-tw/architecture.md) | 元件、資料流、協定、安全模型、關鍵限制 |
-| [docs/security/](./docs/zh-tw/security/) | 威脅模型、信任邊界、工具風險矩陣、事件回應 |
+| [docs/security/](./docs/zh-tw/security/) | 信任邊界帳冊、工具風險矩陣、設計依據、事件回應; 面向讀者的頁面是 [docs/security.md](./docs/zh-tw/security.md) |
 | [docs/cli.md](./docs/zh-tw/cli.md) | 完整的 CLI: doctor/--fix、uninstall、配對、撤銷、緊急開關、稽核 |
 | [docs/troubleshooting.md](./docs/zh-tw/troubleshooting.md) | 逐一症狀: doctor 各列、緊急開關記錄的復原、版本不一致、兩種 WSL 模式 |
 | [docs/release.md](./docs/zh-tw/release.md) | release-please 發行、預先建置的壓縮檔 + 校驗和、SBOM、哪個版本何時變動 |

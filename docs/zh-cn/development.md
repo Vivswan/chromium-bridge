@@ -10,10 +10,10 @@ Rust 只由 rustup 管理, 版本来自 `rust-toolchain.toml`, 所以新机器�
 
 ```sh
 proto install    # provisions bun, moon, node, uv at the pinned versions (rustup owns rust)
-bun install      # workspace deps + wires the git hooks (lefthook)
+moon run setup   # installs the bun workspace, the pinned Rust toolchain, and the crates; wires the git hooks (lefthook); the gate itself never installs
 ```
 
-四个门禁工具没有第一方 proto 插件, 需要手动安装一次: `cargo install cargo-nextest` 和 `brew install typos-cli cargo-machete actionlint` (typos 和 cargo-machete 也可以通过 `cargo install` 获得)。CI 从哪里获取它们:
+四个工具没有第一方 proto 插件, 需要手动安装一次: `cargo install cargo-nextest` (`moon run gate` 使用的测试运行器) 和 `brew install typos-cli cargo-machete actionlint` (只有 `moon run ci` 才运行的工具; typos 和 cargo-machete 也可以通过 `cargo install` 获得)。CI 从哪里获取它们:
 
 - **`Containerfile` 以 `ARG <TOOL>_VERSION` 的形式固定这四个工具外加 cargo-deb**。CI 镜像携带这四个; cargo-deb 只安装在裸的发布与安装程序运行器上。
 - **自行安装某个工具的作业通过 `bun scripts/pin.ts <tool>` 读取同一处固定版本**: checks.yml 的 tooling 作业读 cargo-machete (在镜像内, 该版本已经就位), `installers.yml` 与 `update-release.yml` 在各自的裸运行器上读 cargo-deb。
@@ -31,7 +31,7 @@ bun install      # workspace deps + wires the git hooks (lefthook)
 | [`typos`](https://github.com/crate-ci/typos) + [`cargo-machete`](https://github.com/bnjbvr/cargo-machete) | 拼写检查 + 未使用依赖门禁 | `moon run typos` / `moon run machete`; CI 在受管 ci.yml 中把 typos 作为门禁, 在 checks.yml 中把 machete 作为门禁 |
 | [`actionlint`](https://github.com/rhysd/actionlint) | GitHub Actions 工作流 lint 门禁 | `moon run check-actions`; CI 在受管 ci.yml 的 actionlint 作业中运行它 |
 
-Git 钩子由 [lefthook](https://lefthook.dev) 管理 (`lefthook.yml`): `bun install` 会接好一个运行 `moon run ci` 的 pre-commit 钩子, 所以会让 CI 失败的提交在提交时就失败。
+Git 钩子由 [lefthook](https://lefthook.dev) 管理 (`lefthook.yml`): `moon run setup` 会接好一个运行 `moon run gate` 的 pre-commit 钩子, 即仓库自身工具链所能提供的检查; `moon run ci` 再加上只有 CI 才配备的工具。
 
 ## 目录布局
 
@@ -47,8 +47,8 @@ src/packages/core/fuzz/  cargo-fuzz workspace: wire parsers + semantic validator
                          (nightly + libFuzzer; see the Fuzzing section below)
 src/packages/shared/     contract types / validators / i18n (bun workspace member)
 tests/protocol/          e2e.py, adversarial.py, chaos.py - drive the real release binary
-tests/browser/           the five browser suites, run_all.ts, integration_e2e.ts
-                         (bun workspace member; isolated Chrome only)
+tests/browser/           the browser suites (run_all.ts lists them); integration_e2e.ts and
+                         presence_exchange_test.ts run apart (bun workspace member; isolated Chrome only)
 tests/interop/           the official MCP SDK client against the release binary (bun workspace member)
 tests/harness/           harness-smoke: real harness CLIs in isolated config dirs
 tests/fixtures/          HTML/CSS pages and the probe extension the browser suites load
@@ -85,10 +85,10 @@ moon run fix       # auto-fix everything: biome check --write + cargo fmt
 
 | 步骤 | 任务 |
 |------|-------|
-| Rust | `core:fmt-check`、`core:lint`、`typos`、`machete`、`core:test`、`core:test-doc`、`core:test-loom`、`doc` |
+| Rust | `core:fmt-check`、`core:lint` (每个 cargo 工作区各运行一次, 根工作区与模糊测试工作区)、`typos`、`machete`、`core:test`、`core:test-doc`、`core:test-loom`、`doc` |
 | TypeScript | `typecheck`、`check-ts`、`shared:test`、`extension:test`、`extension:build` |
 | 协议 | `test-e2e` |
-| 卫生检查 | `hygiene` (下文的 bun 侧检查)、`check-refresh-lockfiles`、`check-fuzz-workspace`、`test-fuzz` |
+| 卫生检查 | `hygiene` (下文的 bun 侧检查)、`check-refresh-lockfiles`、`test-fuzz` |
 | 契约 | `check-gen`、`check-envelope`、`check-gen-isolation` |
 | 工作流 | `check-yaml`、`check-actions` |
 
@@ -107,10 +107,13 @@ CI 在此之上还会运行更多: macOS 和 Windows 的 rust 矩阵、覆盖率
 cargo build --release
 cargo nextest run
 cargo fmt --check && cargo clippy --all-targets -- -D warnings
+# the fuzz workspace is excluded from the root one, so its two checks run against its own manifest
+cargo fmt --check --manifest-path src/packages/core/fuzz/Cargo.toml
+cargo clippy --locked --manifest-path src/packages/core/fuzz/Cargo.toml --all-targets -- -D warnings
 uv run --no-project --isolated tests/protocol/e2e.py
 bun install
-bunx tsc -p src/apps/extension        # one TS project; `moon run typecheck` covers them all
-bunx biome ci . --error-on-warnings   # lint + format check, warnings fail (biome.jsonc)
+bun run tsc -p src/apps/extension        # one TS project; `moon run typecheck` covers them all
+bun run biome ci . --error-on-warnings   # lint + format check, warnings fail (biome.jsonc)
 bun run --cwd src/apps/extension build
 ```
 
@@ -120,8 +123,8 @@ bun run --cwd src/apps/extension build
 |------|-------|
 | 聚合任务 | `build`、`test`、`ci`、`hygiene` (CI 的 hygiene 作业运行的 bun 侧检查; `ci` 依赖它)、`release`、`lint`、`fmt`、`fix` |
 | 开发循环 | `dev`、`dev-web`、`extension:dev` |
-| Rust | `core:fmt-check`、`core:lint`、`test-rust` (= `core:test` + `core:test-doc` + `core:test-loom`, 后者是在核心的 `loom` 特性下对中介 (broker) 引用计数做模型检查)、`doc`、`build-release`、`build-repro`、`typos`、`machete`、`audit` |
-| 模糊测试工作区 | `fuzz-seeds`、`fuzz-smoke`、`check-fuzz-smoke`、`check-fuzz-workspace`、`test-fuzz` |
+| Rust | `core:fmt-check` (= `core:fmt-check-workspace` + `core:fmt-check-fuzz`)、`core:lint` (= `core:lint-workspace` + `core:lint-fuzz`)、`test-rust` (= `core:test` + `core:test-doc` + `core:test-loom`, 后者是在核心的 `loom` 特性下对中介 (broker) 引用计数做模型检查)、`doc`、`build-release`、`build-repro`、`typos`、`machete`、`audit` |
+| 模糊测试工作区 | `fuzz-seeds`、`fuzz-smoke`、`check-fuzz-smoke`、`test-fuzz` (该工作区的 clippy 与 fmt 检查分别由 `core:lint-fuzz` 与 `core:fmt-check-fuzz` 执行) |
 | TypeScript | `typecheck`、`test-ts` (= `shared:test` + `extension:test` + `web:test` + `check-harness-driver`)、`lint-ts`、`check-ts`、`fmt-ts`、`fmt-check-ts`、`extension:build`、`web:build` |
 | 契约代码生成 | `gen` (= `gen-shared`)、`gen-icons`、`gen-architecture-map`、`check-gen`、`check-envelope`、`check-gen-isolation` |
 | 协议测试套件 | `test-e2e`、`test-adversarial`、`test-chaos`、`check-uv` |
@@ -130,6 +133,8 @@ bun run --cwd src/apps/extension build
 | 版本管理 | `check-version`、`check-extension-id`、`check-refresh-lockfiles` |
 | 仓库卫生 (`hygiene` 的依赖) | `check-version`、`check-extension-id`、`check-toolchain`、`check-pins`、`check-hasher`、`check-moon-edges`、`check-ignored`、`check-cjk`、`check-typography`、`check-fuzz-smoke`、`check-harness-driver`、`check-docs-literals`、`check-docs-policy`、`check-planning-refs`、`check-compose`、`check-ci-scripts`、`check-docs-probe`、`check-architecture`、`check-docs-locales` |
 | 工作流 | `check-yaml`、`check-actions` |
+
+`check-docs-probe` 让英文文档的每个段落和列表项都保持在 70 词以内, 并让它们点名的每条路径都真实存在。翻译页面 (位于 `zh-cn` 或 `zh-tw` 文档树下, 或根目录的 `README.<locale>.md`) 只探测路径和链接: 按空白切分的词数读不懂 CJK, 所以由英文页面承担词数上限, 而 `check-docs-locales` 让翻译树与它逐文件镜像。
 
 ## moon: 规范的命令接口
 
@@ -193,7 +198,7 @@ uv 只固定在 `.prototools` 中, python 由 uv 管理: 协议测试套件通�
 | 作业 | 运行内容 | 位置 |
 |-----|------|-------|
 | `image` | 把镜像标签解析为摘要一次, 这样每个作业固定的都是同一份内容 | 裸运行器 |
-| `rust` | 在 ubuntu、macOS 和 Windows 上运行 clippy 和测试; fmt、loom 模型、rustdoc 以及模糊测试工作区的检查和测试只在 Linux 上运行 | Linux 上用镜像, 其他平台用裸运行器 |
+| `rust` | 在 ubuntu、macOS 和 Windows 上运行 clippy 和测试; fmt、loom 模型、rustdoc 以及模糊测试工作区的 fmt、clippy 和测试只在 Linux 上运行 | Linux 上用镜像, 其他平台用裸运行器 |
 | `build-release` | `moon run build-release`, 上传供下面的测试套件使用 | 裸运行器, 这样二进制链接到运行器上较旧的 glibc, 在两种环境中都能运行 |
 | `coverage` | `cargo llvm-cov`, 仅供参考 (`continue-on-error`, 无阈值) | 镜像 |
 | `extension` | `typecheck`、`check-ts`、`shared:test`、`extension:test`、`extension:build`, 然后对构建出的清单运行 `check-extension-id` | 镜像 |
@@ -224,7 +229,7 @@ bun run --cwd src/apps/extension build     # production bundle
 
 协议测试套件 (`tests/protocol/e2e.py`、`adversarial.py`、`chaos.py`) 以子进程方式驱动真实的发布二进制, 走真实的线路协议, 不需要浏览器: `moon run test-e2e` (在门禁中)、`test-adversarial`、`test-chaos`。
 
-浏览器测试套件共用一个运行器 `tests/browser/run_all.ts`, CI 的 `browser.yml`、容器和 `moon run test-browser` 都调用它。它先构建扩展, 运行每个测试套件, 然后检查每个套件都留下了自己的 RAN 标记:
+`tests/browser/run_all.ts` 中列出的浏览器测试套件共用一个运行器, CI 的 `browser.yml`、容器和 `moon run test-browser` 都调用它。它先构建扩展, 运行那些测试套件, 然后检查每个套件都留下了自己的 RAN 标记。下表最后一行单独运行:
 
 | 测试套件 | 证明的内容 |
 |-------|----------------|
@@ -233,6 +238,7 @@ bun run --cwd src/apps/extension build     # production bundle
 | `security_browser_test.ts` | 安全模型的浏览器侧那一半, 针对同一个已加载的扩展 |
 | `webauthn_test.ts` | 主机的校验器所假设的关于 Chrome WebAuthn 客户端的事实, 用 CDP 虚拟认证器代替 Touch ID |
 | `cancel_test.ts` | 来自替身主机的 `cancel` 帧被消费且从不被应答; 不在 Windows 上运行 |
+| `presence_exchange_test.ts` | 端到端的 WebAuthn 交换: 两个隔离的 Chrome 对着真实的发布版主机。单独运行 (`moon run test-presence-exchange`); `run_all.ts` 中的 `suitesFor` 说明了原因 |
 
 ```sh
 bun tests/browser/run_all.ts                           # builds the extension, then the suites
@@ -275,7 +281,7 @@ env UID="$(id -u)" GID="$(id -g)" docker compose run --rm shell
 
 ## 模糊测试
 
-`src/packages/core/fuzz/` 是一个独立的 cargo 工作区 (cargo-fuzz + libFuzzer, nightly rust), 有十一个模糊测试目标。凡是存在正确性属性的地方, 目标都会断言该属性, 而不是只检查是否 panic。
+`src/packages/core/fuzz/` 是一个独立的 cargo 工作区 (cargo-fuzz + libFuzzer, nightly rust), 有十一个模糊测试目标。凡是存在正确性属性的地方, 目标都会断言该属性, 而不是只检查是否 panic。根工作区的 clippy 与 rustfmt 门禁也覆盖这个工作区, 使用根 lint 表的一份副本, 其例外由该工作区的 `Cargo.toml` 说明。
 
 | 目标 | 模糊测试的对象 | 除不 panic 之外的判定依据 |
 |---------|----------------|------------------------|

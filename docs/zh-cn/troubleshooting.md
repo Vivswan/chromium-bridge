@@ -37,9 +37,9 @@ chromium-bridge doctor    # or: chromium-bridge status
 - **含义:** 这是切换前的健康状态。尚未写入任何已签名的基线, 因此扩展执行拒绝基线: 所有能力授予关闭, 所有确认开启。这一行从不改变 `doctor` 的退出码。
 - **怎么做:** 什么都不用做, 除非你想要授予: `chromium-bridge policy set` 会写入第一个基线 ([CLI 页面上的策略说明](cli.md#主机持有的策略-policy))。已存在的策略存储会报告它的修订号、`signed` 或 `unsigned`, 以及是否有未签名的限制覆盖层处于活动状态; 主机只报告是否已签名, 从不声称「有效」, 因为只有扩展才能用自己固定的密钥验证签名。
 
-## doctor 报告 `policy baseline: present but UNREADABLE`
+## doctor 报告 `policy baseline: UNREADABLE`
 
-- **你看到:** `present but UNREADABLE (...) - failing closed`, 且 `doctor` 以非零状态退出。
+- **你看到:** `UNREADABLE (...) - failing closed`, 且 `doctor` 以非零状态退出。
 - **含义:** 策略存储存在, 但无法读取或解析。每个使用方都失败即关闭: 主机的分发门禁拒绝所有工具, 扩展继续执行它存储的有效策略或拒绝基线。
 - **怎么做:** 先检查这个存储, 再做其他任何事。它从不会被替换为默认值, 因为默认值可能比你收紧过的策略更宽松, 而由垃圾数据构成的放松杠杆算不上杠杆。
 
@@ -57,7 +57,7 @@ chromium-bridge doctor    # or: chromium-bridge status
 | --- | --- |
 | 新扩展, 旧主机 | 主机从不推送策略帧, 所以扩展也从不发送 (旧主机会把未知帧归类为可转发, 而服务器的严格解析会拆掉浏览器这一侧的连接)。扩展停留在切换前状态, 执行拒绝基线。 |
 | 旧扩展, 新主机 | 旧扩展丢弃它不认识的 `policy_current` 推送 (有测试固定此行为), 保留本地设置; 新主机仍在分发时应用自己的策略, 所以合并后的执行力度绝不会比旧扩展单独执行时更宽松。 |
-| 新扩展, 没有选项页帧的主机 | 选项页会按需发送 `registration_status`、`registration_repair` 和 `policy_restrict`, 所以「绝不先开口」规则不覆盖它们: 中介的严格解析会拆掉浏览器这一侧的连接。在首次发布前这是可接受的, 因为没有任何已发布的主机缺少这些帧; 日后要覆盖它, 需要推迟的握手宣告主机的控制帧, 并让扩展据此决定是否发送。 |
+| 新扩展, 没有选项页帧的主机 | 选项页会按需发送 `registration_status`、`registration_repair`、`policy_restrict`、`audit_read` 和 `doctor_report`, 所以「绝不先开口」规则不覆盖它们: 中介的严格解析会拆掉浏览器这一侧的连接。在首次发布前这是可接受的, 因为没有任何已发布的主机缺少这些帧; 日后要覆盖它, 需要推迟的握手宣告主机的控制帧, 并让扩展据此决定是否发送。 |
 
 ## 没有 Secure Enclave 的 Mac 无法登记
 
