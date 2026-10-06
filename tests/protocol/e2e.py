@@ -18,6 +18,9 @@ each test pins is its first docstring line.
 """
 import json
 import os
+import signal
+import subprocess
+import sys
 import time
 import unittest
 
@@ -29,6 +32,10 @@ from harness import (BridgeCase, McpClient, Served, nm_read, nm_read_raw, nm_rea
 def setUpModule():
     h.ensure_binary()
     h.isolate("bb-e2e-")
+
+
+def tearDownModule():
+    h.teardown()
 
 
 # The user-facing warnings a tool description must keep carrying.
@@ -382,7 +389,7 @@ class KillSwitch(E2ECase):
 
 class Isolation(unittest.TestCase):
     def test_windows_children_are_isolated_through_localappdata(self):
-        """lockfile.rs reads LOCALAPPDATA on Windows and ignores XDG_RUNTIME_DIR,
+        """ipc/runtime_dir.rs reads LOCALAPPDATA on Windows and ignores XDG_RUNTIME_DIR,
         so a child pointed only at XDG there would run against the real
         per-user dir; the spawn guard must judge the variable the binary reads."""
         rundir = h.new_runtime_dir("bb-e2e-nt-")
@@ -396,6 +403,77 @@ class Isolation(unittest.TestCase):
                 h.require_isolated({"XDG_RUNTIME_DIR": rundir}, platform="nt")
         finally:
             h.LOCK = saved
+
+    def test_sweep_removes_only_a_dead_owners_dirs_of_its_prefix(self):
+        """A run killed outright leaves its dir with no process left to remove
+        it (the pre-commit hook's e2e run under a tool timeout), so the sweep
+        removes a prefix dir whose recorded pid is gone and nothing else: a
+        live owner's, a record that is not one positive pid, one still being
+        created, a foreign prefix, a file, and a symlink stay."""
+        root = h.new_runtime_dir("bb-e2e-sweep-")
+        self.addCleanup(h.remove_runtime_dir, root)
+        gone = subprocess.Popen([sys.executable, "-c", "pass"])
+        gone.wait(timeout=30)
+
+        def make(name, owner=None, old=False, dangling=False):
+            path = os.path.join(root, name)
+            os.makedirs(os.path.join(path, "chromium-bridge"))
+            if owner is not None:
+                with open(os.path.join(path, h.OWNER_FILE), "w") as f:
+                    f.write(f"{owner}\n")
+            if dangling:
+                os.symlink(os.path.join(path, "nowhere"), os.path.join(path, h.OWNER_FILE))
+            if old:
+                hour_ago = time.time() - 3600
+                os.utime(path, (hour_ago, hour_ago))
+            return path
+
+        dead = make("bb-sweep-dead", owner=gone.pid)
+        legacy = make("bb-sweep-legacy", old=True)
+        make("bb-sweep-live", owner=os.getpid())
+        make("bb-sweep-negative", owner=-1, old=True)
+        make("bb-sweep-overflow", owner=10**30, old=True)
+        make("bb-sweep-dangling", dangling=True, old=True)
+        make("bb-sweep-fresh")
+        make("other-dead", owner=gone.pid, old=True)
+        os.symlink(root, os.path.join(root, "bb-sweep-link"))
+        removed = h.sweep_stale_runtime_dirs("bb-sweep-", root)
+        self.assertEqual(
+            (sorted(removed), sorted(os.listdir(root))),
+            ([dead, legacy],
+             ["bb-sweep-dangling", "bb-sweep-fresh", "bb-sweep-link", "bb-sweep-live",
+              "bb-sweep-negative", "bb-sweep-overflow", h.OWNER_FILE, "other-dead"]))
+
+    def test_sigterm_removes_the_runtime_dir_before_exiting(self):
+        """SIGTERM ends the interpreter without atexit (the path a tool timeout
+        or a cancelled hook takes), so the handler guard_exit installs must
+        remove the dir, then exit by the signal so the parent still sees it."""
+        if os.name == "nt":
+            self.skipTest("Windows delivers no SIGTERM")
+        root = h.new_runtime_dir("bb-e2e-sigterm-")
+        self.addCleanup(h.remove_runtime_dir, root)
+        child = subprocess.Popen(
+            [sys.executable, "-c", SIGTERM_CHILD, root],
+            stdout=subprocess.PIPE, text=True, cwd=os.path.dirname(os.path.abspath(h.__file__)))
+        h.CHILDREN.append(child)
+        self.addCleanup(h.kill, child)
+        rundir = child.stdout.readline().strip()
+        self.assertTrue(os.path.isfile(os.path.join(rundir, h.OWNER_FILE)), "the child owns its dir")
+        child.send_signal(signal.SIGTERM)
+        child.wait(timeout=30)
+        self.assertEqual((child.returncode, os.listdir(root)), (-signal.SIGTERM, [h.OWNER_FILE]))
+
+
+# A harness process that guards its exit, has created its runtime dir, and
+# waits to be killed.
+SIGTERM_CHILD = """
+import sys, tempfile, time
+tempfile.tempdir = sys.argv[1]
+import harness
+harness.guard_exit()
+print(harness.new_runtime_dir("bb-sigterm-"), flush=True)
+time.sleep(60)
+"""
 
 
 class Broker(E2ECase):

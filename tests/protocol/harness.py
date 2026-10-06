@@ -12,7 +12,9 @@ dir (`isolate`), so the lock, socket, pairing state, and broker logic can
 never reach the developer's real bridge. `isolate` proves the dir took by
 asking the binary itself (`doctor --paths`) where its lock resolves, every
 child starts through the one `spawn` that re-checks the env it will see, and
-the dir is removed at interpreter exit on every path.
+`teardown` removes every dir on every exit path (tearDownModule, SIGTERM,
+SIGINT, atexit) while `sweep_stale_runtime_dirs` clears what a run killed
+outright left behind.
 
 Stdlib only, on purpose: an independent implementation of the protocols with
 no dependencies is what makes these suites catch framing and encoding bugs the
@@ -23,6 +25,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import socket
 import struct
 import subprocess
@@ -41,6 +44,12 @@ RUNDIR = None
 LOCK = None
 # Every runtime dir this process created; a child may only be pointed at one of these.
 OWNED_RUNTIME_DIRS = set()
+# Every process spawn() started, so teardown can stop the ones a killed run leaves behind.
+CHILDREN = []
+# Names the creating process in each runtime dir; the sweep judges staleness by it.
+OWNER_FILE = "harness.pid"
+# A dir with no owner record is kept this long: it may sit between its mkdtemp and its record write.
+UNRECORDED_DIR_FRESH_SECS = 60
 
 
 def within(child, parent):
@@ -78,12 +87,165 @@ def runtime_env(rundir, platform=os.name):
 
 def new_runtime_dir(prefix):
     """A fresh private runtime dir directly under the OS temp dir (a nested
-    one overruns the Unix socket path limit), removed at interpreter exit
-    whether the suite passes, fails, or dies on an exception."""
+    one overruns the Unix socket path limit), recorded as this process's so
+    teardown removes it and a later sweep can tell it from a live run's."""
     rundir = tempfile.mkdtemp(prefix=prefix)
-    atexit.register(shutil.rmtree, rundir, ignore_errors=True)
     OWNED_RUNTIME_DIRS.add(rundir)
+    with open(os.path.join(rundir, OWNER_FILE), "w") as f:
+        f.write(f"{os.getpid()}\n")
     return rundir
+
+
+def remove_runtime_dir(rundir):
+    """Remove a dir this process created. A failure raises: a dir that
+    survives is a leak the run reports, never one it ignores."""
+    shutil.rmtree(rundir)
+    OWNED_RUNTIME_DIRS.discard(rundir)
+
+
+def teardown():
+    """Stop every child still running and remove every runtime dir this
+    process created. Idempotent, so tearDownModule, the signal handlers, and
+    the atexit backstop all call it. Raises naming the dirs that survived."""
+    alive = [proc for proc in CHILDREN if proc.poll() is None]
+    for proc in alive:
+        kill(proc)
+    CHILDREN.clear()
+    if alive:
+        print(f"[isolation] stopped {len(alive)} process(es) still running at teardown",
+              file=sys.stderr)
+    leaked = []
+    for rundir in sorted(OWNED_RUNTIME_DIRS):
+        try:
+            remove_runtime_dir(rundir)
+        except OSError as e:
+            leaked.append(f"{rundir}: {e}")
+    if leaked:
+        raise RuntimeError("runtime dirs survived teardown:\n" + "\n".join(leaked))
+
+
+def _teardown_reporting():
+    try:
+        teardown()
+    except RuntimeError as e:
+        print(f"[isolation] {e}", file=sys.stderr)
+
+
+def _exit_on_signal(signum, frame):
+    """A terminating signal ends the interpreter without atexit (the path a
+    tool timeout or a cancelled pre-commit hook takes), so teardown runs
+    here, then the default action so the parent sees the signal."""
+    _teardown_reporting()
+    signal.signal(signum, signal.SIG_DFL)
+    os.kill(os.getpid(), signum)
+
+
+def guard_exit():
+    """Run teardown on every exit path this process can see."""
+    atexit.register(_teardown_reporting)
+    for name in ("SIGTERM", "SIGINT", "SIGHUP"):
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), _exit_on_signal)
+
+
+# pid_t is a 32-bit int everywhere these suites run; a larger value names no process.
+PID_MAX = 2**31 - 1
+
+
+def read_owner(rundir):
+    """The pid recorded in `rundir`, or None when there is no record. A record
+    that cannot be read, or does not spell one positive pid, raises: the sweep
+    must not mistake it for an absent owner."""
+    record = os.path.join(rundir, OWNER_FILE)
+    try:
+        with open(record) as f:
+            text = f.read()
+    except FileNotFoundError:
+        if os.path.lexists(record):
+            raise
+        return None
+    if not re.fullmatch(r"[1-9][0-9]*", text.strip()) or int(text) > PID_MAX:
+        raise ValueError(f"malformed {OWNER_FILE}: {text!r}")
+    return int(text)
+
+
+def pid_alive(pid):
+    """Whether a process `pid` exists. Another user's process and a zombie
+    count as alive: the sweep never guesses."""
+    if os.name == "nt":
+        return _windows_pid_alive(pid)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _windows_pid_alive(pid):
+    """os.kill(pid, 0) TERMINATES a process on Windows (CPython maps every
+    signal but the console events to TerminateProcess), so existence is read
+    through a query-only handle. Only a definite answer reads as dead: an
+    OpenProcess failure other than "no such pid" or a failed exit-code query
+    keeps the dir."""
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.restype = ctypes.c_void_p
+    kernel32.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    process_query_limited_information, still_active, error_invalid_parameter = 0x1000, 259, 87
+    handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+    if not handle:
+        return ctypes.get_last_error() != error_invalid_parameter
+    try:
+        code = ctypes.c_ulong()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return True
+        return code.value == still_active
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _stale_reason(path, now):
+    """Why `path` may go, or None while a process may still own it."""
+    owner = read_owner(path)
+    if owner is None:
+        if now - os.path.getmtime(path) < UNRECORDED_DIR_FRESH_SECS:
+            return None
+        return "no owner recorded"
+    if pid_alive(owner):
+        return None
+    return f"harness pid {owner} is gone"
+
+
+def sweep_stale_runtime_dirs(prefix, root):
+    """Remove the `prefix` dirs under `root` whose creating process is gone:
+    the heal for a run killed before its teardown. A dir whose recorded pid
+    is alive, or whose record cannot be read, is never touched. Prints and
+    returns what it removed."""
+    removed = []
+    now = time.time()
+    for name in sorted(os.listdir(root)):
+        path = os.path.join(root, name)
+        if not name.startswith(prefix) or os.path.islink(path) or not os.path.isdir(path):
+            continue
+        try:
+            reason = _stale_reason(path, now)
+        except (OSError, ValueError) as e:
+            print(f"[isolation] kept {path}: owner record unreadable ({e})", file=sys.stderr)
+            continue
+        if reason is None:
+            continue
+        try:
+            shutil.rmtree(path)
+        except OSError as e:
+            print(f"[isolation] could not remove stale runtime dir {path}: {e}", file=sys.stderr)
+            continue
+        removed.append(path)
+        print(f"[isolation] removed stale runtime dir {path} ({reason})", file=sys.stderr)
+    return removed
 
 
 def isolate(prefix):
@@ -92,6 +254,8 @@ def isolate(prefix):
     resolver that read a variable this env does not set would place the lock
     outside the dir, and `doctor --paths` would say so."""
     global RUNDIR, LOCK
+    sweep_stale_runtime_dirs(prefix, tempfile.gettempdir())
+    guard_exit()
     rundir = new_runtime_dir(prefix)
     os.environ.update(runtime_env(rundir))
     lock = lock_path(rundir)
@@ -416,7 +580,10 @@ def spawn(args, env=None, bin_path=None, **popen):
     check passes on the env it will see. `bin_path` runs a copy of the binary
     (the attestation tests)."""
     require_isolated(env)
-    return subprocess.Popen([bin_path or BIN, *args], env=env, **popen)
+    proc = subprocess.Popen([bin_path or BIN, *args], env=env, **popen)
+    CHILDREN[:] = [p for p in CHILDREN if p.poll() is None]
+    CHILDREN.append(proc)
+    return proc
 
 
 def run_cli(args, env=None, input=None, stdin=None, check=False, timeout=15):
@@ -718,14 +885,17 @@ def capture_tools_list():
     `moon run fmt-ts` afterwards; the suite's catalogue test then pins it)."""
     ensure_binary()
     isolate("bb-capture-")
-    remove_lock()
-    srv = start_server()
     try:
-        if wait_lock(srv) is None:
-            sys.exit("the server wrote no lock; see its stderr: " + server_stderr(srv))
-        tools = McpClient(srv).modern_tools_list(_id=1)["result"]["tools"]
+        remove_lock()
+        srv = start_server()
+        try:
+            if wait_lock(srv) is None:
+                sys.exit("the server wrote no lock; see its stderr: " + server_stderr(srv))
+            tools = McpClient(srv).modern_tools_list(_id=1)["result"]["tools"]
+        finally:
+            reap(srv)
     finally:
-        reap(srv)
+        teardown()
     with open(TOOLS_LIST_PATH, "w") as f:
         json.dump(tools, f, indent=2, sort_keys=True)
         f.write("\n")
@@ -788,7 +958,7 @@ class BridgeCase(unittest.TestCase):
         def restore():
             global LOCK
             LOCK = saved
-            shutil.rmtree(rundir, ignore_errors=True)
+            remove_runtime_dir(rundir)
 
         self.addCleanup(restore)
         return env

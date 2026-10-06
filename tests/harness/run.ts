@@ -29,7 +29,6 @@ import {
   existsSync,
   constants as fsConstants,
   mkdirSync,
-  mkdtempSync,
   openSync,
   readdirSync,
   readFileSync,
@@ -40,14 +39,23 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-// fake-llm.ts is builtins-only like this file, and its main() is guarded by
-// import.meta.main, so this value import keeps the suite zero-install.
+// fake-llm.ts and owned-dirs.ts are builtins-only like this file, and fake-llm's main() is guarded by
+// import.meta.main, so these value imports keep the suite zero-install.
 import {
   ANTHROPIC_TOOL_USE_ID,
   MAX_LIFETIME_MS as FAKE_LLM_MAX_LIFETIME_MS,
   OPENAI_CALL_ID,
   type RecordedRequest,
 } from "./fake-llm";
+import {
+  joinSignalTeardown,
+  ownedChild,
+  ownedTempDir,
+  removeAllOwnedDirs,
+  removeOwnedDir,
+  sweepStaleDirs,
+  teardownOnSignals,
+} from "./owned-dirs";
 
 const usage = "usage: bun tests/harness/run.ts [--mint-seeds <dir>] [--require-any]";
 
@@ -57,6 +65,13 @@ const FAKE_LLM = resolve(REPO, "tests", "harness", "fake-llm.ts");
 const CAPTURE_DIR = resolve(REPO, "build", "harness-captures");
 // The name the bridge is registered under in each harness's isolated config.
 const SERVER_NAME = "chromium-bridge";
+// The temp dirs one run creates, by prefix; the startup sweep clears a killed run's.
+//   bb-harness-<name>-  -> a harness's isolated config home
+//   bbh-                -> the server's runtime dir (short: the binary refuses one whose socket path overruns sun_path, ipc/runtime_dir.rs)
+//   bbf-                -> the fake LLM backend's portfile
+const SCRATCH_PREFIX = "bb-harness-";
+const RUNTIME_PREFIX = "bbh-";
+const FAKE_LLM_PREFIX = "bbf-";
 // The bridge-side tool the live fake-LLM probes drive end to end.
 const LIVE_TOOL = "tab_list";
 // Wire literals pinned in src/packages/core/src/protocol.rs
@@ -313,12 +328,12 @@ interface FakeLlm {
  * spawned (and is safe to call twice). The log lands in CAPTURE_DIR so CI
  * uploads it green or red. */
 async function startFakeLlm(logPath: string): Promise<FakeLlm> {
-  const dir = mkdtempSync(join(tmpdir(), "bbf-"));
+  const dir = ownedTempDir(FAKE_LLM_PREFIX);
   const portfile = join(dir, "port");
   const log = openSync(logPath, "a");
-  const child = spawn(process.execPath, [FAKE_LLM, "--portfile", portfile], {
-    stdio: ["ignore", log, log],
-  });
+  const child = ownedChild(
+    spawn(process.execPath, [FAKE_LLM, "--portfile", portfile], { stdio: ["ignore", log, log] }),
+  );
   // A spawn-level failure (ENOMEM and friends) is an EventEmitter error
   // event, which would throw uncaught without a listener; surface it
   // through the poll loop instead.
@@ -332,7 +347,7 @@ async function startFakeLlm(logPath: string): Promise<FakeLlm> {
     stopped = true;
     child.kill();
     closeSync(log);
-    rmSync(dir, { recursive: true, force: true });
+    removeOwnedDir(dir);
   };
   try {
     const deadline = Date.now() + 15_000;
@@ -900,9 +915,8 @@ async function runHarness(harness: Harness): Promise<HarnessReport> {
     return report("skipped", detail);
   }
 
-  const scratch = mkdtempSync(join(tmpdir(), `bb-harness-${harness.name}-`));
-  // Short on purpose: the binary refuses a runtime dir whose socket path overruns sun_path (ipc/runtime_dir.rs).
-  const runtime = mkdtempSync(join(tmpdir(), "bbh-"));
+  const scratch = ownedTempDir(`${SCRATCH_PREFIX}${harness.name}-`);
+  const runtime = ownedTempDir(RUNTIME_PREFIX);
   const capture = join(CAPTURE_DIR, `${harness.name}.ndjson`);
   try {
     const ctx: HarnessContext = {
@@ -979,9 +993,9 @@ async function runHarness(harness: Harness): Promise<HarnessReport> {
     };
   } finally {
     // The capture (in CAPTURE_DIR) survives; only the isolated config homes
-    // and the server's scratch state go.
-    rmSync(scratch, { recursive: true, force: true });
-    rmSync(runtime, { recursive: true, force: true });
+    // and the server's scratch state go. A survivor stays owned, and main
+    // retries it once more before the verdict.
+    removeAllOwnedDirs();
   }
 }
 
@@ -991,6 +1005,8 @@ async function main(): Promise<number> {
     console.log("[harness-smoke] SKIP: the tee shim is POSIX sh; Windows is not covered");
     return 0;
   }
+  sweepStaleDirs([SCRATCH_PREFIX, RUNTIME_PREFIX, FAKE_LLM_PREFIX], tmpdir());
+  teardownOnSignals();
   ensureBinary();
   rmSync(CAPTURE_DIR, { recursive: true, force: true });
   mkdirSync(CAPTURE_DIR, { recursive: true });
@@ -1019,6 +1035,11 @@ async function main(): Promise<number> {
       `${failed.length} failed, ${reports.length - probed.length - failed.length} skipped; ` +
       `captures in ${CAPTURE_DIR}`,
   );
+  const survived = removeAllOwnedDirs();
+  if (survived.length > 0) {
+    console.error(`[harness-smoke] FAILED: temp dirs survived: ${survived.join(", ")}`);
+    return 1;
+  }
   if (failed.length > 0) {
     console.error(`[harness-smoke] FAILED: ${failed.map((report) => report.name).join(", ")}`);
     return 1;
@@ -1033,5 +1054,15 @@ async function main(): Promise<number> {
 }
 
 if (import.meta.main) {
-  process.exit(await main());
+  let code = 1;
+  try {
+    code = await main();
+  } finally {
+    // A signal that kills a probe's child also completes the probe; its teardown must finish first,
+    // and then the re-raised signal ends the process. The ordinary error exit (a thrown probe) has no
+    // other path to the owned dirs.
+    await joinSignalTeardown();
+    removeAllOwnedDirs();
+  }
+  process.exit(code);
 }

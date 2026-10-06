@@ -332,7 +332,7 @@ tasks:
     command: 'bun test scripts/tests/fuzz-smoke.test.ts'
 
   check-harness-driver:
-    description: 'Unit test for the harness-smoke driver (--mint-seeds refuses an output dir inside the repository)'
+    description: 'Unit tests for the harness-smoke driver (--mint-seeds refuses an output dir inside the repository; the sweep removes only the dirs of a dead owner; SIGTERM stops its children, removes its dirs, and exits by the signal)'
     deps: ['~:install-deps']
     command: 'bun test tests/harness/run.test.ts'
 
