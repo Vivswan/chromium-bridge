@@ -133,19 +133,12 @@ pub(crate) fn write_private_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
-    /// A scratch directory unique to one test, so parallel tests never
-    /// collide. Cleared at the start of each run, so a previous run's
-    /// leftovers never leak in; left behind afterwards (temp dir).
-    fn scratch(test: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "chromium-bridge-fsguard-test-{}-{test}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch() -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix("chromium-bridge-fsguard-test-")
+            .tempdir()
+            .unwrap()
     }
 
     #[cfg(unix)]
@@ -164,7 +157,8 @@ mod tests {
             ),
             ("rw", open_private_rw as fn(&Path) -> io::Result<fs::File>),
         ] {
-            let dir = scratch(&format!("symlink-{name}"));
+            let tmp = scratch();
+            let dir = tmp.path();
             let target = dir.join("target");
             let link = dir.join("guarded");
             fs::write(&target, b"").unwrap();
@@ -189,7 +183,8 @@ mod tests {
             ),
             ("rw", open_private_rw as fn(&Path) -> io::Result<fs::File>),
         ] {
-            let dir = scratch(&format!("mode-{name}"));
+            let tmp = scratch();
+            let dir = tmp.path();
             // Fresh create: 0600 from the open itself.
             let fresh = dir.join("fresh");
             open(&fresh).unwrap();
@@ -212,7 +207,8 @@ mod tests {
     #[test]
     fn set_private_mode_strips_group_and_other_bits() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = scratch("chmod");
+        let tmp = scratch();
+        let dir = tmp.path();
         let path = dir.join("loose");
         fs::write(&path, b"").unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
@@ -222,7 +218,8 @@ mod tests {
 
     #[test]
     fn ensure_private_dir_creates_refuses_symlink_and_tightens() {
-        let root = scratch("dir");
+        let tmp = scratch();
+        let root = tmp.path();
         // Fresh create (with parents) is owner-only.
         let fresh = root.join("a/b");
         ensure_private_dir(&fresh).unwrap();
@@ -249,7 +246,8 @@ mod tests {
 
     #[test]
     fn read_capped_refuses_an_oversized_file_and_passes_a_small_one() {
-        let dir = scratch("read-capped");
+        let tmp = scratch();
+        let dir = tmp.path();
         let path = dir.join("record.json");
         assert!(read_capped(&path, 16).unwrap().is_none(), "absent is None");
         fs::write(&path, vec![b'x'; 17]).unwrap();
@@ -267,7 +265,8 @@ mod tests {
     #[test]
     fn write_private_atomic_is_owner_only_and_replaces_a_planted_loose_file() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = scratch("planted-record");
+        let tmp = scratch();
+        let dir = tmp.path();
         let path = dir.join("record.json");
         // A world-readable file planted at the destination is replaced, never written through
         // (which would keep its 0644 mode on the secret).
@@ -282,7 +281,7 @@ mod tests {
             "mode {:o} leaks group/other bits",
             mode_of(&path)
         );
-        let leftovers: Vec<_> = fs::read_dir(&dir)
+        let leftovers: Vec<_> = fs::read_dir(dir)
             .unwrap()
             .map(|e| e.unwrap().file_name())
             .filter(|n| n != "record.json")
