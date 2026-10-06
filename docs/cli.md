@@ -223,7 +223,7 @@ Diagnostics in both modes go to **stderr** (stdout carries protocol frames). Two
 
 The same events are appended as strict JSON records to a durable, size-capped `audit.log` (0600, in the runtime directory next to the lock file), which survives the short-lived processes that write it. Each record names its event in `event_kind`; the JSON stderr form wraps the record in a `"kind":"audit"` envelope, so a collector keys on `kind` and reads the event from `event_kind`.
 
-- **No sensitive content is recorded:** no page text, cookie or storage values, eval return values, or form fill values; masking happens on the extension side ([threat model](./security/threat-model.md)).
+- **No sensitive content is recorded:** no page text, cookie or storage values, eval return values, or form fill values; masking happens on the extension side ([trust boundaries](./security/trust-boundaries.md)).
 - **Correlation:** a tool-call line carries its request id (`req`) and the generation of the browser connection the call was routed to (`conn`); the generation increments on every re-attach, so a reconnect starts a new `conn`.
 - **Two extension-local kinds never reach `audit.log`:** `policy_refused` and `policy_compromised` stay in the extension's own audit ring by design, outside the forwarding whitelist; the host records every policy transition as `policy_write`.
 

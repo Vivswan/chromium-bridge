@@ -10,8 +10,8 @@
 //! host_key.json    -> the scalar itself, 0600 beside trust.json, when the user ran `pair --file-store`
 //! ```
 //!
-//! A same-user process can read the scalar wherever it lives; threat-model.md names that as the narrowing
-//! accepted when the Secure Enclave key left.
+//! A same-user process can read the scalar wherever it lives; docs/security/trust-boundaries.md names that as the
+//! accepted narrowing of a software host key: it identifies the installation and nothing stronger.
 
 mod challenge;
 mod cli;

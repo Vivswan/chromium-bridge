@@ -1,5 +1,7 @@
 # Security policy
 
+How to report a vulnerability, what is in scope, the defaults that fail safe, how release artifacts are verified, and the bar a security-relevant change must clear. What the bridge promises and where it stops is the [security page](../docs/security.md); the mechanism and every accepted residual per boundary is the [trust boundaries ledger](../docs/security/trust-boundaries.md).
+
 ## Reporting a vulnerability
 
 **Do not open a public issue for security problems.**
@@ -23,70 +25,40 @@ What to expect, and what we ask:
 
 Only the latest release is supported.
 
-chromium-bridge drives a **real, logged-in browser** on the user's machine. It can read page content, cookies (including httpOnly), and web storage, and can execute JavaScript in pages.
-
 ## Scope
+
+chromium-bridge drives a real, logged-in browser on the user's machine. It can read page content, cookies (including httpOnly), and web storage, and can execute JavaScript in pages.
 
 In scope:
 
-- the Rust binary in all its roles: MCP server/broker, native host, the registration engine, the enrollment and presence ceremonies, the kill switch, the audit trail,
+- the Rust binary in all its roles: MCP server and broker, native host, the registration engine, the pairing and presence ceremonies, the kill switch, the audit trail,
 - the bridge socket and its authentication,
 - harness admission and the trusted-client allowlist,
 - the revocation epoch,
-- the MV3 extension (background/content/confirmation window),
+- the MV3 extension (background, content, the confirmation window, the options page),
 - the site allowlist and confirmation model,
+- the host-owned policy and its signature,
 - masking.
 
 Examples of in-scope issues:
 
 - bypassing the site allowlist or a confirmation prompt,
-- exfiltrating cookies/storage/page content past the mask,
+- exfiltrating cookies, storage, or page content past the mask,
 - a page influencing the extension into acting on a non-approved origin,
 - the bridge socket accepting an unauthenticated or unattested peer,
 - a harness served despite an enrolled allowlist that does not match it,
-- releasing the kill switch without user presence,
-- forging an Enclave presence verdict,
+- releasing the kill switch, or relaxing the policy, without user presence,
+- forging a WebAuthn presence verdict, or answering a presence request from the window on a browser with an enrolled credential,
 - privilege escalation via the native messaging host.
 
 Out of scope:
 
 - anything requiring a pre-compromised machine,
-- a malicious MCP client the user themselves paired (a paired client is trusted by design; see the [threat model](../docs/security/threat-model.md)).
-
-## The security model (summary)
-
-See [docs/security/](../docs/security/) for the full picture:
-
-- [security-bar.md](../docs/security/security-bar.md): the bar in one line, the attackers it answers, where it stops, and the per-OS status. Read it first.
-- [threat-model.md](../docs/security/threat-model.md): actors, assets, what's trusted vs not, residual risks.
-- [trust-boundaries.md](../docs/security/trust-boundaries.md): the process/protocol boundaries and how each is enforced.
-- [tool-risk-matrix.md](../docs/security/tool-risk-matrix.md): every tool's blast radius and protections.
-
-The reasons behind the current model, and the alternatives each decision rejected, are in [rationale.md](../docs/security/rationale.md).
-
-Key invariants:
-
-- **stdout is protocol.** The binary never prints diagnostics there; only framed/NDJSON messages (a stray write corrupts the stream).
-- **Read-only credential access.** Cookies/storage can be read (masked), never written. There is no `cookie_set`/`storage_set` by design.
-- **Approve-per-origin.** Page ops need an allowlisted origin.
-- **Confirm high-risk.** Submit/link clicks, key presses, selects, tab close, uploads, and `page_eval` confirm on an extension-owned window the page cannot reach. On an enrolled Mac, `page_eval` and `page_upload` approval is a Secure Enclave user-presence signature (Touch ID or the login password).
-- **Gates are on by default.** Each is a documented setting, and relaxing one is an explicit, informed choice (see the defaults table below).
-- **Bridge auth.** No bridge connection is served until it passes the four gates below, in order.
-- **Harness admission.** Once the trusted-client allowlist exists, no MCP client is served unless its attested code identity matches an entry; authorization keys on the attested anchor, never a self-asserted name.
-- **Any-side revocation.** A monotonic epoch is re-read at every enforcement point; revoking from any surface drops live connections and refuses re-attach, fail-closed.
-- **Fail-closed kill switch.** One latch halts everything from any trusted surface; release demands proof of user presence and refuses on an unreadable record.
-- **Log-after-decide audit.** Security decisions (admissions, refusals, confirmations, revocations, kill transitions, tool calls) are recorded to stderr and a durable 0600 `audit.log`. Recording can never gate or fail a decision; a failed write drops the record visibly (a `dropped` counter) rather than blocking.
-
-The bridge auth gates, in order:
-
-1. the kernel peer-UID check,
-2. mutual kernel-attested executable identity,
-3. an HMAC-SHA256 challenge-response over a per-run secret (0600 lock file),
-4. a mandatory role-declaring attach frame.
+- a malicious MCP client the user themselves paired (a paired client is trusted by design; the [non-goals](../docs/security.md#explicit-non-goals)).
 
 ## Platform support
 
-The bridge guarantees hold on macOS, Linux, and Windows; the mechanism behind each differs per OS.
+The bridge guarantees hold on macOS, Linux, and Windows; the mechanism behind each differs per OS. The gates are the [ledger's boundary 2](../docs/security/trust-boundaries.md#boundary-2-rust-mcp-server---native-host--bridge-socket-ndjson); this table is the per-OS state.
 
 | Mechanism | macOS and Linux | Windows |
 |-----------|-----------------|---------|
@@ -96,48 +68,47 @@ The bridge guarantees hold on macOS, Linux, and Windows; the mechanism behind ea
 | HMAC challenge-response | One gate of four | One gate of four |
 | Harness admission | Enforced on the attested identity | Enforced on the attested identity: the image hash plus the Authenticode publisher (the signer's X.500 subject) as the signer anchor |
 | Lock file (the per-run secret) | 0600 | No explicit restrictive mode; confidentiality rests on the default permissions of the per-user runtime directory |
+| User presence | The browser's WebAuthn authenticator on an enrolled browser; the confirmation window otherwise; a phrase typed on a terminal for the CLI | The same ladder |
+| Host key | `pair` mints it into the Keychain or the Secret Service, or a 0600 file with `--file-store` | `pair` mints it into the Credential Manager |
 
 What differs on Windows:
 
 - The runtime directory is normally `%LOCALAPPDATA%\chromium-bridge`, falling back to the temp directory when `LOCALAPPDATA` and `USERPROFILE` are unset; the temp directory is not guaranteed per-user.
-- The image is measured by re-opening its path; the [threat model](../docs/security/threat-model.md#residual-risks-accepted-tracked) records what that leaves open.
-- The parent pid Windows records is caller-selectable at `CreateProcess`, so the harness is measured as the creator of the server's stdin pipe instead; a console, or pipe ends opened by two different processes, fails closed, and the threat model records what remains.
+- The image is measured by re-opening its path; the [ledger](../docs/security/trust-boundaries.md#boundary-2-rust-mcp-server---native-host--bridge-socket-ndjson) records what that leaves open.
+- The parent pid Windows records is caller-selectable at `CreateProcess`, so the harness is measured as the creator of the server's stdin pipe instead; a console, or pipe ends opened by two different processes, fails closed, and the [ledger's boundary 1](../docs/security/trust-boundaries.md#boundary-1-mcp-client---rust-mcp-server--stdio-json-rpc-20) records what remains.
 - `pair-client --this-parent` is Unix-only for the same reason (a console command has no pipe creator); the [CLI page](../docs/cli.md#trusted-clients-pair-client--revoke-client--list-clients) owns how Windows pairs.
 - The publisher is read from the embedded Authenticode signature with no revocation check; a catalog-signed image (most of Windows itself) anchors by hash alone.
-- The full scoping is in the [threat model](../docs/security/threat-model.md) and [trust boundaries](../docs/security/trust-boundaries.md) docs.
-
-The Touch ID presence gates are macOS-only by nature; other platforms use the documented interactive fail-closed floors.
 
 ## page_eval and confirmation defaults (fail-safe)
 
 `page_eval` runs arbitrary JavaScript in a real, logged-in page, so its defaults are set to fail safe:
 
-- **Every `page_eval` call reconfirms.** The confirmation shows the full code, target URL, and tab title; on an enrolled Mac it is a Touch ID prompt.
+- **Every `page_eval` call reconfirms.** The confirmation shows the full code, the target origin, and the tab title on the extension-owned window.
 - **No silent-eval window.** `page_eval` is deliberately excluded from the same-origin grace window, so one approval never covers a later, different payload.
-- **The grace window is click-only.** `confirmGraceMs` (default 60000 ms) lets a repeated same-origin click/submit skip re-prompting within the window. Those clicks are lower-risk and observable in the UI.
+- **The grace window is click-only.** `confirmGraceMs` lets a repeated click or submit in the same tab, origin, and action kind skip re-prompting within the window; another tab on the same origin confirms again. Those clicks are lower-risk and observable in the UI.
 
-These are host-owned POLICY defaults: the table shows the signed policy contract's deny baseline, which governs once a host policy applies. A power user can still relax a field, and doing so is an explicit, informed choice:
+These are host-owned policy defaults: the table shows the signed policy contract's deny baseline, which governs once a host policy applies. A power user can still relax a field, and doing so is an explicit, informed choice:
 
 | Setting | Default | Relaxing it means | Residual risk you accept |
 |---------|---------|-------------------|--------------------------|
 | `confirmPageEval` | `true` | `false` = `page_eval` runs with no prompt | Arbitrary JS executes silently on approved origins |
 | `pageEvalEnabled` | `false` | `true` = `page_eval` can run at all (each call still confirms per the rows above) | The arbitrary-JS surface opens on approved origins |
-| `touchIdConfirm` | `true` | `false` = enrolled Macs fall back to the extension-window confirmation for `page_eval`/`page_upload` | The verdict is a window click the extension trusts, not a hardware tap |
+| `touchIdConfirm` | `true` | `false` = `page_eval` and `page_upload` approvals are never routed to a presence provider; no provider is installed today, so both values confirm on the window | When a WebAuthn route for those two lands, `false` keeps their approval a window click rather than an authenticator tap |
 | `confirmHighRiskClick` | `true` | `false` = high-risk clicks (submit/link) run with no prompt; `page_press` and `page_select` still confirm on every call regardless | A prompt-injected model can click submit/links on approved origins silently |
 | `confirmTabClose` | `true` | `false` = `tab_close` runs with no prompt | Silent data loss in a closed tab |
 | `confirmGraceMs` | `60000` | Larger = longer click/submit silence window; `0` = every click reconfirms | A same-origin click/submit within the window is silent (never eval) |
 
 How relaxing works:
 
-- **One write surface, one cost.** The CLI's `chromium-bridge policy` grant path signs the policy document with the enclave key, which raises the Touch ID user-presence prompt.
-- **Never silent.** The extension's options page no longer carries these toggles.
+- **One write surface, one cost.** `chromium-bridge policy set` signs the policy document with the host key behind a confirmation typed on a real terminal; `policy restrict` tightens for free. The [CLI page](../docs/cli.md#host-owned-policy-policy) owns both lanes.
+- **Never silent.** The extension's options page carries no relaxing toggle; its policy editor can only tighten.
 - **Always in force.** The site allowlist (per-origin) and the global kill switch apply regardless of the policy.
 
 The `pageEvalEnabled` baseline denies `page_eval` until an explicit grant: a pre-cutover install enforces the deny baseline, and so does every applied policy that does not grant it.
 
 ## Masking is heuristic and best-effort
 
-Cookie, storage, page-text, and `page_eval`-result masking is a **heuristic, best-effort** filter, not a guarantee. It is applied at the service-worker egress, once for both page backends; the rules live in `src/apps/extension/src/lib/shared/masking.ts`.
+Cookie, storage, page-text, and `page_eval`-result masking is a heuristic, best-effort filter, not a guarantee. It is applied at the service-worker egress, once for both page backends; the rules live in `src/apps/extension/src/lib/shared/masking.ts`.
 
 What it targets:
 
@@ -157,7 +128,7 @@ What it misses:
 - tokens broken up by characters outside the matched set (whitespace, `.`, `/`, `+`, `=`),
 - application-specific formats.
 
-The token rule keys off length plus the presence of a letter and a digit, not a true entropy measure. It can over-mask (a long mixed letter+digit identifier that is not secret) as well as under-mask.
+The token rule keys off length plus the presence of a letter and a digit, not a true entropy measure. It can over-mask (a long mixed letter-and-digit identifier that is not secret) as well as under-mask.
 
 Masking reduces accidental leakage into the model context and logs. It is not a substitute for treating any `page_eval` result or storage dump as potentially sensitive.
 
@@ -166,7 +137,7 @@ Masking reduces accidental leakage into the model context and logs. It is not a 
 
 ## Release artifact integrity
 
-Release binaries are built by GitHub Actions from the tagged commit, with a deterministic build, so the binary's hash can be re-derived from the tag. The pipeline is the repo-owned `.github/workflows/update-release.yml` hook, called by the managed ci.yml between the fleet's release and publish legs; the build recipe is `scripts/build-repro.ts` (pinned toolchain, path remapping, `SOURCE_DATE_EPOCH`, `--locked`). Pipeline mechanics: [docs/release.md](../docs/release.md).
+Release binaries are built by GitHub Actions from the tagged commit, with a deterministic build, so the binary's hash can be re-derived from the tag. The pipeline is the repo-owned `.github/workflows/update-release.yml` hook, called by the managed ci.yml between the fleet's release and publish legs. The build recipe is `scripts/build-repro.ts` (pinned toolchain, path remapping, `SOURCE_DATE_EPOCH`, `--locked`); pipeline mechanics are on the [release page](../docs/release.md).
 
 Each release publishes:
 
@@ -252,26 +223,16 @@ The moving `stable` tag is a real, accepted widening of the CI supply chain:
 - The mover, its gates, and the remaining trusts are recorded in repo-platform's [build-provenance.md](https://github.com/Vivswan/repo-platform/blob/main/docs/platform/build-provenance.md).
 - auto-format.yml pushes with `GITHUB_TOKEN`, whose commits trigger no CI, so a formatted PR head has no all-green result until someone re-runs CI. Fail-safe: the merge stays blocked.
 
-## Identifiers (rebrand, 2026-07)
+## Identifiers
 
-The project renamed from the upstream `browser-bridge` to `chromium-bridge`; the identifiers are our own, so upstream fixes are ported by hand instead of merged. The security-relevant identifiers are now:
+The security-relevant identifiers, each owned by the Rust core and generated into the TypeScript side (`moon run check-gen` keeps every copy pinned):
 
 | Identifier | Value | Note |
 |------------|-------|------|
-| native-messaging host id | `com.vivswan.chromium_bridge.host` | also the manifest filename stem and the extension's `connectNative` argument; `moon run check-gen` and `scripts/check-extension-id.ts` keep every copy pinned to `identity.rs` |
-| enclave keychain label | `com.vivswan.chromium-bridge.enclave.signing.v1` | |
-| enclave challenge domain | `chromium-bridge-enclave-v1` | host and extension changed together; no enrolled key predated the rename, so there was no key migration |
-| extension id | `mkjjlmjbcljpcfkfadfmhblmmddkdihf` | derived from the manifest `key`; did not change |
-
-An install registered under the old host id stops working until re-registered; that is a naming change, not a security regression.
-
-Upgrading from a pre-rebrand install leaves artifacts the current tooling (`doctor --fix`, `uninstall`, `revoke`) does not touch:
-
-- an old `com.browser_bridge.host.json` manifest,
-- the old `browser-bridge` runtime directory,
-- an Enclave key under the old `com.browser-bridge.enclave.signing.v1` label.
-
-Those leftovers grant no capability: the challenge domains differ, an old pin fails closed, and the new host reports `not_enrolled`. To remove them, run the old release's uninstaller and `browser-bridge revoke` with the old binary before switching over.
+| native-messaging host id | `com.vivswan.chromium_bridge.host` | also the manifest filename stem and the extension's `connectNative` argument; `scripts/check-extension-id.ts` keeps every copy pinned to `identity.rs` |
+| host-key credential-store entry prefix | `com.vivswan.chromium-bridge.enclave.signing.v1` | the runtime directory's digest is the suffix, so two directories never share one entry |
+| host-key challenge domain | `chromium-bridge-enclave-v1` | host and extension changed together |
+| extension id | `mkjjlmjbcljpcfkfadfmhblmmddkdihf` | derived from the manifest `key` |
 
 ## Lock poisoning policy (std::sync::Mutex)
 
@@ -291,19 +252,20 @@ A new `Mutex` in the core uses the wrapper or the same recovery; a site that ref
 
 A change is **security-relevant** if it:
 
-- adds/broadens a Chrome permission or host permission,
+- adds or broadens a Chrome permission or host permission,
 - adds a way to read new sensitive data, or any write capability,
 - changes confirmation, allowlist, masking, or presence-gate logic,
 - changes the bridge authentication, harness admission, the trusted-client allowlist, the revocation epoch, the kill switch, the lock file, or the run secret,
-- changes the enrollment ceremony, the Enclave key policy, or the audit trail's failure behavior,
-- adds outbound network/IPC, or widens `page_eval`.
+- changes the pairing ceremony, the host-key policy, the WebAuthn exchange, the policy signature, or the audit trail's failure behavior,
+- adds outbound network or IPC, or widens `page_eval`,
+- touches an [invariant](../docs/security/trust-boundaries.md#invariants-that-must-not-regress).
 
 Such a PR must:
 
 1. carry the [security-change](ISSUE_TEMPLATE/security-change.yml) checklist,
-2. update the [tool risk matrix](../docs/security/tool-risk-matrix.md), and (if it moves a trust boundary) the [threat model](../docs/security/threat-model.md),
-3. add a **negative** security test (proving the boundary holds), in addition to the positive one.
-4. name which row of [the security bar](../docs/security/security-bar.md) it moves and in which direction, or state that no row moves and why.
+2. update the [tool risk matrix](../docs/security/tool-risk-matrix.md), and, if it moves a boundary or a residual, the [trust boundaries ledger](../docs/security/trust-boundaries.md) (the residual it touches updates its ledger entry there; this file does not duplicate the entries),
+3. add a **negative** security test (proving the boundary holds), in addition to the positive one,
+4. name which row of [the security page](../docs/security.md) it moves and in which direction, or state that no row moves and why.
 
 The fuzzing rule for bespoke parsing at a trust boundary in the Rust core:
 
@@ -320,14 +282,11 @@ Extra review care applies to these security-critical surfaces:
 - `src/packages/core/src/trust.rs`
 - `src/packages/core/src/kill.rs`
 - `src/packages/core/src/presence/`
-- `src/packages/core/src/enclave/`
-- `src/packages/core/src/webauthn/` (the WebAuthn assertion verifier, the reason `p256` ships)
+- `src/packages/core/src/enclave/` (the host key)
+- `src/packages/core/src/webauthn/` (the WebAuthn verifier, the reason `p256` ships)
+- `src/packages/core/src/policy/`
 - `src/packages/core/src/registration.rs`
 - `src/packages/core/src/mcp/` (the rmcp seam)
-- the extension's allowlist/eval/confirmation code
+- the extension's allowlist, eval, and confirmation code
 - `src/apps/extension/src/entrypoints/options/PolicyEditor.tsx` and `src/apps/extension/src/lib/background/host-admin.ts` (the options page's policy restriction lane and registration repair)
 - `src/apps/extension/wxt.config.ts`
-
-### The host-owned policy residual ledger
-
-The host-owned policy work records every accepted residual it introduced in one place, the [residual ledger in the threat model](../docs/security/threat-model.md#host-owned-policy-residual-ledger). A change that touches one of those mechanisms updates its ledger entry there; this file deliberately does not duplicate the entries.

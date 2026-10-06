@@ -338,7 +338,7 @@ Broker exits when the last attached harness detaches.
 
 ## 6. Security model
 
-The full treatment is in [docs/security/](./security/); this is the map.
+The full treatment is in [docs/security.md](./security.md); this is the map.
 
 | Boundary | Mechanism | Rationale |
 |------|------|-----|
@@ -484,8 +484,8 @@ The `chrome.debugger` API is SW-only, cannot attach to `chrome://` or Web Store 
 
 1. **Snapshot accuracy**: the content-script a11y tree is an approximation (shadow DOM, complex ARIA); `page_snapshot_precise` is the authoritative fallback.
 2. **Cross-origin iframes**: the content script cannot read them.
-3. **Windows image measurement by path**: the pipe peer's image is hashed from its file path, a residual the [threat model](./security/threat-model.md#residual-risks-accepted-tracked) owns; the gates themselves (user-only pipe, mutual attestation, HMAC, harness admission) hold there as on Unix. See [SECURITY.md](../.github/SECURITY.md#platform-support).
-4. **Same-user attacker running our own binary**: kernel attestation distinguishes binaries, not intentions; see the [threat model](./security/threat-model.md) residuals.
+3. **Windows image measurement by path**: the pipe peer's image is hashed from its file path, a residual the [trust boundaries ledger](./security/trust-boundaries.md#boundary-2-rust-mcp-server---native-host--bridge-socket-ndjson) owns; the gates themselves (user-only pipe, mutual attestation, HMAC, harness admission) hold there as on Unix. See [SECURITY.md](../.github/SECURITY.md#platform-support).
+4. **Same-user attacker running our own binary**: kernel attestation distinguishes binaries, not intentions; see the [trust boundaries](./security/trust-boundaries.md) residuals.
 5. **Revocation latency to the extension**: the socket leg is immediate; the extension's reflection of a host-key revoke is bounded to the next service-worker wake.
 
 ## 10. Extension points
@@ -584,7 +584,7 @@ Demonstrated by: [store_tests.rs](../src/packages/core/src/policy/store/store_te
 - `policy_restrict { overlay }` (extension -> host) and `policy_restrict_result { ok, error? }` (host -> extension): the options page's policy editor tightening the effective policy through the unsigned restriction seam, which refuses anything that relaxes it; an applied restriction is followed by a `policy_current` carrying the written state, so the result carries the verdict alone. Loosening stays a signed write (`chromium-bridge policy set`).
 - `lang_get {}` / `lang_set { value }` (extension -> host) and `lang_current { value, seq }` (host -> extension): the shared `uiLanguage` preference (`runtime_dir()/lang.json`), deliberately outside the signed policy document - not signed, not ratcheted, unable to affect any security decision - with echo suppression by sequence number.
 
-The enforcement contract is asymmetric by design: policy that grants capability carries the host key's signature over the exact bytes and consumed a presence attestation when it was written, while policy that only removes capability travels free as the unsigned overlay. What a same-user process can do to the host key is a residual the [threat model](./security/threat-model.md#residual-risks-accepted-tracked) names.
+The enforcement contract is asymmetric by design: policy that grants capability carries the host key's signature over the exact bytes and consumed a presence attestation when it was written, while policy that only removes capability travels free as the unsigned overlay. What a same-user process can do to the host key is a residual the [trust boundaries ledger](./security/trust-boundaries.md#boundary-3-chrome---native-host--native-messaging-framing) names.
 
 A machine with no host key has no grant surface: `policy set` refuses up front until `pair` has minted one.
 

@@ -1,59 +1,54 @@
 # Incident response runbook
 
-> A realistic security incident handling process for a single-maintainer project, consistent with the reporting channel in [SECURITY.md](../../.github/SECURITY.md) and the assets/trust boundaries in [threat-model.md](threat-model.md). The trust boundaries are enumerated in [trust-boundaries.md](trust-boundaries.md); tool risk is in [tool-risk-matrix.md](tool-risk-matrix.md).
+How a suspected breach of a boundary is reported, graded, contained, fixed, and disclosed, sized for a single-maintainer project. The assets and the boundaries are the [security page's](../security.md); the invariants a fix restores are the [ledger's](trust-boundaries.md#invariants-that-must-not-regress).
 
 ## What counts as a security incident
 
-A compromise, or suspected compromise, of an asset protected in [threat-model.md](threat-model.md). For example:
+A compromise, or suspected compromise, of an asset the [security page](../security.md#what-is-at-stake-and-who-is-trusted) protects. For example:
 
-- a page operation executed on an **unauthorized origin**, bypassing the site allowlist or the confirmation prompt;
-- cookies / storage / page content / eval return values leaked past masking;
-- the bridge socket accepted an **unauthenticated** local peer, or the host manifest's `allowed_origins` was modified;
+- a page operation executed on an unauthorized origin, bypassing the site allowlist or the confirmation prompt;
+- cookies, storage, page content, or eval return values leaked past masking;
+- the bridge socket accepted an unauthenticated local peer, or the host manifest's `allowed_origins` was modified;
+- the kill switch released, or a policy relaxed, without a presence proof;
 - `page_eval` or its confirmation channel abused with irreversible consequences.
 
-Not incidents: anything requiring the machine to be compromised first, or a malicious MCP client the user configured themselves (trusted by design, see [SECURITY.md's Scope](../../.github/SECURITY.md#scope)).
+Not incidents: anything requiring the machine to be compromised first, or a malicious MCP client the user paired themselves (trusted by design, per the [scope](../../.github/SECURITY.md#scope)).
 
 ## Reporting channel
 
-**Do not open a public issue for a security problem.** Use GitHub's **[Report a vulnerability](https://github.com/Vivswan/chromium-bridge/security/advisories/new)** (Security -> Advisories) for a private report, including: what the attacker can do (the impact) and which trust boundary is crossed, reproduction steps or a PoC, and the affected versions/commits. As a small project, we will acknowledge within days and ask for a reasonable fix window.
+**Do not open a public issue for a security problem.** The private channel, what a useful report carries, and what to expect back are the [security policy's](../../.github/SECURITY.md#reporting-a-vulnerability).
 
 ## Triage
 
-After receiving a report, grade it with these questions (they track the blast radius in [tool-risk-matrix.md](tool-risk-matrix.md)):
+Grade a report with four questions; they track the blast radius in the [tool risk matrix](tool-risk-matrix.md):
 
-1. **Which trust boundary is crossed?** (See boundaries 1 through 4 in [trust-boundaries.md](trust-boundaries.md); boundary 4, the page boundary, is the most critical.)
-2. **What can be read or changed?** Does it reach credentials (cookie/storage tokens)? Are there write or irreversible consequences?
+1. **Which boundary is crossed?** Boundaries 1 through 4 in the [ledger](trust-boundaries.md); boundary 4, the page boundary, is the most critical.
+2. **What can be read or changed?** Does it reach credentials (cookie or storage tokens)? Are there write or irreversible consequences?
 3. **How strong are the preconditions?** Does it require the user to have authorized an origin, installed the extension, or a local same-UID process?
-4. **Is it reproducible?** Is there a PoC?
+4. **Is it reproducible?** Is there a proof of concept?
 
-Use that to decide between "mitigate now" and "schedule a fix". Credential leakage and allowlist/confirmation bypasses are the highest priority.
+The answers decide between "mitigate now" and "schedule a fix". Credential leakage and allowlist or confirmation bypasses are the highest priority.
 
 ## Immediate mitigation (user side, no code change needed)
 
-Users can take these actions themselves to **shrink the blast radius** before a patch is ready:
+Users can shrink the blast radius themselves before a patch is ready:
 
-- **Disable a single tool**: add the affected tool to the host policy's `disabledTools` with `chromium-bridge policy restrict --disabled-tools <list>` (the flag states the full comma-separated disabled list, so keep any tools already in it; the write is free, no Touch ID prompt, because a restriction only removes capability - see [cli.md](../cli.md#host-owned-policy-policy)). The host's dispatch gate then refuses the op with the stable `TOOL_DISABLED` code from [`ERROR_SPECS`](../../src/packages/core/src/error.rs) before any bridge traffic, and the extension enforces the pushed policy at its own boundary. A high-risk tool such as `page_eval` should be disabled first. Re-enabling it later is a relaxation and costs one signed, Touch ID-gated policy write - by design.
-- **Revoke the allowlist / turn off all-sites**: in Options / the popup, remove the authorization for the affected origins, and confirm `allowAllSites` is off. Removing an authorization also revokes that origin's host permission.
-- **Kill switch**: disable or remove the Chromium Bridge extension at `chrome://extensions`. Once the extension stops, the native host gets EOF on stdin and exits, which severs the bridge. If needed, also end the MCP client session so the MCP server process exits (confirm not reachable with `doctor`, see [the CLI page](../cli.md#doctor--status-read-only-self-check)).
-- **Uninstall the host manifest**: after deleting the native messaging host manifest, Chrome can no longer spawn the host (paths in [architecture.md section 4.3](../architecture.md#43-on-disk-artifacts)).
-
-> Mitigation order, from light to heavy: disable the high-risk tools first, then revoke the allowlist, then disable the extension, then uninstall the manifest.
+1. **Engage the kill switch:** `chromium-bridge kill`, or the extension's options page. Every tool call is refused and every browser connection is severed within about a second; the [CLI page](../cli.md#kill-switch-kill--unkill) owns the command and its release.
+2. **Disable a single tool:** `chromium-bridge policy restrict --disabled-tools <list>` adds it to the host policy's `disabledTools`. The flag states the whole comma-separated disabled list, so keep the tools already in it. The write is free (no presence prompt) because a restriction only removes capability.
+   - The host then refuses the tool with the stable `TOOL_DISABLED` code from [`ERROR_SPECS`](../../src/packages/core/src/error.rs) before any bridge traffic, and the extension enforces the pushed policy at its own boundary.
+   - Disable a high-risk tool such as `page_eval` first. Re-enabling it later is a relaxation and costs one signed policy write behind the terminal confirmation, by design ([the CLI page](../cli.md#host-owned-policy-policy)).
+3. **Revoke the allowlist, or turn off all-sites:** in the options page or the popup, remove the authorization for the affected origins and confirm `allowAllSites` is off. Removing an authorization also revokes that origin's host permission.
+4. **Stop the extension:** disable or remove it at `chrome://extensions`. The native host gets EOF on stdin and exits, which severs the bridge; end the MCP client session too so the MCP server exits, and confirm with `doctor` ([the CLI page](../cli.md#doctor--status-read-only-self-check)).
+5. **Uninstall the host manifest:** `chromium-bridge uninstall` removes the native-messaging registration, after which Chrome can no longer spawn the host ([the CLI page](../cli.md#doctor---fix--uninstall-native-messaging-registration)).
 
 ## Fix and verification
 
-- Locate the **invariant** that was crossed (see ["invariants that must not regress" in trust-boundaries.md](trust-boundaries.md#invariants-that-must-not-regress)).
-- The fix goes through the **security-relevant change** gate: fill in the [security-change checklist](../../.github/ISSUE_TEMPLATE/security-change.yml), update [tool-risk-matrix.md](tool-risk-matrix.md), and if a trust boundary changed, update [threat-model.md](threat-model.md) too.
-- **A negative security test is mandatory** to prove the boundary holds again (adding positive cases alone is not enough), per [SECURITY.md's review bar](../../.github/SECURITY.md#security-relevant-changes-review-bar).
+- Locate the [invariant](trust-boundaries.md#invariants-that-must-not-regress) that was crossed.
+- The fix goes through the [review bar](../../.github/SECURITY.md#security-relevant-changes-review-bar): the [security-change checklist](../../.github/ISSUE_TEMPLATE/security-change.yml), the [tool risk matrix](tool-risk-matrix.md), and the [ledger](trust-boundaries.md) if a boundary changed.
+- A negative security test proving the boundary holds again is mandatory; positive cases alone are not enough.
 
 ## Release and disclosure
 
-- Tag and release the fix per [release.md](../release.md); pre-1.0 only the latest release is supported (see [SECURITY.md's Supported versions](../../.github/SECURITY.md#supported-versions)), and security fixes ship as a new patch/minor.
-- Coordinate disclosure through a GitHub Security Advisory: give the reporter a reasonable fix window before going public, and after release, credit the reporter in the advisory and state the affected versions and mitigations.
-- Record the fix in [CHANGELOG.md](../../CHANGELOG.md).
-
-## Related
-
-- Reporting channel and review bar: [SECURITY.md](../../.github/SECURITY.md).
-- Assets, actors, non-goals: [threat-model.md](threat-model.md).
-- Boundaries and invariants: [trust-boundaries.md](trust-boundaries.md).
-- Symptoms and recovery: [troubleshooting.md](../troubleshooting.md).
+- Tag and release the fix per the [release page](../release.md). Pre-1.0 only the latest release is supported ([supported versions](../../.github/SECURITY.md#supported-versions)), and security fixes ship as a new patch or minor.
+- Coordinate disclosure through a GitHub Security Advisory: give the reporter a reasonable fix window before going public, and after release credit the reporter in the advisory and state the affected versions and mitigations.
+- The fix reaches the release notes through its Conventional Commit subject; the [release page](../release.md) owns how the changelog is produced.

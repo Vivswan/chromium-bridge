@@ -10,14 +10,14 @@ Because it operates the browser you are already signed into, an agent can do wha
 
 That power is also the risk. Read [Security first](#security-first) before you install.
 
-The bar this project holds itself to: a program you installed cannot use your browser without you noticing, held today on macOS, Linux, and Windows ([the security bar](./docs/security/security-bar.md) states it, and where it stops).
+The bar this project holds itself to: a program you installed cannot use your browser without you noticing, held today on macOS, Linux, and Windows ([the security page](./docs/security.md) states it, and where it stops).
 
 ## Security first
 
 chromium-bridge drives a real, authenticated browser. It can read page content, cookies (including `httpOnly`), and web storage, and can run JavaScript in your pages. The guardrails:
 
 - **Approve every site.** A new origin triggers a prompt; nothing runs on a site you have not approved.
-- **Confirm high-risk actions.** Submit clicks, key presses, tab close, file uploads, and every `page_eval` confirm on an extension-owned window the page cannot see or click. On a Mac enrolled via Touch ID, `page_eval` and `page_upload` approval is a Secure Enclave user-presence check (Touch ID or the login password) that no page can forge; what a same-user program can still do around the tap is in the [threat model's residuals](./docs/security/threat-model.md#residual-risks-accepted-tracked).
+- **Confirm high-risk actions.** Submit clicks, key presses, tab close, file uploads, and every `page_eval` confirm on an extension-owned window the page cannot see or click. `page_eval` and `page_upload` reconfirm on every call. What a same-user program can still do around that window is in the [trust boundaries ledger](./docs/security/trust-boundaries.md#boundary-4-extension---web-page--chrome-api--content-script--dom).
 - **Gates are on by default.** Each is a documented setting, and relaxing one is an explicit, informed choice ([SECURITY.md](./.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe)).
 - **Read-only credentials.** Cookies and storage can be read (always masked: JWTs, long hex, long digit runs), never written. There is no `cookie_set` or `storage_set` by design.
 - **Authenticated, attested bridge.** On macOS and Linux the host processes talk over a private Unix-domain socket (no listening port). Every connection must pass a kernel peer-UID check, kernel-attested executable identity, and an HMAC challenge over a per-run secret.
@@ -31,7 +31,7 @@ chromium-bridge drives a real, authenticated browser. It can read page content, 
 | macOS, Linux | private Unix-domain socket, no listening port | peer-UID check, kernel attestation, HMAC challenge |
 | Windows | named pipe only your user can open, no listening port | the pipe's descriptor (kernel-enforced), mutual attestation, HMAC challenge |
 
-Full details: [SECURITY.md](./.github/SECURITY.md), [threat model](./docs/security/threat-model.md), [trust boundaries](./docs/security/trust-boundaries.md), [per-tool risk matrix](./docs/security/tool-risk-matrix.md).
+Full details: [SECURITY.md](./.github/SECURITY.md), [security page](./docs/security.md), [trust boundaries](./docs/security/trust-boundaries.md), [per-tool risk matrix](./docs/security/tool-risk-matrix.md).
 
 ## Quickstart with the CLI (macOS, Linux, Windows)
 
@@ -247,7 +247,7 @@ Full runbook: [docs/cli.md](./docs/cli.md) and [docs/troubleshooting.md](./docs/
 |-----|--------------|
 | [docs/quickstart.md](./docs/quickstart.md) | Install and first use |
 | [docs/architecture.md](./docs/architecture.md) | Components, data flow, protocols, security model, key constraints |
-| [docs/security/](./docs/security/) | Threat model, trust boundaries, tool risk matrix, incident response |
+| [docs/security/](./docs/security/) | Trust boundaries ledger, tool risk matrix, rationale, incident response; the reader page is [docs/security.md](./docs/security.md) |
 | [docs/cli.md](./docs/cli.md) | The full CLI: doctor/--fix, uninstall, pairing, revocation, kill switch, audit |
 | [docs/troubleshooting.md](./docs/troubleshooting.md) | Symptom by symptom: doctor rows, kill-record recovery, version skew, the two WSL modes |
 | [docs/release.md](./docs/release.md) | Release-please releases, prebuilt archives + checksums, SBOM, which version moves when |
