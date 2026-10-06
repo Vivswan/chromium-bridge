@@ -74,13 +74,14 @@ pub fn attest_peer(stream: &BridgeStream) -> io::Result<()> {
     }
 }
 
-/// Verify the process named by `pid` is running the same executable image as
-/// us - [`attest_peer`], but keyed by pid instead of by a connected socket, so it carries the pid-reuse race
-/// noted on `peercred::peer_pid`: a positive match is the only signal that grants trust, every failure reads
-/// as "not our process". [`super::lockfile::listen_and_publish`] uses this to decide whether a lock
-/// naming a live pid belongs to a genuine peer broker (defer to it) or to a
-/// reused/foreign pid (supersede the stale lock). A mismatch returns
-/// `PermissionDenied`; an unmeasurable target propagates its own error.
+/// [`attest_peer`] keyed by pid instead of a connected socket, so it carries the pid-reuse race noted on
+/// `peercred::peer_pid`: a positive match is the only signal that grants trust.
+///
+/// ```text
+/// same image           -> Ok: listen_and_publish defers to the lock's live owner
+/// different image      -> PermissionDenied: a reused or foreign pid, the stale lock is superseded
+/// unmeasurable target  -> its own error, read the same way as a mismatch
+/// ```
 pub fn attest_pid(pid: u32) -> io::Result<()> {
     if os::pid_identity(pid)? == *own_identity()? {
         Ok(())

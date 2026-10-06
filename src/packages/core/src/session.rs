@@ -141,10 +141,8 @@ fn sever_pending_for_generation(
         .count()
 }
 
-/// Wake every caller. The kill sweep uses this because a kill is global, and every entry is in flight by
-/// construction (inserted already bound, immediately before its write): that includes entries whose generation
-/// is no longer in the registry (their connection was replaced by a same-label reconnect, or their reader
-/// already cleaned up).
+/// Wake every caller: a kill is global, and every entry is in flight (module docs), including those whose
+/// generation already left the registry.
 fn sever_pending_all(pending: &HashMap<u64, (Generation, mpsc::Sender<Delivery>)>) -> usize {
     pending
         .values()
@@ -422,8 +420,8 @@ impl Session {
         true
     }
 
-    /// The labels of all currently-connected browsers, sorted. A poisoned registry reads as empty, so
-    /// callers fail NotConnected rather than route on suspect state.
+    /// The labels of all currently-connected browsers, sorted. A poisoned registry reads as empty rather than
+    /// reporting labels from suspect state.
     pub fn labels(&self) -> Vec<String> {
         let mut labels: Vec<String> = match self.conns.lock() {
             Ok(guard) => guard.keys().map(|l| l.as_str().to_string()).collect(),
@@ -531,9 +529,7 @@ impl Session {
         let (tx, rx) = mpsc::channel::<Delivery>();
 
         // Resolve, register the pending entry, and send under the registry lock, so the chosen connection cannot be
-        // swapped between the decision and the write. The entry is inserted ALREADY BOUND to the connection's
-        // generation, immediately before the write: an unbound in-flight request is unrepresentable, and the response
-        // cannot beat the registration because the request is not on the wire until after the insert.
+        // swapped between the decision and the write, and the response cannot beat the registration.
         //   lock order     -> conns mutex THEN pending mutex, matching the reader-cleanup path, so no deadlock
         //   poisoned lock  -> refuse the call with a typed internal error instead of acting on suspect state
         let Ok(mut guard) = self.conns.lock() else {
