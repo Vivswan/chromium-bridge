@@ -297,8 +297,15 @@ kill:
   no_reply: "no reply from the native host"
 
 audit:
-  desc: "Recent security decisions, this browser only. Read-only; the durable trail lives on the host (`chromium-bridge audit`)."
+  desc: "Recent security decisions, read-only: this browser's own ring, then the host's durable trail."
+  browser_title: "This browser"
   empty: "No audit events recorded yet."
+  host_title: "Host trail"
+  host_desc: "The host's audit.log, the same records `chromium-bridge audit` prints (its default page); for more, `chromium-bridge audit --limit <n>`."
+  refresh: "Refresh"
+  host_loading: "Loading..."
+  host_error: "Could not read the host trail: $1"
+  host_empty: "no audit records yet (looked in $1)"
   kind_confirm_shown: "Confirmation shown"
   kind_confirm_allowed: "Confirmation approved"
   kind_confirm_denied: "Confirmation denied"

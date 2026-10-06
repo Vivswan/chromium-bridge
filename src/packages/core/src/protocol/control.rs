@@ -84,6 +84,10 @@ pub enum EnclaveControl {
 ///                               `doctor` diagnoses, after `doctor --fix`'s repair for the repair frame; rows travel
 ///                               exactly when ok (a repair that failed on any target answers ok: false and the
 ///                               extension re-asks for the rows)
+/// audit_read { limit? }      -> audit_read_result { ok, entries?, older?, path?, error? }: the newest records of the
+///                               host's audit.log, the page `chromium-bridge audit --limit <n>` prints (its default
+///                               when `limit` is absent; 1..=MAX_AUDIT_READ_LIMIT otherwise, out of range is
+///                               malformed); the page travels exactly when ok, an unreadable trail is ok: false
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
@@ -142,6 +146,24 @@ pub enum AdminControl {
         #[serde(skip_serializing_if = "Option::is_none")]
         cid: Option<String>,
     },
+    /// Extension -> host: read the newest records of the host's audit trail.
+    AuditRead {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        limit: Option<usize>,
+    },
+    /// Host -> extension: the trail page. `entries`, `older`, and `path` travel exactly when `ok`, `error`
+    /// exactly when not ([`AuditReport::into_frame`]).
+    AuditReadResult {
+        ok: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        entries: Option<Vec<AuditTrailEntry>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        older: Option<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     /// Extension -> host: report every known browser's native-messaging registration.
     RegistrationStatus {},
     /// Extension -> host: re-register the detected browsers (what `doctor --fix` does), then report.
@@ -155,6 +177,120 @@ pub enum AdminControl {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+}
+
+/// One line of the host's audit trail as the options page shows it: the three parts of the line
+/// `chromium-bridge audit` prints, spelled by `audit.rs` alone (the kind's wire name and the ` key=value`
+/// fields), with the timestamp left raw for the page to localize. An unparsable line keeps its position and
+/// carries the CLI's stand-in text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
+#[serde(tag = "entry", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AuditTrailEntry {
+    Record {
+        ts_ms: u64,
+        kind: String,
+        fields: String,
+    },
+    Unrecognized {
+        text: String,
+    },
+}
+
+impl From<&crate::audit::AuditEntry> for AuditTrailEntry {
+    fn from(entry: &crate::audit::AuditEntry) -> Self {
+        match entry {
+            crate::audit::AuditEntry::Record(rec) => AuditTrailEntry::Record {
+                ts_ms: rec.ts_ms,
+                kind: rec.kind_name(),
+                fields: rec.fields_display(),
+            },
+            crate::audit::AuditEntry::Unrecognized => AuditTrailEntry::Unrecognized {
+                text: crate::audit::UNRECOGNIZED_RECORD.into(),
+            },
+        }
+    }
+}
+
+/// The trail page as the host reports it, the [`KillStatus`] discipline applied: the page travels exactly
+/// when the trail was readable, an error exactly when not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuditReport {
+    Page {
+        /// Newest first, as `audit.rs` reads them.
+        entries: Vec<AuditTrailEntry>,
+        /// Lines older than the page, left out of it.
+        older: usize,
+        /// The live file, for the same empty state the CLI prints.
+        path: String,
+    },
+    Unavailable {
+        error: String,
+    },
+}
+
+impl From<crate::audit::AuditPage> for AuditReport {
+    fn from(page: crate::audit::AuditPage) -> Self {
+        AuditReport::Page {
+            entries: page.entries.iter().map(AuditTrailEntry::from).collect(),
+            older: page.older,
+            path: page.path.to_string_lossy().into_owned(),
+        }
+    }
+}
+
+impl AuditReport {
+    pub fn into_frame(self) -> AdminControl {
+        match self {
+            AuditReport::Page {
+                entries,
+                older,
+                path,
+            } => AdminControl::AuditReadResult {
+                ok: true,
+                entries: Some(entries),
+                older: Some(older),
+                path: Some(path),
+                error: None,
+            },
+            AuditReport::Unavailable { error } => AdminControl::AuditReadResult {
+                ok: false,
+                entries: None,
+                older: None,
+                path: None,
+                error: Some(error),
+            },
+        }
+    }
+}
+
+/// The most records one `audit_read` may ask for. The page shows a list, not the whole trail; the whole
+/// trail is `chromium-bridge audit --limit <n>`.
+pub const MAX_AUDIT_READ_LIMIT: usize = 1000;
+
+/// An `audit_read` limit, parsed once at the frame boundary into `1..=MAX_AUDIT_READ_LIMIT`: a zero or
+/// over-cap limit fails the frame parse, so the handler never sees one. Travels as the plain integer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct AuditReadLimit(usize);
+
+impl AuditReadLimit {
+    pub fn get(self) -> usize {
+        self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for AuditReadLimit {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let limit = usize::deserialize(deserializer)?;
+        if (1..=MAX_AUDIT_READ_LIMIT).contains(&limit) {
+            Ok(AuditReadLimit(limit))
+        } else {
+            Err(serde::de::Error::custom(format!(
+                "audit_read limit {limit} is outside 1..={MAX_AUDIT_READ_LIMIT}"
+            )))
+        }
+    }
 }
 
 /// One browser's registration as the options page shows it: the browser key, whether this user has the
@@ -567,6 +703,8 @@ pub enum HostControlTag {
     KillRelease,
     KillStatusResult,
     AuditEvent,
+    AuditRead,
+    AuditReadResult,
     RegistrationStatus,
     RegistrationRepair,
     RegistrationStatusResult,
@@ -610,6 +748,7 @@ impl HostControlTag {
             | HostControlTag::KillEngage
             | HostControlTag::KillRelease
             | HostControlTag::AuditEvent
+            | HostControlTag::AuditRead
             | HostControlTag::RegistrationStatus
             | HostControlTag::RegistrationRepair
             | HostControlTag::PolicyGet
@@ -627,6 +766,7 @@ impl HostControlTag {
             | HostControlTag::ClientListResult
             | HostControlTag::ClientRevokeResult
             | HostControlTag::KillStatusResult
+            | HostControlTag::AuditReadResult
             | HostControlTag::RegistrationStatusResult
             | HostControlTag::PolicyCurrent
             | HostControlTag::PolicyRestrictResult
@@ -692,6 +832,13 @@ impl HostControlTag {
                     .into(),
                 ))
             }
+            HostControlTag::AuditRead => MalformedReply::Send(Box::new(
+                AuditReport::Unavailable {
+                    error: "malformed audit_read frame".into(),
+                }
+                .into_frame()
+                .into(),
+            )),
             HostControlTag::PolicyRestrict => MalformedReply::Send(Box::new(
                 RestrictOutcome::Refused {
                     error: "malformed policy_restrict frame".into(),
@@ -740,6 +887,7 @@ impl HostControlTag {
             | HostControlTag::ClientListResult
             | HostControlTag::ClientRevokeResult
             | HostControlTag::KillStatusResult
+            | HostControlTag::AuditReadResult
             | HostControlTag::RegistrationStatusResult
             | HostControlTag::PolicyCurrent
             | HostControlTag::PolicyRestrictResult
@@ -873,6 +1021,12 @@ pub enum HostRequest {
         detail: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         cid: Option<String>,
+    },
+    /// Read-only; an absent `limit` reads as the CLI's default.
+    AuditRead {
+        #[cfg_attr(feature = "envelope-schema", schemars(with = "Option<usize>"))]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        limit: Option<AuditReadLimit>,
     },
     RegistrationStatus {},
     /// Re-registers the detected browsers through the same path as `doctor --fix`; idempotent, and

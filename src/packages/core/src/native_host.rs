@@ -24,9 +24,9 @@ use std::time::Duration;
 use crate::enclave::EnrollmentKey;
 use crate::ipc::{self, BrowserLabel};
 use crate::protocol::control::{
-    classify_nm_frame, host_control_type, AdminControl, EnclaveControl, FrameDisposition,
-    HostRequest, KillStatus, MalformedReply, PolicyControl, PolicyStatus, RegistrationReport,
-    RegistrationRow, RestrictOutcome,
+    classify_nm_frame, host_control_type, AdminControl, AuditReadLimit, AuditReport,
+    EnclaveControl, FrameDisposition, HostRequest, KillStatus, MalformedReply, PolicyControl,
+    PolicyStatus, RegistrationReport, RegistrationRow, RestrictOutcome,
 };
 use crate::protocol::{bridge_read, bridge_write, nm_read_frame, nm_write_frame};
 use crate::runtime_record::RuntimeRecord as _;
@@ -143,6 +143,20 @@ fn admin_client_revoke(name: &str) -> AdminControl {
             error: Some(e.to_string()),
         },
     }
+}
+
+/// Handle an `audit_read` frame: the newest records of the host's trail through the reader behind
+/// `chromium-bridge audit`, the CLI's default page size when the frame names none. Read-only; an unreadable
+/// trail answers its error and no entries.
+fn audit_read_reply(limit: Option<AuditReadLimit>) -> AdminControl {
+    let limit = limit.map_or(crate::audit::DEFAULT_AUDIT_LIMIT, AuditReadLimit::get);
+    match crate::audit::read(limit) {
+        Ok(page) => AuditReport::from(page),
+        Err(e) => AuditReport::Unavailable {
+            error: e.to_string(),
+        },
+    }
+    .into_frame()
 }
 
 /// Handle a `registration_status` frame: the per-browser rows `doctor` diagnoses, from one read of the
@@ -620,6 +634,7 @@ fn handle_request<W: Write>(
         HostRequest::KillStatus {} => write_control_reply(out, &kill_status_reply()),
         HostRequest::KillEngage {} => write_control_reply(out, &handle_kill_engage()),
         HostRequest::KillRelease {} => write_replies(out, exchange.kill_release()),
+        HostRequest::AuditRead { limit } => write_control_reply(out, &audit_read_reply(limit)),
         HostRequest::RegistrationStatus {} => {
             write_control_reply(out, &registration_status_reply())
         }

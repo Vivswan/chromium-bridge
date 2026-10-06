@@ -8,6 +8,7 @@ import { z } from "zod";
 import { ConfirmPayloadSchema } from "./confirm";
 import { AuditEntrySchema, KillMirrorSchema } from "./enclave";
 import {
+  AuditTrailEntrySchema,
   EnrollOptionsFrameSchema,
   PresenceRequestFrameSchema,
   RegistrationRowSchema,
@@ -215,6 +216,18 @@ export const RUNTIME_CONTRACT = contract({
     gate: "extension-page",
     req: z.strictObject({ type: z.literal("get_audit") }),
     res: z.object({ ok: z.literal(true), entries: z.array(AuditEntrySchema) }),
+  },
+  // The host's durable trail (its audit_read_result): the newest records `chromium-bridge audit` prints,
+  // newest first, with the count of older lines left out and the live file for the CLI's empty state.
+  get_host_audit: {
+    gate: "extension-page",
+    req: z.strictObject({ type: z.literal("get_host_audit") }),
+    res: z.object({
+      ok: z.literal(true),
+      entries: z.array(AuditTrailEntrySchema),
+      older: z.number().int().nonnegative(),
+      path: z.string(),
+    }),
   },
   // The popup found a pendingAllow record it cannot parse and asks the worker
   // to re-derive the mirror through its one serialized store path; a

@@ -266,6 +266,8 @@ $ chromium-bridge audit --limit 20
 
 A record the reader cannot parse is shown as `UNRECOGNIZED RECORD` and counted, never guessed at; a `dropped=n` field marks records lost to a failed write (a full disk, for example). Recording never blocks or fails an operation: the trail observes decisions, it does not gate them.
 
+The options page reads the same trail: its Recent activity section lists the host trail (the default page above, the host's own words per line) beside this browser's ring of local decisions.
+
 Error codes and the error taxonomy are in [architecture.md section 11.1](./architecture.md#111-error-taxonomy-error_specs).
 
 ## Related

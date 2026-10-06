@@ -55,6 +55,7 @@ const REQUESTS: { [K in RuntimeMsgType]: RuntimeRequest<K> } = {
   set_kill: { type: "set_kill", on: true },
   kill_release: { type: "kill_release" },
   get_audit: { type: "get_audit" },
+  get_host_audit: { type: "get_host_audit" },
   sweep_pending: { type: "sweep_pending" },
   lang_choose: { type: "lang_choose", value: "en" },
   enroll_pair: { type: "enroll_pair" },

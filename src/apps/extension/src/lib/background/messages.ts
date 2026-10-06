@@ -51,7 +51,12 @@ import {
   startPairing,
   verifyPinnedNow,
 } from "./enrollment";
-import { repairRegistration, requestRegistrationStatus, restrictPolicy } from "./host-admin";
+import {
+  repairRegistration,
+  requestHostAudit,
+  requestRegistrationStatus,
+  restrictPolicy,
+} from "./host-admin";
 import { engageKill, panicEngage, requestKillStatus } from "./kill";
 import { chooseLanguage, getPolicyPosture } from "./policy-sync";
 import { isNativeConnected } from "./port";
@@ -103,6 +108,7 @@ const HANDLERS: { [K in RuntimeMsgType]: Handler<K> } = {
   set_kill: engageKill,
   kill_release: beginKillRelease,
   get_audit: async () => ({ ok: true, entries: await readRing() }),
+  get_host_audit: requestHostAudit,
   // Re-derives the pending mirror through the one serialized store path: live
   // requests are rewritten, never deleted; with none, the ghost goes and the
   // badge clears.

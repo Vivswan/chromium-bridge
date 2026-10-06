@@ -497,6 +497,9 @@ pub fn run_audit(limit: usize) -> i32 {
     0
 }
 
+/// What stands in for a line the strict parse refused, on the CLI and on the options page alike.
+pub const UNRECOGNIZED_RECORD: &str = "UNRECOGNIZED RECORD (corrupt, tampered, or newer schema)";
+
 /// The page as the subcommand prints it: oldest first, one line per entry.
 fn render(page: &AuditPage) -> String {
     if page.entries.is_empty() && page.older == 0 {
@@ -506,10 +509,9 @@ fn render(page: &AuditPage) -> String {
     for entry in page.entries.iter().rev() {
         match entry {
             AuditEntry::Record(rec) => out.push_str(&format!("{rec}\n")),
-            AuditEntry::Unrecognized => out.push_str(&format!(
-                "{:<24} UNRECOGNIZED RECORD (corrupt, tampered, or newer schema)\n",
-                "-"
-            )),
+            AuditEntry::Unrecognized => {
+                out.push_str(&format!("{:<24} {UNRECOGNIZED_RECORD}\n", "-"))
+            }
         }
     }
     out
@@ -523,26 +525,42 @@ fn parse_record(line: &str) -> Option<AuditRecord> {
 }
 
 /// One human-facing line per record: UTC timestamp, kind, then the fields the record carries. The same
-/// line serves the `audit` subcommand and the `BB_LOG_FORMAT=text` stderr line.
+/// line serves the `audit` subcommand and the `BB_LOG_FORMAT=text` stderr line; the options page shows the
+/// same three parts ([`kind_name`](AuditRecord::kind_name), [`fields_display`](AuditRecord::fields_display)),
+/// so the words a reader sees are spelled here alone.
 impl fmt::Display for AuditRecord {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{}  {:<15}",
+            "{}  {:<15}{}",
             format_utc_ms(self.ts_ms),
-            serde_variant_name(&self.event_kind)
-        )?;
+            self.kind_name(),
+            self.fields_display()
+        )
+    }
+}
+
+impl AuditRecord {
+    /// The kind's wire name (`tool_call`), the word the `audit` line prints.
+    pub fn kind_name(&self) -> String {
+        serde_variant_name(&self.event_kind)
+    }
+
+    /// Every field the record carries after its kind, as the `audit` line prints them (` key=value`
+    /// each, a leading space included); empty when the record carries none.
+    pub fn fields_display(&self) -> String {
+        let mut out = String::new();
         if let Some(surface) = &self.surface {
-            write!(f, " surface={}", serde_variant_name(surface))?;
+            out.push_str(&format!(" surface={}", serde_variant_name(surface)));
         }
         if let Some(r) = self.req {
-            write!(f, " req={r}")?;
+            out.push_str(&format!(" req={r}"));
         }
         if let Some(c) = self.conn {
-            write!(f, " conn={c}")?;
+            out.push_str(&format!(" conn={c}"));
         }
         if let Some(c) = &self.cid {
-            write!(f, " cid={c}")?;
+            out.push_str(&format!(" cid={c}"));
         }
         for (k, v) in [
             ("tool", &self.tool),
@@ -552,16 +570,16 @@ impl fmt::Display for AuditRecord {
             ("detail", &self.detail),
         ] {
             if let Some(v) = v.as_deref() {
-                write!(f, " {k}={v}")?;
+                out.push_str(&format!(" {k}={v}"));
             }
         }
         if let Some(d) = self.dur_ms {
-            write!(f, " dur_ms={d}")?;
+            out.push_str(&format!(" dur_ms={d}"));
         }
         if let Some(d) = self.dropped {
-            write!(f, " dropped={d}")?;
+            out.push_str(&format!(" dropped={d}"));
         }
-        Ok(())
+        out
     }
 }
 

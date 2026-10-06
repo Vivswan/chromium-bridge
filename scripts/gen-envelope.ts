@@ -749,6 +749,7 @@ export const READER_FRAMES: Record<
       wire: "RegistrationStatusResultWireSchema",
       enforced: "RegistrationStatusResultSchema",
     },
+    audit_read_result: { wire: "AuditReadResultWireSchema", enforced: "AuditReadResultSchema" },
   },
   policy: {
     policy_current: { wire: "PolicyCurrentWireSchema", enforced: "PolicyCurrentFrameSchema" },
@@ -794,6 +795,7 @@ export const WRITER_FRAMES: Record<Group, Readonly<Record<string, string>>> = {
     kill_engage: "KillEngageWireSchema",
     kill_release: "KillReleaseWireSchema",
     audit_event: "AuditEventWireSchema",
+    audit_read: "AuditReadWireSchema",
     registration_status: "RegistrationStatusWireSchema",
     registration_repair: "RegistrationRepairWireSchema",
   },
@@ -1047,6 +1049,14 @@ async function main(): Promise<void> {
       wire: "RegistrationRowWireSchema",
       enforced: "RegistrationRowSchema",
       doc: "One browser's registration row (protocol::control::RegistrationRow), embedded in registration_status_result's `browsers` array.",
+    },
+    {
+      group: "admin",
+      tag: "audit_read_result",
+      field: "entries",
+      wire: "AuditTrailEntryWireSchema",
+      enforced: "AuditTrailEntrySchema",
+      doc: "One line of the host's audit trail (protocol::control::AuditTrailEntry), embedded in audit_read_result's `entries` array.",
     },
   ] as const satisfies readonly {
     group: Group;

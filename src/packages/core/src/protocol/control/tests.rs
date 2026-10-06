@@ -312,6 +312,33 @@ fn classification_matrix() {
             Malformed(Tag::PolicyGet),
         ),
         (
+            json!({ "type": "audit_read" }),
+            Handle(HostRequest::AuditRead { limit: None }),
+        ),
+        (
+            json!({ "type": "audit_read", "limit": 50 }),
+            Handle(HostRequest::AuditRead {
+                limit: Some(serde_json::from_value(json!(50)).unwrap()),
+            }),
+        ),
+        // The limit is bounded at the parse: zero, over the cap, or not an integer is malformed.
+        (
+            json!({ "type": "audit_read", "limit": 0 }),
+            Malformed(Tag::AuditRead),
+        ),
+        (
+            json!({ "type": "audit_read", "limit": MAX_AUDIT_READ_LIMIT + 1 }),
+            Malformed(Tag::AuditRead),
+        ),
+        (
+            json!({ "type": "audit_read", "limit": "50" }),
+            Malformed(Tag::AuditRead),
+        ),
+        (
+            json!({ "type": "audit_read", "extra": 1 }),
+            Malformed(Tag::AuditRead),
+        ),
+        (
             json!({ "type": "registration_status" }),
             Handle(HostRequest::RegistrationStatus {}),
         ),
@@ -442,6 +469,10 @@ fn classification_matrix() {
             Malformed(Tag::KillStatusResult),
         ),
         (
+            json!({ "type": "audit_read_result", "ok": true, "entries": [], "older": 0, "path": "/x" }),
+            Malformed(Tag::AuditReadResult),
+        ),
+        (
             json!({ "type": "registration_status_result", "ok": true, "browsers": [] }),
             Malformed(Tag::RegistrationStatusResult),
         ),
@@ -552,6 +583,11 @@ fn malformed_replies_match_the_request_type() {
             ),
         ),
         (
+            Tag::AuditRead,
+            Frame(json!({ "type": "audit_read_result", "ok": false,
+                          "error": "malformed audit_read frame" })),
+        ),
+        (
             Tag::PolicyRestrict,
             Frame(json!({ "type": "policy_restrict_result", "ok": false,
                           "error": "malformed policy_restrict frame" })),
@@ -596,6 +632,7 @@ fn malformed_replies_match_the_request_type() {
         (Tag::ClientListResult, Nothing),
         (Tag::ClientRevokeResult, Nothing),
         (Tag::KillStatusResult, Nothing),
+        (Tag::AuditReadResult, Nothing),
         (Tag::RegistrationStatusResult, Nothing),
         (Tag::PolicyCurrent, Nothing),
         (Tag::PolicyRestrictResult, Nothing),
@@ -689,6 +726,55 @@ fn registration_and_restrict_outcomes_map_onto_the_pinned_wire_shapes() {
         .unwrap(),
         json!({ "type": "policy_restrict_result", "ok": false,
                 "error": "relaxes the effective policy" })
+    );
+}
+
+#[test]
+fn audit_report_maps_onto_the_pinned_wire_shapes() {
+    // The wire contract the extension's audit reader consumes: the page's three fields travel exactly when
+    // `ok`, the error exactly when not, and an entry is the CLI line's parts under its `entry` tag.
+    assert_eq!(
+        serde_json::to_value(
+            AuditReport::Page {
+                entries: vec![
+                    AuditTrailEntry::Record {
+                        ts_ms: 3_000,
+                        kind: "pair_client".into(),
+                        fields: " surface=cli outcome=ok".into(),
+                    },
+                    AuditTrailEntry::Unrecognized {
+                        text: "UNRECOGNIZED RECORD (corrupt, tampered, or newer schema)".into(),
+                    },
+                ],
+                older: 1,
+                path: "/run/user/1000/chromium-bridge/audit.log".into(),
+            }
+            .into_frame()
+        )
+        .unwrap(),
+        json!({
+            "type": "audit_read_result",
+            "ok": true,
+            "entries": [
+                { "entry": "record", "ts_ms": 3000, "kind": "pair_client",
+                  "fields": " surface=cli outcome=ok" },
+                { "entry": "unrecognized",
+                  "text": "UNRECOGNIZED RECORD (corrupt, tampered, or newer schema)" },
+            ],
+            "older": 1,
+            "path": "/run/user/1000/chromium-bridge/audit.log",
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(
+            AuditReport::Unavailable {
+                error: "cannot read audit.log: permission denied".into(),
+            }
+            .into_frame()
+        )
+        .unwrap(),
+        json!({ "type": "audit_read_result", "ok": false,
+                "error": "cannot read audit.log: permission denied" })
     );
 }
 

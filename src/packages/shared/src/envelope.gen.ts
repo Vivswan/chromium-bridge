@@ -131,6 +131,33 @@ export const RegistrationRowSchema = z
 
 export type RegistrationRow = z.infer<typeof RegistrationRowSchema>;
 
+// One line of the host's audit trail (protocol::control::AuditTrailEntry), embedded in audit_read_result's `entries` array.
+export const AuditTrailEntryWireSchema = z.union([
+  z
+    .object({
+      "entry": z.literal("record"),
+      "fields": z.string(),
+      "kind": z.string(),
+      "ts_ms": z.number().int().gte(0),
+    })
+    .strict(),
+  z.object({ "entry": z.literal("unrecognized"), "text": z.string() }).strict(),
+]);
+
+export const AuditTrailEntrySchema = z.union([
+  z
+    .object({
+      "entry": z.literal("record"),
+      "fields": z.string(),
+      "kind": z.string(),
+      "ts_ms": z.number().int().gte(0),
+    })
+    .catchall(z.unknown()),
+  z.object({ "entry": z.literal("unrecognized"), "text": z.string() }).catchall(z.unknown()),
+]);
+
+export type AuditTrailEntry = z.infer<typeof AuditTrailEntrySchema>;
+
 // The host->extension control frames: the faithful base, then the enforced reader (the base plus the
 // asymmetry table, read loose under its loose-frames rule).
 export const EnclaveProofWireSchema = z
@@ -252,6 +279,42 @@ export const RegistrationStatusResultSchema = z.discriminatedUnion("ok", [
 ]);
 
 export type RegistrationStatusResult = z.infer<typeof RegistrationStatusResultSchema>;
+
+export const AuditReadResultWireSchema = z
+  .object({
+    "entries": z.union([z.array(AuditTrailEntryWireSchema), z.null()]).optional(),
+    "error": z.union([z.string(), z.null()]).optional(),
+    "ok": z.boolean(),
+    "older": z.union([z.number().int().gte(0), z.null()]).optional(),
+    "path": z.union([z.string(), z.null()]).optional(),
+    "type": z.literal("audit_read_result"),
+  })
+  .strict();
+
+export const AuditReadResultSchema = z.discriminatedUnion("ok", [
+  z
+    .object({
+      "entries": z.array(AuditTrailEntrySchema),
+      "error": z.undefined().optional(),
+      "ok": z.literal(true),
+      "older": z.number().int().gte(0),
+      "path": z.string(),
+      "type": z.literal("audit_read_result"),
+    })
+    .catchall(z.unknown()),
+  z
+    .object({
+      "entries": z.undefined().optional(),
+      "error": z.string(),
+      "ok": z.literal(false),
+      "older": z.undefined().optional(),
+      "path": z.undefined().optional(),
+      "type": z.literal("audit_read_result"),
+    })
+    .catchall(z.unknown()),
+]);
+
+export type AuditReadResult = z.infer<typeof AuditReadResultSchema>;
 
 export const PolicyCurrentWireSchema = z
   .object({
@@ -492,6 +555,7 @@ export const GENERATED_WIRE_FRAMES = {
     "client_revoke_result",
     "kill_status_result",
     "registration_status_result",
+    "audit_read_result",
   ],
   policy: ["policy_current", "policy_restrict_result", "lang_current"],
   webauthn: [
@@ -562,6 +626,15 @@ export const AuditEventWireSchema = z
   .strict();
 
 export type AuditEventWire = z.infer<typeof AuditEventWireSchema>;
+
+export const AuditReadWireSchema = z
+  .object({
+    "limit": z.union([z.number().int().gte(0), z.null()]).optional(),
+    "type": z.literal("audit_read"),
+  })
+  .strict();
+
+export type AuditReadWire = z.infer<typeof AuditReadWireSchema>;
 
 export const RegistrationStatusWireSchema = z
   .object({ "type": z.literal("registration_status") })
@@ -662,6 +735,7 @@ export const GENERATED_WRITER_FRAMES = {
     "kill_engage",
     "kill_release",
     "audit_event",
+    "audit_read",
     "registration_status",
     "registration_repair",
   ],

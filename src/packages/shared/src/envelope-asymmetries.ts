@@ -305,6 +305,26 @@ export const ASYMMETRIES: Readonly<Record<string, Readonly<Record<string, Asymme
       },
     ),
   },
+  audit_read_result: {
+    $: okSplit(
+      "audit_read_result",
+      { required: ["entries", "older", "path"], forbidden: ["error"] },
+      { required: ["error"], forbidden: ["entries", "older", "path"] },
+      {
+        refuses: [
+          { type: "audit_read_result", ok: true },
+          { type: "audit_read_result", ok: true, entries: [], older: 0 },
+          { type: "audit_read_result", ok: true, entries: [], older: 0, path: "/a", error: "e" },
+          { type: "audit_read_result", ok: false },
+          { type: "audit_read_result", ok: false, entries: [], error: "e" },
+        ],
+        accepts: [
+          { type: "audit_read_result", ok: true, entries: [], older: 0, path: "/a" },
+          { type: "audit_read_result", ok: false, error: "cannot read audit.log" },
+        ],
+      },
+    ),
+  },
   policy_restrict_result: {
     $: okSplit(
       "policy_restrict_result",

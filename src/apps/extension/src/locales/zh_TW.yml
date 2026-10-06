@@ -295,8 +295,15 @@ kill:
   no_reply: "原生主機沒有回應"
 
 audit:
-  desc: "最近的安全決定, 僅限此瀏覽器。唯讀; 持久紀錄保存在主機上 (`chromium-bridge audit`)。"
+  desc: "最近的安全決定, 唯讀: 先是此瀏覽器自己的環形紀錄, 然後是主機的持久紀錄。"
+  browser_title: "此瀏覽器"
   empty: "尚無稽核事件。"
+  host_title: "主機紀錄"
+  host_desc: "主機的 audit.log, 與 `chromium-bridge audit` 列印的紀錄相同 (預設頁); 更多請用 `chromium-bridge audit --limit <n>`。"
+  refresh: "重新整理"
+  host_loading: "載入中..."
+  host_error: "無法讀取主機紀錄: $1"
+  host_empty: "尚無稽核紀錄 (查找位置: $1)"
   kind_confirm_shown: "已顯示確認框"
   kind_confirm_allowed: "確認已核准"
   kind_confirm_denied: "確認已拒絕"
