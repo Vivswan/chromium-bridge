@@ -994,3 +994,164 @@ fn credential_storage_spelling_round_trips_and_validates_on_read() {
         Err(CredentialIdError::Length { len: 1 })
     );
 }
+
+// ---- Forgetting a browser's enrollments -------------------------------------------------------------------
+
+mod revoke_browser {
+    use super::*;
+    use crate::audit::{AuditKind, AuditRecord, Surface};
+    use crate::presence::{PresenceAttestation, PresencePath};
+    use crate::test_support::scratch_runtime_dir;
+    use crate::trust::TrustState;
+
+    fn label(s: &str) -> BrowserLabel {
+        BrowserLabel::parse(s).unwrap()
+    }
+
+    fn credential_with(seed: u8) -> Credential {
+        Credential {
+            id: CredentialId::parse(vec![seed; 32]).unwrap(),
+            public_key: public_key(&SigningKey::from_slice(&[seed; 32]).unwrap()),
+            sign_count: 0,
+            backup_eligible: false,
+        }
+    }
+
+    /// Plant `(label, seed)` enrollments as the store writes them: the first on first use, the rest approved.
+    fn plant(enrollments: &[(&str, u8)]) {
+        for (i, (browser, seed)) in enrollments.iter().enumerate() {
+            let authority = if i == 0 {
+                EnrollmentAuthority::FirstUse
+            } else {
+                EnrollmentAuthority::Approved(PresenceAttestation::assume_for_tests(
+                    PresencePath::Tty,
+                ))
+            };
+            record(&label(browser), credential_with(*seed), authority).unwrap();
+        }
+    }
+
+    fn fingerprint(seed: u8) -> String {
+        PresencePath::WebAuthn(CredentialId::parse(vec![seed; 32]).unwrap()).audit_label()
+    }
+
+    fn json(enrollments: &[Enrollment]) -> Vec<String> {
+        enrollments
+            .iter()
+            .map(|e| serde_json::to_string(e).unwrap())
+            .collect()
+    }
+
+    /// `(name, detail)` of every RevokeBrowser record in the trail, in order.
+    fn revoke_records() -> Vec<(String, String)> {
+        std::fs::read_to_string(crate::audit::audit_path().unwrap())
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<AuditRecord>(line).unwrap())
+            .filter(|r| r.event_kind == AuditKind::RevokeBrowser)
+            .map(|r| {
+                assert_eq!(r.outcome.as_deref(), Some("ok"), "{r:?}");
+                assert_eq!(r.surface, Some(Surface::Cli), "{r:?}");
+                (r.name.unwrap(), r.detail.unwrap())
+            })
+            .collect()
+    }
+
+    /// Forgetting a browser takes every enrollment under its label and nothing else: the other browsers'
+    /// survive byte for byte, only the epoch moves, and the trail carries one record per credential.
+    #[test]
+    fn forgets_every_enrollment_under_the_label_and_leaves_the_rest_byte_for_byte() {
+        let _dir = scratch_runtime_dir();
+        plant(&[
+            ("brave", 0x31),
+            ("chrome", 0x41),
+            ("brave", 0x32),
+            ("edge", 0x51),
+        ]);
+        let before = TrustState::current().unwrap();
+        let (gone, kept): (Vec<&Enrollment>, Vec<&Enrollment>) = before
+            .enrollments()
+            .iter()
+            .partition(|e| e.label.as_str() == "brave");
+
+        let revoked = revoke_browser(&label("brave"), Surface::Cli)
+            .unwrap()
+            .expect("brave was enrolled");
+
+        let after = TrustState::current().unwrap();
+        assert_eq!(
+            *revoked.trust, *after,
+            "the returned snapshot is the record"
+        );
+        assert_eq!(
+            json(&revoked.forgotten),
+            gone.iter()
+                .map(|e| serde_json::to_string(e).unwrap())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            json(after.enrollments()),
+            kept.iter()
+                .map(|e| serde_json::to_string(e).unwrap())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(after.epoch(), before.epoch() + 1);
+        assert_eq!(
+            (
+                after.killed(),
+                after.kill_epoch(),
+                after.host_key_epoch(),
+                after.policy_epoch(),
+                after.lang_epoch(),
+                after.clients(),
+            ),
+            (
+                before.killed(),
+                before.kill_epoch(),
+                before.host_key_epoch(),
+                before.policy_epoch(),
+                before.lang_epoch(),
+                before.clients(),
+            ),
+            "nothing but the enrollments and the epoch moved"
+        );
+        assert_eq!(
+            revoke_records(),
+            [0x31, 0x32]
+                .map(|seed| (
+                    "brave".to_string(),
+                    format!("credential={}", fingerprint(seed))
+                ))
+                .to_vec()
+        );
+    }
+
+    /// The last enrolled browser can be forgotten too, and the machine is then back on first use: the next
+    /// enrollment needs no approval, which is what the CLI tells the user.
+    #[test]
+    fn the_last_browser_is_forgotten_and_the_next_enrollment_is_first_use_again() {
+        let _dir = scratch_runtime_dir();
+        plant(&[("brave", 0x31)]);
+
+        let revoked = revoke_browser(&label("brave"), Surface::Cli)
+            .unwrap()
+            .expect("brave was enrolled");
+
+        assert_eq!(revoked.forgotten.len(), 1);
+        assert!(revoked.trust.enrollments().is_empty());
+        assert!(TrustState::current().unwrap().enrollments().is_empty());
+        record(
+            &label("chrome"),
+            credential_with(0x41),
+            EnrollmentAuthority::FirstUse,
+        )
+        .expect("an emptied store takes a first-use enrollment");
+        assert_eq!(
+            revoke_records(),
+            vec![(
+                "brave".to_string(),
+                format!("credential={}", fingerprint(0x31))
+            )]
+        );
+    }
+}

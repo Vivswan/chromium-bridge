@@ -4,9 +4,10 @@
 //! (`src/packages/core`); this binary parses argv once into a typed command
 //! and dispatches it. `chromium-bridge --help` lists the modes.
 
-use chromium_bridge_core::cli::{parse, Command};
+use chromium_bridge_core::cli::{parse, Command, RevokeTarget};
 use chromium_bridge_core::{
     allowlist, audit, doctor, enclave, kill, mcp_server, native_host, policy, registration,
+    webauthn,
 };
 
 fn main() {
@@ -19,7 +20,8 @@ fn main() {
         Command::NativeHost { label } => native_host::run(label),
         Command::Doctor(doctor) => doctor::run(doctor),
         Command::Pair { reset, file_store } => enclave::run_pair(reset, file_store),
-        Command::Revoke => enclave::run_revoke(),
+        Command::Revoke(RevokeTarget::Browser(label)) => webauthn::run_revoke_browser(&label),
+        Command::Revoke(RevokeTarget::All) => enclave::run_revoke_all(),
         Command::EnclaveStatus { json: false } => enclave::run_status(),
         Command::EnclaveStatus { json: true } => enclave::run_status_json(),
         Command::PairClient(client) => allowlist::run_pair_client(client),

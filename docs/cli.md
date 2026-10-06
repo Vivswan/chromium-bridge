@@ -17,7 +17,8 @@
 | `chromium-bridge doctor --fix --system` | repair / install (root) | The same, machine-wide: into the root-owned directories every account's browser reads. What the `.deb` runs after install. |
 | `chromium-bridge uninstall [--system]` | removal | Removes exactly the registrations this project wrote in that scope, nothing else. |
 | `chromium-bridge pair [--reset] [--file-store]` | enrollment | Mints the host key the extension pins, behind a confirmation typed on the terminal; the key lives in the OS credential store, or in a 0600 file with `--file-store`. |
-| `chromium-bridge revoke` | enrollment | Deletes the host key; a pinning extension then fails closed. |
+| `chromium-bridge revoke <browser>` | enrollment | Forgets that browser's enrolled authenticators; no proof needed, the browser enrolls again from its options page. |
+| `chromium-bridge revoke --all` | enrollment | Starts over: deletes the host key and the signed policy baseline, forgets every browser and every trusted client. A bare `revoke` is refused with the usage. |
 | `chromium-bridge enclave-status [--json]` | read-only | Prints the host key state, where it lives, and its fingerprint. |
 | `chromium-bridge pair-client --name <label> (--this-parent \| --hash <hex> \| --signer <id>)` | trusted clients | Adds an MCP-client harness to the trusted-client allowlist; presence-gated. |
 | `chromium-bridge revoke-client --name <label>` | trusted clients | Removes a client; a live broker drops it immediately. |
@@ -132,11 +133,17 @@ The host-key ceremony gives the extension one host identity to pin:
 
 - `chromium-bridge pair` asks for a confirmation typed on the terminal (a piped stdin is refused before any prompt), mints a P-256 host key, keeps it in the OS credential store (the Keychain, the Credential Manager, or the Secret Service), and prints the key's SHA-256 fingerprint. Compare that fingerprint with the one the extension shows on its enrollment screen; a mismatch means something sits between them.
 - `chromium-bridge pair --file-store` keeps the key in a 0600 file in the runtime directory instead, for a machine with no usable credential store. The choice is explicit: a store failure is reported, never silently redirected to the file.
-- `chromium-bridge pair --reset` asks for the confirmation first, then removes the previous key (from whichever store holds it) and mints a fresh one; the extension must re-pin. When the credential store does not answer, a `--file-store` reset proceeds with a warning that an entry the store may hold stays behind; run `revoke` again once the store answers.
-- `chromium-bridge revoke` deletes the key and confirms it is gone. The host pushes a revocation to the extension, which fails closed.
+- `chromium-bridge pair --reset` asks for the confirmation first, then removes the previous key (from whichever store holds it) and mints a fresh one; the extension must re-pin. When the credential store does not answer, a `--file-store` reset proceeds with a warning that an entry the store may hold stays behind; run `revoke --all` again once the store answers.
 - `chromium-bridge enclave-status [--json]` reports the current state read-only: whether a key is present, which store holds it, and its fingerprint.
 
 User presence for the browser's own acts (releasing the kill switch, enrolling a second browser) is a WebAuthn tap on the browser's authenticator, verified by the host. The options page's identity section enrolls the authenticator, and its kill panel answers the host's presence request with the tap.
+
+Forgetting is friction-free, because it only removes capability:
+
+- `chromium-bridge revoke <browser>` forgets every authenticator enrolled under that label (`brave`, `chrome`, the label the browser's host manifest carries). The browser's acts fall back to the confirmation window until it enrolls again from its options page; when it was the last enrolled browser, the next enrollment is first-time again.
+- `chromium-bridge revoke --all` starts over in one step: the host key is deleted, the policy record goes (the signed baseline and any restriction overlay), every browser is forgotten, and every trusted client is revoked, so a paired machine admits no client until `pair-client` trusts one again. The kill switch is not touched; release it with `unkill`.
+- After `revoke --all` a connected extension fails closed either way: by the revocation push when the credential store confirmed the key gone and the record write landed, otherwise at its next key verification. `revoke <browser>` leaves the host key and the pin alone.
+- A bare `chromium-bridge revoke` names neither and is refused with the usage.
 
 The CLI never raises that prompt: its own grants (`pair`, `pair-client`, `unkill`, `policy set`) are confirmed by the typed phrase on a real terminal.
 

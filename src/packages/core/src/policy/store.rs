@@ -603,16 +603,16 @@ fn bump_policy_epoch_locked(lock: &ipc::RuntimeLockToken) {
 ///                          epoch bump, so no concurrent WRITER lands a fresh baseline in between
 /// readers               -> take no lock; can see the baseline for the instant after the key is gone
 /// ```
-pub fn clear_baseline_locked(lock: &ipc::RuntimeLockToken) -> io::Result<()> {
+pub fn clear_baseline_locked(lock: &ipc::RuntimeLockToken) -> io::Result<bool> {
     let Some(prev) = PolicyStore::load()? else {
-        return Ok(());
+        return Ok(false);
     };
     push_history_locked(lock, &prev);
     PolicyStore::remove(lock)?;
     // A clear is a policy change like any write: on a successful bump the push drops the extension to its deny
     // baseline on the next tick; a failed bump (best-effort, logged) leaves it until its next connect.
     bump_policy_epoch_locked(lock);
-    Ok(())
+    Ok(true)
 }
 
 /// The overlay a grant write leaves behind: the stored entries minus those on the `touched` fields. The

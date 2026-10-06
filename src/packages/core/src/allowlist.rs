@@ -154,14 +154,20 @@ pub fn revoke(name: &str, surface: crate::audit::Surface) -> io::Result<bool> {
         Ok(true)
     })?;
     if removed {
-        crate::audit::record(
-            crate::audit::AuditRecord::new(crate::audit::AuditKind::RevokeClient)
-                .surface(surface)
-                .name(name)
-                .outcome("ok"),
-        );
+        audit_client_revoked(surface, name);
     }
     Ok(removed)
+}
+
+/// The [`AuditKind::RevokeClient`](crate::audit::AuditKind::RevokeClient) record one removed entry leaves.
+/// Call it after the write, outside the lock.
+pub(crate) fn audit_client_revoked(surface: crate::audit::Surface, name: &str) {
+    crate::audit::record(
+        crate::audit::AuditRecord::new(crate::audit::AuditKind::RevokeClient)
+            .surface(surface)
+            .name(name)
+            .outcome("ok"),
+    );
 }
 
 fn now_unix() -> u64 {

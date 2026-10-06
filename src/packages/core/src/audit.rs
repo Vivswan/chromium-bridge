@@ -84,6 +84,10 @@ pub enum AuditKind {
     /// fingerprint, and whether first use or an approved assertion authorized it; `refused` names the
     /// verifier's or the store's reason. Host-recorded only.
     Enroll,
+    /// Host: a browser's WebAuthn enrollments forgotten (`revoke <browser>`, `revoke --all`). One record per
+    /// forgotten credential: `name` is the browser label, `detail` the credential fingerprint. Host-recorded
+    /// only.
+    RevokeBrowser,
     /// Host: one policy write through `policy::set_signed` / `policy::restrict`:
     /// `ok` names the presence rung that authorized a grant
     /// (`auth=none` for a free restriction) and the touched fields; `refused`
