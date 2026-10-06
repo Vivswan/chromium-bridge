@@ -53,6 +53,7 @@ import {
 } from "./enrollment";
 import {
   repairRegistration,
+  requestDoctorReport,
   requestHostAudit,
   requestRegistrationStatus,
   restrictPolicy,
@@ -138,6 +139,7 @@ const HANDLERS: { [K in RuntimeMsgType]: Handler<K> } = {
   }) => assertPresence({ nonce, credential_id, authenticator_data, client_data_json, signature }),
   webauthn_presence_confirm: ({ nonce }) => confirmPresence(nonce),
   webauthn_forget: forgetBrowser,
+  get_doctor: requestDoctorReport,
   get_registration: requestRegistrationStatus,
   repair_registration: (msg) => repairRegistration(msg.browsers),
   get_policy: async () => ({ ok: true, posture: await getPolicyPosture() }),

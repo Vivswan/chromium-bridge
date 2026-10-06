@@ -354,30 +354,34 @@ pub fn audit_host_key_revoke(surface: crate::audit::Surface, revoked: &Revoked) 
 /// `tests/protocol/harness.py` reads to tell an enrolled machine from a fresh one.
 pub fn run_status() -> i32 {
     println!("chromium-bridge enclave-status");
-    match key_report() {
-        EnclaveStatusReport::Present {
-            store,
-            public_key_b64,
-            fingerprint,
-            ..
-        } => {
-            println!("key:        present ({KEY_LABEL}, {})", store_name(store));
-            println!("public key: {public_key_b64}");
-            println!("fingerprint (sha256):");
-            println!("  {fingerprint}");
-        }
-        EnclaveStatusReport::None { .. } => {
-            println!("key:        none (run `chromium-bridge pair`)")
-        }
-        EnclaveStatusReport::Invalid { detail, .. } => println!(
-            "key:        REJECTED - {detail}\n            treat it as untrusted; \
-             run `chromium-bridge pair --reset` to replace it"
-        ),
-        EnclaveStatusReport::Error { detail, .. } => {
-            println!("key:        lookup failed: {detail}")
-        }
+    let report = key_report();
+    println!("key:        {}", key_line(&report));
+    if let EnclaveStatusReport::Present {
+        public_key_b64,
+        fingerprint,
+        ..
+    } = report
+    {
+        println!("public key: {public_key_b64}");
+        println!("fingerprint (sha256):");
+        println!("  {fingerprint}");
     }
     0
+}
+
+/// The `key:` line's text: the state, and for a present key where it lives. Printed by `enclave-status` and
+/// shown by the options page, so the words are spelled here alone.
+pub(crate) fn key_line(report: &EnclaveStatusReport) -> String {
+    match report {
+        EnclaveStatusReport::Present { store, .. } => {
+            format!("present ({KEY_LABEL}, {})", store_name(*store))
+        }
+        EnclaveStatusReport::None { .. } => "none (run `chromium-bridge pair`)".into(),
+        EnclaveStatusReport::Invalid { detail, .. } => format!(
+            "REJECTED - {detail}; treat it as untrusted and run `chromium-bridge pair --reset` to replace it"
+        ),
+        EnclaveStatusReport::Error { detail, .. } => format!("lookup failed: {detail}"),
+    }
 }
 
 /// `chromium-bridge enclave-status --json`: the machine-readable form of [`run_status`]. One JSON object on
@@ -434,7 +438,7 @@ pub enum EnclaveStatusReport {
 }
 
 /// One lookup, so the store and the public half the report shows come from the same record read.
-fn key_report() -> EnclaveStatusReport {
+pub(crate) fn key_report() -> EnclaveStatusReport {
     let (v, key_label) = (1, KEY_LABEL.to_string());
     match EnrollmentKey::lookup() {
         Ok(Some(key)) => EnclaveStatusReport::Present {

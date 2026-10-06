@@ -157,6 +157,19 @@ const HOST_MINTED: Asymmetry = {
   probes: { refuses: [""] },
 };
 
+/** A whole report for the doctor_report_result probes (every row has a value and a details list). */
+const DOCTOR_REPORT_PROBE = {
+  version: "1.2.3",
+  platform: "linux/x86_64",
+  lock_file: { value: "/run/user/1000/chromium-bridge/run.lock", details: ["present: no"] },
+  mcp_server: { value: "not probed (no lock file)", details: [] },
+  kill_switch: { value: "off (bridge activity permitted)", details: [] },
+  policy_baseline: { value: "revision 3, unsigned", details: [] },
+  host_key: "none (run `chromium-bridge pair`)",
+  summary: "server not running - is your MCP client started?",
+  healthy: false,
+};
+
 /** Keyed by reader: the two envelopes by name, every host->extension control frame by its `type` tag. */
 export const ASYMMETRIES: Readonly<Record<string, Readonly<Record<string, Asymmetry>>>> = {
   request: {
@@ -301,6 +314,24 @@ export const ASYMMETRIES: Readonly<Record<string, Readonly<Record<string, Asymme
         accepts: [
           { type: "registration_status_result", ok: true, browsers: [] },
           { type: "registration_status_result", ok: false, error: "HOME is not set" },
+        ],
+      },
+    ),
+  },
+  doctor_report_result: {
+    $: okSplit(
+      "doctor_report_result",
+      { required: ["report"], forbidden: ["error"] },
+      { required: ["error"], forbidden: ["report"] },
+      {
+        refuses: [
+          { type: "doctor_report_result", ok: true },
+          { type: "doctor_report_result", ok: false },
+          { type: "doctor_report_result", ok: false, report: DOCTOR_REPORT_PROBE, error: "e" },
+        ],
+        accepts: [
+          { type: "doctor_report_result", ok: true, report: DOCTOR_REPORT_PROBE },
+          { type: "doctor_report_result", ok: false, error: "malformed doctor_report frame" },
         ],
       },
     ),

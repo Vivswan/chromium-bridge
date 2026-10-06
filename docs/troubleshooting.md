@@ -57,7 +57,7 @@ The host-owned policy frames were added without a bridge protocol version bump: 
 | --- | --- |
 | New extension, old host | The host never pushes a policy frame, so the extension never sends one either (an old host would classify the unknown frame as forwardable and the server's strict parse would tear the browser leg down). The extension stays pre-cutover and enforces the deny baseline. |
 | Old extension, new host | The old extension drops the unfamiliar `policy_current` push (pinned by test) and keeps its local settings; the new host still applies its own policy at dispatch, so the combined enforcement is never more permissive than the old extension alone. |
-| New extension, a host without the options page's frames | The options page sends `registration_status`, `registration_repair`, `policy_restrict`, and `audit_read` on demand, so the never-speak-first rule does not cover them: the broker's strict parse tears the browser leg down. Accepted before the first release, since no shipped host lacks them; covering it later needs the deferred handshake to advertise the host's control frames and the extension to gate its sends on that. |
+| New extension, a host without the options page's frames | The options page sends `registration_status`, `registration_repair`, `policy_restrict`, `audit_read`, and `doctor_report` on demand, so the never-speak-first rule does not cover them: the broker's strict parse tears the browser leg down. Accepted before the first release, since no shipped host lacks them; covering it later needs the deferred handshake to advertise the host's control frames and the extension to gate its sends on that. |
 
 ## A Mac without a Secure Enclave cannot enroll
 

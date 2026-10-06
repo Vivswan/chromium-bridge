@@ -69,6 +69,7 @@ Chrome spawns the host per the host manifest, whose `allowed_origins` pins the e
 | kill switch | `kill_status`, `kill_engage`, `kill_release` | `kill_status_result` |
 | WebAuthn | `enroll_begin`, `enroll_finish`, `presence_assert`, `presence_confirm`, `browser_revoke` | `enroll_options`, `enroll_result`, `presence_request`, `presence_result`, `browser_revoke_result` |
 | registration | `registration_status`, `registration_repair` | `registration_status_result` |
+| health report | `doctor_report` | `doctor_report_result` |
 | policy and language | `policy_get`, `policy_restrict`, `lang_get`, `lang_set` | `policy_current`, `policy_restrict_result`, `lang_current` |
 | audit | `audit_event` (fire-and-forget), `audit_read` | `audit_read_result` |
 

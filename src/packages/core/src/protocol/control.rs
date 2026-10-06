@@ -86,6 +86,9 @@ pub enum EnclaveControl {
 ///                               extension re-asks for the rows). repair { browsers? } names exactly the known
 ///                               browsers to register (`--browser`), absent is every detected one; an empty
 ///                               list or an unknown key is malformed
+/// doctor_report              -> doctor_report_result { ok, report?, error? }: the rows plain `doctor` prints (lock file,
+///                               mcp server, kill switch, policy baseline, the verdict) with the words the CLI uses,
+///                               plus the `key:` line of `enclave-status`; read-only, ok: false only for a malformed frame
 /// audit_read { limit? }      -> audit_read_result { ok, entries?, older?, path?, error? }: the newest records of the
 ///                               host's audit.log, the page `chromium-bridge audit --limit <n>` prints (its default
 ///                               when `limit` is absent; 1..=MAX_AUDIT_READ_LIMIT otherwise, out of range is
@@ -148,6 +151,17 @@ pub enum AdminControl {
         #[serde(skip_serializing_if = "Option::is_none")]
         cid: Option<String>,
     },
+    /// Extension -> host: the health report plain `doctor` prints, and the host key's state.
+    DoctorReport {},
+    /// Host -> extension: the report. `report` travels exactly when `ok`, `error` exactly when not
+    /// ([`DoctorOutcome::into_frame`]).
+    DoctorReportResult {
+        ok: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        report: Option<HealthReport>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     /// Extension -> host: read the newest records of the host's audit trail.
     AuditRead {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -183,6 +197,75 @@ pub enum AdminControl {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+}
+
+/// The health report as the options page shows it: each row's words are the ones `doctor` prints after its
+/// label (`doctor.rs` spells them once for both), and `host_key` is the `key:` line of `enclave-status`. The
+/// page localizes the labels and nothing else.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct HealthReport {
+    pub version: String,
+    /// `os/arch`, as the `platform:` row prints it.
+    pub platform: String,
+    pub lock_file: DoctorRow,
+    pub mcp_server: DoctorRow,
+    pub kill_switch: DoctorRow,
+    pub policy_baseline: DoctorRow,
+    pub host_key: String,
+    /// The one-line verdict `doctor` ends with; `healthy` is its exit code 0.
+    pub summary: String,
+    pub healthy: bool,
+}
+
+/// One `doctor` row: the text after its label, then the indented lines under it (the lock file's endpoint
+/// and pid, an active policy overlay), empty for most rows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct DoctorRow {
+    pub value: String,
+    pub details: Vec<String>,
+}
+
+impl DoctorRow {
+    pub fn new(value: impl Into<String>) -> Self {
+        DoctorRow {
+            value: value.into(),
+            details: Vec::new(),
+        }
+    }
+
+    pub fn detail(mut self, line: impl Into<String>) -> Self {
+        self.details.push(line.into());
+        self
+    }
+}
+
+/// The report as the host answers it, the [`KillStatus`] discipline applied: gathering never fails, so the
+/// refused arm exists for a malformed frame alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DoctorOutcome {
+    Report(Box<HealthReport>),
+    Unavailable { error: String },
+}
+
+impl DoctorOutcome {
+    pub fn into_frame(self) -> AdminControl {
+        match self {
+            DoctorOutcome::Report(report) => AdminControl::DoctorReportResult {
+                ok: true,
+                report: Some(*report),
+                error: None,
+            },
+            DoctorOutcome::Unavailable { error } => AdminControl::DoctorReportResult {
+                ok: false,
+                report: None,
+                error: Some(error),
+            },
+        }
+    }
 }
 
 /// One line of the host's audit trail as the options page shows it: the three parts of the line
@@ -751,6 +834,8 @@ pub enum HostControlTag {
     KillRelease,
     KillStatusResult,
     AuditEvent,
+    DoctorReport,
+    DoctorReportResult,
     AuditRead,
     AuditReadResult,
     RegistrationStatus,
@@ -796,6 +881,7 @@ impl HostControlTag {
             | HostControlTag::KillEngage
             | HostControlTag::KillRelease
             | HostControlTag::AuditEvent
+            | HostControlTag::DoctorReport
             | HostControlTag::AuditRead
             | HostControlTag::RegistrationStatus
             | HostControlTag::RegistrationRepair
@@ -814,6 +900,7 @@ impl HostControlTag {
             | HostControlTag::ClientListResult
             | HostControlTag::ClientRevokeResult
             | HostControlTag::KillStatusResult
+            | HostControlTag::DoctorReportResult
             | HostControlTag::AuditReadResult
             | HostControlTag::RegistrationStatusResult
             | HostControlTag::PolicyCurrent
@@ -880,6 +967,13 @@ impl HostControlTag {
                     .into(),
                 ))
             }
+            HostControlTag::DoctorReport => MalformedReply::Send(Box::new(
+                DoctorOutcome::Unavailable {
+                    error: "malformed doctor_report frame".into(),
+                }
+                .into_frame()
+                .into(),
+            )),
             HostControlTag::AuditRead => MalformedReply::Send(Box::new(
                 AuditReport::Unavailable {
                     error: "malformed audit_read frame".into(),
@@ -935,6 +1029,7 @@ impl HostControlTag {
             | HostControlTag::ClientListResult
             | HostControlTag::ClientRevokeResult
             | HostControlTag::KillStatusResult
+            | HostControlTag::DoctorReportResult
             | HostControlTag::AuditReadResult
             | HostControlTag::RegistrationStatusResult
             | HostControlTag::PolicyCurrent
@@ -1070,6 +1165,8 @@ pub enum HostRequest {
         #[serde(skip_serializing_if = "Option::is_none")]
         cid: Option<String>,
     },
+    /// Read-only: the facts plain `doctor` gathers, nothing probed beyond its passive socket connect.
+    DoctorReport {},
     /// Read-only; an absent `limit` reads as the CLI's default.
     AuditRead {
         #[cfg_attr(feature = "envelope-schema", schemars(with = "Option<usize>"))]

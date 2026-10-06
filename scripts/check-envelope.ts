@@ -34,6 +34,7 @@ import {
 } from "../src/packages/shared/src/envelope-asymmetries";
 import {
   AUDIT_READ_FRAME_TYPES,
+  DOCTOR_FRAME_TYPES,
   POLICY_RESTRICT_FRAME_TYPES,
   REGISTRATION_FRAME_TYPES,
 } from "../src/packages/shared/src/host-admin";
@@ -109,6 +110,30 @@ const FRAMES: Readonly<Record<string, FrameArms>> = {
   policy_restrict_result: [
     { type: "policy_restrict_result", ok: true },
     { type: "policy_restrict_result", ok: false, error: "relaxes the effective policy" },
+  ],
+  doctor_report_result: [
+    {
+      type: "doctor_report_result",
+      ok: true,
+      report: {
+        version: "1.2.3",
+        platform: "macos/aarch64",
+        lock_file: {
+          value: "/tmp/run.lock",
+          details: ["present: yes", "endpoint: /tmp/run.sock", "pid:     4242"],
+        },
+        mcp_server: { value: "reachable (socket connect OK)", details: [] },
+        kill_switch: { value: "off (bridge activity permitted)", details: [] },
+        policy_baseline: {
+          value: "revision 3, unsigned",
+          details: ["restriction overlay: active"],
+        },
+        host_key: "present (com.example.key, the OS credential store)",
+        summary: "OK",
+        healthy: true,
+      },
+    },
+    { type: "doctor_report_result", ok: false, error: "malformed doctor_report frame" },
   ],
   audit_read_result: [
     {
@@ -443,6 +468,7 @@ export const CLASSIFIED_TAGS: Record<Group, ReadonlySet<string>> = {
     "kill_status_result",
     ...REGISTRATION_FRAME_TYPES,
     ...AUDIT_READ_FRAME_TYPES,
+    ...DOCTOR_FRAME_TYPES,
   ]),
   policy: new Set([...POLICY_FRAME_TYPES, ...POLICY_RESTRICT_FRAME_TYPES]),
   webauthn: new Set(WEBAUTHN_FRAME_TYPES),

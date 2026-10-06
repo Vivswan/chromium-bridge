@@ -1,4 +1,4 @@
-import type { RegistrationRow } from "@chromium-bridge/shared/envelope.gen";
+import type { HealthReport, RegistrationRow } from "@chromium-bridge/shared/envelope.gen";
 import { BROWSER_KEYS } from "@chromium-bridge/shared/host.gen";
 import type { RuntimeRequest, RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
 import { useCallback, useEffect, useState } from "react";
@@ -6,19 +6,27 @@ import { Button } from "@/components/ui/button";
 import { useI18n } from "@/hooks/useI18n";
 import { send } from "@/lib/messages";
 
-// The host-registration panel over the SW router's two registration messages. Repair covers every detected
+// The host-registration panel: the health report plain `chromium-bridge doctor` prints (rows worded by the
+// host, labels localized here), then the registration rows over the SW router's two registration messages.
+// Repair covers every detected
 // browser, as `doctor --fix` does; a browser the host did not detect gets its own register action, as
 // `--browser <key>` does. A failed repair re-asks for the rows instead of keeping the pre-repair table: the
 // host answers a failure with no rows, so the rows on screen must come from a read the host vouched for.
 export function RegistrationPanel() {
   const { t } = useI18n();
   const [view, setView] = useState<RuntimeResponse<"get_registration"> | null>(null);
+  const [doctor, setDoctor] = useState<RuntimeResponse<"get_doctor"> | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setBusy(true);
-    setView(await send({ type: "get_registration" }));
+    const [rows, report] = await Promise.all([
+      send({ type: "get_registration" }),
+      send({ type: "get_doctor" }),
+    ]);
+    setView(rows);
+    setDoctor(report);
     setBusy(false);
   }, []);
 
@@ -26,6 +34,8 @@ export function RegistrationPanel() {
     void refresh();
   }, [refresh]);
 
+  // A repair changes the verdict too (a healthy registration flips `doctor` to OK), so the report is re-read
+  // on either outcome.
   const repair = async (browsers?: RuntimeRequest<"repair_registration">["browsers"]) => {
     setBusy(true);
     setActionError(null);
@@ -34,6 +44,7 @@ export function RegistrationPanel() {
     );
     if (r.ok) {
       setView(r);
+      setDoctor(await send({ type: "get_doctor" }));
     } else {
       setActionError(t("registration.repair_failed", [r.error]));
       await refresh();
@@ -50,6 +61,16 @@ export function RegistrationPanel() {
         </Button>
       </div>
 
+      <div className="section-title mt-3 mb-1.5">{t("doctor.title")}</div>
+      {doctor === null && <div className="text-xs text-text-3">{t("doctor.loading")}</div>}
+      {doctor && !doctor.ok && (
+        <div role="status" className="text-xs font-semibold text-pending">
+          {t("doctor.error", [doctor.error])}
+        </div>
+      )}
+      {doctor?.ok && <HealthRows report={doctor.report} />}
+
+      <div className="section-title mt-5 mb-1.5">{t("registration.rows_title")}</div>
       {view === null && <div className="mt-2 text-xs text-text-3">{t("registration.loading")}</div>}
 
       {/* A read failure is unknown/degraded, not a denial: pending ink, fail-closed wording. */}
@@ -91,6 +112,48 @@ export function RegistrationPanel() {
         {actionError}
       </div>
     </div>
+  );
+}
+
+function HealthRows({ report }: { report: HealthReport }) {
+  const { t } = useI18n();
+  const rows = [
+    { label: t("doctor.lock_file"), row: report.lock_file },
+    { label: t("doctor.mcp_server"), row: report.mcp_server },
+    { label: t("doctor.kill_switch"), row: report.kill_switch },
+    { label: t("doctor.policy_baseline"), row: report.policy_baseline },
+  ];
+  return (
+    <dl className="m-0 grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 font-mono text-[11px]">
+      <dt className="text-text-3">{t("doctor.version")}</dt>
+      <dd className="m-0 text-text-1">
+        {report.version} ({report.platform})
+      </dd>
+      {rows.map(({ label, row }) => (
+        <HealthRow key={label} label={label} row={row} />
+      ))}
+      <dt className="text-text-3">{t("doctor.summary")}</dt>
+      <dd className="m-0 flex items-center gap-2 font-semibold text-text-1">
+        <span className={`status-dot ${report.healthy ? "live" : "down"}`} />
+        {report.summary}
+      </dd>
+    </dl>
+  );
+}
+
+function HealthRow({ label, row }: { label: string; row: HealthReport["lock_file"] }) {
+  return (
+    <>
+      <dt className="text-text-3">{label}</dt>
+      <dd className="m-0 break-all text-text-1">
+        {row.value}
+        {row.details.map((detail) => (
+          <div key={detail} className="whitespace-pre-wrap text-text-3">
+            {detail}
+          </div>
+        ))}
+      </dd>
+    </>
   );
 }
 

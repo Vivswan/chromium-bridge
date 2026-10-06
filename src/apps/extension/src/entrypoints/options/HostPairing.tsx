@@ -19,9 +19,18 @@ export function HostPairing() {
   const { t } = useI18n();
   // null until the first answer lands; a refusal renders the no-status line.
   const [st, setSt] = useState<RuntimeResponse<"get_enrollment"> | null>(null);
+  // The host key's `key:` line as `chromium-bridge enclave-status` prints it (its state, and where it
+  // lives), read with the pairing status: a refusal shows nothing, since the pin above is the extension's
+  // own fact and the key line is the host's.
+  const [hostKey, setHostKey] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    setSt(await send({ type: "get_enrollment" }));
+    const [status, doctor] = await Promise.all([
+      send({ type: "get_enrollment" }),
+      send({ type: "get_doctor" }),
+    ]);
+    setSt(status);
+    setHostKey(doctor.ok ? doctor.report.host_key : null);
   }, []);
 
   useEffect(() => {
@@ -153,6 +162,12 @@ export function HostPairing() {
               {t("enroll.btn_pair")}
             </Button>
           </Actions>
+        </div>
+      )}
+
+      {hostKey !== null && (
+        <div className="mt-2 font-mono text-[11px] text-text-3">
+          {t("enroll.host_key_line", [hostKey])}
         </div>
       )}
 

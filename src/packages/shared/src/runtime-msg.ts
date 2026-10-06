@@ -10,6 +10,7 @@ import { AuditEntrySchema, KillMirrorSchema } from "./enclave";
 import {
   AuditTrailEntrySchema,
   EnrollOptionsFrameSchema,
+  HealthReportSchema,
   PresenceRequestFrameSchema,
   RegistrationRowSchema,
   TrustedClientSchema,
@@ -337,6 +338,13 @@ export const RUNTIME_CONTRACT = contract({
     gate: "extension-page",
     req: z.strictObject({ type: z.literal("webauthn_forget") }),
     res: Acknowledged,
+  },
+  // The health report plain `chromium-bridge doctor` prints (its doctor_report_result), rows worded by the
+  // host, plus the `key:` line of `enclave-status`.
+  get_doctor: {
+    gate: "extension-page",
+    req: z.strictObject({ type: z.literal("get_doctor") }),
+    res: z.object({ ok: z.literal(true), report: HealthReportSchema }),
   },
   // The host-registration panel: the per-browser manifest rows the host's doctor diagnoses, and the repair
   // `doctor --fix` runs, both answered with the fresh rows (a repair that failed is a refusal; the panel re-asks).

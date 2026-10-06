@@ -312,6 +312,14 @@ fn classification_matrix() {
             Malformed(Tag::PolicyGet),
         ),
         (
+            json!({ "type": "doctor_report" }),
+            Handle(HostRequest::DoctorReport {}),
+        ),
+        (
+            json!({ "type": "doctor_report", "extra": 1 }),
+            Malformed(Tag::DoctorReport),
+        ),
+        (
             json!({ "type": "audit_read" }),
             Handle(HostRequest::AuditRead { limit: None }),
         ),
@@ -488,6 +496,10 @@ fn classification_matrix() {
             Malformed(Tag::KillStatusResult),
         ),
         (
+            json!({ "type": "doctor_report_result", "ok": false, "error": "e" }),
+            Malformed(Tag::DoctorReportResult),
+        ),
+        (
             json!({ "type": "audit_read_result", "ok": true, "entries": [], "older": 0, "path": "/x" }),
             Malformed(Tag::AuditReadResult),
         ),
@@ -602,6 +614,11 @@ fn malformed_replies_match_the_request_type() {
             ),
         ),
         (
+            Tag::DoctorReport,
+            Frame(json!({ "type": "doctor_report_result", "ok": false,
+                          "error": "malformed doctor_report frame" })),
+        ),
+        (
             Tag::AuditRead,
             Frame(json!({ "type": "audit_read_result", "ok": false,
                           "error": "malformed audit_read frame" })),
@@ -651,6 +668,7 @@ fn malformed_replies_match_the_request_type() {
         (Tag::ClientListResult, Nothing),
         (Tag::ClientRevokeResult, Nothing),
         (Tag::KillStatusResult, Nothing),
+        (Tag::DoctorReportResult, Nothing),
         (Tag::AuditReadResult, Nothing),
         (Tag::RegistrationStatusResult, Nothing),
         (Tag::PolicyCurrent, Nothing),
@@ -745,6 +763,55 @@ fn registration_and_restrict_outcomes_map_onto_the_pinned_wire_shapes() {
         .unwrap(),
         json!({ "type": "policy_restrict_result", "ok": false,
                 "error": "relaxes the effective policy" })
+    );
+}
+
+#[test]
+fn doctor_outcome_maps_onto_the_pinned_wire_shapes() {
+    // The wire contract the extension's doctor reader consumes: the report travels exactly when `ok`, the
+    // error exactly when not, each row as its value and indented details.
+    let report = HealthReport {
+        version: "1.2.3".into(),
+        platform: "linux/x86_64".into(),
+        lock_file: DoctorRow::new("/run/user/1000/chromium-bridge/run.lock")
+            .detail("present: no (MCP server not running?)"),
+        mcp_server: DoctorRow::new("not probed (no lock file)"),
+        kill_switch: DoctorRow::new("off (bridge activity permitted)"),
+        policy_baseline: DoctorRow::new("revision 3, unsigned")
+            .detail("restriction overlay: active"),
+        host_key: "none (run `chromium-bridge pair`)".into(),
+        summary: "server not running - is your MCP client started?".into(),
+        healthy: false,
+    };
+    assert_eq!(
+        serde_json::to_value(DoctorOutcome::Report(Box::new(report)).into_frame()).unwrap(),
+        json!({
+            "type": "doctor_report_result",
+            "ok": true,
+            "report": {
+                "version": "1.2.3",
+                "platform": "linux/x86_64",
+                "lock_file": { "value": "/run/user/1000/chromium-bridge/run.lock",
+                               "details": ["present: no (MCP server not running?)"] },
+                "mcp_server": { "value": "not probed (no lock file)", "details": [] },
+                "kill_switch": { "value": "off (bridge activity permitted)", "details": [] },
+                "policy_baseline": { "value": "revision 3, unsigned",
+                                     "details": ["restriction overlay: active"] },
+                "host_key": "none (run `chromium-bridge pair`)",
+                "summary": "server not running - is your MCP client started?",
+                "healthy": false,
+            },
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(
+            DoctorOutcome::Unavailable {
+                error: "malformed doctor_report frame".into(),
+            }
+            .into_frame()
+        )
+        .unwrap(),
+        json!({ "type": "doctor_report_result", "ok": false, "error": "malformed doctor_report frame" })
     );
 }
 

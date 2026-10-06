@@ -46,6 +46,8 @@ It reports:
 - **Native-host registrations**: for each known browser (chrome, chromium, brave, edge, vivaldi, opera), whether it looks present on this machine and the state of its registration for `com.vivswan.chromium_bridge.host` in each scope, `user` and `system`: `ok`, `missing`, `stale` (ours, but its launch path dangles), or not ours.
 - **The verdict follows the browser's lookup order**: the per-user entry when one exists, the system one only in its absence. The diagnosis comes from the same resolver `--fix` repairs with, so what doctor reports is exactly what `--fix` produces.
 
+The options page's Host registration section shows the same rows (lock file, server, kill switch, policy baseline, the verdict), worded by the host, and its identity section shows where the host key lives, as `enclave-status` prints it.
+
 `doctor --json` prints the same report as one JSON object on stdout, with the same exit code. Check its `v` field first and refuse a newer value before reading anything else (fail closed), as with every `--json` report of this binary.
 
 ### How to interpret "server not reachable"

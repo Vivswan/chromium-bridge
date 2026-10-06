@@ -25,7 +25,7 @@ use crate::cli::FixTargets;
 use crate::enclave::EnrollmentKey;
 use crate::ipc::{self, BrowserLabel};
 use crate::protocol::control::{
-    classify_nm_frame, host_control_type, AdminControl, AuditReadLimit, AuditReport,
+    classify_nm_frame, host_control_type, AdminControl, AuditReadLimit, AuditReport, DoctorOutcome,
     EnclaveControl, FrameDisposition, HostRequest, KillStatus, MalformedReply, PolicyControl,
     PolicyStatus, RegistrationReport, RegistrationRow, RepairBrowsers, RestrictOutcome,
 };
@@ -144,6 +144,12 @@ fn admin_client_revoke(name: &str) -> AdminControl {
             error: Some(e.to_string()),
         },
     }
+}
+
+/// Handle a `doctor_report` frame: the facts plain `doctor` gathers and the host key's state, through the
+/// same gather, so the page reads what the terminal prints.
+fn doctor_report_reply() -> AdminControl {
+    DoctorOutcome::Report(Box::new(crate::doctor::wire_report())).into_frame()
 }
 
 /// Handle an `audit_read` frame: the newest records of the host's trail through the reader behind
@@ -637,6 +643,7 @@ fn handle_request<W: Write>(
         HostRequest::KillStatus {} => write_control_reply(out, &kill_status_reply()),
         HostRequest::KillEngage {} => write_control_reply(out, &handle_kill_engage()),
         HostRequest::KillRelease {} => write_replies(out, exchange.kill_release()),
+        HostRequest::DoctorReport {} => write_control_reply(out, &doctor_report_reply()),
         HostRequest::AuditRead { limit } => write_control_reply(out, &audit_read_reply(limit)),
         HostRequest::RegistrationStatus {} => {
             write_control_reply(out, &registration_status_reply())

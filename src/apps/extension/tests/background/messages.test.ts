@@ -81,6 +81,7 @@ const REQUESTS: { [K in RuntimeMsgType]: RuntimeRequest<K> } = {
   },
   webauthn_presence_confirm: { type: "webauthn_presence_confirm", nonce: "nonce-0002" },
   webauthn_forget: { type: "webauthn_forget" },
+  get_doctor: { type: "get_doctor" },
   get_registration: { type: "get_registration" },
   repair_registration: { type: "repair_registration" },
   get_policy: { type: "get_policy" },
