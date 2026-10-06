@@ -14,20 +14,32 @@ use chromium_bridge_fuzz::seeds::{
 
 fn files_under(root: &Path) -> BTreeMap<String, Vec<u8>> {
     fn walk(root: &Path, dir: &Path, out: &mut BTreeMap<String, Vec<u8>>) {
-        for entry in fs::read_dir(dir).unwrap() {
-            let path = entry.unwrap().path();
+        for entry in
+            fs::read_dir(dir).expect("the corpus root and every directory under it can be listed")
+        {
+            let path = entry
+                .expect("an entry under the written corpus is readable")
+                .path();
             if path.is_dir() {
                 walk(root, &path, out);
                 continue;
             }
             let relative = path
                 .strip_prefix(root)
-                .unwrap()
+                .expect("a walked path lies under the root the walk began at")
                 .components()
-                .map(|c| c.as_os_str().to_str().unwrap().to_string())
+                .map(|c| {
+                    c.as_os_str()
+                        .to_str()
+                        .expect("corpus file names are UTF-8")
+                        .to_string()
+                })
                 .collect::<Vec<_>>()
                 .join("/");
-            out.insert(relative, fs::read(&path).unwrap());
+            out.insert(
+                relative,
+                fs::read(&path).expect("a file write_corpus wrote is readable"),
+            );
         }
     }
     let mut out = BTreeMap::new();
@@ -37,7 +49,7 @@ fn files_under(root: &Path) -> BTreeMap<String, Vec<u8>> {
 
 #[test]
 fn an_empty_directory_receives_every_seed_and_the_dictionary() {
-    let fuzz_dir = tempfile::tempdir().unwrap();
+    let fuzz_dir = tempfile::tempdir().expect("a scratch directory for the corpus can be created");
     let summary = write_corpus(fuzz_dir.path())
         .expect("a directory with no seeds/ and no dictionaries/ is where the nightly job starts");
 

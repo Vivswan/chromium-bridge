@@ -39,7 +39,11 @@ pub(super) fn directory() -> Directory {
                 attested(flags::UP | flags::AT | flags::BE, &id, &es256),
                 reads,
             ),
-            Seed::refused("header_short_by_one", header(flags::UP)[..36].to_vec(), reads),
+            Seed::refused(
+                "header_short_by_one",
+                header(flags::UP)[..36].to_vec(),
+                reads,
+            ),
             Seed::refused("reserved_flag_bit", header(flags::UP | 0x02), reads),
             Seed::refused("extensions_flag", header(flags::UP | flags::ED), reads),
             Seed::refused(

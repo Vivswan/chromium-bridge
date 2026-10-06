@@ -8,21 +8,31 @@ license-file = "../../../../LICENSE.md"
 [package.metadata]
 cargo-fuzz = true
 
-# Its own workspace so the fuzz crate never enters the main `cargo build`/
-# `cargo test` graph (the binaries need nightly + libFuzzer; the library, its
-# tests, and the seed generator example build on stable). The root Cargo.toml
-# also lists it under [workspace].exclude. Excluded means the root lint tables
-# do not reach this crate, so the fleet floor entries (not the root's extra
-# no-panic and numeric lints) are re-declared here and inherited below; a
-# change to the floor is made in both files. (`fuzz_target!` expands to
-# libFuzzer's unsafe extern hooks, but the lints do not fire on external-macro
-# expansions.)
+# Its own workspace, excluded by the root Cargo.toml, so the fuzz crate never enters the main `cargo build`/
+# `cargo test` graph (`cargo fuzz run` needs nightly + libFuzzer; the library, its tests, and the seed
+# generator example build on stable). An excluded crate inherits no lint table, so the root's
+# [workspace.lints] is copied below, verbatim except the four entries here, and a change to the root table
+# is made here too. The four stay off because a harness's oracle IS a panic, and clippy.toml's
+# allow-*-in-tests cannot reach a fuzz binary or the seed generator:
+#
+#   expect_used              -> the harness assertion: a generator or target stops with its message on an
+#                               impossible fixture
+#   panic                    -> the oracle's failure arm: a schema fragment the seed generator has no rule
+#                               for, or a request whose own serialization does not classify as a request
+#   indexing_slicing         -> seeds are hand-built fixed-size byte strings, so the slice bound is the fixture
+#   arithmetic_side_effects  -> seed lengths and version bumps on those fixtures; an overflow there is a
+#                               harness bug, and stopping is the right outcome
+#
+# `fuzz_target!` expands to libFuzzer's unsafe extern hooks; the unsafe lints do not fire on external-macro
+# expansions, so `unsafe_code = "deny"` holds without an expect on every binary.
 [workspace]
 
 [workspace.lints.rust]
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"
 non_ascii_idents = "deny"
+unexpected_cfgs = "deny"
+unused_lifetimes = "deny"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
@@ -37,6 +47,17 @@ missing_assert_message = "deny"
 wildcard_enum_match_arm = "deny"
 match_wildcard_for_single_variants = "deny"
 rest_pat_in_fully_bound_structs = "deny"
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+mem_forget = "deny"
+fn_to_numeric_cast_any = "deny"
+unwrap_used = "deny"
+panic_in_result_fn = "deny"
+string_slice = "deny"
+unreachable = "deny"
+as_conversions = "deny"
+unchecked_time_subtraction = "deny"
 
 [workspace.lints.rustdoc]
 broken_intra_doc_links = "deny"

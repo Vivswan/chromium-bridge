@@ -87,7 +87,6 @@ tasks:
       - 'extension:test'
       - 'extension:build'
       - '~:hygiene'
-      - '~:check-fuzz-workspace'
       - '~:test-fuzz'
       - '~:check-gen'
       - '~:check-envelope'
@@ -162,8 +161,8 @@ tasks:
   # ----- quality ------------------------------------------------------------
 
   fmt:
-    description: 'Format everything in place: Rust (cargo fmt) + TS/JS/JSON (Biome)'
-    script: 'set -e; cargo fmt; bun run biome format --write .'
+    description: 'Format everything in place: Rust (cargo fmt, root + fuzz workspaces) + TS/JS/JSON (Biome)'
+    script: 'cargo fmt && cargo fmt --manifest-path src/packages/core/fuzz/Cargo.toml && bun run biome format --write .'
     options:
       mutex: 'generated-contract'
       runInCI: false
@@ -176,8 +175,8 @@ tasks:
       runInCI: false
 
   fix:
-    description: 'Auto-fix everything: Biome lint+format fixes, then cargo fmt'
-    script: 'set -e; bun run biome check --write .; cargo fmt'
+    description: 'Auto-fix everything: Biome lint+format fixes, then cargo fmt (root + fuzz workspaces)'
+    script: 'bun run biome check --write . && cargo fmt && cargo fmt --manifest-path src/packages/core/fuzz/Cargo.toml'
     options:
       mutex: 'generated-contract'
       runInCI: false
@@ -349,14 +348,6 @@ tasks:
   check-refresh-lockfiles:
     description: 'Unit test for the release-PR lockfile refresh (a bumped scratch workspace re-locks into one commit; needs cargo, git, bun)'
     command: 'bun test scripts/tests/refresh-lockfiles.test.ts'
-
-  check-fuzz-workspace:
-    description: >-
-      Cargo-check the excluded fuzz workspace (stable is enough to compile it) so fuzz targets
-      cannot rot outside the main build; CI runs the same check in checks.yml's rust job
-    command: 'cargo check --frozen --manifest-path src/packages/core/fuzz/Cargo.toml --all-targets'
-    env:
-      RUSTUP_AUTO_INSTALL: '0'
 
   test-fuzz:
     description: >-

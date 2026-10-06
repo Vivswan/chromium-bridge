@@ -85,10 +85,10 @@ moon run fix       # auto-fix everything: biome check --write + cargo fmt
 
 | Step | Tasks |
 |------|-------|
-| Rust | `core:fmt-check`, `core:lint`, `typos`, `machete`, `core:test`, `core:test-doc`, `core:test-loom`, `doc` |
+| Rust | `core:fmt-check`, `core:lint` (each one run per cargo workspace, root and fuzz), `typos`, `machete`, `core:test`, `core:test-doc`, `core:test-loom`, `doc` |
 | TypeScript | `typecheck`, `check-ts`, `shared:test`, `extension:test`, `extension:build` |
 | Protocol | `test-e2e` |
-| Hygiene | `hygiene` (the bun-side checks below), `check-refresh-lockfiles`, `check-fuzz-workspace`, `test-fuzz` |
+| Hygiene | `hygiene` (the bun-side checks below), `check-refresh-lockfiles`, `test-fuzz` |
 | Contract | `check-gen`, `check-envelope`, `check-gen-isolation` |
 | Workflows | `check-yaml`, `check-actions` |
 
@@ -107,6 +107,9 @@ The repo-wide verbs cover every language at once: `moon run lint` is clippy plus
 cargo build --release
 cargo nextest run
 cargo fmt --check && cargo clippy --all-targets -- -D warnings
+# the fuzz workspace is excluded from the root one, so its two checks run against its own manifest
+cargo fmt --check --manifest-path src/packages/core/fuzz/Cargo.toml
+cargo clippy --locked --manifest-path src/packages/core/fuzz/Cargo.toml --all-targets -- -D warnings
 uv run --no-project --isolated tests/protocol/e2e.py
 bun install
 bun run tsc -p src/apps/extension        # one TS project; `moon run typecheck` covers them all
@@ -120,8 +123,8 @@ The full task menu, by area:
 |------|-------|
 | Aggregates | `build`, `test`, `ci`, `hygiene` (the bun-side checks CI's hygiene job runs; `ci` depends on it), `release`, `lint`, `fmt`, `fix` |
 | Dev loops | `dev`, `dev-web`, `extension:dev` |
-| Rust | `core:fmt-check`, `core:lint`, `test-rust` (= `core:test` + `core:test-doc` + `core:test-loom`, the broker ref-count model check under the core's `loom` feature), `doc`, `build-release`, `build-repro`, `typos`, `machete`, `audit` |
-| Fuzz workspace | `fuzz-seeds`, `fuzz-smoke`, `check-fuzz-smoke`, `check-fuzz-workspace`, `test-fuzz` |
+| Rust | `core:fmt-check` (= `core:fmt-check-workspace` + `core:fmt-check-fuzz`), `core:lint` (= `core:lint-workspace` + `core:lint-fuzz`), `test-rust` (= `core:test` + `core:test-doc` + `core:test-loom`, the broker ref-count model check under the core's `loom` feature), `doc`, `build-release`, `build-repro`, `typos`, `machete`, `audit` |
+| Fuzz workspace | `fuzz-seeds`, `fuzz-smoke`, `check-fuzz-smoke`, `test-fuzz` (clippy and fmt over it are `core:lint-fuzz` and `core:fmt-check-fuzz`) |
 | TypeScript | `typecheck`, `test-ts` (= `shared:test` + `extension:test` + `web:test` + `check-harness-driver`), `lint-ts`, `check-ts`, `fmt-ts`, `fmt-check-ts`, `extension:build`, `web:build` |
 | Contract codegen | `gen` (= `gen-shared`), `gen-icons`, `gen-architecture-map`, `check-gen`, `check-envelope`, `check-gen-isolation` |
 | Protocol suites | `test-e2e`, `test-adversarial`, `test-chaos`, `check-uv` |
@@ -195,7 +198,7 @@ The workflow-level `CI_IMAGE_TAG` is the one switch: an empty value runs every j
 | Job | Runs | Where |
 |-----|------|-------|
 | `image` | resolves the image tag to its digest once, so every job pins the same content | bare runner |
-| `rust` | clippy and tests on ubuntu, macOS, and Windows; fmt, the loom model, rustdoc, and the fuzz workspace's check and tests on Linux alone | image on Linux, bare elsewhere |
+| `rust` | clippy and tests on ubuntu, macOS, and Windows; fmt, the loom model, rustdoc, and the fuzz workspace's fmt, clippy, and tests on Linux alone | image on Linux, bare elsewhere |
 | `build-release` | `moon run build-release`, uploaded for the suites below | bare runner, so the binary links against the runner's older glibc and runs in both environments |
 | `coverage` | `cargo llvm-cov`, informational (`continue-on-error`, no threshold) | image |
 | `extension` | `typecheck`, `check-ts`, `shared:test`, `extension:test`, `extension:build`, then `check-extension-id` against the built manifest | image |
@@ -278,7 +281,7 @@ The isolation guard's container exception is stated once, in the Safety section 
 
 ## Fuzzing
 
-`src/packages/core/fuzz/` is its own cargo workspace (cargo-fuzz + libFuzzer, nightly rust) with eleven targets. Where a correctness property exists, a target asserts it instead of only checking for panics.
+`src/packages/core/fuzz/` is its own cargo workspace (cargo-fuzz + libFuzzer, nightly rust) with eleven targets. Where a correctness property exists, a target asserts it instead of only checking for panics. The root's clippy and rustfmt gate runs over this workspace too, from a copy of the root lint table whose exceptions its `Cargo.toml` states.
 
 | Targets | What they fuzz | Oracle beyond no-panic |
 |---------|----------------|------------------------|

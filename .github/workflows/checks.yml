@@ -71,6 +71,8 @@ jobs:
           cargo: "true"
       - if: runner.os == 'Linux'
         run: cargo fmt --check
+      - if: runner.os == 'Linux'
+        run: cargo fmt --check --manifest-path src/packages/core/fuzz/Cargo.toml
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       # The loom model check of the broker ref-count (core/moon.yml's test-loom). Platform-independent, like fmt.
@@ -80,11 +82,10 @@ jobs:
         run: cargo doc --workspace --no-deps --document-private-items
         env:
           RUSTDOCFLAGS: -D warnings
-      # The fuzz crate is excluded from the root workspace, so nothing above compiles it, and its targets
-      # rotted unnoticed once (nightly-fuzz.yml is the only job that runs them). --locked because nothing
-      # else exercises the fuzz workspace's own Cargo.lock.
+      # The fuzz crate is excluded from the root workspace, so nothing above compiles or lints it, and
+      # nightly-fuzz.yml is the only job that runs its targets (core/moon.yml's lint-fuzz).
       - if: runner.os == 'Linux'
-        run: cargo check --locked --manifest-path src/packages/core/fuzz/Cargo.toml --all-targets
+        run: cargo clippy --locked --manifest-path src/packages/core/fuzz/Cargo.toml --all-targets -- -D warnings
       # The fuzz workspace's own tests (moon test-fuzz): every generated seed through its target
       # in-process, held to its reader's verdict. Stable rust, no libFuzzer.
       - if: runner.os == 'Linux'
