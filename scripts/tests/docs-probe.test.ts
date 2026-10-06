@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync, realpathSync, symlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type Finding, parseArgs, probePage } from "../docs-probe";
+import { type Finding, parseCli, probePage } from "../docs-probe";
 import { gitEnv, runGit, Scratch, writeTree } from "../lib";
 
 const script = join(dirname(fileURLToPath(import.meta.url)), "..", "docs-probe.ts");
@@ -343,10 +343,10 @@ test("the CLI refuses an unknown flag, a flag without its value, and no page; a 
     [[], /usage:/],
   ];
   for (const [args, message] of refused) {
-    expect(() => parseArgs(["--root", root, ...args])).toThrow(message);
+    expect(() => parseCli(["--root", root, ...args])).toThrow(message);
   }
   expect(
-    parseArgs(["--base", "docs", "--max-words", "5", "--shape-only", "--root", root, "docs/a.md"]),
+    parseCli(["--base", "docs", "--max-words", "5", "--shape-only", "--root", root, "docs/a.md"]),
   ).toEqual({
     root: realpathSync(root),
     bases: [realpathSync(join(root, "docs"))],

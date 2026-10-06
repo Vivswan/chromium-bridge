@@ -16,6 +16,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import { localeOf } from "./check-docs-locales";
 import { gitEnv } from "./lib";
 import { linkFile, readPage } from "./markdown-page";
@@ -550,51 +551,27 @@ export function expandPages(root: string, args: readonly string[]): string[] {
   return [...pages].sort();
 }
 
-export function parseArgs(argv: readonly string[]): CliOptions {
-  let root = realpath(process.cwd());
-  let maxWords = DEFAULT_MAX_WORDS;
-  let paths = true;
-  let baseline: string | undefined;
-  let printBaseline = false;
-  const baseArgs: string[] = [];
-  const pageArgs: string[] = [];
-  for (let index = 0; index < argv.length; index++) {
-    const arg = argv[index] ?? "";
-    const value = () => {
-      const next = argv[++index];
-      if (next === undefined) throw new Error(`${arg} needs a value\n${USAGE}`);
-      return next;
-    };
-    if (arg === "--root") {
-      root = realpath(value());
-      if (!statSync(root, { throwIfNoEntry: false })?.isDirectory())
-        throw new Error(`--root ${root} is not a directory`);
-    } else if (arg === "--base") {
-      baseArgs.push(value());
-    } else if (arg === "--max-words") {
-      maxWords = Number(value());
-      if (!Number.isInteger(maxWords) || maxWords < 1)
-        throw new Error(`--max-words needs a positive integer\n${USAGE}`);
-    } else if (arg === "--baseline") baseline = value();
-    else if (arg === "--print-baseline") printBaseline = true;
-    else if (arg === "--shape-only") paths = false;
-    else if (arg.startsWith("-")) throw new Error(`unknown option ${arg}\n${USAGE}`);
-    else pageArgs.push(arg);
-  }
+export function parseCli(argv: readonly string[]): CliOptions {
+  const { values, positionals: pageArgs } = parseFlags(argv);
+  const root = realpath(values.root ?? process.cwd());
+  if (!statSync(root, { throwIfNoEntry: false })?.isDirectory())
+    throw new Error(`--root ${root} is not a directory`);
+  const maxWords =
+    values["max-words"] === undefined ? DEFAULT_MAX_WORDS : Number(values["max-words"]);
+  if (!Number.isInteger(maxWords) || maxWords < 1)
+    throw new Error(`--max-words needs a positive integer\n${USAGE}`);
   if (pageArgs.length === 0) throw new Error(USAGE);
-  // Resolved after the loop so a --root given later still governs every --base, the baseline, and the globs.
-  const bases = baseArgs.map((arg) => {
+  const bases = (values.base ?? []).map((arg) => {
     const base = realpath(resolve(root, arg));
     if (!statSync(base, { throwIfNoEntry: false })?.isDirectory())
       throw new Error(`--base ${base} is not a directory`);
     if (!withinRoot(root, base)) throw new Error(`--base ${base} is outside the root ${root}`);
     return base;
   });
-  if (baseline !== undefined) {
-    baseline = resolve(root, baseline);
-    if (!statSync(baseline, { throwIfNoEntry: false })?.isFile())
-      throw new Error(`--baseline ${baseline} is not a readable file`);
-  }
+  const baseline = values.baseline === undefined ? undefined : resolve(root, values.baseline);
+  if (baseline !== undefined && !statSync(baseline, { throwIfNoEntry: false })?.isFile())
+    throw new Error(`--baseline ${baseline} is not a readable file`);
+  const paths = values["shape-only"] !== true;
   const pages = expandPages(root, pageArgs);
   // A locale page skips the cap, so without the path check it would pass with nothing probed.
   const unchecked = paths ? [] : pages.filter((page) => localeOf(page) !== undefined);
@@ -603,7 +580,28 @@ export function parseArgs(argv: readonly string[]): CliOptions {
       `--shape-only leaves a locale page with nothing to check: ${unchecked.join(", ")}`,
     );
   }
+  const printBaseline = values["print-baseline"] === true;
   return { root, bases, maxWords, paths, baseline, printBaseline, pages };
+}
+
+function parseFlags(argv: readonly string[]) {
+  try {
+    return parseArgs({
+      args: [...argv],
+      options: {
+        root: { type: "string" },
+        base: { type: "string", multiple: true },
+        "max-words": { type: "string" },
+        baseline: { type: "string" },
+        "print-baseline": { type: "boolean" },
+        "shape-only": { type: "boolean" },
+      },
+      strict: true,
+      allowPositionals: true,
+    });
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\n${USAGE}`);
+  }
 }
 
 if (import.meta.main) {
@@ -611,7 +609,7 @@ if (import.meta.main) {
   let judgment: Judgment;
   let baselineLabel = "";
   try {
-    options = parseArgs(process.argv.slice(2));
+    options = parseCli(process.argv.slice(2));
     const findings: Finding[] = [];
     for (const page of options.pages) {
       findings.push(...probePage(readFileSync(resolve(options.root, page), "utf8"), page, options));

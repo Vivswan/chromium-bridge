@@ -92,10 +92,17 @@ describe("selectMode", () => {
           return "exit";
         }
       };
-      const argvs = [["build"], [], ["build", "publish"], ["toString"], ["--build"]];
+      const argvs = [
+        ["build"],
+        [],
+        ["build", "publish"],
+        ["toString"],
+        ["--build"],
+        ["--", "build"],
+      ];
       expect({ outcomes: argvs.map(outcome), exits, lines: new Set(lines) }).toEqual({
-        outcomes: ["b", "exit", "exit", "exit", "exit"],
-        exits: [2, 2, 2, 2],
+        outcomes: ["b", "exit", "exit", "exit", "exit", "exit"],
+        exits: [2, 2, 2, 2, 2],
         lines: new Set(["usage: bun scripts/x.ts build | publish"]),
       });
     } finally {

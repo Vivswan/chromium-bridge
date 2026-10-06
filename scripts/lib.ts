@@ -16,6 +16,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 
 // Repo root, derived from this file's location (scripts/ is a direct child).
 export const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -84,15 +85,28 @@ export function requiredEnv(name: string, env: Env = process.env): string {
 }
 
 export function selectMode<T>(modes: Record<string, T>, argv: string[], script: string): T {
-  const [mode, ...extra] = argv;
+  const refuse = (): never => {
+    console.error(`usage: bun ${script} ${Object.keys(modes).join(" | ")}`);
+    process.exit(2);
+  };
+  let positionals: string[];
+  try {
+    ({ positionals } = parseArgs({
+      args: argv,
+      options: {},
+      strict: true,
+      allowPositionals: true,
+    }));
+  } catch {
+    return refuse();
+  }
+  // A `--` parseArgs swallowed is not a mode either, so every argument must have come back as a positional.
+  if (positionals.length !== argv.length) return refuse();
+  const [mode, ...extra] = positionals;
   // Object.hasOwn: `toString` is not a mode.
   const selected =
     mode === undefined || extra.length > 0 || !Object.hasOwn(modes, mode) ? undefined : modes[mode];
-  if (selected === undefined) {
-    console.error(`usage: bun ${script} ${Object.keys(modes).join(" | ")}`);
-    process.exit(2);
-  }
-  return selected;
+  return selected === undefined ? refuse() : selected;
 }
 
 export function runGit(cwd: string, env: Env, ...args: string[]): string {

@@ -25,6 +25,7 @@
 import { renameSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import http from "node:http";
+import { parseArgs } from "node:util";
 
 const usage = "usage: bun tests/harness/fake-llm.ts [--portfile <path>]";
 
@@ -621,15 +622,15 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
 function main(): void {
   let portfile: string | undefined;
-  const argv = process.argv.slice(2);
-  for (let i = 0; i < argv.length; i += 1) {
-    if (argv[i] === "--portfile" && argv[i + 1] !== undefined) {
-      portfile = argv[i + 1];
-      i += 1;
-    } else {
-      console.error(`error: invalid argument: ${argv[i]}\n${usage}`);
-      process.exit(2);
-    }
+  try {
+    portfile = parseArgs({
+      args: process.argv.slice(2),
+      options: { portfile: { type: "string" } },
+      strict: true,
+    }).values.portfile;
+  } catch (error) {
+    console.error(`error: ${error instanceof Error ? error.message : String(error)}\n${usage}`);
+    process.exit(2);
   }
   const server = http.createServer((req, res) => {
     handleRequest(req, res).catch(() => {

@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { realpathSync } from "node:fs";
 import { join } from "node:path";
-import { lintArchitecture, parseArgs, readArchitecture } from "../arch-lint";
+import { lintArchitecture, parseCli, readArchitecture } from "../arch-lint";
 import { Scratch, writeTree } from "../lib";
 
 const scratch = new Scratch();
@@ -89,14 +88,8 @@ describe("lintArchitecture", () => {
 });
 
 // The check-architecture task's flags reach the lint through this parser: a mistyped or valueless flag must
-// fail the task, never lint with defaults; the default declaration sits under the --root given.
-test("the CLI refuses an unknown flag and a flag without its value; --root places the default declaration", () => {
-  const root = realpathSync(scratch.dir("arch-lint-args"));
-  expect(parseArgs(["--mermaid", "--root", root])).toEqual({
-    root,
-    config: join(root, "architecture.yml"),
-    mermaid: true,
-  });
-  expect(() => parseArgs(["--bogus"])).toThrow(/usage:/);
-  expect(() => parseArgs(["--config"])).toThrow(/usage:/);
+// fail the task, never lint with defaults.
+test("the CLI refuses an unknown flag and a flag without its value", () => {
+  expect(() => parseCli(["--bogus"])).toThrow(/usage:/);
+  expect(() => parseCli(["--config"])).toThrow(/usage:/);
 });

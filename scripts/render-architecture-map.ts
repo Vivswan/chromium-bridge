@@ -6,6 +6,7 @@
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { parseArgs } from "node:util";
 import {
   DEFAULT_CONFIG,
   pathLabel,
@@ -74,34 +75,37 @@ interface CliOptions {
   check: boolean;
 }
 
-function parseArgs(argv: readonly string[]): CliOptions {
-  let root = realpath(process.cwd());
-  let page: string | undefined;
-  let config: string | undefined;
-  let region = DEFAULT_REGION;
-  let check = false;
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    const value = (): string => {
-      const next = argv[++i];
-      if (next === undefined) throw new Error(`${arg} needs a value\n${USAGE}`);
-      return next;
+function parseCli(argv: readonly string[]): CliOptions {
+  try {
+    const { values } = parseArgs({
+      args: [...argv],
+      options: {
+        page: { type: "string" },
+        config: { type: "string" },
+        root: { type: "string" },
+        region: { type: "string" },
+        check: { type: "boolean" },
+      },
+      strict: true,
+    });
+    if (values.page === undefined) throw new Error("--page is required");
+    const root = realpath(values.root ?? process.cwd());
+    return {
+      page: realpath(values.page),
+      root,
+      config: values.config === undefined ? join(root, DEFAULT_CONFIG) : realpath(values.config),
+      region: values.region ?? DEFAULT_REGION,
+      check: values.check === true,
     };
-    if (arg === "--root") root = realpath(value());
-    else if (arg === "--page") page = realpath(value());
-    else if (arg === "--config") config = realpath(value());
-    else if (arg === "--region") region = value();
-    else if (arg === "--check") check = true;
-    else throw new Error(`unknown argument: ${arg}\n${USAGE}`);
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\n${USAGE}`);
   }
-  if (page === undefined) throw new Error(`--page is required\n${USAGE}`);
-  return { page, root, config: config ?? join(root, DEFAULT_CONFIG), region, check };
 }
 
 if (import.meta.main) {
   let options: CliOptions;
   try {
-    options = parseArgs(process.argv.slice(2));
+    options = parseCli(process.argv.slice(2));
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(2);

@@ -83,7 +83,7 @@ test("--mint-seeds refuses an output dir inside the repository (the captured-cor
         status: 2,
         stderr: `error: refusing to write captured frames inside the repository: ${inside}`,
       },
-      missing: { status: 2, stderr: "error: --mint-seeds needs <dir>" },
+      missing: { status: 2, stderr: "error: Option '--mint-seeds <value>' argument missing" },
     });
   } finally {
     rmSync(outside, { recursive: true, force: true });
