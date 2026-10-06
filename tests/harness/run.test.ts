@@ -127,8 +127,9 @@ test("the sweep removes only a dead owner's dirs of its prefixes (the protocol s
 // test never probes or signals a pid it did not spawn. A write to fd 1 is synchronous, so the report
 // lands before the child re-raises the signal and dies. The child's normal completion is the driver's
 // shape: it awaits the sleeper, which the signal's SIGKILL also completes, then joins the teardown and
-// would exit 7 on its own.
-test("SIGTERM stops and reaps the owned child, then removes the owned dirs, then exits by the signal, even when the kill completes the run or a second signal lands (a finally never runs on it; an unreaped orphan is a zombie under a non-reaping init)", async () => {
+// would exit 7 on its own. The reap is asserted because under a non-reaping init (a CI container) an
+// unreaped orphan is a zombie that still reads as alive.
+test("SIGTERM stops and reaps the owned child, removes the owned dirs, then exits by the signal, even when the kill completes the run or a second signal lands (a finally never runs on a signal)", async () => {
   if (process.platform === "win32") return;
   const root = ownedTempDir("bb-harness-sigterm-");
   const script = [
