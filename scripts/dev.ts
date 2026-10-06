@@ -66,7 +66,8 @@ const killWeb = () => {
   // that somehow escaped the group, and clears the lockfile so the next
   // start is clean.
   try {
-    execFileSync("bunx", ["astro", "dev", "stop"], {
+    // `bun run` reaches the workspace's own astro; bunx would answer from bun's global cache without it.
+    execFileSync("bun", ["run", "astro", "dev", "stop"], {
       cwd: webDir,
       stdio: "ignore",
       timeout: 10_000,

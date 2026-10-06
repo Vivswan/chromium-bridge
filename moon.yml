@@ -2,14 +2,28 @@
 # Touch ID runbooks. Unscoped task names resolve here via .moon/workspace.yml's defaultProject. Every task is
 # uncached by the workspace default (.moon/tasks/all.yml says why).
 #
-# Two rules govern every `moon run`, whatever targets the caller names together, so no caller has to:
-#   runs bun or bunx                                    -> depends on install-deps (a fresh clone installs itself)
+# These rules govern every `moon run`, whatever targets the caller names together, so no caller has to; the
+# first three are read back from the resolved graph by scripts/check-moon-edges.ts, the last two are not:
+#   runs a package binary                               -> `bun run <bin>` (node_modules/.bin, then PATH; never bun's
+#                                                          global cache, which is where bunx finds a bare name when
+#                                                          node_modules is absent)
+#   reachable from `gate` (the pre-commit hook's task)  -> only bun, the toolchain's cargo verbs, the shell's set, and
+#                                                          moon's noop, never a bun install; a tool another runtime or
+#                                                          a separate install provides runs in `ci`
+#   a cargo verb reachable from `gate`                  -> takes --frozen (a missing crate fails, never fetches; fmt
+#                                                          reads no crates and has no such flag) and carries
+#                                                          RUSTUP_AUTO_INSTALL=0 in its env (rustup would otherwise
+#                                                          download a missing pinned toolchain)
+#   a bun task whose script spawns cargo                -> the same flag and env by convention (gen-shared, check-gen,
+#                                                          check-gen-isolation): the auditor sees only a task's own command
 #   reads or writes src/packages/shared/src/*.gen.ts    -> options.mutex 'generated-contract', shared with gen-shared,
 #                                                          so one invocation never overlaps a reader with the rewrite
-# A dependency on gen-shared was rejected for the readers: it would put a cargo build into every TS task and into
-# CI's build-free jobs, while check-gen already proves the committed modules fresh. build-repro, fuzz-smoke, and
-# harness-smoke run before or without an install by contract (their scripts say so) and are the only bun tasks
-# without the first rule. The per-project moon.yml files follow the same two rules.
+# Nothing reachable from `gate` installs or fetches; `setup` is the one bootstrap, and nothing depends on it
+# (`ci` adds tools CI provisions in its own steps, such as uv's). A missing package or crate fails its task
+# with the tool's own message; CI is the source of truth for a tree that drifted from its lockfiles. A dependency
+# on gen-shared was rejected for the readers: it would put a cargo build into every TS task and into CI's
+# build-free jobs, while check-gen already proves the committed modules fresh. The per-project moon.yml files
+# follow the same rules.
 #
 # The build, ci, test, test-rust, test-ts, release, and gen aggregates set `runDepsInParallel: false`, so their
 # steps run in the listed order. lint's two deps still run in parallel: clippy reads nothing gen-shared writes.
@@ -27,42 +41,42 @@ tasks:
 
   help:
     description: 'List every task with its description (the front door; raw JSON: `moon query tasks`)'
-    deps: ['~:install-deps']
     command: 'bun scripts/help.ts'
     options:
       runInCI: false
 
-  install-deps:
-    # --frozen-lockfile: a dependency edge must never rewrite bun.lock, so a drifted lockfile fails the run
-    # instead of silently landing. bun's own check makes the warm run a no-op.
-    description: 'Install the bun workspace (bun install --frozen-lockfile; idempotent, so every bun task depends on it)'
-    command: 'bun install --frozen-lockfile'
-    inputs:
-      - '/bun.lock'
-      - '/**/package.json'
-      - '!**/node_modules/**'
+  setup:
+    # `rustup toolchain install` with no name installs the active toolchain (the Containerfile's rustup step
+    # says the same); an inherited RUSTUP_TOOLCHAIN would make that another toolchain, so the script drops it.
+    description: 'Run once per fresh checkout: install the bun workspace to bun.lock (lefthook wires the git hooks from its postinstall), the pinned Rust toolchain, and the crates of both cargo workspaces to their Cargo.lock'
+    script: |
+      set -e
+      bun install --frozen-lockfile
+      unset RUSTUP_TOOLCHAIN
+      rustup toolchain install
+      cargo fetch --locked
+      cargo fetch --locked --manifest-path src/packages/core/fuzz/Cargo.toml
+    options:
+      runInCI: false
 
   # ----- main aggregates ----------------------------------------------------
 
   build:
     description: 'Build everything: shared typecheck, extension, web app, scripts typecheck, cargo workspace'
     deps:
-      - '~:install-deps'
       - 'shared:typecheck'
       - 'extension:build'
       - 'web:build'
-    script: 'bunx tsc -p scripts && cargo build --workspace'
+    script: 'bun run tsc -p scripts && cargo build --workspace'
     options:
       mutex: 'generated-contract'
       runDepsInParallel: false
 
-  ci:
-    description: 'THE GATE: the local cross-platform gate steps (CI layers the OS matrix, linux-install, the adversarial/chaos suites, the browser suites, and the web build on top); uncached, sequential, always full'
+  gate:
+    description: "THE PRE-COMMIT GATE (lefthook.yml runs it): every check the repository's own toolchain provides (bun, biome, tsc, vitest, cargo verbs); uncached, sequential, always full; `ci` adds the CI-only tools"
     deps:
       - 'core:fmt-check'
       - 'core:lint'
-      - '~:typos'
-      - '~:machete'
       - 'core:test'
       - 'core:test-doc'
       - 'core:test-loom'
@@ -72,14 +86,23 @@ tasks:
       - 'shared:test'
       - 'extension:test'
       - 'extension:build'
-      - '~:test-e2e'
       - '~:hygiene'
-      - '~:check-refresh-lockfiles'
       - '~:check-fuzz-workspace'
       - '~:test-fuzz'
       - '~:check-gen'
       - '~:check-envelope'
       - '~:check-gen-isolation'
+    options:
+      runDepsInParallel: false
+
+  ci:
+    description: 'THE GATE CI runs: gate, then the checks that need another runtime or a separately installed binary (typos, cargo-machete, the Python protocol e2e, yamllint, actionlint) or re-lock a scratch workspace (check-refresh-lockfiles); CI layers the OS matrix, linux-install, the adversarial/chaos suites, the browser suites, and the web build on top'
+    deps:
+      - '~:gate'
+      - '~:typos'
+      - '~:machete'
+      - '~:test-e2e'
+      - '~:check-refresh-lockfiles'
       - '~:check-yaml'
       - '~:check-actions'
     options:
@@ -125,7 +148,6 @@ tasks:
 
   dev:
     description: 'Dev everything: extension (WXT) + web app (Astro) + a dev browser in one terminal; Ctrl-C stops all'
-    deps: ['~:install-deps']
     command: 'bun scripts/dev.ts'
     preset: 'server'
 
@@ -133,7 +155,6 @@ tasks:
     # Not a `persistent` server task: the web project's dev script backgrounds the astro dev daemon itself
     # (`astro dev stop; ASTRO_DEV_BACKGROUND=1 astro dev`) and exits, so here it is a plain one-shot command.
     description: 'Docs site dev server only; replaces any already-running astro dev (`dev` supersets this)'
-    deps: ['~:install-deps']
     command: 'bun run --cwd src/apps/web dev'
     options:
       runInCI: false
@@ -142,24 +163,21 @@ tasks:
 
   fmt:
     description: 'Format everything in place: Rust (cargo fmt) + TS/JS/JSON (Biome)'
-    deps: ['~:install-deps']
-    script: 'set -e; cargo fmt; bunx biome format --write .'
+    script: 'set -e; cargo fmt; bun run biome format --write .'
     options:
       mutex: 'generated-contract'
       runInCI: false
 
   fmt-ts:
     description: 'Format TS/JS/JSON in place (Biome; what `bun run format` delegates to)'
-    deps: ['~:install-deps']
-    command: 'bunx biome format --write .'
+    command: 'bun run biome format --write .'
     options:
       mutex: 'generated-contract'
       runInCI: false
 
   fix:
     description: 'Auto-fix everything: Biome lint+format fixes, then cargo fmt'
-    deps: ['~:install-deps']
-    script: 'set -e; bunx biome check --write .; cargo fmt'
+    script: 'set -e; bun run biome check --write .; cargo fmt'
     options:
       mutex: 'generated-contract'
       runInCI: false
@@ -174,24 +192,21 @@ tasks:
 
   lint-ts:
     description: 'Lint TS/JS/JSON (Biome; what `bun run lint` delegates to)'
-    deps: ['~:install-deps']
-    command: 'bunx biome lint .'
+    command: 'bun run biome lint .'
     inputs: ['**/*', '!**/node_modules/**']
     options:
       mutex: 'generated-contract'
 
   check-ts:
     description: 'Lint + format-check all TS/JS/JSON, warnings fail (biome ci; what `bun run check` delegates to)'
-    deps: ['~:install-deps']
-    command: 'bunx biome ci . --error-on-warnings'
+    command: 'bun run biome ci . --error-on-warnings'
     inputs: ['**/*', '!**/node_modules/**']
     options:
       mutex: 'generated-contract'
 
   fmt-check-ts:
     description: 'Verify TS/JS/JSON formatting (Biome; what `bun run format:check` delegates to)'
-    deps: ['~:install-deps']
-    command: 'bunx biome format .'
+    command: 'bun run biome format .'
     inputs: ['**/*', '!**/node_modules/**']
     options:
       mutex: 'generated-contract'
@@ -225,16 +240,18 @@ tasks:
   # ----- typescript aggregates ----------------------------------------------
 
   typecheck:
-    description: 'Type-check every TS project (extension, tests, scripts, src/packages/shared)'
-    deps: ['~:install-deps']
+    # The extension's tsconfig extends the gitignored .wxt/tsconfig.json and its i18n module types against the
+    # generated #i18n key structure, so tsc needs them regenerated first; no earlier gate step does that.
+    description: 'Type-check every TS project (extension, tests, scripts, src/packages/shared); regenerates the WXT types first'
     script: |
       set -e
-      bunx tsc -p src/apps/extension
-      bunx tsc -p tests/browser
-      bunx tsc -p tests/interop
-      bunx tsc -p tests/harness
-      bunx tsc -p scripts
-      bunx tsc -p src/packages/shared
+      bun run --cwd src/apps/extension wxt prepare
+      bun run tsc -p src/apps/extension
+      bun run tsc -p tests/browser
+      bun run tsc -p tests/interop
+      bun run tsc -p tests/harness
+      bun run tsc -p scripts
+      bun run tsc -p src/packages/shared
     options:
       mutex: 'generated-contract'
 
@@ -252,7 +269,6 @@ tasks:
     # SAFETY: only ever run against an isolated Chrome for Testing via CHROME_BIN, never a browser holding a
     # real session (tests/README.md). The runner builds the extension and owns the suite-ran canary.
     description: 'DOM + smoke + security proofs (needs bun + isolated Chrome via CHROME_BIN; builds the extension first)'
-    deps: ['~:install-deps']
     command: 'bun tests/browser/run_all.ts'
     options:
       mutex: 'generated-contract'
@@ -265,7 +281,6 @@ tasks:
 
   ci-container:
     description: 'THE GATE inside the container test environment (docker; CONTAINER_ENGINE=podman switches)'
-    deps: ['~:install-deps']
     command: 'bun scripts/compose-run.ts ci'
     options:
       runInCI: false
@@ -275,7 +290,7 @@ tasks:
     # throwaway runtime dir) through the real extension, so it needs the Rust build the browser CI job does not
     # have, which is why it is not in run_all.ts.
     description: 'The WebAuthn exchange end to end against the real host in the isolated Chrome (needs CHROME_BIN; builds the extension and the release binary first)'
-    deps: ['~:install-deps', '~:build-release']
+    deps: ['~:build-release']
     script: |
       set -e
       bun run --cwd src/apps/extension build
@@ -285,14 +300,12 @@ tasks:
 
   test-browser-container:
     description: 'Browser suites inside the container under xvfb with BB_REQUIRE_BROWSER=1 (a skipped suite fails as in CI); no test Chrome on the host'
-    deps: ['~:install-deps']
     command: 'bun scripts/compose-run.ts browser'
     options:
       runInCI: false
 
   shell-container:
     description: 'Interactive bash inside the container test environment, the checkout bind-mounted at /work'
-    deps: ['~:install-deps']
     command: 'bun scripts/compose-run.ts shell'
     options:
       runInCI: false
@@ -301,7 +314,6 @@ tasks:
   test-integration:
     description: 'Real E2E integration (opt-in; real binary + isolated Chrome + extension)'
     deps:
-      - '~:install-deps'
       - '~:build-release'
       - 'extension:build'
     command: 'bun tests/browser/integration_e2e.ts'
@@ -328,37 +340,39 @@ tasks:
 
   check-fuzz-smoke:
     description: 'Unit tests for the fuzz-smoke driver (flag parsing, failure-report contract)'
-    deps: ['~:install-deps']
     command: 'bun test scripts/tests/fuzz-smoke.test.ts'
 
   check-harness-driver:
     description: 'Unit tests for the harness-smoke driver (--mint-seeds refuses an output dir inside the repository; the sweep removes only the dirs of a dead owner; SIGTERM stops its children, removes its dirs, and exits by the signal)'
-    deps: ['~:install-deps']
     command: 'bun test tests/harness/run.test.ts'
 
   check-refresh-lockfiles:
     description: 'Unit test for the release-PR lockfile refresh (a bumped scratch workspace re-locks into one commit; needs cargo, git, bun)'
-    deps: ['~:install-deps']
     command: 'bun test scripts/tests/refresh-lockfiles.test.ts'
 
   check-fuzz-workspace:
     description: >-
       Cargo-check the excluded fuzz workspace (stable is enough to compile it) so fuzz targets
       cannot rot outside the main build; CI runs the same check in checks.yml's rust job
-    command: 'cargo check --locked --manifest-path src/packages/core/fuzz/Cargo.toml --all-targets'
+    command: 'cargo check --frozen --manifest-path src/packages/core/fuzz/Cargo.toml --all-targets'
+    env:
+      RUSTUP_AUTO_INSTALL: '0'
 
   test-fuzz:
     description: >-
       The fuzz workspace's own tests (stable rust): every generated seed runs through its target
       in-process and its reader agrees with its label
-    command: 'cargo test --locked --manifest-path src/packages/core/fuzz/Cargo.toml'
+    command: 'cargo test --frozen --manifest-path src/packages/core/fuzz/Cargo.toml'
+    env:
+      RUSTUP_AUTO_INSTALL: '0'
 
   doc:
     description: >-
       Build the workspace docs with rustdoc warnings denied (broken intra-doc links included); CI runs the
       same step in checks.yml's rust job
-    command: 'cargo doc --workspace --no-deps --document-private-items'
+    command: 'cargo doc --frozen --workspace --no-deps --document-private-items'
     env:
+      RUSTUP_AUTO_INSTALL: '0'
       RUSTDOCFLAGS: '-D warnings'
 
   # ----- python protocol suites (uv-provisioned interpreter) -----------------
@@ -368,7 +382,6 @@ tasks:
     # local runs and CI cannot diverge (a PATH python3 already bit us once: 3.12 vs 3.14 subprocess
     # semantics). No fallback by design.
     description: 'Fail loudly if uv (which provisions the pinned Python) is missing'
-    deps: ['~:install-deps']
     command: 'bun scripts/check-uv.ts'
 
   # The three protocol suites are stdlib unittest modules under tests/protocol
@@ -408,12 +421,11 @@ tasks:
 
   gen-shared:
     description: 'Regenerate the TS contract modules from the Rust core (src/packages/shared/src/*.gen.ts)'
-    deps: ['~:install-deps']
     script: |
       set -e
       bun scripts/gen-ops.ts
       bun scripts/gen-envelope.ts
-      bunx biome format --write \
+      bun run biome format --write \
         src/packages/shared/src/ops.gen.ts \
         src/packages/shared/src/identity.gen.ts \
         src/packages/shared/src/errors.gen.ts \
@@ -424,23 +436,26 @@ tasks:
         src/packages/shared/src/audit.gen.ts \
         src/packages/shared/src/host.gen.ts \
         src/packages/shared/src/policy.gen.ts
+    env:
+      RUSTUP_AUTO_INSTALL: '0'
     options:
       mutex: 'generated-contract'
 
   gen-icons:
     description: 'Render the extension icon rasters from the assets/icon/ SVGs (build artifacts, gitignored)'
-    deps: ['~:install-deps']
     command: 'bun scripts/gen-icons.ts'
 
   check-gen:
     # scripts/check-gen.ts judges only the generated modules (tracked or newly written), so local WIP in the
     # hand-written files sharing the directory cannot false-fail the staleness gate.
     description: 'Staleness gate for the generated shared contract modules + envelope generator fail-closed rules'
-    deps: ['~:install-deps', '~:gen-shared']
+    deps: ['~:gen-shared']
     script: |
       set -e
       bun scripts/check-gen.ts
       bun test scripts/tests/check-gen.test.ts scripts/tests/gen-envelope.test.ts
+    env:
+      RUSTUP_AUTO_INSTALL: '0'
     options:
       mutex: 'generated-contract'
 
@@ -450,7 +465,6 @@ tasks:
     # hand-written refinements stay pinned. Base freshness is check-gen's job; the bun test covers the gate's
     # rules against tables a live run cannot mutate.
     description: 'Envelope asymmetry gate: generated validators match the asymmetry table, classifiers match the reader plan'
-    deps: ['~:install-deps']
     script: |
       set -e
       bun scripts/check-envelope.ts
@@ -462,11 +476,12 @@ tasks:
     # Only `cargo tree -e normal` sees the shipped graph (scripts/check-gen-isolation.ts says why cargo-deny
     # cannot): ts-rs is refused anywhere in it, schemars only through rmcp.
     description: 'Gen-only tooling (ts-rs; schemars outside rmcp) stays out of the shipped binary dependency graph'
-    deps: ['~:install-deps']
     script: |
       set -e
       bun scripts/check-gen-isolation.ts
       bun test scripts/tests/check-gen-isolation.test.ts
+    env:
+      RUSTUP_AUTO_INSTALL: '0'
 
   # ----- version + repo hygiene checks ---------------------------------------
 
@@ -499,26 +514,22 @@ tasks:
 
   check-ci-scripts:
     description: "Unit tests for the TypeScript behind CI's workflow steps (image digest and tag, Linux registration scenarios, installer smoke, mutants shard, auto-format commit, release packaging, uv check)"
-    deps: ['~:install-deps']
     command: 'bun test scripts/tests/ci-image.test.ts scripts/tests/linux-registration.test.ts scripts/tests/installer-smoke.test.ts scripts/tests/mutants-shard.test.ts scripts/tests/auto-format-commit.test.ts scripts/tests/release-package.test.ts scripts/tests/check-uv.test.ts'
     options:
       mutex: 'generated-contract'
 
   check-version:
     description: 'Verify the crate, JS package, and release-please versions agree'
-    deps: ['~:install-deps']
     command: 'bun scripts/check-version.ts'
 
   check-extension-id:
     description: 'Verify the built extension manifest keeps the pinned key and permission surface, and identity.rs stays the only definition site'
-    deps: ['~:install-deps']
     command: 'bun scripts/check-extension-id.ts'
     options:
       mutex: 'generated-contract'
 
   check-cjk:
     description: 'Verify CJK text stays inside the zh locale files and translated docs (one git grep -P; the wrapper owns the excludes and the engine control)'
-    deps: ['~:install-deps']
     script: |
       set -e
       bun scripts/check-cjk.ts
@@ -528,7 +539,6 @@ tasks:
 
   check-typography:
     description: 'No typographic look-alike characters in any tracked file (exemptions in .typography-allow)'
-    deps: ['~:install-deps']
     script: |
       set -e
       bun scripts/check-typography.ts
@@ -538,22 +548,18 @@ tasks:
 
   check-toolchain:
     description: 'The bun pin copies (.prototools, package.json, .bun-version) must agree, and .prototools must leave rust to rustup and python to uv'
-    deps: ['~:install-deps']
     command: 'bun scripts/check-toolchain.ts'
 
   check-pins:
     description: 'The pin reader CI bootstraps from (scripts/pin.ts) refuses a tool pinned in both .prototools and the Containerfile, twice, or nowhere; then every pin of both files is swept through that rule'
-    deps: ['~:install-deps']
     script: 'bun test scripts/tests/pin.test.ts && bun scripts/pin.ts --all'
 
   check-hasher:
     description: 'No tracked file may match a .moon/workspace.yml hasher.ignorePattern (a stale-cache hole)'
-    deps: ['~:install-deps']
     command: 'bun scripts/check-moon-hasher.ts'
 
   check-moon-edges:
-    description: "Every task that runs bun or bunx depends on root:install-deps (the header's first rule), read from moon's resolved task graph"
-    deps: ['~:install-deps']
+    description: "The header's first three rules, read from moon's resolved task graph: no bunx anywhere, and the gate's graph holds only own-toolchain commands (cargo verbs with --frozen, no bun install)"
     script: |
       set -e
       bun scripts/check-moon-edges.ts
@@ -561,7 +567,6 @@ tasks:
 
   check-ignored:
     description: 'No tracked file may be matched by .gitignore (Biome and knip would skip it silently; one git ls-files call behind a typed wrapper)'
-    deps: ['~:install-deps']
     script: |
       set -e
       bun scripts/check-ignored.ts
@@ -581,7 +586,6 @@ tasks:
 
   check-docs-literals:
     description: 'Living docs state the canonical identifiers, paths, and protocol versions exactly'
-    deps: ['~:install-deps']
     script: |
       set -e
       bun scripts/check-docs-literals.ts
@@ -591,7 +595,6 @@ tasks:
 
   check-docs-policy:
     description: 'Risk matrix, tool-count headlines, and settings-defaults docs match the catalogue and settings schema'
-    deps: ['~:install-deps']
     script: |
       set -e
       bun scripts/check-docs-policy.ts
@@ -601,7 +604,6 @@ tasks:
 
   check-planning-refs:
     description: 'No planning references (retired design-record numbers, decision/finding/phase tags, audit codes) in the covered sources (TypeScript, Rust, TOML, Python, shell, docs, web)'
-    deps: ['~:install-deps']
     script: |
       set -e
       bun scripts/check-planning-refs.ts
@@ -611,7 +613,6 @@ tasks:
 
   check-compose:
     description: 'compose.yaml + compose.podman.yaml stay within the Compose Specification subset both docker compose and podman compose implement'
-    deps: ['~:install-deps']
     script: |
       set -e
       bun scripts/check-compose-compat.ts
@@ -619,7 +620,6 @@ tasks:
 
   check-docs-probe:
     description: 'Every paragraph and list item of the living docs under the 70-word cap and every path they name real; pre-rewrite findings are allowed by docs/.probe-baseline, which fails when an allowance goes stale (CHANGELOG.md is release-please output and stays out)'
-    deps: ['~:install-deps']
     script: |
       set -e
       bun scripts/docs-probe.ts --baseline docs/.probe-baseline 'README*.md' CONTRIBUTING.md GOVERNANCE.md 'docs/**/*.md' .github/SECURITY.md
@@ -627,7 +627,6 @@ tasks:
 
   check-architecture:
     description: 'The TS import graph equals architecture.yml in both directions, the module map rendered into docs/architecture.md is current, and every diagram box and demonstration link on that page names real code'
-    deps: ['~:install-deps']
     script: |
       set -e
       bun scripts/arch-lint.ts
@@ -639,14 +638,12 @@ tasks:
 
   gen-architecture-map:
     description: 'Rewrite the generated module-map region of docs/architecture.md from architecture.yml (check-architecture verifies it)'
-    deps: ['~:install-deps']
     command: 'bun scripts/render-architecture-map.ts --page docs/architecture.md'
     options:
       runInCI: false
 
   check-docs-locales:
     description: 'docs/zh-cn and docs/zh-tw, once present, mirror the English docs tree file-for-file with their README; absent locales pass'
-    deps: ['~:install-deps']
     script: |
       set -e
       bun scripts/check-docs-locales.ts
@@ -659,7 +656,6 @@ tasks:
     # spec 2026-07-28) over stdio, the one real third-party modern client.
     description: 'MCP client SDK v2 interop suite (official @modelcontextprotocol/client over stdio; CI runs it via checks.yml)'
     deps:
-      - '~:install-deps'
       - '~:build-release'
     command: 'bun test tests/interop/sdk-client.test.ts'
     options:

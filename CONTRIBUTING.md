@@ -37,7 +37,7 @@ This is a small, security-sensitive project (it drives a real logged-in browser)
    ```sh
    git pull --rebase origin main
    ```
-4. **Gate locally - everything must pass.** The lefthook pre-commit hook (wired by `bun install`) runs this for you; `moon run help` lists every task:
+4. **Gate locally - everything must pass.** The lefthook pre-commit hook (wired by `moon run setup`) runs `moon run gate`, the own-toolchain part of this, for you; `moon run help` lists every task:
    ```sh
    moon run ci        # rust fmt/clippy/nextest + typos/machete + TS typecheck/biome/test/build + protocol e2e
    ```
@@ -76,7 +76,7 @@ This project drives a real logged-in browser, and a past incident nearly took do
   - Cargo workspace: `src/packages/core` (the `chromium-bridge-core` library), and `src/apps/host` (the `chromium-bridge` binary).
   - Errors on the tool-call path use the typed `CallError` (`src/packages/core/src/error.rs`).
   - Log via the `log_*!` macros (`src/packages/core/src/log.rs`), never bare `eprintln!` for diagnostics. **stdout is protocol** - all logging goes to stderr.
-- **TypeScript** - Biome lints and formats every TS/JS/JSON file in the bun workspace (`bunx biome ci . --error-on-warnings` to check, `moon run fix` to auto-fix; config in `biome.jsonc`).
+- **TypeScript** - Biome lints and formats every TS/JS/JSON file in the bun workspace (`bun run biome ci . --error-on-warnings` to check, `moon run fix` to auto-fix; config in `biome.jsonc`).
   - `noExplicitAny` is enforced in extension source; test files and the tests/ harness are exempt until their CDP plumbing gets real types.
 - **Shared schemas** - the cross-boundary TS shapes (settings, envelopes, runtime messages) live as Zod schemas in `src/packages/shared`; the types are inferred from them and the extension parses untrusted input against them at runtime. Don't reintroduce a hand-written duplicate type next to a schema - extend the schema.
 

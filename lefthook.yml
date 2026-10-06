@@ -1,15 +1,15 @@
-# Git hooks, managed by lefthook (https://lefthook.dev).
+# Git hooks, managed by lefthook (https://lefthook.dev). The hook checks and fails, never installs, stages, or
+# commits; what `gate` may run is the root moon.yml header's rule.
 #
-# `bun install` wires the hooks automatically (lefthook is a devDependency and
-# its postinstall runs `lefthook install`); run `lefthook install` to re-wire
-# by hand. CONTRIBUTING.md requires the full gate green before every commit -
-# this hook automates that rule. The gate task is uncached by design (every
-# step sets cache: false), so this always runs the full suite. moon comes
-# from proto (`proto install`; see .prototools) - make sure ~/.proto/shims
-# and ~/.proto/bin are on your PATH. For a WIP commit on a private branch,
-# LEFTHOOK=0 git commit skips it; CI still runs the same gate on the PR.
+#   wire or re-wire the hooks   -> `moon run setup` (lefthook's postinstall) or `lefthook install`
+#   moon and cargo              -> proto's ~/.proto/shims and ~/.proto/bin (`proto install`, .prototools) and rustup's
+#                                  ~/.cargo/bin, prefixed below so a git client that starts hooks without your
+#                                  shell's PATH still finds them
+#   rust                        -> RUSTUP_AUTO_INSTALL=0 here as well as in the gate's cargo tasks: moon's task env
+#                                  yields to an inherited value, and a commit must never download a toolchain
+#   skip for a WIP commit       -> LEFTHOOK=0 git commit (CI runs the full gate on the PR)
 
 pre-commit:
   jobs:
     - name: gate
-      run: moon run ci
+      run: PATH="$HOME/.proto/shims:$HOME/.proto/bin:$HOME/.cargo/bin:$PATH" RUSTUP_AUTO_INSTALL=0 moon run gate

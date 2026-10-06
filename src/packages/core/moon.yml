@@ -1,5 +1,5 @@
-# moon tasks for the Rust security core: the cargo gate steps the root ci aggregate (moon.yml at the
-# repo root) depends on.
+# moon tasks for the Rust security core: the cargo gate steps the root gate aggregate (moon.yml at the
+# repo root) depends on, under its header's rules (--frozen on every verb that reads crates).
 $schema: 'https://moonrepo.dev/schemas/project.json'
 
 language: 'rust'
@@ -10,6 +10,10 @@ layer: 'library'
 # workspace root - byte-identical to running the cargo verbs by hand.
 taskOptions:
   runFromWorkspaceRoot: true
+
+# The root moon.yml header's rule for every cargo verb the gate reaches.
+env:
+  RUSTUP_AUTO_INSTALL: '0'
 
 fileGroups:
   # Everything a workspace-level cargo verb can read: every member's sources,
@@ -33,25 +37,25 @@ tasks:
     # One test (protocol/control/tests.rs) reads src/packages/shared/src/envelope.gen.ts to hold the Rust frame
     # roster to the generated one, so this task is a reader under the root moon.yml header's mutex rule.
     description: 'Rust unit + integration tests (cargo-nextest)'
-    command: 'cargo nextest run'
+    command: 'cargo nextest run --frozen'
     inputs: ['@group(workspace-rust)', '$RUSTFLAGS']
     options:
       mutex: 'generated-contract'
 
   test-doc:
     description: 'Rust doctests'
-    command: 'cargo test --doc'
+    command: 'cargo test --frozen --doc'
     inputs: ['@group(workspace-rust)', '$RUSTFLAGS', '$RUSTDOCFLAGS']
 
   test-loom:
     # Only the model: every other test the feature build could run is a rerun of core:test.
     description: 'Model-check the broker ref-count shutdown protocol with loom (the core `loom` feature)'
-    command: 'cargo test -p chromium-bridge-core --lib --features loom loom_model'
+    command: 'cargo test --frozen -p chromium-bridge-core --lib --features loom loom_model'
     inputs: ['@group(workspace-rust)', '$RUSTFLAGS']
 
   lint:
     description: 'Lint Rust, denying all warnings (the CI gate)'
-    command: 'cargo clippy --all-targets -- -D warnings'
+    command: 'cargo clippy --frozen --all-targets -- -D warnings'
     inputs: ['@group(workspace-rust)', '$RUSTFLAGS']
 
   fmt-check:

@@ -32,7 +32,6 @@ tasks:
     # the whole scripts/ tree is declared so a new helper import there can
     # never be an undeclared input.
     description: 'Build the extension bundle (src/ -> build/extension/; generates icons first)'
-    deps: ['root:install-deps']
     command: 'bun run build'
     inputs:
       - '**/*'
@@ -49,13 +48,11 @@ tasks:
 
   dev:
     description: 'WXT dev mode: rebuild on change'
-    deps: ['root:install-deps']
     command: 'bun run dev'
     preset: 'server'
 
   test:
     description: "Unit-test the extension's shared modules (vitest + fakeBrowser; no real browser)"
-    deps: ['root:install-deps']
     command: 'bun run test'
     inputs:
       - '**/*'
@@ -67,13 +64,11 @@ tasks:
 
   typecheck:
     description: "Type-check the extension (tsc against the WXT-generated tsconfig)"
-    deps: ['root:install-deps']
     command: 'bun run typecheck'
 
   lint:
     description: "Biome lint for the extension workspace"
-    deps: ['root:install-deps']
-    command: 'bunx biome lint $projectSource'
+    command: 'bun run biome lint $projectSource'
     inputs:
       - '**/*'
       - '!**/node_modules/**'

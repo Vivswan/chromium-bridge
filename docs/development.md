@@ -10,10 +10,10 @@ Rust is rustup's alone, from `rust-toolchain.toml`, so a fresh machine needs [ru
 
 ```sh
 proto install    # provisions bun, moon, node, uv at the pinned versions (rustup owns rust)
-bun install      # workspace deps + wires the git hooks (lefthook)
+moon run setup   # installs the bun workspace, the pinned Rust toolchain, and the crates; wires the git hooks (lefthook); the gate itself never installs
 ```
 
-Four gate tools have no first-party proto plugin and are installed once by hand: `cargo install cargo-nextest` and `brew install typos-cli cargo-machete actionlint` (typos and cargo-machete also come from `cargo install`). Where CI gets them:
+Four tools have no first-party proto plugin and are installed once by hand: `cargo install cargo-nextest` (the test runner `moon run gate` uses) and `brew install typos-cli cargo-machete actionlint` (tools only `moon run ci` runs; typos and cargo-machete also come from `cargo install`). Where CI gets them:
 
 - **The `Containerfile` pins all four plus cargo-deb** as `ARG <TOOL>_VERSION`. The CI image carries the four; cargo-deb is installed on the bare release and installer runners alone.
 - **A job that installs a tool itself reads the same pin** through `bun scripts/pin.ts <tool>`: checks.yml's tooling job for cargo-machete (inside the image, where that version is already present), `installers.yml` and `update-release.yml` for cargo-deb on their bare runners.
@@ -31,7 +31,7 @@ Four gate tools have no first-party proto plugin and are installed once by hand:
 | [`typos`](https://github.com/crate-ci/typos) + [`cargo-machete`](https://github.com/bnjbvr/cargo-machete) | spelling + unused-dependency gates | `moon run typos` / `moon run machete`; CI gates typos in the managed ci.yml and machete in checks.yml |
 | [`actionlint`](https://github.com/rhysd/actionlint) | GitHub Actions workflow lint gate | `moon run check-actions`; CI runs it in the managed ci.yml's actionlint job |
 
-Git hooks are managed by [lefthook](https://lefthook.dev) (`lefthook.yml`): `bun install` wires a pre-commit hook that runs `moon run ci`, so a commit that would fail CI fails at commit time instead.
+Git hooks are managed by [lefthook](https://lefthook.dev) (`lefthook.yml`): `moon run setup` wires a pre-commit hook that runs `moon run gate`, the checks the repository's own toolchain provides, and `moon run ci` adds the tools only CI provisions.
 
 ## Layout
 
@@ -109,8 +109,8 @@ cargo nextest run
 cargo fmt --check && cargo clippy --all-targets -- -D warnings
 uv run --no-project --isolated tests/protocol/e2e.py
 bun install
-bunx tsc -p src/apps/extension        # one TS project; `moon run typecheck` covers them all
-bunx biome ci . --error-on-warnings   # lint + format check, warnings fail (biome.jsonc)
+bun run tsc -p src/apps/extension        # one TS project; `moon run typecheck` covers them all
+bun run biome ci . --error-on-warnings   # lint + format check, warnings fail (biome.jsonc)
 bun run --cwd src/apps/extension build
 ```
 

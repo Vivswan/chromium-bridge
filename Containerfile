@@ -98,7 +98,8 @@ RUN rm -rf /tmp/pins \
 ENV CHROME_BIN=/usr/bin/chromium \
     LEFTHOOK=0
 
-# The node_modules named volume starts empty and holds the Linux install, which the host's macOS or
-# Windows install cannot stand in for, so every service installs before its command.
-ENTRYPOINT ["bash", "-euo", "pipefail", "-c", "bun install --frozen-lockfile && exec \"$@\"", "container-entrypoint"]
+# The node_modules and cargo-registry named volumes start empty and hold the Linux install, which the host's
+# macOS or Windows install cannot stand in for, so every service installs and fetches before its command
+# (the gate's package binaries run from node_modules/.bin and its cargo verbs --frozen; neither fetches).
+ENTRYPOINT ["bash", "-euo", "pipefail", "-c", "bun install --frozen-lockfile && cargo fetch --locked && cargo fetch --locked --manifest-path src/packages/core/fuzz/Cargo.toml && exec \"$@\"", "container-entrypoint"]
 CMD ["bash"]
