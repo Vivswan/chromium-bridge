@@ -66,7 +66,7 @@ The CLI below registers the native-messaging host from a terminal through one en
 
 - **Idempotent re-registration:** on a fresh machine `--fix` is also the first registration, and after moving the binary it refreshes a stale one.
 - **Nothing built, downloaded, or copied:** the manifest points at this binary's own resolved path, through a small per-browser wrapper script on macOS/Linux.
-- **That wrapper** bakes in `--native-host --label <browser>`, because Chrome's manifest format has no `args` field.
+- **That wrapper** bakes in `--native-host`, because Chrome's manifest format has no `args` field, plus `--label <browser>` when one browser alone launches the manifest (`run-host-<browser>.sh`); a manifest several browsers read gets the unlabeled `run-host.sh` (the rule is `Target`'s in `registration.rs`).
 - **Overwrites a manifest another tool wrote at our host id** (the report names what it launched), refuses one it cannot read, and refuses a foreign pointer; `uninstall` leaves a foreign manifest.
 
 Selecting browsers:

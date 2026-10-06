@@ -12,8 +12,10 @@
 //! scope          -> one per command: the account's own locations, or with `--system` the root-owned ones every
 //!                   account's browser reads (the .deb's post-install, which runs as root); the command's privilege
 //!                   must match the scope ([`Privilege`]), so root never writes into a home and a user never into /etc
-//! macOS / Linux  -> Chrome's manifest has no `args` field, so each browser gets a wrapper script baking in
-//!                   `--native-host --label <browser>` (the label rides the bridge handshake)
+//! macOS / Linux  -> Chrome's manifest has no `args` field, so it launches a wrapper script: `run-host-<browser>.sh`
+//!                   baking in `--native-host --label <browser>` when one browser alone launches that manifest (the
+//!                   label rides the bridge handshake), or `run-host.sh` with no label when several browsers read
+//!                   it; the rule is [`Target`]'s
 //! Windows        -> Chrome appends the extension origin to the command line, which selects native-host mode, so the
 //!                   manifest points straight at the binary and registration is an HKCU registry key; compiles but is
 //!                   unverified on a real Windows machine (docs/cli.md)
