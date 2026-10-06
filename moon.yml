@@ -615,7 +615,7 @@ tasks:
     script: |
       set -e
       bun scripts/docs-probe.ts --baseline docs/.probe-baseline 'README*.md' CONTRIBUTING.md GOVERNANCE.md 'docs/**/*.md' .github/SECURITY.md
-      bun test scripts/tests/docs-probe.test.ts
+      bun test scripts/tests/docs-probe.test.ts scripts/tests/markdown-page.test.ts
 
   check-architecture:
     description: 'The TS import graph equals architecture.yml in both directions, the module map rendered into docs/architecture.md is current, and every diagram box and demonstration link on that page names real code'

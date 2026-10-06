@@ -32,11 +32,11 @@ export function regionBounds(text: string, name: string): { bodyStart: number; b
   if (!REGION_NAME.test(name)) {
     throw new Error(`a region name is lowercase letters, digits, and dashes; got "${name}"`);
   }
-  // A marker quoted inside a fence is page text about markers, not a region;
-  // line counting on the raw text keeps the offsets the splice needs.
+  // A marker quoted inside a fence is page text about markers, not a region; line counting on the raw
+  // text keeps the offsets the splice needs, with readPage's line-ending model (CRLF and lone CR fold).
   const page = readPage(text);
   const live = (match: RegExpExecArray): boolean =>
-    page.text[text.slice(0, match.index).split("\n").length - 1] !== undefined;
+    page.text[text.slice(0, match.index).split(/\r\n?|\n/).length - 1] !== undefined;
   const begins = [...text.matchAll(markerPattern("BEGIN", name))].filter(live);
   const ends = [...text.matchAll(markerPattern("END", name))].filter(live);
   const [begin] = begins;

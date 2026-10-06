@@ -51,6 +51,12 @@ test("spliceMap replaces the live region, leaves the quoted markers, and is idem
     ].join("\n"),
   );
   expect(spliceMap(once, "architecture-map", "graph TD\n  a --> b")).toBe(once);
+  // A lone CR above the markers is a line break to the parser, and the marker lookup counts it the same
+  // way; with no blank line before the live BEGIN, a count that skips the CR lands the marker on the fence.
+  const tight = PAGE.replace("```\n\n<!-- BEGIN", "```\n<!-- BEGIN");
+  expect(
+    spliceMap(tight.replace("page text:", "page\rtext:"), "architecture-map", "graph TD"),
+  ).toBe(spliceMap(tight, "architecture-map", "graph TD").replace("page text:", "page\rtext:"));
   expect(() => spliceMap("# No region\n", "architecture-map", "graph TD")).toThrow(
     'region "architecture-map" needs exactly one BEGIN and one END marker, found 0 and 0',
   );
