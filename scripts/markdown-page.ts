@@ -63,9 +63,8 @@ export function readPage(markdown: string): Page {
       }
       return;
     }
-    // A comment BLOCK (its own lines, up to three spaces in) spanning more than one line hides them; a
-    // one-line comment stays text (the GENERATED markers are one-line comments), and a comment opened
-    // inside a paragraph is phrasing, so its lines keep their prose. Other HTML blocks are text.
+    // Only a comment that is a block of its own (parent root, quote, or list item) hides lines; one opened
+    // inside a paragraph is phrasing and its lines keep their prose. Other HTML blocks are text.
     const block =
       parent?.type === "root" || parent?.type === "blockquote" || parent?.type === "listItem";
     if (block && node.value.trimStart().startsWith("<!--") && end.line > start.line) {

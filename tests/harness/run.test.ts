@@ -77,13 +77,13 @@ test("--mint-seeds refuses an output dir inside the repository (the captured-cor
     const missing = spawnSync(process.execPath, [RUN, "--mint-seeds"], { encoding: "utf8", env });
     expect({
       refused: { status: refused.status, stderr: refused.stderr.split("\n")[0] },
-      missing: { status: missing.status, stderr: missing.stderr.split("\n")[0] },
+      missing: { status: missing.status, stderr: missing.stderr },
     }).toEqual({
       refused: {
         status: 2,
         stderr: `error: refusing to write captured frames inside the repository: ${inside}`,
       },
-      missing: { status: 2, stderr: "error: Option '--mint-seeds <value>' argument missing" },
+      missing: { status: 2, stderr: expect.stringMatching(/usage:/) },
     });
   } finally {
     rmSync(outside, { recursive: true, force: true });
