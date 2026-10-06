@@ -331,5 +331,4 @@ audit:
   kind_enroll_revoked: "配對已撤銷 (解除配對)"
   kind_client_revoked: "受信任用戶端已撤銷"
   kind_kill_engaged: "已請求啟用緊急停止"
-  kind_kill_released: "已請求解除緊急停止"
   kind_kill_status_changed: "緊急停止狀態已變更"

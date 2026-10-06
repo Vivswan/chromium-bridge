@@ -3,6 +3,7 @@ import type {
   PresenceRequestFrame,
 } from "@chromium-bridge/shared/envelope.gen";
 import { type RuntimeResponse, WEBAUTHN_ENROLLMENT_KEY } from "@chromium-bridge/shared/runtime-msg";
+import { PRESENCE_REQUIRED } from "@chromium-bridge/shared/webauthn";
 import { useCallback, useEffect, useState } from "react";
 import { browser } from "wxt/browser";
 import { Button } from "@/components/ui/button";
@@ -76,7 +77,7 @@ export function AuthenticatorEnrollment() {
       await create(begun.options);
       return;
     }
-    if (begun.error !== "presence_required") {
+    if (begun.error !== PRESENCE_REQUIRED) {
       setStep({ kind: "refused", reason: begun.error });
       return;
     }

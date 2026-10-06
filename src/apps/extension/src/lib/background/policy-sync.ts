@@ -34,11 +34,13 @@ import {
   policyValuesFrom,
   relaxedPolicyFields,
 } from "@chromium-bridge/shared/policy-compare";
-import { UI_LANGUAGES, type UiLanguageValue } from "@chromium-bridge/shared/settings";
+import { SettingsSchema, type UiLanguageValue } from "@chromium-bridge/shared/settings";
 import { unreachable } from "@chromium-bridge/shared/util";
 import pLimit from "p-limit";
 import { browser } from "wxt/browser";
+import { z } from "zod";
 import { inLife } from "../shared/in-life";
+import { readKey, readKeyOr, readKeys, type Stored } from "../shared/read-key";
 import { auditEvent } from "./audit-log";
 import type { Connection, PortCollaborator } from "./connection";
 import { getPin, setCompromised } from "./enclave-pin";
@@ -177,10 +179,13 @@ async function langLanePinned(): Promise<boolean> {
   return (await currentScope()).pinned;
 }
 
+// Its default never fires here: readKey classifies an absent record before parsing, and a frame value is a string.
+const UiLanguageSchema = SettingsSchema.shape.uiLanguage;
+
 /** The frame schema pins only the shape, so the enum check is the consumer's job: out-of-enum is refused and the
  * current value stands. */
 function isSharedLanguage(value: string): value is UiLanguageValue {
-  return (UI_LANGUAGES as readonly string[]).includes(value);
+  return UiLanguageSchema.safeParse(value).success;
 }
 
 /** The APPLY path plus the adoption offer. The ONLY emit here is the once-per-connection adoption send for seq:0;
@@ -209,8 +214,8 @@ async function handleLangCurrent(msg: unknown, attachment: LiveConnection | null
     return;
   }
   // Skip the write when storage already agrees: the push-on-connect replay must not retrigger the i18n watcher.
-  const { [UI_LANGUAGE_KEY]: stored } = await browser.storage.local.get(UI_LANGUAGE_KEY);
-  if (stored !== value) {
+  const stored = await readKey(UI_LANGUAGE_KEY, UiLanguageSchema);
+  if (stored.state !== "valid" || stored.value !== value) {
     await browser.storage.local.set({ [UI_LANGUAGE_KEY]: value });
   }
   // onAttach resets the cursor off the frame lane: a dead connection's push must not re-commit over the new one.
@@ -229,12 +234,12 @@ async function maybeAdoptExtensionLanguage(attachment: LiveConnection | null): P
   if (attachment.langAdoptionOffered) return;
   // A real push already applied: the host HAS an explicit value, so a later seq:0 is noise.
   if (lang.value !== null) return;
-  const { [UI_LANGUAGE_KEY]: stored } = await browser.storage.local.get(UI_LANGUAGE_KEY);
-  if (typeof stored !== "string" || !isSharedLanguage(stored)) return;
+  const stored = await readKey(UI_LANGUAGE_KEY, UiLanguageSchema);
+  if (stored.state !== "valid") return;
   // Re-checked after the await: a reconnect mid-read must not ride the dead attachment's offer.
   if (attachment !== live.value) return;
   attachment.langAdoptionOffered = true;
-  attachment.conn.post({ type: "lang_set", value: stored } satisfies LangSetWire);
+  attachment.conn.post({ type: "lang_set", value: stored.value } satisfies LangSetWire);
 }
 
 /** The only gesture-driven `lang_set` (the options picker's `lang_choose`; its local write keeps the UI responsive
@@ -255,39 +260,26 @@ export function chooseLanguage(value: UiLanguageValue): Promise<boolean> {
   return send;
 }
 
-// ---- the persisted reads (each discriminates its three outcomes) ---------------
+// ---- the persisted reads (each caller's own collapse of the one reader's three outcomes) ----
 
 /** `corrupt` (present but not exactly `true`) is tampering and must not read as armed or unarmed: it latches closed.
  * Written only as `true`; only onPinPinned's new-key path touches a corrupt flag, rewriting it to `true`. */
 type CutoverRead = "unarmed" | "armed" | "corrupt";
 
-/** `undefined` is the absent signal (storage cannot hold undefined); any other non-`true` value is tampering. */
-function classifyCutover(value: unknown): CutoverRead {
-  if (value === undefined) return "unarmed";
-  return value === true ? "armed" : "corrupt";
+const CutoverFlagSchema = z.literal(true);
+
+function cutoverRead(stored: Stored<true>): CutoverRead {
+  if (stored.state === "absent") return "unarmed";
+  return stored.state === "valid" ? "armed" : "corrupt";
 }
 
 async function readCutover(): Promise<CutoverRead> {
-  const { [POLICY_CUTOVER_KEY]: value } = await browser.storage.local.get(POLICY_CUTOVER_KEY);
-  return classifyCutover(value);
+  return cutoverRead(await readKey(POLICY_CUTOVER_KEY, CutoverFlagSchema));
 }
 
 /** Corrupt (present but failing the strict schema) is NEVER folded into absent: that would fail open. */
-type StoredRead =
-  | { kind: "absent" }
-  | { kind: "corrupt" }
-  | { kind: "valid"; record: StoredPolicyState };
-
-function classifyStored(value: unknown): StoredRead {
-  if (value === undefined) return { kind: "absent" };
-  const parsed = StoredPolicyStateSchema.safeParse(value);
-  if (!parsed.success) return { kind: "corrupt" };
-  return { kind: "valid", record: parsed.data };
-}
-
-async function readStoredRecord(): Promise<StoredRead> {
-  const { [POLICY_STATE_KEY]: value } = await browser.storage.local.get(POLICY_STATE_KEY);
-  return classifyStored(value);
+function readStoredRecord(): Promise<Stored<StoredPolicyState>> {
+  return readKey(POLICY_STATE_KEY, StoredPolicyStateSchema);
 }
 
 /** The keyId pinned when the last revoke ran, written by onPinRevoked and consumed by the next onPinPinned. Durable
@@ -295,29 +287,25 @@ async function readStoredRecord(): Promise<StoredRead> {
  * re-pair as "prior unknown", and neither the compromise latch nor a corrupt cutover flag could recover.
  * It carries LESS trust than the pin store (a bare string, no pubkey to check), so only the keyId shape is validated:
  *   a different keyId-shaped string  -> the next re-pair reads as new; no worse than deleting bridgePolicyState
- *   anything else                    -> unknown; recovery stalls until the next revoke overwrites it */
-type PriorPinRead = { kind: "known"; keyId: string } | { kind: "unknown" };
+ *   anything else                    -> unknown (null), which fails closed to "not a new key"; recovery stalls until
+ *                                       the next revoke overwrites it */
+const PriorPinSchema = z.string().regex(KEY_ID_HEX);
 
-function classifyPriorPin(value: unknown): PriorPinRead {
-  // Anything not keyId-shaped is unknown, which fails closed to "not a new key".
-  return typeof value === "string" && KEY_ID_HEX.test(value)
-    ? { kind: "known", keyId: value }
-    : { kind: "unknown" };
+function readPriorPin(): Promise<string | null> {
+  return readKeyOr(POLICY_PRIOR_PIN_KEY, PriorPinSchema, null);
 }
 
-async function readPriorPin(): Promise<PriorPinRead> {
-  const { [POLICY_PRIOR_PIN_KEY]: value } = await browser.storage.local.get(POLICY_PRIOR_PIN_KEY);
-  return classifyPriorPin(value);
-}
-
-/** One storage `get` for both keys: resolvePolicyState folds them together, and two separate reads could tear across a
+/** One storage get for both keys: resolvePolicyState folds them together, and two separate reads could tear across a
  * pin transition or a partial write and hand the fold an inconsistent pair. */
-async function readPolicyStorage(): Promise<{ cutover: CutoverRead; stored: StoredRead }> {
-  const raw = await browser.storage.local.get([POLICY_CUTOVER_KEY, POLICY_STATE_KEY]);
-  return {
-    cutover: classifyCutover(raw[POLICY_CUTOVER_KEY]),
-    stored: classifyStored(raw[POLICY_STATE_KEY]),
-  };
+async function readPolicyStorage(): Promise<{
+  cutover: CutoverRead;
+  stored: Stored<StoredPolicyState>;
+}> {
+  const read = await readKeys({
+    [POLICY_CUTOVER_KEY]: CutoverFlagSchema,
+    [POLICY_STATE_KEY]: StoredPolicyStateSchema,
+  });
+  return { cutover: cutoverRead(read[POLICY_CUTOVER_KEY]), stored: read[POLICY_STATE_KEY] };
 }
 
 // ---- the resolved policy state (the no-invalid-states sum type) ----------------
@@ -337,15 +325,15 @@ async function resolvePolicyState(scope: PolicyScope): Promise<PolicyState> {
   if (cutover === "corrupt") return { kind: "compromised" };
   if (cutover === "unarmed") {
     // armCutover precedes the record write, so a record with no cutover is tampering: latch closed.
-    return stored.kind === "absent" ? { kind: "preCutover" } : { kind: "compromised" };
+    return stored.state === "absent" ? { kind: "preCutover" } : { kind: "compromised" };
   }
   // Cutover armed:
-  if (stored.kind === "corrupt") return { kind: "compromised" };
-  if (stored.kind === "absent") return { kind: "awaitingBaseline", scope };
-  const recordScope = scopeFromStored(stored.record.scope);
+  if (stored.state === "corrupt") return { kind: "compromised" };
+  if (stored.state === "absent") return { kind: "awaitingBaseline", scope };
+  const recordScope = scopeFromStored(stored.value.scope);
   // Out of scope: the old effective is NOT enforced. writeStoredRecord owns the retained-record rule.
   if (!scopesEqual(recordScope, scope)) return { kind: "awaitingBaseline", scope };
-  return { kind: "active", scope: recordScope, record: stored.record };
+  return { kind: "active", scope: recordScope, record: stored.value };
 }
 
 // ---- writers ------------------------------------------------------------------
@@ -355,13 +343,13 @@ async function resolvePolicyState(scope: PolicyScope): Promise<PolicyState> {
 async function writeStoredRecord(next: StoredPolicyState): Promise<boolean> {
   const stored = await readStoredRecord();
   // resolvePolicyState is the primary guard; this is the torn-read backstop.
-  if (stored.kind === "corrupt") {
+  if (stored.state === "corrupt") {
     throw new Error("refusing to overwrite a corrupt policy record");
   }
   // onPinRevoked RETAINS the pinned record as the same-key anti-replay anchor; while unpinned it is inert, not
   // disposable. Otherwise an unsigned push in the unpinned window could ride the user's approval over the anchor, and
   // an old, more-permissive signed baseline would replay as first-ever once the same key is re-paired.
-  if (next.scope === null && stored.kind === "valid" && stored.record.scope !== null) {
+  if (next.scope === null && stored.state === "valid" && stored.value.scope !== null) {
     throw new Error(
       "refusing to replace a retained pinned-scope policy record with an unsigned one",
     );
@@ -369,11 +357,11 @@ async function writeStoredRecord(next: StoredPolicyState): Promise<boolean> {
   // Unchanged state writes nothing (the kill.ts setMirror discipline): a rewrite would retrigger every
   // storage.onChanged consumer on the push-on-connect replay.
   if (
-    stored.kind === "valid" &&
-    stored.record.scope === next.scope &&
-    stored.record.revision === next.revision &&
-    stored.record.baselineB64 === next.baselineB64 &&
-    policyValuesEqual(stored.record.effective, next.effective)
+    stored.state === "valid" &&
+    stored.value.scope === next.scope &&
+    stored.value.revision === next.revision &&
+    stored.value.baselineB64 === next.baselineB64 &&
+    policyValuesEqual(stored.value.effective, next.effective)
   ) {
     return false;
   }
@@ -399,22 +387,22 @@ function sameStoredRecord(a: StoredPolicyState, b: StoredPolicyState): boolean {
  *   ratchet RESET mid-flight  -> the pre-write record is a dead anchor; removed instead (lands in awaitingBaseline) */
 async function undoRecordWrite(
   written: StoredPolicyState,
-  prior: StoredRead,
+  prior: Stored<StoredPolicyState>,
   resetGenerationAtWrite: number,
 ): Promise<void> {
   const now = await readStoredRecord();
-  if (now.kind !== "valid" || !sameStoredRecord(now.record, written)) return;
+  if (now.state !== "valid" || !sameStoredRecord(now.value, written)) return;
   // Re-checked after the awaited read. The microtask gap before set() cannot be closed (browser.storage.local has no
   // transaction); a reset inside it degrades to a restore the transition's own removal supersedes, never an open barrier.
   if (ratchetResetGeneration.value !== resetGenerationAtWrite) {
     await browser.storage.local.remove(POLICY_STATE_KEY);
     return;
   }
-  if (prior.kind === "valid") {
-    await browser.storage.local.set({ [POLICY_STATE_KEY]: prior.record });
+  if (prior.state === "valid") {
+    await browser.storage.local.set({ [POLICY_STATE_KEY]: prior.value });
     return;
   }
-  if (prior.kind === "absent") {
+  if (prior.state === "absent") {
     await browser.storage.local.remove(POLICY_STATE_KEY);
     return;
   }
@@ -543,7 +531,7 @@ export async function getPolicySnapshotForTests(): Promise<PolicySnapshot> {
 /** The valid persisted record or null. Tests and diagnostics only; enforcement goes through resolvePolicyState. */
 export async function getStoredPolicyState(): Promise<StoredPolicyState | null> {
   const stored = await readStoredRecord();
-  return stored.kind === "valid" ? stored.record : null;
+  return stored.state === "valid" ? stored.value : null;
 }
 
 // ---- pin lifecycle hooks (called from enrollment.ts) ----------------------------
@@ -559,8 +547,7 @@ export async function onPinPinned(newKeyId: string): Promise<void> {
   // Synchronously FIRST: a push in flight must observe the move even when the new keyId equals the old.
   pinGeneration.value += 1;
   // The durable prior survives the SW restart that so often falls between revoke and re-pair.
-  const durablePrior = await readPriorPin();
-  const priorKeyId = durablePrior.kind === "known" ? durablePrior.keyId : lastPinnedKeyId.value;
+  const priorKeyId = (await readPriorPin()) ?? lastPinnedKeyId.value;
   const isNewKey = priorKeyId !== null && priorKeyId !== newKeyId;
   lastPinnedKeyId.value = newKeyId;
   if (isNewKey) {
@@ -810,7 +797,7 @@ async function handlePolicyCurrent(msg: unknown, attachment: LiveConnection | nu
     if (needsApproval) {
       // A RETAINED pinned-scope record makes this push unstorable whatever the user answers: refuse audited, up front.
       const storedNow = await readStoredRecord();
-      if (storedNow.kind === "valid" && storedNow.record.scope !== null) {
+      if (storedNow.state === "valid" && storedNow.value.scope !== null) {
         return refuse(
           "unsigned push cannot replace the retained pinned-scope anchor; re-pair to recover",
           { audit: true },

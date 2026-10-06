@@ -1,11 +1,7 @@
-import { DEFAULTS, type Settings, salvageSettings } from "@chromium-bridge/shared/settings";
+import { DEFAULTS, type Settings } from "@chromium-bridge/shared/settings";
 import { useEffect, useRef, useState } from "react";
 import { browser } from "wxt/browser";
-
-async function readAll(): Promise<Settings> {
-  const bag = await browser.storage.local.get(Object.keys(DEFAULTS));
-  return salvageSettings(bag);
-}
+import { readSettings } from "@/lib/shared/settings";
 
 /** Live settings, backed by storage.onChanged (event-driven; no polling). A
  * write goes straight to storage; the change event refreshes every open view.
@@ -25,7 +21,7 @@ export function useSettings(): {
     let live = true;
     const refresh = () => {
       const seq = ++readSeq.current;
-      void readAll().then((s) => {
+      void readSettings().then((s) => {
         if (live && seq === readSeq.current) setSettings(s);
       });
     };

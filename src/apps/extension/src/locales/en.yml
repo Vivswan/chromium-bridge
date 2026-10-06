@@ -333,5 +333,4 @@ audit:
   kind_enroll_revoked: "Pairing revoked (unpaired)"
   kind_client_revoked: "Trusted client revoked"
   kind_kill_engaged: "Kill switch engage requested"
-  kind_kill_released: "Kill switch release requested"
   kind_kill_status_changed: "Kill state changed"

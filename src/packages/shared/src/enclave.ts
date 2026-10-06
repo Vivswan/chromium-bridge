@@ -110,9 +110,6 @@ export const AUDIT_EVENT_KINDS = [
   ...AUDIT_FORWARDED_KINDS,
   "client_revoked",
   "kill_engaged",
-  // Write-dead (the host audits the release itself, so the WebAuthn exchange records no local event), READ-LIVE:
-  // retained so historical audit entries carrying it still render through the kind-to-locale mapping.
-  "kill_released",
   "kill_status_changed",
   // Local-only (not in the host whitelist, so never forwarded): a policy push refused after crypto/ratchet
   // reasoning (attack-shaped evidence, not benign version skew), and the policy-side compromise mark a bad

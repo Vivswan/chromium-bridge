@@ -6,6 +6,7 @@ import type {
   EnrollOptionsFrame,
   PresenceRequestFrame,
 } from "@chromium-bridge/shared/envelope.gen";
+import { PRESENCE_REQUIRED } from "@chromium-bridge/shared/webauthn";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -161,7 +162,7 @@ describe("AuthenticatorEnrollment", () => {
   test("enrolled machine: the pushed request is an approval step, and its tap continues the enrollment on its own", async () => {
     let begins = 0;
     replies.webauthn_enroll_begin = () =>
-      ++begins === 1 ? { ok: false, error: "presence_required" } : { ok: true, options: OPTIONS };
+      ++begins === 1 ? { ok: false, error: PRESENCE_REQUIRED } : { ok: true, options: OPTIONS };
     await mount();
     await userEvent.click(screen.getByRole("button", { name: "Enroll this browser" }));
     await screen.findByText("approval needed");
@@ -218,7 +219,7 @@ describe("AuthenticatorEnrollment", () => {
   });
 
   test("Cancel on the approval step returns to Enroll without answering the request", async () => {
-    replies.webauthn_enroll_begin = () => ({ ok: false, error: "presence_required" });
+    replies.webauthn_enroll_begin = () => ({ ok: false, error: PRESENCE_REQUIRED });
     await mount();
     await userEvent.click(screen.getByRole("button", { name: "Enroll this browser" }));
     await screen.findByText("approval needed");
@@ -238,7 +239,7 @@ describe("AuthenticatorEnrollment", () => {
     {
       name: "a replayed approval assertion",
       arrange: () => {
-        replies.webauthn_enroll_begin = () => ({ ok: false, error: "presence_required" });
+        replies.webauthn_enroll_begin = () => ({ ok: false, error: PRESENCE_REQUIRED });
         replies.webauthn_presence_assert = () => ({ ok: false, error: "sign_count_not_increased" });
       },
       approve: true,
@@ -275,7 +276,7 @@ describe("AuthenticatorEnrollment", () => {
     {
       name: "a pushed request the worker no longer holds",
       arrange: () => {
-        replies.webauthn_enroll_begin = () => ({ ok: false, error: "presence_required" });
+        replies.webauthn_enroll_begin = () => ({ ok: false, error: PRESENCE_REQUIRED });
         replies.webauthn_presence_pending = () => ({ ok: true, request: null });
       },
       approve: false,

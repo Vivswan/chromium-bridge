@@ -84,6 +84,8 @@ const LOCK = "chromium-bridge-settings-write";
  * second call is a no-op once the store is at SETTINGS_VERSION. */
 export function migrateSettings(): Promise<void> {
   return navigator.locks.request(LOCK, async () => {
+    // The whole store, raw: a migration rung is handed keys and shapes the current schema no longer describes,
+    // so there is nothing to classify the bag against before the climb.
     const result = climb(SETTINGS_LADDER, await browser.storage.local.get(null));
     if (result.outcome === "current" || result.outcome === "newer") return;
     await browser.storage.local.set(result.write);
