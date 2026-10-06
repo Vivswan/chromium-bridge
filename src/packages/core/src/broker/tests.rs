@@ -296,19 +296,20 @@ fn pending_slot_bounds_the_handshake_phase_and_releases_on_drop() {
     assert_eq!(broker.pending.load(Ordering::SeqCst), 0);
 }
 
+/// The relay quota at its three edges, the contract a relay author sizes against: the burst the broker
+/// absorbs, the refusal that drops the relay, and the refill (one request per period, the whole burst per
+/// second).
 #[test]
-fn rate_limiter_allows_a_burst_then_throttles() {
-    let mut rl = RateLimiter::new();
-    let mut allowed = 0;
-    for _ in 0..(RATE_BURST as usize + 10) {
-        if rl.allow() {
-            allowed += 1;
-        }
-    }
-    // The burst is bounded by the bucket capacity (a hair of refill may let
-    // one or two extra through in real time; assert the order of magnitude).
-    assert!(allowed >= RATE_BURST as usize);
-    assert!(allowed <= RATE_BURST as usize + 5);
+fn relay_quota_admits_the_burst_then_refuses_until_the_period_refills_one() {
+    use governor::clock::FakeRelativeClock;
+    let clock = FakeRelativeClock::default();
+    let limiter = RateLimiter::direct_with_clock(RELAY_QUOTA, clock.clone());
+    let admitted = |n: u32| (0..n).all(|_| limiter.check().is_ok()) && limiter.check().is_err();
+    assert!(admitted(128), "the whole burst, then a refusal");
+    clock.advance(Duration::from_secs(1) / 128);
+    assert!(admitted(1), "one period refills exactly one");
+    clock.advance(Duration::from_secs(1));
+    assert!(admitted(128), "one second refills the whole burst");
 }
 
 #[test]

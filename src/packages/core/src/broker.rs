@@ -31,10 +31,13 @@
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, PoisonError};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
 
 use crate::audit;
 use crate::ipc::{self, BridgeStream, BrowserLabel, ClientIdentity};
@@ -63,12 +66,10 @@ const MAX_PENDING_ATTACH: usize = 32;
 /// or relay connection is legitimately idle for long stretches.
 const ATTACH_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Per-relay request rate limit: burst capacity and steady refill per second.
-/// A relay that exceeds it is dropped (fail closed); it may reconnect. The
-/// relay is attested and allowlisted, so this is defense in depth against a
-/// compromised harness flooding the shared broker, not the primary control.
-const RATE_BURST: f64 = 128.0;
-const RATE_REFILL_PER_SEC: f64 = 128.0;
+/// Per-relay request rate limit. A relay that exceeds it is dropped (fail closed); it may reconnect. The
+/// relay is attested and allowlisted, so this is defense in depth against a compromised harness flooding
+/// the shared broker, not the primary control.
+const RELAY_QUOTA: Quota = Quota::per_second(NonZeroU32::new(128).unwrap());
 
 // ---- Ref-count coordinator (loom-checked) ----------------------------------
 
@@ -186,37 +187,6 @@ impl RefCount {
     }
 }
 
-// ---- Rate limiter (per relay) ----------------------------------------------
-
-/// A simple token bucket, one per relay connection (so it needs no locking).
-struct RateLimiter {
-    tokens: f64,
-    last: Instant,
-}
-
-impl RateLimiter {
-    fn new() -> Self {
-        RateLimiter {
-            tokens: RATE_BURST,
-            last: Instant::now(),
-        }
-    }
-
-    /// Whether one more request is allowed right now, consuming a token.
-    fn allow(&mut self) -> bool {
-        let now = Instant::now();
-        let elapsed = now.duration_since(self.last).as_secs_f64();
-        self.last = now;
-        self.tokens = (self.tokens + elapsed * RATE_REFILL_PER_SEC).min(RATE_BURST);
-        if self.tokens >= 1.0 {
-            self.tokens -= 1.0;
-            true
-        } else {
-            false
-        }
-    }
-}
-
 // ---- Admission enforcement -------------------------------------------------
 
 /// One admitted peer of a serve loop: the identity and posture it was admitted with, plus the rate limiter
@@ -231,7 +201,7 @@ enum ServedPeer {
     Relay {
         identity: Option<ClientIdentity>,
         posture: Posture,
-        limiter: RateLimiter,
+        limiter: DefaultDirectRateLimiter,
     },
 }
 
@@ -240,7 +210,7 @@ impl ServedPeer {
         ServedPeer::Relay {
             identity,
             posture,
-            limiter: RateLimiter::new(),
+            limiter: RateLimiter::direct(RELAY_QUOTA),
         }
     }
 
@@ -977,7 +947,7 @@ fn serve_jsonrpc<R: BufRead, W: Write>(
                 posture,
                 limiter,
             } => {
-                if !limiter.allow() {
+                if limiter.check().is_err() {
                     log_warn!(
                         "broker",
                         "relay exceeded its request rate limit; dropping it"
