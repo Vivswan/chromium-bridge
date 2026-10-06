@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync, realpathSync, symlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type Finding, probePage } from "../docs-probe";
+import { type Finding, parseArgs, probePage } from "../docs-probe";
 import { gitEnv, runGit, Scratch, writeTree } from "../lib";
 
 const script = join(dirname(fileURLToPath(import.meta.url)), "..", "docs-probe.ts");
@@ -328,5 +328,32 @@ test("the baseline keys on the unit, so a line shift keeps it valid and an edit 
     status: 2,
     stdout: "",
     stderr: `docs-probe: nowhere/**/*.md matches no file under ${realpathSync.native(root)}\n`,
+  });
+});
+
+// The check-docs-probe task's flags reach the probe through this parser: a mistyped or valueless flag, or no
+// page at all, must fail the task, never probe with defaults; a --root given last still places every --base.
+test("the CLI refuses an unknown flag, a flag without its value, and no page; a full flag set parses whole", () => {
+  const root = scratch.dir("docs-probe-args");
+  writeTree(root, { "docs/a.md": "# A\n" });
+  const refused: ReadonlyArray<readonly [args: string[], message: RegExp]> = [
+    [["--bogus", "docs/a.md"], /usage:/],
+    [["--root"], /usage:/],
+    [["--max-words", "0", "docs/a.md"], /positive integer/],
+    [[], /usage:/],
+  ];
+  for (const [args, message] of refused) {
+    expect(() => parseArgs(["--root", root, ...args])).toThrow(message);
+  }
+  expect(
+    parseArgs(["--base", "docs", "--max-words", "5", "--shape-only", "--root", root, "docs/a.md"]),
+  ).toEqual({
+    root: realpathSync(root),
+    bases: [realpathSync(join(root, "docs"))],
+    maxWords: 5,
+    paths: false,
+    baseline: undefined,
+    printBaseline: false,
+    pages: ["docs/a.md"],
   });
 });

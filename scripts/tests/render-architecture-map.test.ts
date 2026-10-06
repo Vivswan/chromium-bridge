@@ -97,3 +97,24 @@ test("the CLI's --check fails on drift, a render writes the map, and --check the
     stderr: "",
   });
 });
+
+// The check-architecture task's flags reach the renderer through this parser: a mistyped or valueless flag
+// or a missing --page must fail the task, never render with defaults.
+test("the CLI exits 2 with the usage on an unknown flag, a flag without its value, and a missing --page", () => {
+  const root = scratch.dir("render-map-args");
+  const cases: ReadonlyArray<readonly [args: string[], stderr: RegExp]> = [
+    [["--page", "docs/page.md", "--bogus"], /usage:/],
+    [["--page"], /usage:/],
+    [[], /--page is required/],
+  ];
+  const outcomes = cases.map(([args]) => {
+    const result = spawnSync("bun", [script, "--root", root, ...args], {
+      encoding: "utf8",
+      cwd: root,
+    });
+    return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+  });
+  expect(outcomes).toEqual(
+    cases.map(([, stderr]) => ({ status: 2, stdout: "", stderr: expect.stringMatching(stderr) })),
+  );
+});

@@ -144,3 +144,17 @@ test("the CLI exits 0 with no locale tree, 1 on a partial mirror, and 2 on a mis
     stderr: `check-docs-locales: ${join(empty, "docs")} holds no .md page; the English docs tree is the reference\n`,
   });
 });
+
+// The check-docs-locales task's flags reach the check through this parser: a mistyped or valueless flag must
+// fail the task, never check the cwd by default.
+test("the CLI exits 2 with the usage on an unknown flag and a --root without its value", () => {
+  const root = scratch.dir("docs-locales-args");
+  const outcomes = [["--bogus"], ["--root"]].map((args) => {
+    const result = spawnSync("bun", [script, ...args], { encoding: "utf8", cwd: root });
+    return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+  });
+  expect(outcomes).toEqual([
+    { status: 2, stdout: "", stderr: expect.stringMatching(/usage:/) },
+    { status: 2, stdout: "", stderr: expect.stringMatching(/usage:/) },
+  ]);
+});

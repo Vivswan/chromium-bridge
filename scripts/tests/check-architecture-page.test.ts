@@ -156,3 +156,25 @@ describe("the CLI's --expect-diagrams pin", () => {
     },
   );
 });
+
+// The check-architecture task's flags reach the page check through this parser: a mistyped or valueless
+// flag, a missing --page, or a non-numeric --expect-diagrams must fail the task, never check with defaults.
+test("the CLI exits 2 with the usage on an unknown flag, a missing --page, and a malformed --expect-diagrams", () => {
+  const root = repo();
+  const cases: ReadonlyArray<readonly [args: string[], stderr: RegExp]> = [
+    [["--page", "docs/architecture.md", "--bogus"], /usage:/],
+    [["--page"], /usage:/],
+    [[], /--page is required/],
+    [["--page", "docs/architecture.md", "--expect-diagrams", "two"], /whole number/],
+  ];
+  const outcomes = cases.map(([args]) => {
+    const result = spawnSync("bun", [script, "--root", root, ...args], {
+      encoding: "utf8",
+      cwd: root,
+    });
+    return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+  });
+  expect(outcomes).toEqual(
+    cases.map(([, stderr]) => ({ status: 2, stdout: "", stderr: expect.stringMatching(stderr) })),
+  );
+});

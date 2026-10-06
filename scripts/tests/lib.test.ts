@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { gitEnv, githubOutput, runGit, Scratch } from "../lib";
+import { gitEnv, githubOutput, runGit, Scratch, selectMode } from "../lib";
 
 // The incident: a pre-commit hook in a linked worktree exports GIT_DIR (that worktree's private gitdir) and
 // GIT_INDEX_FILE; a scratch `git init` inheriting them re-initialised the shared repository as bare.
@@ -67,5 +67,40 @@ describe("githubOutput", () => {
       "name=ghcr.io/example-user/repo-ci\ntag=0123456789ab\n",
     );
     expect(() => githubOutput("name", "x", {})).toThrow(/GITHUB_OUTPUT is not set/);
+  });
+});
+
+// A workflow step names the mode on the command line: a misspelt, missing, doubled, or flag-shaped mode must
+// fail the step with the usage, never run a default mode.
+describe("selectMode", () => {
+  test("exactly one named mode is selected; anything else prints the usage and exits 2", () => {
+    const modes = { build: "b", publish: "p" };
+    const exits: unknown[] = [];
+    const lines: unknown[] = [];
+    const exit = spyOn(process, "exit").mockImplementation(((code: unknown) => {
+      exits.push(code);
+      throw new Error("exit");
+    }) as never);
+    const error = spyOn(console, "error").mockImplementation((line: unknown) => {
+      lines.push(line);
+    });
+    try {
+      const outcome = (argv: string[]) => {
+        try {
+          return selectMode(modes, argv, "scripts/x.ts");
+        } catch {
+          return "exit";
+        }
+      };
+      const argvs = [["build"], [], ["build", "publish"], ["toString"], ["--build"]];
+      expect({ outcomes: argvs.map(outcome), exits, lines: new Set(lines) }).toEqual({
+        outcomes: ["b", "exit", "exit", "exit", "exit"],
+        exits: [2, 2, 2, 2],
+        lines: new Set(["usage: bun scripts/x.ts build | publish"]),
+      });
+    } finally {
+      exit.mockRestore();
+      error.mockRestore();
+    }
   });
 });
