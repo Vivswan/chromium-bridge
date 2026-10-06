@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { useI18n } from "@/hooks/useI18n";
 import type { MessageKey } from "@/lib/i18n";
 import { send } from "@/lib/messages";
+import { readKey } from "@/lib/shared/read-key";
 
 interface Pending {
   id: string;
@@ -98,23 +99,22 @@ export function PopupApp() {
     setEnroll(enrollment.ok ? enrollment : undefined);
     const al = await send({ type: "get_allowlist" });
     setList(al.ok ? al.list : []);
-    const { pendingAllow } = await browser.storage.local.get("pendingAllow");
-    const parsed = PendingApprovalsSchema.safeParse(pendingAllow);
-    if (!parsed.success) {
+    const pendingAllow = await readKey("pendingAllow", PendingApprovalsSchema);
+    if (pendingAllow.state !== "valid") {
       // An unparsable record is an old-shape or corrupted ghost. Fail closed
       // for display, and ask the SW to re-derive the mirror through its ONE
       // serialized store path (sweep_pending). The popup never removes the
       // record itself: between this read and an uncoordinated popup-side
       // remove, the SW could mint a LIVE request - deleting it here would
       // strand its resolver until the deadline.
-      if (pendingAllow !== undefined) void send({ type: "sweep_pending" });
+      if (pendingAllow.state === "corrupt") void send({ type: "sweep_pending" });
       setPending(null);
     } else {
       // Oldest unexpired request first; an expired record is a ghost a dead
       // service worker left behind (its resolver died with the worker), so it
       // must not be offered for approval.
       const now = Date.now();
-      setPending(parsed.data.find((p) => p.expiresAt > now) ?? null);
+      setPending(pendingAllow.value.find((p) => p.expiresAt > now) ?? null);
     }
     setKill(await send({ type: "get_kill" }));
   }, []);

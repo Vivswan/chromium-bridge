@@ -1,6 +1,6 @@
 // Single source of truth for the BROWSER-OWNED configurable settings: their
-// schema, their defaults, and the salvage helper that recovers a usable
-// Settings from whatever is actually in storage.
+// schema and their defaults. The storage reads over them are the extension's
+// (lib/shared/settings.ts there).
 //
 // Only fields the browser itself owns live here: the site-scope opt-in, tab
 // grouping, and the display language. The policy fields are host-owned
@@ -42,20 +42,3 @@ export type SettingKey = keyof Settings;
 // mutating its "copy" must throw instead of quietly rewriting the defaults
 // for everyone after it.
 export const DEFAULTS: Readonly<Settings> = Object.freeze(SettingsSchema.parse({}));
-
-/**
- * Recover a usable Settings from an untrusted storage bag, field by field:
- * a value that fails its own schema falls back to that field's default
- * without discarding the healthy fields around it. Missing fields get their
- * defaults from the schema itself.
- */
-export function salvageSettings(stored: unknown): Settings {
-  const bag: Record<string, unknown> =
-    typeof stored === "object" && stored !== null ? (stored as Record<string, unknown>) : {};
-  return Object.fromEntries(
-    Object.entries(SettingsSchema.shape).map(([key, schema]) => {
-      const parsed = schema.safeParse(bag[key]);
-      return [key, parsed.success ? parsed.data : DEFAULTS[key as SettingKey]];
-    }),
-  ) as Settings;
-}

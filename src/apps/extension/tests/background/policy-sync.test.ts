@@ -952,7 +952,7 @@ describe("policy consumption hardening: durable prior pin, sticky latch, ownersh
     if (!gate.allowed) expect(gate.reason).toContain("host-substitution"); // latch survived
   });
 
-  test("classifyPriorPin: non-string and non-hex-string priors both read as unknown", async () => {
+  test("a non-string or non-hex-string durable prior reads as unknown", async () => {
     // Both tamper directions land on "unknown" -> not new -> nothing is reset.
     // Exercised through onPinPinned, the only consumer.
     for (const tampered of [
