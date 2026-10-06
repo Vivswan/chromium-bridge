@@ -107,6 +107,22 @@ type Command =
   | { op: "page_handle_dialog"; args: { action: string; promptText?: string } }
   | { op: "page_upload"; args: { path: string; selector: string } };
 
+type BrowserKey = "chrome" | "chromium" | "brave" | "edge" | "vivaldi" | "opera";
+
+type HealthCheck = { value: string; details: string[] } & Loose;
+
+type Report = {
+  healthy: boolean;
+  host_key: string;
+  kill_switch: HealthCheck;
+  lock_file: HealthCheck;
+  mcp_server: HealthCheck;
+  platform: string;
+  policy_baseline: HealthCheck;
+  summary: string;
+  version: string;
+} & Loose;
+
 /** The Rust-side nullable optional of a writer frame (Option<T> serialized with its null). */
 type Opt<T> = T | null | undefined;
 
@@ -125,6 +141,13 @@ pin<
   envelope.RegistrationRow,
   { browser: string; detected: boolean; location: string; state: RowState } & Loose
 >(true);
+
+pin<
+  envelope.AuditTrailEntry,
+  | ({ entry: "record"; fields: string; kind: string; ts_ms: number } & Loose)
+  | ({ entry: "unrecognized"; text: string } & Loose)
+>(true);
+pin<envelope.HealthReport, Report>(true);
 
 // The host->extension readers (loose; the verdict frames split on ok).
 pin<
@@ -164,6 +187,35 @@ pin<
       error: string;
       browsers?: undefined;
     } & Loose)
+>(true);
+pin<
+  envelope.AuditReadResult,
+  | ({
+      type: "audit_read_result";
+      ok: true;
+      entries: envelope.AuditTrailEntry[];
+      older: number;
+      path: string;
+      error?: undefined;
+    } & Loose)
+  | ({
+      type: "audit_read_result";
+      ok: false;
+      error: string;
+      entries?: undefined;
+      older?: undefined;
+      path?: undefined;
+    } & Loose)
+>(true);
+pin<
+  envelope.DoctorReportResult,
+  | ({ type: "doctor_report_result"; ok: true; report: Report; error?: undefined } & Loose)
+  | ({ type: "doctor_report_result"; ok: false; error: string; report?: undefined } & Loose)
+>(true);
+pin<
+  envelope.BrowserRevokeResultFrame,
+  | ({ type: "browser_revoke_result"; ok: true; reason?: undefined } & Loose)
+  | ({ type: "browser_revoke_result"; ok: false; reason: string } & Loose)
 >(true);
 pin<
   envelope.PolicyCurrentFrame,
@@ -246,7 +298,12 @@ pin<
   }
 >(true);
 pin<envelope.RegistrationStatusWire, { type: "registration_status" }>(true);
-pin<envelope.RegistrationRepairWire, { type: "registration_repair" }>(true);
+pin<envelope.RegistrationRepairWire, { type: "registration_repair"; browsers?: Opt<BrowserKey[]> }>(
+  true,
+);
+pin<envelope.AuditReadWire, { type: "audit_read"; limit?: Opt<number> }>(true);
+pin<envelope.DoctorReportWire, { type: "doctor_report" }>(true);
+pin<envelope.BrowserRevokeWire, { type: "browser_revoke" }>(true);
 pin<envelope.PolicyGetWire, { type: "policy_get" }>(true);
 pin<
   envelope.PolicyRestrictWire,
@@ -270,6 +327,7 @@ pin<
   }
 >(true);
 pin<envelope.PresenceConfirmWire, { type: "presence_confirm"; nonce: string }>(true);
+pin<envelope.PresenceBeginWire, { type: "presence_begin"; action: string; origin: string }>(true);
 
 // The catalogue and the policy contract.
 pin<OpArgs, Args>(true);

@@ -9,6 +9,7 @@
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
 import * as generated from "../src/envelope.gen";
+import { BROWSER_KEYS } from "../src/host.gen";
 
 type Frame = Record<string, unknown>;
 
@@ -31,6 +32,26 @@ const row: Frame = {
   location: "/home/user/.config/google-chrome/NativeMessagingHosts/host.json",
 };
 
+const record: Frame = {
+  entry: "record",
+  ts_ms: 3000,
+  kind: "pair_client",
+  fields: "surface=cli outcome=ok",
+};
+
+const check = { value: "present", details: ["pid: 4242"] };
+const report: Frame = {
+  version: "1.2.3",
+  platform: "linux/x86_64",
+  lock_file: check,
+  mcp_server: check,
+  kill_switch: check,
+  policy_baseline: check,
+  host_key: "present (the OS credential store)",
+  summary: "OK",
+  healthy: true,
+};
+
 // One representative valid frame per reader pair (the faithful base and the enforced validator the extension
 // runs); the harness below derives the hostile variants. The enforced validator runs too: a generator change
 // that silently coerces (z.preprocess) is invisible to the asymmetry gate's structural view and is caught only
@@ -44,6 +65,7 @@ const row: Frame = {
 //                        frames; the control frames read loose under the asymmetry table's loose-frames rule)
 //   enforcedRequired  -> fields the enforced side requires beyond the base (an ok-split's ok:true arm); the
 //                        minimal-frame probe keeps them and proves dropping each fails only there
+//   tag               -> the discriminant field when it is not `type` (an embedded item's own tag)
 const WIRE_CASES: ReadonlyArray<{
   name: string;
   enforced: string;
@@ -54,6 +76,7 @@ const WIRE_CASES: ReadonlyArray<{
   enforcedStringOk?: readonly string[];
   enforcedStrict?: boolean;
   enforcedRequired?: readonly string[];
+  tag?: string;
 }> = [
   {
     name: "BridgeReqWireSchema",
@@ -95,6 +118,26 @@ const WIRE_CASES: ReadonlyArray<{
     required: ["browser", "detected", "state", "location"],
   },
   {
+    name: "AuditTrailEntryWireSchema",
+    enforced: "AuditTrailEntrySchema",
+    valid: record,
+    required: ["entry", "ts_ms", "kind", "fields"],
+    tag: "entry",
+  },
+  {
+    name: "AuditTrailEntryWireSchema",
+    enforced: "AuditTrailEntrySchema",
+    valid: { entry: "unrecognized", text: "UNRECOGNIZED RECORD" },
+    required: ["entry", "text"],
+    tag: "entry",
+  },
+  {
+    name: "HealthReportWireSchema",
+    enforced: "HealthReportSchema",
+    valid: report,
+    required: Object.keys(report),
+  },
+  {
     name: "EnclaveProofWireSchema",
     enforced: "EnclaveProofFrameSchema",
     valid: { type: "enclave_proof", sig: "s", key_id: "k", pubkey: "p" },
@@ -131,6 +174,32 @@ const WIRE_CASES: ReadonlyArray<{
     valid: { type: "registration_status_result", ok: true, browsers: [row] },
     required: ["type", "ok"],
     enforcedRequired: ["browsers"],
+  },
+  {
+    name: "AuditReadResultWireSchema",
+    enforced: "AuditReadResultSchema",
+    valid: {
+      type: "audit_read_result",
+      ok: true,
+      entries: [record],
+      older: 1,
+      path: "/tmp/audit.log",
+    },
+    required: ["type", "ok"],
+    enforcedRequired: ["entries", "older", "path"],
+  },
+  {
+    name: "DoctorReportResultWireSchema",
+    enforced: "DoctorReportResultSchema",
+    valid: { type: "doctor_report_result", ok: true, report },
+    required: ["type", "ok"],
+    enforcedRequired: ["report"],
+  },
+  {
+    name: "BrowserRevokeResultWireSchema",
+    enforced: "BrowserRevokeResultFrameSchema",
+    valid: { type: "browser_revoke_result", ok: true },
+    required: ["type", "ok"],
   },
   {
     name: "PolicyCurrentWireSchema",
@@ -288,6 +357,7 @@ describe("generated wire schemas and their enforced validators fail closed", () 
     enforcedStringOk,
     enforcedStrict,
     enforcedRequired,
+    tag = "type",
   } of WIRE_CASES) {
     const schema = schemaNamed(name);
     const enforced = schemaNamed(enforcedName);
@@ -326,10 +396,10 @@ describe("generated wire schemas and their enforced validators fail closed", () 
         }
       });
 
-      if ("type" in valid) {
+      if (tag in valid) {
         test("the tag is load-bearing: a retagged frame is refused", () => {
-          expect(schema.safeParse({ ...valid, type: "evil" }).success).toBe(false);
-          expect(enforced.safeParse({ ...valid, type: "evil" }).success).toBe(false);
+          expect(schema.safeParse({ ...valid, [tag]: "evil" }).success).toBe(false);
+          expect(enforced.safeParse({ ...valid, [tag]: "evil" }).success).toBe(false);
         });
       }
 
@@ -414,6 +484,14 @@ describe("generated wire schemas and their enforced validators fail closed", () 
     ],
     ["EnrollResultWireSchema", "EnrollResultFrameSchema", "enroll_result", "reason"],
     ["PresenceResultWireSchema", "PresenceResultFrameSchema", "presence_result", "reason"],
+    ["AuditReadResultWireSchema", "AuditReadResultSchema", "audit_read_result", "error"],
+    ["DoctorReportResultWireSchema", "DoctorReportResultSchema", "doctor_report_result", "error"],
+    [
+      "BrowserRevokeResultWireSchema",
+      "BrowserRevokeResultFrameSchema",
+      "browser_revoke_result",
+      "reason",
+    ],
   ])(
     "%s: type confusion on the ok:false arm is refused on both sides",
     (base, enforced, type, field) => {
@@ -503,13 +581,16 @@ describe("generated wire schemas and their enforced validators fail closed", () 
 // so parsing the exact frames the extension constructs proves those constructor shapes are frames the host
 // actually admits - and that the schemas kept deny_unknown_fields, so the `satisfies` claim is against a strict
 // shape, not a lax one.
-//   required  -> the fields the host's parser demands; the rest are Options
-//   nullable  -> the Option fields, which the host's serializer may write as null (a writer keeps the null arm)
+//   required      -> the fields the host's parser demands; the rest are Options
+//   nullable      -> the Option fields, which the host's serializer may write as null (a writer keeps the null arm)
+//   integerRange  -> the admitted range of the frame's integer fields when the host bounds it below the JS-safe
+//                    non-negative integers (both ends admitted, one past each end refused)
 const WRITER_CASES: ReadonlyArray<{
   name: string;
   valid: Frame;
   required: readonly string[];
   nullable?: readonly string[];
+  integerRange?: readonly [number, number];
 }> = [
   {
     name: "EnclaveChallengeWireSchema",
@@ -548,9 +629,19 @@ const WRITER_CASES: ReadonlyArray<{
   },
   {
     name: "RegistrationRepairWireSchema",
-    valid: { type: "registration_repair" },
+    valid: { type: "registration_repair", browsers: ["chrome", "brave"] },
     required: ["type"],
+    nullable: ["browsers"],
   },
+  {
+    name: "AuditReadWireSchema",
+    valid: { type: "audit_read", limit: 100 },
+    required: ["type"],
+    nullable: ["limit"],
+    integerRange: [1, 1000],
+  },
+  { name: "DoctorReportWireSchema", valid: { type: "doctor_report" }, required: ["type"] },
+  { name: "BrowserRevokeWireSchema", valid: { type: "browser_revoke" }, required: ["type"] },
   { name: "PolicyGetWireSchema", valid: { type: "policy_get" }, required: ["type"] },
   {
     name: "PolicyRestrictWireSchema",
@@ -589,11 +680,21 @@ const WRITER_CASES: ReadonlyArray<{
     valid: { type: "presence_confirm", nonce: "nonce-0002" },
     required: ["type", "nonce"],
   },
+  {
+    name: "PresenceBeginWireSchema",
+    valid: {
+      type: "presence_begin",
+      action: "pair_client:codex",
+      origin: "chrome-extension://example",
+    },
+    required: ["type", "action", "origin"],
+  },
 ];
 
 describe("generated writer schemas admit exactly the frames the extension constructs", () => {
-  for (const { name, valid, required, nullable } of WRITER_CASES) {
+  for (const { name, valid, required, nullable, integerRange } of WRITER_CASES) {
     const schema = schemaNamed(name);
+    const [min, max] = integerRange ?? [0, Number.MAX_SAFE_INTEGER];
     describe(String(valid.type), () => {
       test("accepts the constructed frame and its required-only subset", () => {
         expect(schema.safeParse(valid).success).toBe(true);
@@ -612,14 +713,16 @@ describe("generated writer schemas admit exactly the frames the extension constr
         expect(schema.safeParse({ ...valid, type: "evil" }).success).toBe(false);
       });
       if (integerFrames(valid, 0).length > 0) {
-        test("every integer spans exactly the JS-safe non-negative integers", () => {
-          for (const value of [0, Number.MAX_SAFE_INTEGER]) {
+        test("every integer spans exactly its range", () => {
+          for (const value of [min, max]) {
             for (const frame of integerFrames(valid, value)) {
               expect(schema.safeParse(frame).success).toBe(true);
             }
           }
-          for (const frame of integerFrames(valid, 2 ** 53)) {
-            expect(schema.safeParse(frame).success).toBe(false);
+          for (const value of [min - 1, max + 1]) {
+            for (const frame of integerFrames(valid, value)) {
+              expect(schema.safeParse(frame).success).toBe(false);
+            }
           }
         });
       }
@@ -645,14 +748,28 @@ describe("generated writer schemas admit exactly the frames the extension constr
   }
 });
 
+// The repair writer's browser list is the catalogue's own key set (browsers.rs Browser::ALL, emitted into
+// host.gen.ts as BROWSER_KEYS) and never empty: a repair of no browser is not a request the host answers.
+test("registration_repair admits every catalogue browser key and nothing else, never an empty list", () => {
+  const schema = generated.RegistrationRepairWireSchema;
+  const frame = (browsers: unknown) => ({ type: "registration_repair", browsers });
+  for (const key of BROWSER_KEYS) expect(schema.safeParse(frame([key])).success).toBe(true);
+  expect(schema.safeParse(frame([...BROWSER_KEYS])).success).toBe(true);
+  expect(schema.safeParse(frame([])).success).toBe(false);
+  expect(schema.safeParse(frame(["firefox"])).success).toBe(false);
+  expect(schema.safeParse(frame(["chrome", "firefox"])).success).toBe(false);
+});
+
 test("every schema envelope.gen.ts exports is under a reader or writer case", () => {
   const exported = Object.entries(generated)
     .filter(([, value]) => value instanceof z.ZodType)
     .map(([name]) => name)
     .sort();
   const covered = [
-    ...WIRE_CASES.flatMap((wire) => [wire.name, wire.enforced]),
-    ...WRITER_CASES.map((writer) => writer.name),
+    ...new Set([
+      ...WIRE_CASES.flatMap((wire) => [wire.name, wire.enforced]),
+      ...WRITER_CASES.map((writer) => writer.name),
+    ]),
   ].sort();
   expect(exported).toEqual(covered);
 });
