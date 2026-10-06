@@ -348,7 +348,26 @@ fn classification_matrix() {
         ),
         (
             json!({ "type": "registration_repair" }),
-            Handle(HostRequest::RegistrationRepair {}),
+            Handle(HostRequest::RegistrationRepair { browsers: None }),
+        ),
+        // Named browsers parse as `--browser` does: known keys, a repeat folded, never empty.
+        (
+            json!({ "type": "registration_repair", "browsers": ["brave", "chrome", "brave"] }),
+            Handle(HostRequest::RegistrationRepair {
+                browsers: Some(serde_json::from_value(json!(["brave", "chrome"])).unwrap()),
+            }),
+        ),
+        (
+            json!({ "type": "registration_repair", "browsers": [] }),
+            Malformed(Tag::RegistrationRepair),
+        ),
+        (
+            json!({ "type": "registration_repair", "browsers": ["netscape"] }),
+            Malformed(Tag::RegistrationRepair),
+        ),
+        (
+            json!({ "type": "registration_repair", "browsers": "chrome" }),
+            Malformed(Tag::RegistrationRepair),
         ),
         (
             json!({ "type": "registration_repair", "browser": "chrome" }),

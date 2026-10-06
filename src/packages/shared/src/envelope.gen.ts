@@ -643,7 +643,10 @@ export const RegistrationStatusWireSchema = z
 export type RegistrationStatusWire = z.infer<typeof RegistrationStatusWireSchema>;
 
 export const RegistrationRepairWireSchema = z
-  .object({ "type": z.literal("registration_repair") })
+  .object({
+    "browsers": z.union([z.array(z.string()), z.null()]).optional(),
+    "type": z.literal("registration_repair"),
+  })
   .strict();
 
 export type RegistrationRepairWire = z.infer<typeof RegistrationRepairWireSchema>;

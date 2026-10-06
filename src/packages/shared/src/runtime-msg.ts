@@ -14,6 +14,7 @@ import {
   RegistrationRowSchema,
   TrustedClientSchema,
 } from "./envelope.gen";
+import { BROWSER_KEYS } from "./host.gen";
 import { PolicyOverlaySchema, PolicyValuesSchema } from "./policy.gen";
 import { UI_LANGUAGES } from "./settings";
 import { PresenceAnswerSchema, RegistrationResponseSchema } from "./webauthn";
@@ -339,6 +340,8 @@ export const RUNTIME_CONTRACT = contract({
   },
   // The host-registration panel: the per-browser manifest rows the host's doctor diagnoses, and the repair
   // `doctor --fix` runs, both answered with the fresh rows (a repair that failed is a refusal; the panel re-asks).
+  // `browsers` names exactly the known browsers to register (`--browser`), enum-pinned here at the trust
+  // boundary; absent is every detected one.
   get_registration: {
     gate: "extension-page",
     req: z.strictObject({ type: z.literal("get_registration") }),
@@ -346,7 +349,10 @@ export const RUNTIME_CONTRACT = contract({
   },
   repair_registration: {
     gate: "extension-page",
-    req: z.strictObject({ type: z.literal("repair_registration") }),
+    req: z.strictObject({
+      type: z.literal("repair_registration"),
+      browsers: z.array(z.enum(BROWSER_KEYS)).min(1).optional(),
+    }),
     res: RegistrationViewSchema,
   },
   // The policy editor reads the posture the worker enforces and tightens it through the host's unsigned

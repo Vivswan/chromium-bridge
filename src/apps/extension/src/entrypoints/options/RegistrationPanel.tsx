@@ -1,13 +1,15 @@
 import type { RegistrationRow } from "@chromium-bridge/shared/envelope.gen";
-import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
+import { BROWSER_KEYS } from "@chromium-bridge/shared/host.gen";
+import type { RuntimeRequest, RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/hooks/useI18n";
 import { send } from "@/lib/messages";
 
-// The host-registration panel over the SW router's two registration messages. A failed repair re-asks for the
-// rows instead of keeping the pre-repair table: the host answers a failure with no rows, so the rows on screen
-// must come from a read the host vouched for.
+// The host-registration panel over the SW router's two registration messages. Repair covers every detected
+// browser, as `doctor --fix` does; a browser the host did not detect gets its own register action, as
+// `--browser <key>` does. A failed repair re-asks for the rows instead of keeping the pre-repair table: the
+// host answers a failure with no rows, so the rows on screen must come from a read the host vouched for.
 export function RegistrationPanel() {
   const { t } = useI18n();
   const [view, setView] = useState<RuntimeResponse<"get_registration"> | null>(null);
@@ -24,10 +26,12 @@ export function RegistrationPanel() {
     void refresh();
   }, [refresh]);
 
-  const repair = async () => {
+  const repair = async (browsers?: RuntimeRequest<"repair_registration">["browsers"]) => {
     setBusy(true);
     setActionError(null);
-    const r = await send({ type: "repair_registration" });
+    const r = await send(
+      browsers ? { type: "repair_registration", browsers } : { type: "repair_registration" },
+    );
     if (r.ok) {
       setView(r);
     } else {
@@ -62,7 +66,12 @@ export function RegistrationPanel() {
       {view?.ok && view.browsers.length > 0 && (
         <ul className="m-0 mt-1 list-none p-0">
           {view.browsers.map((row) => (
-            <RegistrationLine key={row.browser} row={row} />
+            <RegistrationLine
+              key={row.browser}
+              row={row}
+              busy={busy}
+              onRegister={(browser) => void repair([browser])}
+            />
           ))}
         </ul>
       )}
@@ -73,6 +82,7 @@ export function RegistrationPanel() {
         </Button>
         <span className="text-[11px] text-text-3">{t("registration.restart_note")}</span>
       </div>
+      <p className="consequence mt-2">{t("registration.cli_only_note")}</p>
 
       <div
         role="alert"
@@ -84,10 +94,21 @@ export function RegistrationPanel() {
   );
 }
 
-function RegistrationLine({ row }: { row: RegistrationRow }) {
+function RegistrationLine({
+  row,
+  busy,
+  onRegister,
+}: {
+  row: RegistrationRow;
+  busy: boolean;
+  onRegister: (browser: (typeof BROWSER_KEYS)[number]) => void;
+}) {
   const { t } = useI18n();
   const healthy = row.state.kind === "ok";
   const detail = row.state.kind === "ok" || row.state.kind === "missing" ? null : row.state.detail;
+  // The bulk repair skips an undetected browser, so that row offers the CLI's `--browser` form; only a key
+  // the generated list knows can be named, which the host's rows always carry.
+  const key = BROWSER_KEYS.find((known) => known === row.browser);
   return (
     <li className="flex items-start gap-3 border-b border-edge py-2 last:border-b-0">
       <div className="min-w-0 flex-1">
@@ -108,6 +129,11 @@ function RegistrationLine({ row }: { row: RegistrationRow }) {
           {row.location}
         </div>
       </div>
+      {!row.detected && key !== undefined && (
+        <Button variant="ghost" onClick={() => onRegister(key)} disabled={busy}>
+          {t("registration.register_one", [row.browser])}
+        </Button>
+      )}
     </li>
   );
 }

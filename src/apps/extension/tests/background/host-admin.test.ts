@@ -72,15 +72,20 @@ function failed(view: { ok: true } | { ok: false; error: string }): { ok: false;
 }
 
 describe("registration status and repair (one shared slot)", () => {
-  // The two requests differ only in the frame they put on the wire; the host answers both with one tag.
+  // The requests differ only in the frame they put on the wire; the host answers all with one tag.
   test.each([
-    { name: "status", request: requestRegistrationStatus, frame: "registration_status" },
-    { name: "repair", request: repairRegistration, frame: "registration_repair" },
+    { name: "status", request: requestRegistrationStatus, frame: { type: "registration_status" } },
+    { name: "repair", request: () => repairRegistration(), frame: { type: "registration_repair" } },
+    {
+      name: "repair of named browsers",
+      request: () => repairRegistration(["brave", "opera"]),
+      frame: { type: "registration_repair", browsers: ["brave", "opera"] },
+    },
   ])(
     "$name posts its frame and resolves with the rows the host reports",
     async ({ request, frame }) => {
       const p = request();
-      expect(posted).toEqual([{ type: frame }]);
+      expect(posted).toEqual([frame]);
       handleHostAdminFrame(rowsResult);
       await expect(p).resolves.toEqual({ ok: true, browsers: ROWS });
     },

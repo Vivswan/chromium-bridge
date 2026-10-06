@@ -255,6 +255,8 @@ registration:
   state_unreadable: "unreadable"
   empty: "The host knows no browser on this platform."
   restart_note: "After a repair, restart the browser so it re-reads its registrations."
+  register_one: "Register $1"
+  cli_only_note: "Registering a Chromium variant by its directory, or machine-wide for every account, stays in the terminal (`chromium-bridge doctor --fix --manifest-dir`, `sudo chromium-bridge doctor --fix --system`): a directory is typed, and root is held, where this page has neither."
 
 policy:
   desc: "What the host lets clients do in this browser. Tightening applies at once; loosening needs a presence tap this page cannot give yet, so use `chromium-bridge policy set`."

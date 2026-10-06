@@ -21,12 +21,13 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use crate::cli::FixTargets;
 use crate::enclave::EnrollmentKey;
 use crate::ipc::{self, BrowserLabel};
 use crate::protocol::control::{
     classify_nm_frame, host_control_type, AdminControl, AuditReadLimit, AuditReport,
     EnclaveControl, FrameDisposition, HostRequest, KillStatus, MalformedReply, PolicyControl,
-    PolicyStatus, RegistrationReport, RegistrationRow, RestrictOutcome,
+    PolicyStatus, RegistrationReport, RegistrationRow, RepairBrowsers, RestrictOutcome,
 };
 use crate::protocol::{bridge_read, bridge_write, nm_read_frame, nm_write_frame};
 use crate::runtime_record::RuntimeRecord as _;
@@ -175,13 +176,15 @@ fn registration_report(
     }
 }
 
-/// Handle a `registration_repair` frame: `doctor --fix` for the detected browsers through the same seam, then
-/// the fresh rows. The lines the CLI prints go to the log instead (stdout is the protocol here), and a repair
-/// that failed on any target answers that failure in place of rows, so the extension re-asks for the state it
-/// should show.
-fn registration_repair_reply() -> AdminControl {
+/// Handle a `registration_repair` frame: `doctor --fix` for the detected browsers, or `--browser` for the
+/// named ones, through the same seam, then the fresh rows. The frame never widens the scope (this account's)
+/// or the foreign-manifest rule. The lines the CLI prints go to the log instead (stdout is the protocol
+/// here), and a repair that failed on any target answers that failure in place of rows, so the extension
+/// re-asks for the state it should show.
+fn registration_repair_reply(browsers: Option<RepairBrowsers>) -> AdminControl {
+    let targets = browsers.map_or(FixTargets::Detected, RepairBrowsers::into_targets);
     let outcomes = match crate::registration::fix(
-        &crate::cli::FixTargets::Detected,
+        &targets,
         crate::browsers::Scope::User,
         crate::registration::ForeignManifest::Refuse,
     ) {
@@ -638,8 +641,8 @@ fn handle_request<W: Write>(
         HostRequest::RegistrationStatus {} => {
             write_control_reply(out, &registration_status_reply())
         }
-        HostRequest::RegistrationRepair {} => {
-            write_control_reply(out, &registration_repair_reply())
+        HostRequest::RegistrationRepair { browsers } => {
+            write_control_reply(out, &registration_repair_reply(browsers))
         }
         HostRequest::PolicyGet {} => write_control_reply(out, &policy_current_reply()),
         HostRequest::PolicyRestrict { overlay } => policy_restrict_replies(overlay)

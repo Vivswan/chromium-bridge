@@ -101,6 +101,7 @@ Known browser keys: `chrome`, `chromium`, `brave`, `edge`, `vivaldi`, `opera`. "
 - **A non-standard install on macOS** reads as "not detected"; it can still be registered explicitly with `--browser <key>` or `--manifest-dir`.
 - **Plain `doctor` counts only detected browsers,** so a healthy explicit registration for a non-standard install keeps the summary below "OK" even though the bridge works - the per-browser lines tell the real story.
 - **Nothing detected:** `--fix` refuses and asks for an explicit selection instead of guessing, exiting 3 rather than 1 so an installer can tell "no browser yet" from a failure.
+- **The options page's Host registration section** repairs the same two ways, for this account: every detected browser, or one named browser from its row. `--manifest-dir` and `--system` stay in the terminal: a directory is typed, and root is held, where the page has neither.
 
 `chromium-bridge uninstall` reverses exactly what this project registers (via `--fix`) in one scope: the per-browser manifests, the extension pointers, and the wrapper scripts. Re-pass any `--manifest-dir` you registered, and `--system` (as root) for a machine-wide registration.
 

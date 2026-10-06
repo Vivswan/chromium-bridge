@@ -253,6 +253,8 @@ registration:
   state_unreadable: "不可读"
   empty: "主机在此平台上不认识任何浏览器。"
   restart_note: "修复后请重启浏览器, 让它重新读取注册信息。"
+  register_one: "注册 $1"
+  cli_only_note: "按目录注册某个 Chromium 变体, 或为所有账户在整机范围内注册, 仍需在终端完成 (`chromium-bridge doctor --fix --manifest-dir`, `sudo chromium-bridge doctor --fix --system`): 目录需要键入, root 需要持有, 此页面两者皆无。"
 
 policy:
   desc: "主机允许客户端在此浏览器中做什么。收紧立即生效; 放宽需要一次在场确认, 本页暂时无法提供, 请用 `chromium-bridge policy set`。"

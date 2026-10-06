@@ -139,7 +139,7 @@ const HANDLERS: { [K in RuntimeMsgType]: Handler<K> } = {
   webauthn_presence_confirm: ({ nonce }) => confirmPresence(nonce),
   webauthn_forget: forgetBrowser,
   get_registration: requestRegistrationStatus,
-  repair_registration: repairRegistration,
+  repair_registration: (msg) => repairRegistration(msg.browsers),
   get_policy: async () => ({ ok: true, posture: await getPolicyPosture() }),
   // The host's restriction seam decides the direction and audits the verdict; this only relays.
   restrict_policy: (msg) => restrictPolicy(msg.overlay),

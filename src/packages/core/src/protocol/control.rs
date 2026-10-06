@@ -83,7 +83,9 @@ pub enum EnclaveControl {
 /// registration_status/repair -> registration_status_result { ok, browsers, error? }: the per-browser manifest rows
 ///                               `doctor` diagnoses, after `doctor --fix`'s repair for the repair frame; rows travel
 ///                               exactly when ok (a repair that failed on any target answers ok: false and the
-///                               extension re-asks for the rows)
+///                               extension re-asks for the rows). repair { browsers? } names exactly the known
+///                               browsers to register (`--browser`), absent is every detected one; an empty
+///                               list or an unknown key is malformed
 /// audit_read { limit? }      -> audit_read_result { ok, entries?, older?, path?, error? }: the newest records of the
 ///                               host's audit.log, the page `chromium-bridge audit --limit <n>` prints (its default
 ///                               when `limit` is absent; 1..=MAX_AUDIT_READ_LIMIT otherwise, out of range is
@@ -166,8 +168,12 @@ pub enum AdminControl {
     },
     /// Extension -> host: report every known browser's native-messaging registration.
     RegistrationStatus {},
-    /// Extension -> host: re-register the detected browsers (what `doctor --fix` does), then report.
-    RegistrationRepair {},
+    /// Extension -> host: re-register the detected browsers, or exactly the named ones (what `doctor --fix`
+    /// and `--browser` do), then report.
+    RegistrationRepair {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        browsers: Option<Vec<String>>,
+    },
     /// Host -> extension: the registration rows (the reply to both registration frames). `browsers`
     /// travels exactly when `ok`, `error` exactly when not ([`RegistrationReport::into_frame`]).
     RegistrationStatusResult {
@@ -261,6 +267,48 @@ impl AuditReport {
                 error: Some(error),
             },
         }
+    }
+}
+
+/// The browsers a `registration_repair` names, parsed once at the frame boundary the way `--browser` is at
+/// argv: known keys only, folded by the CLI's own [`crate::cli::distinct_browsers`], never empty. Travels as
+/// the list of keys.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepairBrowsers(Vec<crate::browsers::Browser>);
+
+impl RepairBrowsers {
+    pub fn into_targets(self) -> crate::cli::FixTargets {
+        crate::cli::FixTargets::Browsers(self.0)
+    }
+}
+
+impl Serialize for RepairBrowsers {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.0.iter().map(|browser| browser.key()))
+    }
+}
+
+impl<'de> Deserialize<'de> for RepairBrowsers {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use crate::browsers::Browser;
+        let keys = Vec::<String>::deserialize(deserializer)?;
+        if keys.is_empty() {
+            return Err(serde::de::Error::custom(
+                "registration_repair names no browser; omit the list for the detected ones",
+            ));
+        }
+        let browsers = keys
+            .iter()
+            .map(|key| {
+                Browser::from_key(key).ok_or_else(|| {
+                    serde::de::Error::custom(format!(
+                        "unknown browser key {key:?}; known: {}",
+                        crate::registration::known_keys()
+                    ))
+                })
+            })
+            .collect::<Result<Vec<Browser>, D::Error>>()?;
+        Ok(RepairBrowsers(crate::cli::distinct_browsers(browsers)))
     }
 }
 
@@ -1029,9 +1077,14 @@ pub enum HostRequest {
         limit: Option<AuditReadLimit>,
     },
     RegistrationStatus {},
-    /// Re-registers the detected browsers through the same path as `doctor --fix`; idempotent, and
-    /// capability-neutral toward MCP clients (it points browsers at this binary and nothing else).
-    RegistrationRepair {},
+    /// Re-registers the detected browsers, or exactly the named ones, through the same path as `doctor
+    /// --fix`; idempotent, and capability-neutral toward MCP clients (it points browsers at this binary and
+    /// nothing else).
+    RegistrationRepair {
+        #[cfg_attr(feature = "envelope-schema", schemars(with = "Option<Vec<String>>"))]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        browsers: Option<RepairBrowsers>,
+    },
     PolicyGet {},
     /// The free restriction lane; the seam refuses a relaxation, so no presence gate stands here.
     PolicyRestrict {

@@ -1,7 +1,8 @@
 // The registration panel's render path over the SW contract: the rows the host reports render with their state
-// and location, a repair posts repair_registration and shows the post-repair rows, a failed repair shows the
-// host's error and re-asks for the rows, and a not-connected worker renders the refusal with the repair
-// disabled, never an empty healthy-looking table. While a status read is outstanding both actions are disabled,
+// and location, a repair posts repair_registration and shows the post-repair rows, an undetected row alone
+// offers a register action that names its browser, a failed repair shows the host's error and re-asks for the
+// rows, and a not-connected worker renders the refusal with the repair disabled, never an empty
+// healthy-looking table. While a status read is outstanding both actions are disabled,
 // since status and repair share one worker slot and a repair sent then is refused as already in flight.
 
 import type { RegistrationRow } from "@chromium-bridge/shared/envelope.gen";
@@ -23,11 +24,17 @@ const ROWS: RegistrationRow[] = [
     state: { kind: "stale", detail: "launch path missing" },
     location: "/home/user/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts/host.json",
   },
+  {
+    browser: "edge",
+    detected: false,
+    state: { kind: "missing" },
+    location: "/home/user/.config/microsoft-edge/NativeMessagingHosts/host.json",
+  },
 ];
 
 type Reply = { ok: true; browsers: RegistrationRow[] } | { ok: false; error: string };
 
-let sent: Array<{ type: string }>;
+let sent: Array<{ type: string; browsers?: string[] }>;
 let replies: Record<"get_registration" | "repair_registration", () => Reply | Promise<Reply>>;
 
 beforeEach(() => {
@@ -56,6 +63,10 @@ beforeEach(() => {
     registration_state_unreadable: { message: "unreadable" },
     registration_empty: { message: "The host knows no browser on this platform." },
     registration_restart_note: { message: "After a repair, restart the browser." },
+    registration_register_one: { message: "Register $1" },
+    registration_cli_only_note: {
+      message: "Directory and machine-wide registration stay in the terminal.",
+    },
   };
   vi.stubGlobal(
     "fetch",
@@ -100,9 +111,22 @@ describe("RegistrationPanel", () => {
     await mount();
     await screen.findByText("stale");
     await userEvent.click(screen.getByRole("button", { name: "Repair registrations" }));
-    await waitFor(() => expect(screen.getAllByText("ok")).toHaveLength(2));
+    await waitFor(() => expect(screen.getAllByText("ok")).toHaveLength(ROWS.length));
     expect(screen.queryByText("stale")).toBeNull();
     expect(sent).toEqual([{ type: "get_registration" }, { type: "repair_registration" }]);
+  });
+
+  test("an undetected row alone offers a register action, which names that browser", async () => {
+    await mount();
+    await screen.findByText("edge");
+    expect(screen.getAllByRole("button", { name: /^Register / })).toHaveLength(1);
+    await userEvent.click(screen.getByRole("button", { name: "Register edge" }));
+    await waitFor(() =>
+      expect(sent).toEqual([
+        { type: "get_registration" },
+        { type: "repair_registration", browsers: ["edge"] },
+      ]),
+    );
   });
 
   test("a failed repair shows the host's error and re-asks for the rows", async () => {

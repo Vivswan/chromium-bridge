@@ -1,8 +1,9 @@
 // The options page's host-admin exchanges that clients.ts and kill.ts do not own: the browser-registration
 // rows (status, and the repair that `doctor --fix` runs), the policy restriction lane, and the host's audit
 // trail (what `chromium-bridge audit` reads). port.ts drives `collaborator`; messages.ts routes the
-// options-page actions here. A repair writes manifests and wrapper scripts for every detected browser, still a
-// local operation; nothing here can raise a presence prompt.
+// options-page actions here. A repair writes manifests and wrapper scripts for the detected browsers, or for
+// the browsers the page names, still a local operation in this account's scope; nothing here can raise a
+// presence prompt.
 
 import {
   AuditReadResultSchema,
@@ -75,13 +76,14 @@ export function requestRegistrationStatus(): Promise<RegistrationView> {
   ).view;
 }
 
-/** Re-register the detected browsers (what `doctor --fix` does) and get the fresh rows back. A repair that
- * failed on any target answers a refusal naming the target, and the panel asks for the rows again. */
-export function repairRegistration(): Promise<RegistrationView> {
-  return registration.request(
-    { type: "registration_repair" } satisfies RegistrationRepairWire,
-    readRegistration,
-  ).view;
+/** Re-register the detected browsers (what `doctor --fix` does), or exactly the named ones (`--browser`), and
+ * get the fresh rows back. A repair that failed on any target answers a refusal naming the target, and the
+ * panel asks for the rows again. */
+export function repairRegistration(browsers?: readonly string[]): Promise<RegistrationView> {
+  const frame: RegistrationRepairWire = browsers
+    ? { type: "registration_repair", browsers: [...browsers] }
+    : { type: "registration_repair" };
+  return registration.request(frame, readRegistration).view;
 }
 
 /** Tighten the effective policy by `overlay` through the host's unsigned restriction lane. The overlay was
