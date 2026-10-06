@@ -21,16 +21,12 @@ export function toolchainMismatches(root: string): string[] {
   };
   const read = (file: string): string => readFileSync(join(root, file), "utf8");
 
-  const prototools = read(".prototools");
-  // Pins live above the first [table]; a simple key = "value" scan suffices.
-  const pins = new Map<string, string>();
-  for (const line of prototools.split("\n")) {
-    if (line.startsWith("[")) break;
-    const match = line.match(/^([A-Za-z0-9_-]+)\s*=\s*"([^"]+)"/);
-    if (match) pins.set(match[1] as string, match[2] as string);
-  }
-  const bunPin = pins.get("bun") ?? "<missing>";
-  if (!pins.has("bun")) fail(".prototools does not pin bun");
+  const prototools = Bun.TOML.parse(read(".prototools")) as Record<string, unknown>;
+  // A pin is a top-level string; anything under a [table] is a setting, not a pin.
+  const pin = (tool: string): string | undefined =>
+    typeof prototools[tool] === "string" ? prototools[tool] : undefined;
+  const bunPin = pin("bun") ?? "<missing>";
+  if (pin("bun") === undefined) fail(".prototools does not pin bun");
 
   const rootPkg = JSON.parse(read("package.json")) as { packageManager?: string };
   const packageManager = rootPkg.packageManager ?? "";
@@ -46,13 +42,17 @@ export function toolchainMismatches(root: string): string[] {
     fail(`.prototools bun (${bunPin}) != .bun-version (${bunVersionFile})`);
   }
 
-  if (pins.has("rust")) {
+  if (pin("rust") !== undefined) {
     fail(
       ".prototools pins rust - rust-toolchain.toml is its only pin (proto's install breaks rustup's)",
     );
   }
-  const builtinPlugins = prototools.match(/builtin-plugins\s*=\s*\[([^\]]*)\]/)?.[1] ?? "";
-  if (!builtinPlugins) {
+  const settings = prototools.settings;
+  const builtinPlugins =
+    typeof settings === "object" && settings !== null
+      ? (settings as Record<string, unknown>)["builtin-plugins"]
+      : undefined;
+  if (!Array.isArray(builtinPlugins)) {
     fail(
       ".prototools settings.builtin-plugins allow-list is missing (proto would provision python and rust)",
     );
