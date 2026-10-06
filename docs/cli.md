@@ -34,6 +34,8 @@
 | `chromium-bridge lang [show \| set <value>]` | display language | Reads or sets the display language the options page shows; `lang` alone is `show`. |
 | `chromium-bridge --help` | help | Usage information. |
 
+The options page offers the same actions, with three terminal-only exceptions by design: `uninstall` (below), and the `--system` and `--manifest-dir` repair forms. The site allowlist, allow-all, and tab grouping stay on the page. They are browser-local extension storage (see the [privacy policy](./privacy-policy.md)), which no subcommand reads or writes.
+
 ## doctor / status (read-only self-check)
 
 `doctor` (with `status` as an equivalent alias) is a read-only subcommand: it does not bind the socket, does not write the lock file, and does not spawn any child process. It only probes the current environment and prints its conclusions, to answer the question "why can't I connect".
@@ -111,6 +113,8 @@ Known browser keys: `chrome`, `chromium`, `brave`, `edge`, `vivaldi`, `opera`. "
 Before deleting a manifest or pointer it verifies the content is ours (our host id and description marker; the Web Store update url alone). Anything else, or anything it cannot read, is reported and left in place as a warning, never a failure, so a package removal completes; the other artifacts of ours beside it still go, and only one of ours that cannot be removed fails the command.
 
 It never touches this binary or your browsers. A browser drops the extension it installed from the pointer on its next start; an unpacked extension is yours to remove.
+
+`uninstall` has no options-page twin by design. The frame asking for it would delete the manifest that launched the very host answering it.
 
 The extension pointer, beside each manifest:
 
