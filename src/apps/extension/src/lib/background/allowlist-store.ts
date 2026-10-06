@@ -16,20 +16,19 @@ import {
 } from "../shared/allowlist";
 import { inLife } from "../shared/in-life";
 import { getSetting } from "../shared/settings";
+import { readKey } from "../shared/storage";
 import { BADGE_PENDING_COLOR } from "../shared/theme-colors";
 
 const STORAGE_KEY = "allowlist";
 
 export async function getAllowlist(): Promise<string[]> {
-  const { [STORAGE_KEY]: list } = await browser.storage.local.get(STORAGE_KEY);
+  const stored = await readKey(STORAGE_KEY, AllowlistSchema);
   // A record that fails the schema (not an array, or with non-string entries)
   // degrades to the empty allowlist: nothing is allowed - fail closed.
-  const parsed = AllowlistSchema.safeParse(list ?? []);
-  if (!parsed.success) {
+  if (stored.state === "corrupt") {
     console.warn("[bb] stored allowlist is malformed; treating it as empty");
-    return [];
   }
-  return parsed.data;
+  return stored.state === "valid" ? stored.value : [];
 }
 
 export async function setAllowlist(list: string[]) {

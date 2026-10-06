@@ -28,7 +28,9 @@ import {
 import type { AuditEventWire } from "@chromium-bridge/shared/envelope.gen";
 import pLimit from "p-limit";
 import { browser } from "wxt/browser";
+import { z } from "zod";
 import { inLife } from "../shared/in-life";
+import { readKeyOr } from "../shared/storage";
 import type { Connection, PortCollaborator } from "./connection";
 
 const AUDIT_RING_KEY = "auditRing";
@@ -122,9 +124,8 @@ export function auditEvent(kind: AuditEventKind, fields: AuditFields = {}): void
 /** The ring, newest last. Malformed entries are dropped (display-only data;
  * dropping is the fail-closed direction for a read). */
 export async function readRing(): Promise<AuditEntry[]> {
-  const { [AUDIT_RING_KEY]: value } = await browser.storage.local.get(AUDIT_RING_KEY);
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((raw) => {
+  const ring = await readKeyOr(AUDIT_RING_KEY, z.array(z.unknown()), []);
+  return ring.flatMap((raw) => {
     const parsed = AuditEntrySchema.safeParse(raw);
     return parsed.success ? [parsed.data] : [];
   });

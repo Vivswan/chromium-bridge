@@ -12,7 +12,8 @@
 
 import { POLICY_FIELDS } from "@chromium-bridge/shared/policy.gen";
 import { relaxedPolicyFields } from "@chromium-bridge/shared/policy-compare";
-import { confirmWithUser, currentPanicEpoch } from "./confirm/service";
+import { currentPanicEpoch } from "./brake";
+import { confirmWithUser } from "./confirm/service";
 import { setUnpinnedRelaxationApprover, type UnpinnedRelaxation } from "./policy-sync";
 
 // Generous but bounded: the prompt names a policy change, not a page action,

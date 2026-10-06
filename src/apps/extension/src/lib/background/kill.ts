@@ -29,6 +29,7 @@ import type {
 import pLimit from "p-limit";
 import { browser } from "wxt/browser";
 import { inLife } from "../shared/in-life";
+import { readKey, readKeyOr, type Stored } from "../shared/storage";
 import { claimKillRelease, type PresenceAssertView } from "../webauthn/exchange";
 import { auditEvent } from "./audit-log";
 import { advance, engageOutstanding, resetBrakeForTests, stampArrival } from "./brake";
@@ -39,11 +40,10 @@ const KILL_MIRROR_KEY = "bridgeKillMirror";
 
 export type KillGate = { allowed: true } | { allowed: false; reason: string };
 
-/** The mirror's verdict for the request gate. Pure over the stored value so the fail-closed matrix is unit-testable. */
-export function killGateFromStored(value: unknown): KillGate {
-  if (value === undefined) return { allowed: true };
-  const parsed = KillMirrorSchema.safeParse(value);
-  if (!parsed.success) {
+/** The mirror's verdict for the request gate. */
+function killGateFromStored(stored: Stored<KillMirror>): KillGate {
+  if (stored.state === "absent") return { allowed: true };
+  if (stored.state === "corrupt") {
     return {
       allowed: false,
       reason:
@@ -52,7 +52,7 @@ export function killGateFromStored(value: unknown): KillGate {
         "`chromium-bridge kill` / `unkill`, to rewrite it.",
     };
   }
-  switch (parsed.data.state) {
+  switch (stored.value.state) {
     case "alive":
       return { allowed: true };
     case "killed":
@@ -74,15 +74,12 @@ export function killGateFromStored(value: unknown): KillGate {
 
 /** Read the mirror and gate on it. Consulted by the enrollment gate before every dispatched bridge request. */
 export async function killGate(): Promise<KillGate> {
-  const { [KILL_MIRROR_KEY]: value } = await browser.storage.local.get(KILL_MIRROR_KEY);
-  return killGateFromStored(value);
+  return killGateFromStored(await readKey(KILL_MIRROR_KEY, KillMirrorSchema));
 }
 
 /** The mirror for the UI (null = never heard from a host). */
-export async function getKillMirror(): Promise<KillMirror | null> {
-  const { [KILL_MIRROR_KEY]: value } = await browser.storage.local.get(KILL_MIRROR_KEY);
-  const parsed = KillMirrorSchema.safeParse(value);
-  return parsed.success ? parsed.data : null;
+export function getKillMirror(): Promise<KillMirror | null> {
+  return readKeyOr(KILL_MIRROR_KEY, KillMirrorSchema, null);
 }
 
 async function setMirror(state: KillMirror["state"]): Promise<void> {

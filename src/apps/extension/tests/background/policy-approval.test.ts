@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 import type { Presentation } from "@/lib/background/confirm/service";
 import {
-  denyAllConfirmations,
+  denyActiveConfirmation,
   installConfirmationProvider,
   resolveConfirm,
 } from "@/lib/background/confirm/service";
@@ -83,7 +83,7 @@ beforeEach(() => {
 afterEach(() => {
   // Drain anything a failed assertion left pending, so the service's shared
   // FIFO can never wedge the next test's confirmation behind a stale one.
-  denyAllConfirmations();
+  denyActiveConfirmation();
 });
 
 /** Push a frame and answer the NEW confirmation it raises through the

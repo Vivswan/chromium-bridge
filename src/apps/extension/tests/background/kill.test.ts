@@ -22,7 +22,6 @@ import {
   handleKillFrame,
   type KillControlFrame,
   killGate,
-  killGateFromStored,
   requestKillStatus,
   resetKillForTests,
 } from "@/lib/background/kill";
@@ -59,17 +58,16 @@ describe("kill gate fail-closed matrix", () => {
     ["missing at", { state: "alive" }, false],
     ["an unknown field", { state: "alive", at: 1, extra: true }, false],
     ["an unknown state word", { state: "dead", at: 1 }, false],
-  ])("%s", (_case, stored, allowed) => {
-    expect(killGateFromStored(stored)).toEqual(
+  ])("%s", async (_case, stored, allowed) => {
+    // Planted at the read, not through set(): the fake's set() drops a null value where Chrome stores it.
+    vi.spyOn(fakeBrowser.storage.local, "get").mockImplementationOnce((async () => ({
+      bridgeKillMirror: stored,
+    })) as typeof fakeBrowser.storage.local.get);
+    const verdict = killGate();
+    vi.restoreAllMocks();
+    await expect(verdict).resolves.toEqual(
       allowed ? { allowed: true } : { allowed: false, reason: expect.any(String) },
     );
-  });
-
-  test("killGate reads the stored mirror", async () => {
-    await fakeBrowser.storage.local.set({ bridgeKillMirror: { state: "killed", at: 5 } });
-    expect((await killGate()).allowed).toBe(false);
-    await fakeBrowser.storage.local.set({ bridgeKillMirror: { state: "alive", at: 6 } });
-    expect((await killGate()).allowed).toBe(true);
   });
 });
 

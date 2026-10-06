@@ -1,5 +1,6 @@
 // The panic brake: one state for the confirm window's deny-and-kill and for the at-least-once engage re-post.
-// kill.ts feeds it (the posts, the committed frames); confirm/service.ts reads the latch, kill.ts the re-post.
+// kill.ts feeds it (the posts, the committed frames); confirm/service.ts reads the latch and the panic epoch, kill.ts
+// the re-post.
 //
 // Frames are the only evidence (at panic time the mirror can read a stale "killed" with a release about to write
 // "alive"), and a frame counts only if it ARRIVED after the watermark it is judged against: kill.ts stamps arrivals
@@ -82,6 +83,10 @@ function transition(brake: Brake, event: BrakeEvent, now: number): Brake {
 // Arrivals are never reset: a handler still running from a previous test, stamped before the reset, must not outrank
 // a new watermark.
 const arrivals = inLife(() => 0);
+// The panic count, bumped on every panic event whether or not it moved the state (a panic whose engage never reached
+// the pipe still denies the decisions it crossed). The level (confirmationsLatched) cannot see a panic that lands AND
+// lifts between a decision's start and its presentation; the count can. Never reset, like arrivals.
+const panics = inLife(() => 0);
 const brake = inLife<Brake>(() => CLEAR);
 
 /** Stamp one inbound kill_status_result on arrival, before its serialized mirror write. */
@@ -91,7 +96,15 @@ export function stampArrival(): number {
 }
 
 export function advance(event: BrakeEvent): void {
+  if (event.type === "panic") panics.value += 1;
   brake.value = transition(brake.value, event, arrivals.value);
+}
+
+/** Captured at the START of a decision, before its first await, and carried by every confirmation the decision
+ * raises (ConfirmRequest.panicEpoch): the service denies a confirmation whose epoch is not the current one, so a
+ * deny-kill that crossed the decision denies it even after the latch lifted. */
+export function currentPanicEpoch(): number {
+  return panics.value;
 }
 
 /** An engage reached the pipe and no killed frame has arrived since; the next attach re-posts it. */

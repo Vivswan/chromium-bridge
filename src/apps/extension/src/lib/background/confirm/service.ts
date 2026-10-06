@@ -14,7 +14,7 @@ import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
 import pLimit from "p-limit";
 import { inLife } from "../../shared/in-life";
 import { auditEvent } from "../audit-log";
-import { confirmationsLatched } from "../brake";
+import { confirmationsLatched, currentPanicEpoch } from "../brake";
 
 /** The fields every confirmation request carries. */
 interface ConfirmRequestBase {
@@ -110,26 +110,11 @@ function providerFor(req: ConfirmRequest): {
   return { provider: defaultProvider.value, hardware: false };
 }
 
-// The panic latch (every confirmation denies without presenting while a deny-and-kill's brake is in flight or awaits
-// its release) is the brake's: confirmationsLatched() in brake.ts. This edge marker sits beside it, bumped on every
-// panic: every request carries the epoch its decision captured at its start (ConfirmRequest.panicEpoch), so a panic
-// that lands AND lifts between that capture and presentation, invisible to the level alone, still denies on the
-// mismatch. Never reset, exactly like the real thing across panics.
-const panicEpoch = inLife(() => 0);
-
-/** Capture the panic epoch at the START of a decision, before its first await. Every confirmation the
- * decision raises carries this value, so the service denies it if a deny-kill crossed the decision,
- * even one that lifted again before the confirmation was created. */
-export function currentPanicEpoch(): number {
-  return panicEpoch.value;
-}
-
-/** The confirm window hit the brake: deny the active confirmation and bump the epoch. Settling the active entry lets
- * the lane advance, and every request queued behind it sees the brake's latch and denies without presenting. The
- * router follows this with the panic engage in the same synchronous turn (messages.ts denyAndKill), which arms the
- * latch. */
-export function denyAllConfirmations(): void {
-  panicEpoch.value += 1;
+/** The confirm window hit the brake. Settling the active entry lets the lane advance; the router follows this with
+ * the panic engage in the same synchronous turn (messages.ts denyAndKill), which bumps the brake's panic epoch and
+ * arms its latch before any queued request can reach the front, so every request behind this one denies without
+ * presenting. */
+export function denyActiveConfirmation(): void {
   active.value?.settle(false);
 }
 
@@ -178,7 +163,7 @@ async function presentOne(
   cid: string,
   resolve: (approved: boolean) => void,
 ): Promise<void> {
-  if (confirmationsLatched() || panicEpoch.value !== epoch) {
+  if (confirmationsLatched() || currentPanicEpoch() !== epoch) {
     // Denied unseen: the user already chose "kill everything" - showing
     // more consent surfaces after that choice would invert it. Same
     // attempt cid, but no surface was shown, so it resolves no row.

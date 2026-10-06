@@ -12,10 +12,10 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { Browser } from "wxt/browser";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 import { readRing, resetAuditForTests } from "@/lib/background/audit-log";
+import { currentPanicEpoch } from "@/lib/background/brake";
 import type { Presentation } from "@/lib/background/confirm/service";
 import {
   confirmWithUser,
-  currentPanicEpoch,
   installConfirmationProvider,
   installPresenceProvider,
   resolveConfirm,

@@ -19,6 +19,8 @@ import {
   PendingPairingSchema,
 } from "@chromium-bridge/shared/enclave";
 import { browser } from "wxt/browser";
+import { z } from "zod";
+import { readKey, readKeyOr, type Stored } from "../shared/storage";
 import { computeKeyId, parsePubkey } from "./enclave-verify";
 
 const PIN_KEY = "enclavePin";
@@ -28,11 +30,6 @@ const PAUSED_KEY = "enclavePairingPaused";
 const LAST_ERROR_KEY = "enclaveLastError";
 const LAST_VERIFIED_KEY = "enclaveLastVerifiedAt";
 const HOST_REVOKE_PENDING_KEY = "enclaveHostRevokePending";
-
-async function read(key: string): Promise<unknown> {
-  const { [key]: v } = await browser.storage.local.get(key);
-  return v;
-}
 
 /** A stored key record counts only if it is cryptographically whole: the
  * pubkey decodes to a real 65-byte X9.63 point and its SHA-256 equals the
@@ -63,23 +60,16 @@ async function keyRecordIsWhole(rec: { keyId: string; pubkeyB64: string }): Prom
  * visible decision, never an accident of parsing. Exported for tests and
  * for a future consumer that needs the distinction; every production read
  * today goes through [`getPin`] (the collapse). */
-export type PinRead =
-  | { state: "absent" }
-  | { state: "corrupt" }
-  | { state: "valid"; pin: EnclavePin };
+export type PinRead = Stored<EnclavePin>;
 
 /** Read the pinned enrollment key three ways. Absent means the storage key
  * is missing; anything present that fails the strict schema or the
  * fingerprint self-check is corrupt (already warned about by
  * keyRecordIsWhole), never folded into absent by THIS reader. */
 export async function readPin(): Promise<PinRead> {
-  const raw = await read(PIN_KEY);
-  if (raw === undefined) return { state: "absent" };
-  const parsed = EnclavePinSchema.safeParse(raw);
-  if (parsed.success && (await keyRecordIsWhole(parsed.data))) {
-    return { state: "valid", pin: parsed.data };
-  }
-  return { state: "corrupt" };
+  const stored = await readKey(PIN_KEY, EnclavePinSchema);
+  if (stored.state !== "valid") return stored;
+  return (await keyRecordIsWhole(stored.value)) ? stored : { state: "corrupt" };
 }
 
 /** THE DOCUMENTED COLLAPSE: every consumer routes a
@@ -90,7 +80,7 @@ export async function readPin(): Promise<PinRead> {
  * collapsing it to null grants nothing; it only denies. Consumers that ever
  * need the distinction read [`readPin`] instead. */
 export function pinOrNull(read: PinRead): EnclavePin | null {
-  return read.state === "valid" ? read.pin : null;
+  return read.state === "valid" ? read.value : null;
 }
 
 /** The collapsed read every gate/ratchet/lane consumer uses: `pinOrNull`
@@ -104,8 +94,8 @@ export async function setPin(pin: EnclavePin): Promise<void> {
 }
 
 export async function getPending(): Promise<PendingPairing | null> {
-  const parsed = PendingPairingSchema.safeParse(await read(PENDING_KEY));
-  if (parsed.success && (await keyRecordIsWhole(parsed.data))) return parsed.data;
+  const stored = await readKey(PENDING_KEY, PendingPairingSchema);
+  if (stored.state === "valid" && (await keyRecordIsWhole(stored.value))) return stored.value;
   return null;
 }
 
@@ -117,9 +107,8 @@ export async function clearPending(): Promise<void> {
   await browser.storage.local.remove(PENDING_KEY);
 }
 
-export async function getCompromised(): Promise<CompromisedMark | null> {
-  const parsed = CompromisedMarkSchema.safeParse(await read(COMPROMISED_KEY));
-  return parsed.success ? parsed.data : null;
+export function getCompromised(): Promise<CompromisedMark | null> {
+  return readKeyOr(COMPROMISED_KEY, CompromisedMarkSchema, null);
 }
 
 export async function setCompromised(mark: CompromisedMark): Promise<void> {
@@ -130,8 +119,8 @@ export async function setCompromised(mark: CompromisedMark): Promise<void> {
  * user rejected a fingerprint or revoked the pin; restarting the ceremony is
  * a manual act from the options page). Purely a prompt-suppression flag: the
  * gate stays closed either way. */
-export async function getPaused(): Promise<boolean> {
-  return (await read(PAUSED_KEY)) === true;
+export function getPaused(): Promise<boolean> {
+  return readKeyOr(PAUSED_KEY, z.literal(true), false);
 }
 
 export async function setPaused(paused: boolean): Promise<void> {
@@ -139,9 +128,8 @@ export async function setPaused(paused: boolean): Promise<void> {
   else await browser.storage.local.remove(PAUSED_KEY);
 }
 
-export async function getLastError(): Promise<string | null> {
-  const v = await read(LAST_ERROR_KEY);
-  return typeof v === "string" && v ? v : null;
+export function getLastError(): Promise<string | null> {
+  return readKeyOr(LAST_ERROR_KEY, z.string().min(1), null);
 }
 
 export async function setLastError(msg: string): Promise<void> {
@@ -152,9 +140,8 @@ export async function clearLastError(): Promise<void> {
   await browser.storage.local.remove(LAST_ERROR_KEY);
 }
 
-export async function getLastVerifiedAt(): Promise<number | null> {
-  const v = await read(LAST_VERIFIED_KEY);
-  return typeof v === "number" ? v : null;
+export function getLastVerifiedAt(): Promise<number | null> {
+  return readKeyOr(LAST_VERIFIED_KEY, z.number(), null);
 }
 
 export async function setLastVerifiedAt(at: number): Promise<void> {
@@ -168,8 +155,8 @@ export async function setLastVerifiedAt(at: number): Promise<void> {
  * settled: cleared by the host's `enclave_revoked` acknowledgement, or
  * superseded when a fresh pairing is pinned (the frame names no key, so past a
  * re-pair it would delete the newly minted key - see enrollment.ts). */
-export async function getHostRevokePending(): Promise<boolean> {
-  return (await read(HOST_REVOKE_PENDING_KEY)) === true;
+export function getHostRevokePending(): Promise<boolean> {
+  return readKeyOr(HOST_REVOKE_PENDING_KEY, z.literal(true), false);
 }
 
 export async function setHostRevokePending(on: boolean): Promise<void> {
