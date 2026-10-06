@@ -560,53 +560,16 @@ impl fmt::Display for AuditRecord {
     }
 }
 
-/// Format Unix milliseconds as `YYYY-MM-DD HH:MM:SS.mmm` UTC, without a date
-/// dependency.
+/// Unix milliseconds as `YYYY-MM-DD HH:MM:SS.mmmZ`. Past chrono's range (year 262143) the value is not a
+/// clock reading, so it prints raw.
 fn format_utc_ms(ts_ms: u64) -> String {
-    let secs = ts_ms / 1000;
-    let ms = ts_ms % 1000;
-    let rem = secs % 86_400;
-    let (h, m, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);
-    match civil_from_days(secs / 86_400) {
-        Some((year, month, day)) => {
-            format!("{year:04}-{month:02}-{day:02} {h:02}:{m:02}:{s:02}.{ms:03}Z")
-        }
-        None => format!("ts_ms={ts_ms}"),
-    }
-}
-
-/// Civil `(year, month, day)` for a day count since 1970-01-01, per Howard
-/// Hinnant's civil-from-days algorithm. Day counts derived from u64
-/// milliseconds are non-negative and small enough that every intermediate
-/// fits u64, so no overflow is reachable; the checked ops are defense in
-/// depth, turning any future slip into a `None` (rendered as raw `ts_ms`)
-/// instead of a panic.
-fn civil_from_days(days: u64) -> Option<(u64, u64, u64)> {
-    let z = days.checked_add(719_468)?;
-    let era = z / 146_097;
-    let doe = z % 146_097;
-    let yoe = doe
-        .checked_sub(doe / 1460)?
-        .checked_add(doe / 36_524)?
-        .checked_sub(doe / 146_096)?
-        / 365;
-    let y = era.checked_mul(400)?.checked_add(yoe)?;
-    let doy = doe.checked_sub(
-        yoe.checked_mul(365)?
-            .checked_add(yoe / 4)?
-            .checked_sub(yoe / 100)?,
-    )?;
-    let mp = doy.checked_mul(5)?.checked_add(2)? / 153;
-    let day = doy
-        .checked_sub(mp.checked_mul(153)?.checked_add(2)? / 5)?
-        .checked_add(1)?;
-    let month = if mp < 10 {
-        mp.checked_add(3)?
-    } else {
-        mp.checked_sub(9)?
-    };
-    let year = if month <= 2 { y.checked_add(1)? } else { y };
-    Some((year, month, day))
+    i64::try_from(ts_ms)
+        .ok()
+        .and_then(chrono::DateTime::from_timestamp_millis)
+        .map_or_else(
+            || format!("ts_ms={ts_ms}"),
+            |utc| utc.format("%Y-%m-%d %H:%M:%S%.3fZ").to_string(),
+        )
 }
 
 #[cfg(test)]
@@ -803,13 +766,21 @@ mod tests {
         }
     }
 
+    /// The trail line's timestamp is read by people and by log tooling. The rows bound the format: the
+    /// epoch, a leap day, the 2038 rollover, the last four-digit year, the first signed year, and the
+    /// field's maximum, which is past any calendar and prints raw.
     #[test]
-    fn utc_formatting_is_correct() {
-        assert_eq!(format_utc_ms(0), "1970-01-01 00:00:00.000Z");
-        // 2026-07-17 00:00:00 UTC = 1784246400s.
-        assert_eq!(format_utc_ms(1_784_246_400_000), "2026-07-17 00:00:00.000Z");
-        // Leap-year day: 2024-02-29 12:34:56.789 UTC = 1709210096s.
-        assert_eq!(format_utc_ms(1_709_210_096_789), "2024-02-29 12:34:56.789Z");
+    fn utc_formatting_is_pinned_across_the_representable_range() {
+        for (ts_ms, expected) in [
+            (0, "1970-01-01 00:00:00.000Z"),
+            (1_709_210_096_789, "2024-02-29 12:34:56.789Z"),
+            (2_147_483_648_000, "2038-01-19 03:14:08.000Z"),
+            (253_402_300_799_999, "9999-12-31 23:59:59.999Z"),
+            (253_402_300_800_000, "+10000-01-01 00:00:00.000Z"),
+            (u64::MAX, "ts_ms=18446744073709551615"),
+        ] {
+            assert_eq!(format_utc_ms(ts_ms), expected, "{ts_ms}");
+        }
     }
 
     #[test]

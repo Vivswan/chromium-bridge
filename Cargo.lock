@@ -317,6 +317,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "chromium-bridge-core",
+ "chrono",
  "ciborium",
  "clap",
  "core-foundation 0.10.1",
