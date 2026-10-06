@@ -7,9 +7,9 @@
 /src/packages/core/fuzz/artifacts/
 # The seed corpus and the JSON token dictionary are generated from the
 # production types by `moon run fuzz-seeds` (fuzz/src/seeds/) before every
-# fuzz pass; der.dict beside the generated dictionary is hand-written and tracked.
+# fuzz pass. Nothing under either directory is tracked.
 /src/packages/core/fuzz/seeds/
-/src/packages/core/fuzz/dictionaries/json_protocol.dict
+/src/packages/core/fuzz/dictionaries/
 # fuzz-smoke.ts failure reports (cleared and rewritten per run, consumed by
 # the nightly job's issue filing)
 /src/packages/core/fuzz/failures/
