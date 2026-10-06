@@ -1,9 +1,11 @@
+import type { PolicyHistoryRow } from "@chromium-bridge/shared/generated/envelope";
 import { OP_NAMES } from "@chromium-bridge/shared/generated/ops";
 import {
   BOOL_POLICY_FIELDS,
   type BoolPolicyField,
   MS_POLICY_FIELDS,
   type MsPolicyField,
+  POLICY_DEFAULTS,
   POLICY_DIRECTIONS,
   type PolicyOverlay,
   type PolicyValues,
@@ -23,34 +25,56 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { useI18n } from "@/hooks/useI18n";
 import { send } from "@/lib/messages";
+import { PresenceActStatus } from "./PresenceActStatus";
+import { usePresenceAct } from "./usePresenceAct";
 
-// The host-owned policy editor, restriction lane only: relaxing moves are disabled because the signed grant
-// lane needs a presence tap this page cannot give yet. Direction is recomputed from the generated catalogue,
-// never from a control's own idea of which way it points, and the host's seam refuses a relaxation regardless.
+// The host-owned policy editor, both lanes. Direction is recomputed from the generated catalogue, never from a
+// control's own idea of which way it points, and the host's seams decide again regardless.
+//
+//   tightening   restrict_policy, applied at once (the free lane `policy restrict` runs)
+//   loosening    grant_policy behind this browser's tap (the grant lane `policy set` runs); the host refuses
+//                before any prompt on a keyless host, in the CLI's words
+//   history      the superseded-revision ring, each row with a roll-back that takes the lane its direction decides
+//
+// Before any policy is signed, the controls edit the deny baseline this browser enforces and every edit is a
+// grant, whichever way it points: the first baseline is a signed write (`policy restrict` has nothing to
+// restrict yet), so it can be signed from here as it can with `policy set`.
 export function PolicyEditor() {
   const { t } = useI18n();
   const [view, setView] = useState<RuntimeResponse<"get_policy"> | null>(null);
+  const [history, setHistory] = useState<RuntimeResponse<"get_policy_history"> | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setView(await send({ type: "get_policy" }));
   }, []);
+  const refreshHistory = useCallback(async () => {
+    setHistory(await send({ type: "get_policy_history" }));
+  }, []);
+  const presence = usePresenceAct(refreshHistory);
 
   useEffect(() => {
     void refresh();
+    void refreshHistory();
     // The posture folds the policy record, the cutover flag, AND the pin (a revoke blocks it with the record
-    // untouched), so any local change re-reads it rather than this page keeping the owner's key list.
+    // untouched), so any local change re-reads it rather than this page keeping the owner's key list. The ring
+    // is re-read on the same signal and on demand: a write from another surface that leaves the enforced
+    // values unchanged still pushes a ring entry but moves nothing in storage.
     const onChanged = (_changes: Record<string, unknown>, area: string) => {
-      if (area === "local") void refresh();
+      if (area === "local") {
+        void refresh();
+        void refreshHistory();
+      }
     };
     browser.storage.onChanged.addListener(onChanged);
     return () => browser.storage.onChanged.removeListener(onChanged);
-  }, [refresh]);
+  }, [refresh, refreshHistory]);
 
   const restrict = async (overlay: PolicyOverlay) => {
     setBusy(true);
     setActionError(null);
+    presence.cancel();
     const r = await send({ type: "restrict_policy", overlay });
     if (!r.ok) setActionError(t("policy.apply_failed", [r.error]));
     setBusy(false);
@@ -61,14 +85,6 @@ export function PolicyEditor() {
     return (
       <div role="status" className="py-2 text-xs font-semibold text-pending">
         {t("policy.error", [view.error])}
-      </div>
-    );
-  }
-  if (view.posture.kind === "preCutover") {
-    return (
-      <div className="py-1">
-        <div className="text-[13px] font-medium">{t("policy.none_title")}</div>
-        <p className="consequence mt-1">{t("policy.none_desc")}</p>
       </div>
     );
   }
@@ -84,61 +100,93 @@ export function PolicyEditor() {
     );
   }
 
-  const effective = view.posture.effective;
+  const firstBaseline = view.posture.kind === "preCutover";
+  const effective = view.posture.kind === "active" ? view.posture.effective : POLICY_DEFAULTS;
+  const needsTap = (overlay: PolicyOverlay) => firstBaseline || wouldRelax(effective, overlay);
+  const grant = (overlay: PolicyOverlay) => {
+    setActionError(null);
+    void presence.run(() => send({ type: "grant_policy", overlay }));
+  };
+  const edit = (overlay: PolicyOverlay) => {
+    if (needsTap(overlay)) grant(overlay);
+    else void restrict(overlay);
+  };
+  const rowBusy = busy || presence.busy;
   return (
     <div className="py-1">
-      <p className="consequence m-0">{t("policy.desc")}</p>
+      {firstBaseline ? (
+        <div className="mb-2">
+          <div className="text-[13px] font-medium">{t("policy.none_title")}</div>
+          <p className="consequence mt-1">{t("policy.none_desc")}</p>
+        </div>
+      ) : (
+        <p className="consequence m-0">{t("policy.desc")}</p>
+      )}
       {BOOL_POLICY_FIELDS.map((field) => (
         <BoolRow
           key={field}
           field={field}
-          effective={effective}
-          busy={busy}
-          onRestrict={(overlay) => void restrict(overlay)}
+          {...{ effective, needsTap, busy: rowBusy, onEdit: edit }}
         />
       ))}
       {MS_POLICY_FIELDS.map((field) => (
         <MsRow
           key={field}
           field={field}
-          effective={effective}
-          busy={busy}
-          onRestrict={(overlay) => void restrict(overlay)}
+          {...{ effective, needsTap, busy: rowBusy, onEdit: edit }}
         />
       ))}
-      <ToolsRow
-        effective={effective}
-        busy={busy}
-        onRestrict={(overlay) => void restrict(overlay)}
-      />
-      <p className="consequence mt-2">{t("policy.effective_note")}</p>
+      <ToolsRow {...{ effective, needsTap, busy: rowBusy, onEdit: edit }} />
+      {!firstBaseline && <p className="consequence mt-2">{t("policy.effective_note")}</p>}
       <div
         role="alert"
         className={actionError ? "mt-2 text-xs font-semibold text-danger" : "sr-only"}
       >
         {actionError}
       </div>
+      <PresenceActStatus
+        presence={presence}
+        confirmLabel={t("policy.grant_confirm")}
+        refused={(sentence) => t("policy.grant_failed", [sentence])}
+      />
+      <HistoryBlock
+        history={history}
+        busy={rowBusy}
+        onRefresh={() => void refreshHistory()}
+        onRollback={(revision) => {
+          setActionError(null);
+          void presence.run(() => send({ type: "rollback_policy", revision }));
+        }}
+      />
     </div>
   );
 }
 
 interface RowProps {
   effective: PolicyValues;
+  /** Whether `overlay` takes the grant lane: it relaxes a field, or no baseline exists yet. */
+  needsTap: (overlay: PolicyOverlay) => boolean;
   busy: boolean;
-  onRestrict: (overlay: PolicyOverlay) => void;
+  onEdit: (overlay: PolicyOverlay) => void;
 }
 
 /** Whether applying `overlay` over the enforced values would relax any field: the host's own direction check
- * (policy::restricts_or_equal), run here so a relaxing control is disabled before it can ask. */
+ * (policy::restricts_or_equal), run here so the page knows which lane a move takes before it asks. */
 function wouldRelax(effective: PolicyValues, overlay: PolicyOverlay): boolean {
   return relaxedPolicyFields(foldPolicyOverlay(effective, overlay), effective).length > 0;
 }
 
-function BoolRow({ field, effective, busy, onRestrict }: RowProps & { field: BoolPolicyField }) {
+function BoolRow({
+  field,
+  effective,
+  needsTap,
+  busy,
+  onEdit,
+}: RowProps & { field: BoolPolicyField }) {
   const { t } = useI18n();
   const id = useId();
   const checked = effective[field];
-  const flipRelaxes = wouldRelax(effective, { [field]: !checked });
+  const flipRelaxes = needsTap({ [field]: !checked });
   return (
     <div className="flex items-start gap-3.5 border-b border-edge py-3 last:border-b-0">
       <div className="min-w-0 flex-1">
@@ -152,8 +200,8 @@ function BoolRow({ field, effective, busy, onRestrict }: RowProps & { field: Boo
       <Switch
         id={id}
         checked={checked}
-        disabled={busy || flipRelaxes}
-        onCheckedChange={(next) => onRestrict({ [field]: next })}
+        disabled={busy}
+        onCheckedChange={(next) => onEdit({ [field]: next })}
         className="mt-0.5"
       />
     </div>
@@ -168,7 +216,7 @@ function parseDuration(draft: string): number | null {
   return Number.isSafeInteger(n) && n >= 0 ? n : null;
 }
 
-function MsRow({ field, effective, busy, onRestrict }: RowProps & { field: MsPolicyField }) {
+function MsRow({ field, effective, needsTap, busy, onEdit }: RowProps & { field: MsPolicyField }) {
   const { t } = useI18n();
   const id = useId();
   const current = effective[field];
@@ -176,7 +224,7 @@ function MsRow({ field, effective, busy, onRestrict }: RowProps & { field: MsPol
   useEffect(() => setDraft(String(current)), [current]);
   const candidate = parseDuration(draft);
   const changed = candidate !== null && candidate !== current;
-  const relaxes = changed && wouldRelax(effective, { [field]: candidate });
+  const relaxes = changed && needsTap({ [field]: candidate });
   return (
     <div className="flex items-start gap-3.5 border-b border-edge py-3 last:border-b-0">
       <div className="min-w-0 flex-1">
@@ -205,9 +253,9 @@ function MsRow({ field, effective, busy, onRestrict }: RowProps & { field: MsPol
         <span className="text-[11px] text-text-3">{t("policy.ms_unit")}</span>
         <Button
           onClick={() => {
-            if (candidate !== null) onRestrict({ [field]: candidate });
+            if (candidate !== null) onEdit({ [field]: candidate });
           }}
-          disabled={busy || !changed || relaxes}
+          disabled={busy || !changed}
         >
           {t("policy.apply")}
         </Button>
@@ -216,7 +264,7 @@ function MsRow({ field, effective, busy, onRestrict }: RowProps & { field: MsPol
   );
 }
 
-function ToolsRow({ effective, busy, onRestrict }: RowProps) {
+function ToolsRow({ effective, busy, onEdit }: Omit<RowProps, "needsTap">) {
   const { t } = useI18n();
   const disabled = effective.disabledTools;
   const candidates = OP_NAMES.filter((op) => !disabled.includes(op));
@@ -224,14 +272,24 @@ function ToolsRow({ effective, busy, onRestrict }: RowProps) {
   return (
     <div className="border-b border-edge py-3 last:border-b-0">
       <div className="text-[13px] font-medium">{t("confirm.pf_disabledTools")}</div>
-      {/* Re-enabling a tool is a relaxation: the chips carry no remove action, only the note. */}
+      {/* The overlay states the WHOLE disabled set, as `--disabled-tools` does; re-enabling one is a relaxation. */}
       <div className="mt-1 flex flex-wrap items-center gap-1.5">
         {disabled.length === 0 && (
           <span className="text-[11px] text-text-3">{t("policy.tools_none")}</span>
         )}
         {disabled.map((tool) => (
-          <span key={tool} className="chip-mono" title={t("policy.needs_presence")}>
+          <span key={tool} className="chip-mono inline-flex items-center gap-1">
             {tool}
+            <button
+              type="button"
+              aria-label={t("policy.enable_tool", [tool])}
+              title={t("policy.needs_presence")}
+              className="cursor-pointer text-text-3 hover:text-text-1 disabled:cursor-default"
+              disabled={busy}
+              onClick={() => onEdit({ disabledTools: disabled.filter((d) => d !== tool) })}
+            >
+              x
+            </button>
           </span>
         ))}
       </div>
@@ -250,7 +308,7 @@ function ToolsRow({ effective, busy, onRestrict }: RowProps) {
         </Select>
         <Button
           onClick={() => {
-            onRestrict({ disabledTools: [...disabled, pick] });
+            onEdit({ disabledTools: [...disabled, pick] });
             setPick("");
           }}
           disabled={busy || pick === "" || disabled.includes(pick)}
@@ -259,5 +317,95 @@ function ToolsRow({ effective, busy, onRestrict }: RowProps) {
         </Button>
       </div>
     </div>
+  );
+}
+
+function HistoryBlock({
+  history,
+  busy,
+  onRefresh,
+  onRollback,
+}: {
+  history: RuntimeResponse<"get_policy_history"> | null;
+  busy: boolean;
+  onRefresh: () => void;
+  onRollback: (revision: number) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="mt-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-[13px] font-medium">{t("policy.history_title")}</div>
+          <p className="consequence mt-1">{t("policy.history_desc")}</p>
+        </div>
+        <Button variant="ghost" onClick={onRefresh} disabled={busy}>
+          {t("policy.history_refresh")}
+        </Button>
+      </div>
+      {history === null && <div className="mt-2 text-xs text-text-3">{t("policy.loading")}</div>}
+      {history && !history.ok && (
+        <div role="status" className="mt-2 text-xs font-semibold text-pending">
+          {t("policy.history_error", [history.error])}
+        </div>
+      )}
+      {history?.ok && history.entries.length === 0 && (
+        <div className="mt-2 text-xs text-text-3">{t("policy.history_empty")}</div>
+      )}
+      {history?.ok && history.entries.length > 0 && (
+        <ul className="m-0 mt-1 list-none p-0">
+          {keyedRows(history.entries).map(([key, row]) => (
+            <HistoryRowItem key={key} row={row} busy={busy} onRollback={onRollback} />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** The ring may hold one revision several times (each restriction while it was current), so a row's key is its
+ * revision and time plus how many identical rows precede it. */
+function keyedRows(rows: PolicyHistoryRow[]): Array<[string, PolicyHistoryRow]> {
+  const seen = new Map<string, number>();
+  return rows.map((row) => {
+    const base = `${row.revision ?? "damaged"}-${row.superseded_unix}`;
+    const nth = seen.get(base) ?? 0;
+    seen.set(base, nth + 1);
+    return [`${base}-${nth}`, row];
+  });
+}
+
+function HistoryRowItem({
+  row,
+  busy,
+  onRollback,
+}: {
+  row: PolicyHistoryRow;
+  busy: boolean;
+  onRollback: (revision: number) => void;
+}) {
+  const { t } = useI18n();
+  const superseded = new Date(row.superseded_unix * 1000).toLocaleString();
+  return (
+    <li className="flex items-center gap-3 border-b border-edge py-2 last:border-b-0">
+      <div className="min-w-0 flex-1">
+        <div className="text-xs font-medium text-text-1">
+          {row.revision === undefined
+            ? t("policy.history_damaged", [superseded])
+            : t("policy.history_row", [String(row.revision), superseded])}
+        </div>
+        {row.revision !== undefined && (
+          <div className="font-mono text-[11px] text-text-3">
+            {row.signed ? t("policy.history_signed") : t("policy.history_unsigned")}
+            {row.overlay_active && `, ${t("policy.history_overlay")}`}
+          </div>
+        )}
+      </div>
+      {row.revision !== undefined && (
+        <Button variant="ghost" onClick={() => onRollback(row.revision ?? 0)} disabled={busy}>
+          {t("policy.rollback")}
+        </Button>
+      )}
+    </li>
   );
 }
