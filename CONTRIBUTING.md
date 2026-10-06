@@ -37,7 +37,7 @@ This is a small, security-sensitive project (it drives a real logged-in browser)
    ```sh
    git pull --rebase origin main
    ```
-4. **Gate locally - everything must pass.** The lefthook pre-commit hook (wired by `moon run setup`) runs `moon run gate`, the own-toolchain part of this, for you; `moon run help` lists every task:
+4. **Gate locally - everything must pass.** The lefthook hooks (wired by `moon run setup`) run `moon run gate`, the own-toolchain part of this, for you before a commit and after a rebase; `moon run help` lists every task:
    ```sh
    moon run ci        # rust fmt/clippy/nextest + typos/machete + TS typecheck/biome/test/build + protocol e2e
    ```
