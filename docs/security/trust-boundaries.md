@@ -44,7 +44,7 @@ The one hop defended against local peers: any process that could try to reach th
 
 - **HMAC challenge-response:** the server sends a fresh random nonce, the host replies with `HMAC-SHA256(secret, nonce)`, verified in constant time. The per-run secret lives in the lock file, private per [the owner-only rule](#the-trust-record), and never travels on the wire; the per-connection nonce defeats replay.
 - **Attach frame:** immediately after the handshake every peer sends one role-declaring frame (browser, or relay client), read fail-closed; a relay's carries its attested harness identity for the boundary 1 decision. A browser reconnect under the same label replaces that label's previous writer.
-- **Bounds:** at most 16 distinct browser labels and 8 harness clients, at most 32 connections mid-handshake, a 10 s handshake-plus-attach read timeout cleared for admitted idle connections, and a per-relay token bucket (burst 128, refill 128/s) that drops a flooding relay. Each connection is size-checked NDJSON.
+- **Bounds:** at most 16 distinct browser labels and 8 harness clients, at most 32 connections mid-handshake, a 10 s handshake-plus-attach read timeout cleared for admitted idle connections, and a per-relay GCRA rate limiter (burst 128, refill 128/s) that drops a flooding relay. Each connection is size-checked NDJSON.
 - **Kill switch:** while the latch is set, the broker's watcher severs every live browser connection within its one-second tick, draining in-flight calls into typed failures, and browser attaches are refused at admission. An unreadable trust record gets the same treatment. Relays stay attached; their calls are refused typed at boundary 1.
 
 Residuals at this hop:
