@@ -73,7 +73,7 @@ const POLICY_FIELD_LABEL = {
   pageEvalEnabled: "confirm.pf_pageEvalEnabled",
   confirmHighRiskClick: "confirm.pf_confirmHighRiskClick",
   confirmPageEval: "confirm.pf_confirmPageEval",
-  touchIdConfirm: "confirm.pf_touchIdConfirm",
+  presenceConfirm: "confirm.pf_presenceConfirm",
   confirmTabClose: "confirm.pf_confirmTabClose",
   warnPreciseSnapshot: "confirm.pf_warnPreciseSnapshot",
   evalMask: "confirm.pf_evalMask",

@@ -333,7 +333,7 @@ const fn edit_flag(field: PolicyField) -> &'static str {
         PolicyField::PageEvalEnabled => "page-eval",
         PolicyField::ConfirmHighRiskClick => "confirm-high-risk-click",
         PolicyField::ConfirmPageEval => "confirm-page-eval",
-        PolicyField::TouchIdConfirm => "touch-id-confirm",
+        PolicyField::PresenceConfirm => "presence-confirm",
         PolicyField::ConfirmTabClose => "confirm-tab-close",
         PolicyField::WarnPreciseSnapshot => "warn-precise-snapshot",
         PolicyField::EvalMask => "eval-mask",

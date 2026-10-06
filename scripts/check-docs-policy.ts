@@ -202,7 +202,7 @@ export function settingsKeyViolations(
 export const REQUIRED_SECURITY_DEFAULT_ROWS = [
   "confirmPageEval",
   "pageEvalEnabled",
-  "touchIdConfirm",
+  "presenceConfirm",
   "confirmHighRiskClick",
   "confirmTabClose",
   "confirmGraceMs",

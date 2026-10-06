@@ -9,7 +9,7 @@
 // upload (fileUploadEnabled, clickToastTimeoutMs), dialog
 // (handleDialogEnabled), tabs (confirmTabClose, clickToastTimeoutMs),
 // precise (warnPreciseSnapshot), egress (evalMask), the presence routing
-// verdict (touchIdConfirm). enrollment's hostReverifyMs rides the ceremony harness
+// verdict (presenceConfirm). enrollment's hostReverifyMs rides the ceremony harness
 // in enrollment.test.ts instead.
 //
 // Plus the in-flight snapshot rule at vitest granularity: a policy swap
@@ -601,11 +601,11 @@ describe("presence routing is decided from the per-request snapshot", () => {
     return shown;
   }
 
-  test("deny: policy touchIdConfirm=false keeps the window path", async () => {
+  test("deny: policy presenceConfirm=false keeps the window path", async () => {
     pinSeam.pin = { keyId: KEY_ID, pubkeyB64: "p", pinnedAt: 1 };
     const hw = presenceStub();
     const asked = autoProvider(false);
-    await armCutover({ pageEvalEnabled: true, touchIdConfirm: false }, 1, KEY_ID);
+    await armCutover({ pageEvalEnabled: true, presenceConfirm: false }, 1, KEY_ID);
     await expect(
       preflightPageOp(
         "page_eval",
@@ -621,11 +621,11 @@ describe("presence routing is decided from the per-request snapshot", () => {
     expect(asked[0] !== undefined && isHardwareGated(asked[0])).toBe(false);
   });
 
-  test("grant: policy touchIdConfirm=true routes to the installed presence provider", async () => {
+  test("grant: policy presenceConfirm=true routes to the installed presence provider", async () => {
     pinSeam.pin = { keyId: KEY_ID, pubkeyB64: "p", pinnedAt: 1 };
     const hw = presenceStub();
     const asked = autoProvider(false);
-    await armCutover({ pageEvalEnabled: true, touchIdConfirm: true }, 1, KEY_ID);
+    await armCutover({ pageEvalEnabled: true, presenceConfirm: true }, 1, KEY_ID);
     await expect(
       preflightPageOp(
         "page_eval",

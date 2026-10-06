@@ -123,7 +123,7 @@ const FRAMES: Readonly<Record<string, FrameArms>> = {
         pageEvalEnabled: false,
         confirmHighRiskClick: true,
         confirmPageEval: true,
-        touchIdConfirm: true,
+        presenceConfirm: true,
         confirmTabClose: true,
         warnPreciseSnapshot: true,
         evalMask: true,

@@ -182,7 +182,7 @@ chromium-bridge policy history [--json]           # read-only: superseded revisi
 chromium-bridge policy rollback --revision <n> [--json]
 ```
 
-**Field flags.** `set` and `restrict` share one flag per policy field, spelled as the kebab-case of its camelCase wire name: `--cdp-mode`, `--file-upload`, `--handle-dialog`, `--page-eval`, `--confirm-high-risk-click`, `--confirm-page-eval`, `--touch-id-confirm`, `--confirm-tab-close`, `--warn-precise-snapshot`, `--eval-mask`, `--host-reverify-ms`, `--confirm-grace-ms`, `--click-toast-timeout-ms`, `--eval-toast-timeout-ms`, and `--disabled-tools`.
+**Field flags.** `set` and `restrict` share one flag per policy field, spelled as the kebab-case of its camelCase wire name: `--cdp-mode`, `--file-upload`, `--handle-dialog`, `--page-eval`, `--confirm-high-risk-click`, `--confirm-page-eval`, `--presence-confirm`, `--confirm-tab-close`, `--warn-precise-snapshot`, `--eval-mask`, `--host-reverify-ms`, `--confirm-grace-ms`, `--click-toast-timeout-ms`, `--eval-toast-timeout-ms`, and `--disabled-tools`.
 
 | Flag kind | Value |
 | --- | --- |

@@ -157,7 +157,7 @@ impl std::fmt::Display for Ms {
 pub enum BoolPole {
     /// The capability grants: permissive at `true`.
     TruePermissive,
-    /// The confirm*/warn*/evalMask flags and `touchIdConfirm`: permissive
+    /// The confirm*/warn*/evalMask flags and `presenceConfirm`: permissive
     /// at `false` (a skipped confirmation is a grant).
     FalsePermissive,
 }
@@ -465,7 +465,7 @@ policy_fields! {
         PageEvalEnabled: page_eval_enabled "pageEvalEnabled" => TruePermissive,
         ConfirmHighRiskClick: confirm_high_risk_click "confirmHighRiskClick" => FalsePermissive,
         ConfirmPageEval: confirm_page_eval "confirmPageEval" => FalsePermissive,
-        TouchIdConfirm: touch_id_confirm "touchIdConfirm" => FalsePermissive,
+        PresenceConfirm: presence_confirm "presenceConfirm" => FalsePermissive,
         ConfirmTabClose: confirm_tab_close "confirmTabClose" => FalsePermissive,
         WarnPreciseSnapshot: warn_precise_snapshot "warnPreciseSnapshot" => FalsePermissive,
         EvalMask: eval_mask "evalMask" => FalsePermissive,
@@ -514,7 +514,7 @@ impl Default for PolicyValues {
             page_eval_enabled: false,
             confirm_high_risk_click: true,
             confirm_page_eval: true,
-            touch_id_confirm: true,
+            presence_confirm: true,
             confirm_tab_close: true,
             warn_precise_snapshot: true,
             eval_mask: true,

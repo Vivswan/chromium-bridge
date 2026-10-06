@@ -183,7 +183,7 @@ export async function preflightPageOp(
         detail: code,
         timeoutMs: policy.evalToastTimeoutMs,
         // From this decision's policy snapshot (ConfirmRequestBase.presenceRouting).
-        presenceRouting: policy.touchIdConfirm,
+        presenceRouting: policy.presenceConfirm,
         panicEpoch,
       });
       if (!approved) throw new Error("user denied page_eval");

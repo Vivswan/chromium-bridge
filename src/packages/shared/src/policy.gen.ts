@@ -34,7 +34,7 @@ export const POLICY_FIELDS = [
   "pageEvalEnabled",
   "confirmHighRiskClick",
   "confirmPageEval",
-  "touchIdConfirm",
+  "presenceConfirm",
   "confirmTabClose",
   "warnPreciseSnapshot",
   "evalMask",
@@ -62,7 +62,7 @@ export const BOOL_POLICY_FIELDS = [
   "pageEvalEnabled",
   "confirmHighRiskClick",
   "confirmPageEval",
-  "touchIdConfirm",
+  "presenceConfirm",
   "confirmTabClose",
   "warnPreciseSnapshot",
   "evalMask",
@@ -94,7 +94,7 @@ export function policyFieldKind(field: PolicyFieldName): PolicyFieldKind {
     case "pageEvalEnabled":
     case "confirmHighRiskClick":
     case "confirmPageEval":
-    case "touchIdConfirm":
+    case "presenceConfirm":
     case "confirmTabClose":
     case "warnPreciseSnapshot":
     case "evalMask":
@@ -129,7 +129,7 @@ export const POLICY_DIRECTIONS: Readonly<
   pageEvalEnabled: "truePermissive",
   confirmHighRiskClick: "falsePermissive",
   confirmPageEval: "falsePermissive",
-  touchIdConfirm: "falsePermissive",
+  presenceConfirm: "falsePermissive",
   confirmTabClose: "falsePermissive",
   warnPreciseSnapshot: "falsePermissive",
   evalMask: "falsePermissive",
@@ -149,7 +149,7 @@ export const PolicyValuesSchema = z.strictObject({
   pageEvalEnabled: z.boolean(),
   confirmHighRiskClick: z.boolean(),
   confirmPageEval: z.boolean(),
-  touchIdConfirm: z.boolean(),
+  presenceConfirm: z.boolean(),
   confirmTabClose: z.boolean(),
   warnPreciseSnapshot: z.boolean(),
   evalMask: z.boolean(),
@@ -174,7 +174,7 @@ export const PolicyDocSchema = z.strictObject({
   pageEvalEnabled: z.boolean(),
   confirmHighRiskClick: z.boolean(),
   confirmPageEval: z.boolean(),
-  touchIdConfirm: z.boolean(),
+  presenceConfirm: z.boolean(),
   confirmTabClose: z.boolean(),
   warnPreciseSnapshot: z.boolean(),
   evalMask: z.boolean(),
@@ -197,7 +197,7 @@ export const PolicyOverlaySchema = z.strictObject({
   pageEvalEnabled: z.boolean().optional(),
   confirmHighRiskClick: z.boolean().optional(),
   confirmPageEval: z.boolean().optional(),
-  touchIdConfirm: z.boolean().optional(),
+  presenceConfirm: z.boolean().optional(),
   confirmTabClose: z.boolean().optional(),
   warnPreciseSnapshot: z.boolean().optional(),
   evalMask: z.boolean().optional(),
@@ -220,7 +220,7 @@ export const POLICY_DEFAULTS: Readonly<PolicyValues> = deepFreeze(
     pageEvalEnabled: false,
     confirmHighRiskClick: true,
     confirmPageEval: true,
-    touchIdConfirm: true,
+    presenceConfirm: true,
     confirmTabClose: true,
     warnPreciseSnapshot: true,
     evalMask: true,

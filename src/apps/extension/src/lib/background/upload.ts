@@ -76,7 +76,7 @@ export async function pageUpload(
     detail: `${path}\n(input: ${selector})`,
     timeoutMs: policy.clickToastTimeoutMs,
     // From this decision's policy snapshot (ConfirmRequestBase.presenceRouting).
-    presenceRouting: policy.touchIdConfirm,
+    presenceRouting: policy.presenceConfirm,
     panicEpoch,
   });
   if (!approved) {
