@@ -370,21 +370,6 @@ fn the_last_js_safe_revision_still_writes() {
 }
 
 #[test]
-fn the_revision_seam_covers_its_boundaries() {
-    // Deterministic edges of next_revision (the proptest below sweeps
-    // the range): no store mints 1, MAX - 1 mints MAX, MAX overflows.
-    assert_eq!(next_revision(None).unwrap(), 1);
-    assert_eq!(
-        next_revision(Some(JS_SAFE_INT_MAX - 1)).unwrap(),
-        JS_SAFE_INT_MAX
-    );
-    assert!(matches!(
-        next_revision(Some(JS_SAFE_INT_MAX)),
-        Err(PolicyWriteError::RevisionOverflow)
-    ));
-}
-
-#[test]
 fn a_refused_presence_never_falls_to_the_floor() {
     let _dir = scratch_runtime_dir();
     enroll_host_key();

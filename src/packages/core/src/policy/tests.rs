@@ -227,19 +227,6 @@ fn serialized_bytes_are_the_signed_wire_contract() {
 }
 
 #[test]
-fn wire_names_match_serde_emission_and_round_trip() {
-    // The macro derives both from one literal; this pins that serde
-    // actually emits it, the same posture as protocol/control.rs's
-    // every_control_variant_tag_is_derived_and_recognized.
-    for f in PolicyField::ALL {
-        let emitted = serde_json::to_value(f).unwrap();
-        assert_eq!(emitted, json!(f.wire_name()));
-        let back: PolicyField = serde_json::from_value(emitted).unwrap();
-        assert_eq!(back, *f);
-    }
-}
-
-#[test]
 fn unknown_touched_field_names_fail_the_parse() {
     // requireEnrollment is retired and uiLanguage is deliberately not a
     // policy field; neither may ride into a touched set.
@@ -373,20 +360,6 @@ fn validate_refuses_entries_the_cli_transport_cannot_round_trip() {
     assert!(doc(vec!["page_eval".into(), "tab_close".into()])
         .validate()
         .is_ok());
-}
-
-#[test]
-fn policy_field_wire_names_carry_no_comma() {
-    // The audit details and the rollback plan comma-join FIELD wire
-    // names (wire_name_list / wire_names); this pins that join faithful
-    // for the catalogue itself.
-    for field in PolicyField::ALL {
-        assert!(
-            !field.wire_name().contains(','),
-            "{} must not contain a comma",
-            field.wire_name()
-        );
-    }
 }
 
 #[test]

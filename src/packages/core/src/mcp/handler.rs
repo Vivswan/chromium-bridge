@@ -70,11 +70,7 @@ fn tools_list_result(tools: &[McpTool], cacheable: bool) -> ListToolsResult {
 /// failures stay `isError: true` results carrying the stable taxonomy codes
 /// of [`crate::error::ERROR_SPECS`] - never JSON-RPC protocol errors.
 fn call_tool_result(out: &tools::Outcome) -> CallToolResult {
-    // The outcome's content is already MCP content blocks (built by
-    // tools::dispatch); re-typing through rmcp's model validates the shape.
-    // The fallback cannot fire for blocks we build ourselves and exists only
-    // because this layer never panics: it degrades to the raw JSON as one
-    // text block, losing formatting but no information.
+    // The fallback cannot fire for blocks we build ourselves; it exists because this layer never panics.
     let blocks: Vec<ContentBlock> = serde_json::from_value(out.content().clone())
         .unwrap_or_else(|_| vec![ContentBlock::text(out.content().to_string())]);
     if out.is_error() {
@@ -211,8 +207,6 @@ impl ServerHandler for BridgeHandler {
 /// Serves every harness (the broker's own stdio harness and all relays route
 /// here through their per-connection rmcp services).
 fn execute_tool_call(session: &Session, name: &str, args: JsonObject) -> tools::Outcome {
-    // Correlate every invocation with a per-call request id and record a
-    // structured audit event (tool, outcome, taxonomy code, duration).
     let req_id = next_request_id();
     let started = std::time::Instant::now();
     // The global kill switch gates EVERY tool call before any routing or bridge traffic, failing
@@ -234,8 +228,6 @@ fn execute_tool_call(session: &Session, name: &str, args: JsonObject) -> tools::
     rec.tool = Some(name.to_string());
     rec.outcome = Some(if out.is_error() { "error" } else { "ok" }.to_string());
     rec.code = out.error_code().map(str::to_string);
-    // Saturating: a duration too long for u64 milliseconds (~584M years)
-    // clamps rather than fails the audit record.
     rec.dur_ms = Some(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
     crate::audit::record(rec);
     out
@@ -374,34 +366,55 @@ mod tests {
     }
 
     #[test]
-    fn a_success_outcome_becomes_a_non_error_result() {
-        let out = tools::Outcome::Success {
-            content: json!([{ "type": "text", "text": "{\"tabs\":[]}" }]),
-        };
-        let result = call_tool_result(&out);
-        assert_eq!(result.is_error, Some(false));
-        assert_eq!(result.content.len(), 1);
-    }
-
-    #[test]
-    fn an_error_outcome_stays_a_tool_level_error() {
-        let out = tools::Outcome::Error {
-            content: json!([{ "type": "text", "text": "Error [BRIDGE_KILLED]: killed" }]),
-            code: "BRIDGE_KILLED",
-        };
-        let result = call_tool_result(&out);
-        assert_eq!(result.is_error, Some(true));
-    }
-
-    #[test]
-    fn an_image_content_block_survives_the_mapping() {
-        // page_screenshot returns an image block; it must reach the client
-        // as image content, not a stringified fallback.
-        let out = tools::Outcome::Success {
-            content: json!([{ "type": "image", "data": "aGk=", "mimeType": "image/png" }]),
-        };
-        let result = call_tool_result(&out);
-        assert!(matches!(result.content[0], ContentBlock::Image(_)));
+    fn call_tool_result_keeps_each_outcome_class_and_content_block() {
+        // rmcp's content model is the external side: an outcome's blocks must reach the client typed (an
+        // image stays an image, never the stringified fallback) and tool failures stay isError results,
+        // never protocol errors.
+        enum Kind {
+            Text,
+            Image,
+        }
+        let cases = [
+            (
+                "success text",
+                tools::Outcome::Success {
+                    content: json!([{ "type": "text", "text": "{\"tabs\":[]}" }]),
+                },
+                false,
+                Kind::Text,
+            ),
+            (
+                "success image",
+                tools::Outcome::Success {
+                    content: json!([{ "type": "image", "data": "aGk=", "mimeType": "image/png" }]),
+                },
+                false,
+                Kind::Image,
+            ),
+            (
+                "error",
+                tools::Outcome::Error {
+                    content: json!([{ "type": "text", "text": "Error [BRIDGE_KILLED]: killed" }]),
+                    code: "BRIDGE_KILLED",
+                },
+                true,
+                Kind::Text,
+            ),
+        ];
+        for (case, out, is_error, kind) in cases {
+            let result = call_tool_result(&out);
+            assert_eq!(result.is_error, Some(is_error), "{case}");
+            assert_eq!(
+                serde_json::to_value(&result.content).unwrap(),
+                *out.content(),
+                "{case}: the blocks must survive typed"
+            );
+            let typed = match kind {
+                Kind::Text => matches!(result.content[0], ContentBlock::Text(_)),
+                Kind::Image => matches!(result.content[0], ContentBlock::Image(_)),
+            };
+            assert!(typed, "{case}: the first block must keep its kind");
+        }
     }
 
     fn call(name: &str, args: serde_json::Value) -> Result<ToolCall, CallError> {

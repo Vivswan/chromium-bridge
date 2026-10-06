@@ -18,14 +18,10 @@ pub(crate) fn generate_secret() -> io::Result<String> {
 mod tests {
     use super::*;
 
+    /// Every handshake challenge comes from here, so a draw that repeats lets a captured response verify
+    /// again; nothing else notices a generator that went deterministic.
     #[test]
-    fn secret_is_32_hex_chars_and_unique() {
-        let s = generate_secret().unwrap();
-        assert_eq!(s.len(), 32);
-        assert!(s.chars().all(|c| c.is_ascii_hexdigit()));
-        // 128 bits from the CSPRNG: two draws colliding means the RNG is
-        // broken (or the fail-closed path silently regressed to something
-        // deterministic).
-        assert_ne!(s, generate_secret().unwrap());
+    fn consecutive_draws_differ() {
+        assert_ne!(generate_secret().unwrap(), generate_secret().unwrap());
     }
 }

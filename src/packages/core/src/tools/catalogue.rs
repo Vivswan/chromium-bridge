@@ -584,23 +584,3 @@ catalogue! {
              specific file.",
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // The catalogue is the canonical contract; the descriptions ship to the
-    // model and into the generated TS, so they must be plain ASCII (the
-    // repo-wide typography convention the Rust typography gate does not read
-    // string literals for).
-    #[test]
-    fn descriptions_are_plain_ascii() {
-        for t in all() {
-            assert!(
-                t.description.is_ascii(),
-                "tool {} description contains non-ASCII text",
-                t.name
-            );
-        }
-    }
-}

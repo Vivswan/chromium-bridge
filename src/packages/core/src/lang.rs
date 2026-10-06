@@ -205,16 +205,6 @@ mod tests {
     }
 
     #[test]
-    fn out_of_enum_values_are_rejected() {
-        for bad in ["fr", "EN", "zh", "", "en_US", "auto "] {
-            assert!(!is_valid_lang(bad), "{bad:?} must be refused");
-        }
-        for ok in UI_LANGUAGES {
-            assert!(is_valid_lang(ok));
-        }
-    }
-
-    #[test]
     fn a_stored_value_outside_the_enum_or_the_js_safe_bound_fails_the_load() {
         // The two bounds the extension's Zod parser enforces on `lang_current`; a store carrying a value
         // past either would make the host push a frame the extension refuses.

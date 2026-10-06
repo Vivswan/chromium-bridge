@@ -5,8 +5,9 @@
 //! by the caller's deadline) for one to attach; the extension re-calls `connectNative` on its own.
 //!
 //! Connections are keyed by browser label (from the handshake `Response`, trusted only after the HMAC verifies;
-//! a missing label maps to [`DEFAULT_LABEL`]). A new dial-in under the SAME label supersedes that connection:
-//! the registry severs the older socket, its host exits on the EOF, and that extension life redials on its own.
+//! a missing label maps to [`crate::ipc::DEFAULT_LABEL`]). A new dial-in under the SAME label supersedes that
+//! connection: the registry severs the older socket, its host exits on the EOF, and that extension life redials
+//! on its own.
 //! Different labels coexist. [`resolve_target`] picks the connection for a request.
 //!
 //! Every connection carries a monotonic `generation` (global across labels), and a pending request is bound to
@@ -38,11 +39,6 @@ use crate::ipc::{self, BrowserLabel};
 use crate::protocol::{bridge_read, bridge_write, BridgeReq, BridgeSignal, ParsedResp};
 use crate::tools::BridgeCommand;
 
-/// The label assigned to a connection whose handshake carried no label.
-/// Re-exported from the handshake module, where [`BrowserLabel`] owns the
-/// label domain.
-pub use crate::ipc::DEFAULT_LABEL;
-
 /// Maximum number of concurrent *distinct* browser labels the session holds, a
 /// DoS bound on the browser leg. A reconnect under an existing label replaces
 /// its slot (it does not grow the set) and is always allowed; only a NEW label
@@ -55,9 +51,8 @@ pub(crate) const MAX_BROWSERS: usize = 16;
 /// before any host has re-attached. Only the empty registry waits.
 const CONNECT_WAIT: Duration = Duration::from_secs(12);
 
-/// A connection generation. Non-zero by construction: minting refuses a
-/// wrapped-to-zero counter value ([`Session::attach_authenticated`]), so no
-/// sentinel can ever collide with a real generation.
+/// A connection generation. Non-zero by construction: the mint ([`Session::attach_authenticated`]) refuses
+/// a wrapped counter, so no sentinel can collide with a real generation.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct Generation(std::num::NonZeroU64);
 
@@ -75,11 +70,7 @@ impl std::fmt::Display for Generation {
     }
 }
 
-/// A live, authenticated connection to one browser's native host, paired with
-/// the generation id that owns it. Storing the generation alongside the writer
-/// makes cleanup atomic under the registry mutex: a reader can compare its own
-/// generation against whatever currently occupies its label's slot before
-/// touching it.
+/// A live, authenticated connection to one browser's native host and the generation that owns it.
 ///
 /// Dropping a `Conn` severs its socket, and every path that takes one out of the registry (supersession, the
 /// owning reader's cleanup, the kill sweep) drops it once the lock is released, so no removed connection stays
@@ -104,12 +95,8 @@ impl Drop for Conn {
     }
 }
 
-/// Pending request callbacks keyed by `BridgeReq.id`. Each entry carries the
-/// generation it was sent under - by construction: [`Session::send`]
-/// inserts the entry already bound, under the registry lock, immediately
-/// before the write, so there is no unsent state a severance or a delivery
-/// check could mishandle. A disconnecting reader wakes exactly the callers
-/// that belonged to its (now-dead) connection.
+/// Pending request callbacks keyed by `BridgeReq.id`, each bound to the generation it was sent under
+/// (module docs).
 type Pending = Arc<Mutex<HashMap<u64, (Generation, mpsc::Sender<Delivery>)>>>;
 
 /// What a waiting caller receives: the reply, or the news that its connection is gone. Severance travels
@@ -131,11 +118,8 @@ enum RoutedResp {
     Unknown,
 }
 
-/// Decide whether a reader thread owning `my_gen` should clear its label's
-/// registry slot on disconnect. Clear **only** when the slot still holds *my*
-/// generation; a newer connection under the same label (or an already-empty
-/// slot) must be left untouched. This is the core of the anti-clobber fix and
-/// is unit-tested directly.
+/// Whether a reader owning `my_gen` may clear its label's slot on disconnect: only while the slot is still
+/// its own, never a newer connection's.
 fn should_clear_conn(current: Option<Generation>, my_gen: Generation) -> bool {
     current == Some(my_gen)
 }
@@ -143,8 +127,7 @@ fn should_clear_conn(current: Option<Generation>, my_gen: Generation) -> bool {
 /// Wake every caller whose request went out on `my_gen` with [`Delivery::Severed`], surfaced as
 /// [`CallError::Disconnected`] at once instead of a wait to the deadline. The entries stay: each caller's guard
 /// removes its own on Drop and cancels through whatever connection holds the label by then. Entries bound to
-/// any other generation - other still-live connections - are untouched. Returns how many were woken; factored
-/// out so the policy is unit-testable without sockets.
+/// any other generation - other still-live connections - are untouched. Returns how many were woken.
 fn sever_pending_for_generation(
     pending: &HashMap<u64, (Generation, mpsc::Sender<Delivery>)>,
     my_gen: Generation,
@@ -159,10 +142,8 @@ fn sever_pending_for_generation(
         .count()
 }
 
-/// Wake every caller. The kill sweep uses this because a kill is global, and every entry is in flight by
-/// construction (inserted already bound, immediately before its write): that includes entries whose generation
-/// is no longer in the registry (their connection was replaced by a same-label reconnect, or their reader
-/// already cleaned up).
+/// Wake every caller: a kill is global, and every entry is in flight (module docs), including those whose
+/// generation already left the registry.
 fn sever_pending_all(pending: &HashMap<u64, (Generation, mpsc::Sender<Delivery>)>) -> usize {
     pending
         .values()
@@ -210,17 +191,10 @@ fn resolve_target(available: &[&str], want: Option<&str>) -> Result<String, Call
 /// Shared session. Cheap to clone - everything is behind Arc.
 #[derive(Clone)]
 pub struct Session {
-    /// The currently-connected native hosts, keyed by (validated) browser
-    /// label. Each entry pairs the writer with its generation so the owning
-    /// reader can atomically decide whether to clear it (see module docs).
     conns: Arc<Mutex<HashMap<BrowserLabel, Conn>>>,
-    /// Pending request callbacks keyed by BridgeReq.id, tagged by binding.
     pending: Pending,
     next_id: Arc<AtomicU64>,
-    /// Monotonic per-connection generation counter, global across labels.
-    /// Starts at 1; [`Generation`] is non-zero by construction, so a wrapped
-    /// counter is refused at the mint point rather than colliding with
-    /// anything.
+    /// Starts at 1, global across labels; [`Generation`] refuses a wrap.
     next_gen: Arc<AtomicU64>,
 }
 
@@ -259,14 +233,10 @@ impl Session {
         self.attach_authenticated(label, reader, writer, Some(MAX_BROWSERS))
     }
 
-    /// Register an already-authenticated connection under `label` and spawn
-    /// its reader. `cap` bounds the number of distinct browser labels
-    /// (`None` = unbounded, used by the registry unit tests). The cap check,
-    /// the generation allocation, and the insert all happen under ONE lock so
-    /// the cap invariant cannot be raced. Returns whether the connection was
-    /// attached. Split out so the registry semantics (replace-same-label,
-    /// per-entry generation guard, cap) are testable over a socketpair without
-    /// a lock file or handshake.
+    /// Register an already-authenticated connection under `label` and spawn its reader; `cap` bounds the
+    /// distinct labels (`None` in the registry tests, which run over a socketpair with no lock file or
+    /// handshake). The cap check, the generation mint, and the insert share ONE lock acquisition, so the cap
+    /// cannot be raced.
     fn attach_authenticated(
         &self,
         label: BrowserLabel,
@@ -274,14 +244,8 @@ impl Session {
         writer: BufWriter<ipc::BridgeStream>,
         cap: Option<usize>,
     ) -> bool {
-        // Atomic section: enforce the cap, allocate the generation, and install
-        // the writer under a single lock acquisition. An existing same-label
-        // entry (older connection to the same browser) is superseded regardless
-        // of the cap; a new label beyond the cap is refused.
         let (my_gen, superseded) = {
-            // A poisoned registry lock means a thread panicked mid-mutation;
-            // refuse the new connection rather than install it into state we
-            // cannot trust (the native host will redial).
+            // A poisoned lock is state nothing may build on; the refused host redials.
             let Ok(mut guard) = self.conns.lock() else {
                 log_error!(
                     "session",
@@ -300,10 +264,7 @@ impl Session {
             }
             let raw_gen = self.next_gen.fetch_add(1, Ordering::SeqCst);
             let Some(nz) = std::num::NonZeroU64::new(raw_gen) else {
-                // Unreachable short of the u64 wrapping (the counter starts at
-                // 1 and only increments), but the no-panic lint set forbids
-                // unwrap/expect: refuse the connection (fail closed, the
-                // native host redials) rather than mint an invalid generation.
+                // Only a wrapped u64 lands here; the no-panic lint set forbids unwrap, so refuse instead.
                 log_error!(
                     "session",
                     "generation counter wrapped; refusing connection '{label}'"
@@ -334,12 +295,8 @@ impl Session {
             drop(old);
         }
 
-        // Spawn the reader: each response routes to its pending sender. The
-        // reader is bound to `my_gen`; on disconnect it only tears down the
-        // connection it actually owns. Responses are read as [`ParsedResp`],
-        // so a frame the wire shape could spell but the contract cannot mean
-        // (ok-with-error, failure-with-data) is a read error here - the
-        // connection is dropped, fail closed, before any caller sees it.
+        // Responses are read as [`ParsedResp`], so a frame the wire can spell but the contract cannot mean is
+        // a read error here: the connection drops before any caller sees it.
         let pending = self.pending.clone();
         let conns = self.conns.clone();
         thread::spawn(move || {
@@ -373,9 +330,6 @@ impl Session {
                 //   the id was never issued)                                    -> dropped and logged; the connection stays
                 let routed = {
                     let Ok(mut pending_guard) = pending.lock() else {
-                        // Poisoned pending map: no delivery can be trusted;
-                        // drop this connection (fail closed) and let the
-                        // cleanup below do what it still can.
                         log_error!(
                             "session",
                             "pending-call lock poisoned ('{label}' generation {my_gen}); \
@@ -429,9 +383,7 @@ impl Session {
             //                                                                    and their guards cancel through a
             //                                                                    replacement connection if one attached
             let removed = {
-                // A poisoned lock here means another thread panicked while
-                // holding it; skip the half we cannot trust (and say so) --
-                // any caller whose entry survives fails via its timeout.
+                // A poisoned half is skipped; a caller whose entry survives fails via its timeout.
                 let mut conns_guard = match conns.lock() {
                     Ok(guard) => Some(guard),
                     Err(_) => {
@@ -469,11 +421,9 @@ impl Session {
         true
     }
 
-    /// The labels of all currently-connected browsers, sorted. Used by the
-    /// `list_browsers` tool and by routing errors.
+    /// The labels of all currently-connected browsers, sorted. A poisoned registry reads as empty rather than
+    /// reporting labels from suspect state.
     pub fn labels(&self) -> Vec<String> {
-        // A poisoned registry reads as empty: report nothing rather than
-        // labels from state we cannot trust (callers then fail NotConnected).
         let mut labels: Vec<String> = match self.conns.lock() {
             Ok(guard) => guard.keys().map(|l| l.as_str().to_string()).collect(),
             Err(_) => {
@@ -501,17 +451,13 @@ impl Session {
     /// response claimed pre-sweep   -> a call that completed before the kill, not one that survived it
     /// ```
     pub(crate) fn shutdown_all_browsers(&self) -> usize {
-        // The kill switch must bite even after a panic poisoned a lock:
-        // severing sockets, dropping slots, and waking callers with a typed
-        // disconnect are all safe on inconsistent bookkeeping (they can only
-        // make callers fail faster), whereas refusing to sever would leave
-        // the bridge alive. Recover both guards.
+        // Both guards recover from poison: severing and waking are safe on inconsistent bookkeeping (callers
+        // only fail faster), while refusing to sever would leave the bridge alive.
         let mut conns_guard = self
             .conns
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Bookkeeping under the same conns -> pending lock order the readers
-        // and `send` use, so the three paths serialize instead of racing.
+        // conns THEN pending, the order every path keeps.
         let severed: Vec<Conn> = conns_guard.drain().map(|(_, conn)| conn).collect();
         {
             let pending_guard = self
@@ -526,19 +472,13 @@ impl Session {
         count
     }
 
-    /// Resolve where a call with the given `browser` argument would be routed
-    /// right now: the label and that connection's generation. `None` when the
-    /// request is unroutable at this moment (nothing connected, unknown label,
-    /// or ambiguous). Used by the MCP server to tag audit lines so operators
-    /// can correlate a tool call with the specific browser and connection it
-    /// ran over, across reconnects. Just a lock and a map - non-blocking.
+    /// Where a call with this `browser` argument would route right now: the label and that connection's
+    /// generation, which the audit line carries so a tool call correlates with one browser connection across
+    /// reconnects. `None` when unroutable at this moment, a poisoned registry included.
     pub fn route_info(&self, browser: Option<&str>) -> Option<(String, u64)> {
-        // A poisoned registry is unroutable (None), same as nothing connected.
         let conns = self.conns.lock().ok()?;
         let labels: Vec<&str> = conns.keys().map(BrowserLabel::as_str).collect();
         let label = resolve_target(&labels, browser).ok()?;
-        // Borrow<str> lets the validated key be probed with the plain string
-        // resolve_target picked from this very key set.
         let generation = conns.get(label.as_str())?.generation;
         Some((label, generation.get()))
     }
@@ -590,9 +530,7 @@ impl Session {
         let (tx, rx) = mpsc::channel::<Delivery>();
 
         // Resolve, register the pending entry, and send under the registry lock, so the chosen connection cannot be
-        // swapped between the decision and the write. The entry is inserted ALREADY BOUND to the connection's
-        // generation, immediately before the write: an unbound in-flight request is unrepresentable, and the response
-        // cannot beat the registration because the request is not on the wire until after the insert.
+        // swapped between the decision and the write, and the response cannot beat the registration.
         //   lock order     -> conns mutex THEN pending mutex, matching the reader-cleanup path, so no deadlock
         //   poisoned lock  -> refuse the call with a typed internal error instead of acting on suspect state
         let Ok(mut guard) = self.conns.lock() else {
@@ -600,20 +538,14 @@ impl Session {
         };
         let labels: Vec<&str> = guard.keys().map(BrowserLabel::as_str).collect();
         let label = resolve_target(&labels, browser)?;
-        // Borrow<str>: probe the validated key set with the plain string
-        // resolve_target picked from it.
         let Some(conn) = guard.get_mut(label.as_str()) else {
-            // Unreachable in practice: resolve_target picked the label
-            // from this very map under the same lock. Refuse rather than
-            // panic if that invariant is ever broken.
+            // resolve_target picked the label from this map under this lock; refuse rather than panic.
             return Err(CallError::Internal(
                 "resolved browser label vanished from the registry".into(),
             ));
         };
         let generation = conn.generation;
         let Ok(mut pending_guard) = self.pending.lock() else {
-            // Do not send a request whose response could never be
-            // routed back (no entry would be waiting for it).
             return Err(CallError::Internal("pending-call lock poisoned".into()));
         };
         // Routing errors first: a budget that ran out while no browser was attached is reported as the

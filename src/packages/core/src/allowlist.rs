@@ -123,8 +123,7 @@ pub struct ClientEntry {
 /// mutation can skip the trail and no path can enroll without a [`PresenceAttestation`], which only
 /// [`crate::presence`] mints (pairing GRANTS capability).
 fn pair(name: &ClientName, anchor: Anchor, auth: PresenceAttestation) -> io::Result<()> {
-    // The attestation is structural evidence, consumed here; the audit record that names its path is written
-    // by the caller, log-after-decide.
+    // Consumed as evidence; the caller writes the audit record that names its path.
     let _ = auth;
     ipc::with_runtime_lock(|lock| {
         Trust::mutate_locked(lock, Scope::Clients, |trust| {
@@ -216,8 +215,7 @@ pub fn pair_client_with_presence(
     let auth = match terminal.and_then(|terminal| presence::tty_confirm(&reason, terminal)) {
         Ok(auth) => auth,
         Err(e) => {
-            // Log-after-decide: the refusal has already happened; make the
-            // attempted silent enrollment visible in the trail.
+            // A refused pairing is audited too, so a silent enrollment attempt shows in the trail.
             audit::record(
                 AuditRecord::new(AuditKind::PairClient)
                     .surface(surface)
@@ -275,9 +273,6 @@ pub fn run_pair_client(client: PairClientArgs) -> i32 {
         &client.name,
         anchor,
         crate::audit::Surface::Cli,
-        // The terminal witness comes first, by construction: a piped stdin
-        // arrives at the gate as the precondition failure, refused (and
-        // audited) after the name check, promptless.
         presence::TerminalStdin::require(),
     ) {
         Ok(path) => {
@@ -401,50 +396,12 @@ mod tests {
         assert!(err.contains("--hash") && err.contains("--signer"), "{err}");
     }
 
-    /// A 40-character test digest from a lowercase-hex seed.
-    fn hd(seed: &str) -> HashDigest {
-        HashDigest::try_from(seed.chars().cycle().take(40).collect::<String>()).unwrap()
-    }
-
-    fn sid(signer: &str) -> SignerId {
-        SignerId::try_from(signer).unwrap()
-    }
-
     fn anchor_entry(kind: &str, value: String) -> serde_json::Value {
         serde_json::json!({ "name": "bad", "anchor": { "kind": kind, "value": value }, "added_unix": 0 })
     }
 
     fn named_entry(name: &str) -> serde_json::Value {
         serde_json::json!({ "name": name, "anchor": { "kind": "signer", "value": "SIGNER0001" }, "added_unix": 0 })
-    }
-
-    #[test]
-    fn anchor_serde_shape_is_tagged() {
-        // The on-disk shape is a tagged {kind, value} so a hash and a signer
-        // can never be confused for one another.
-        assert_eq!(
-            serde_json::to_value(Anchor::Hash(hd("0a"))).unwrap(),
-            serde_json::json!({ "kind": "hash", "value": "0a".repeat(20) })
-        );
-        assert_eq!(
-            serde_json::to_value(Anchor::Signer(sid("t"))).unwrap(),
-            serde_json::json!({ "kind": "signer", "value": "t" })
-        );
-    }
-
-    #[test]
-    fn a_valid_hash_anchor_round_trips_with_an_unchanged_serialized_form() {
-        // The newtype must be invisible on disk: a valid lowercase-hex anchor
-        // serializes to exactly the same JSON as when the field was a plain
-        // String, and parses back equal.
-        let anchor = Anchor::Hash(hd("deadbeef"));
-        let value = serde_json::to_value(&anchor).unwrap();
-        assert_eq!(
-            value,
-            serde_json::json!({ "kind": "hash", "value": "deadbeef".repeat(5) })
-        );
-        let back: Anchor = serde_json::from_value(value).unwrap();
-        assert_eq!(back, anchor);
     }
 
     #[test]

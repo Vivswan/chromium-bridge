@@ -18,42 +18,29 @@ pub(crate) const OWN_IDENTITY_ERROR: &str = "cannot hash own executable";
 
 /// This process's own executable identity: the SHA256 of its on-disk image.
 pub(crate) fn own_identity() -> io::Result<HashDigest> {
-    exe_hash_of_pid(std::process::id())
+    pid_identity(std::process::id())
 }
 
 /// The peer's running-image identity, measured the same way as
 /// [`own_identity`].
 pub(crate) fn peer_identity(stream: &BridgeStream) -> io::Result<HashDigest> {
-    exe_hash_of_pid(super::super::peercred::peer_pid(stream)?)
+    pid_identity(super::super::peercred::peer_pid(stream)?)
 }
 
-/// The running-image identity of an arbitrary process named by pid. Carries
-/// the pid-reuse race documented on [`super::super::peercred::peer_pid`].
-pub(crate) fn pid_identity(pid: u32) -> io::Result<HashDigest> {
-    exe_hash_of_pid(pid)
-}
-
-/// The full client identity of an arbitrary process named by pid: its image
-/// hash plus its code signer. Linux code signing is not part of the base
-/// system, so there is no signer to read here and the anchor is always the
-/// hash; `signer` is therefore always `None`. Carries the same pid-reuse race
-/// as [`pid_identity`].
+/// The full client identity of an arbitrary process named by pid. Linux code signing is not part of the
+/// base system, so the anchor is always the hash and `signer` is always `None`. Carries the same pid-reuse
+/// race as [`pid_identity`].
 pub(crate) fn pid_client_identity(pid: u32) -> io::Result<ClientIdentity> {
     Ok(ClientIdentity {
-        hash: exe_hash_of_pid(pid)?,
+        hash: pid_identity(pid)?,
         signer: None,
     })
 }
 
-/// SHA256 of a running process's on-disk executable, named by pid. We hash
-/// `/proc/<pid>/exe`, the kernel's magic symlink to the actual executable
-/// inode: it follows to the real backing file even if the path was later
-/// replaced, so once the pid is resolved the digest reflects the running image
-/// (the pid-resolution race is noted on [`super::super::peercred::peer_pid`]).
-/// macOS does not use this: it attests the running image directly through the
-/// Security framework (see `platform::macos`), which is bound to the running
-/// image and needs no path re-open.
-fn exe_hash_of_pid(pid: u32) -> io::Result<HashDigest> {
+/// The running-image identity of a process named by pid: the SHA256 of `/proc/<pid>/exe`, the kernel's
+/// magic symlink to the executable inode, which follows to the real backing file even after the path was
+/// replaced. The pid-resolution race is noted on [`super::super::peercred::peer_pid`].
+pub(crate) fn pid_identity(pid: u32) -> io::Result<HashDigest> {
     HashDigest::of_file(&PathBuf::from(format!("/proc/{pid}/exe")))
 }
 
