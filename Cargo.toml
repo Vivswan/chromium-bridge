@@ -50,6 +50,9 @@ signal-hook = "0.4"
 # inputs, which breaks the write/read-back identity the store relies on.
 serde_json = { version = "1", features = ["float_roundtrip"] }
 sha2 = { version = "0.11", default-features = false }
+# The WHATWG URL parser behind Origin (src/packages/core/src/webauthn/statement.rs): an origin the
+# extension names is admitted only when the url crate's origin serialization reproduces it byte for byte.
+url = { version = "2", default-features = false }
 # Temp-file-then-rename atomic writers (registration, private records).
 tempfile = "3.27"
 thiserror = "2.0.18"

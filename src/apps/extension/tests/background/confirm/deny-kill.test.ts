@@ -2,12 +2,12 @@
 // confirmation AND engages the kill switch in one SW-side step. The property
 // that must hold under any interleaving: by the time the kill_engage frame is
 // posted to the host, the in-flight action is ALREADY settled false, so nothing
-// arriving later (a window Allow, a hardware tap's verdict) can approve it -
+// arriving later (a window Allow, the host's verdict on a tap) can approve it -
 // and while the engage is in flight, no OTHER confirmation (queued or newly
 // arriving) is presented for approval. Sender gating rides the same
 // confirm-window-only rule as the other confirm_* messages.
 
-import { type ConfirmPayload, isHardwareGated } from "@chromium-bridge/shared/confirm";
+import { type ConfirmPayload, isPresenceGated } from "@chromium-bridge/shared/confirm";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { Browser } from "wxt/browser";
 import { fakeBrowser } from "wxt/testing/fake-browser";
@@ -178,20 +178,20 @@ describe("confirm_deny_kill", () => {
     await expect(later).resolves.toBe(false);
   });
 
-  test("a hardware-gated confirmation is denied and a late tap verdict cannot flip it", async () => {
+  test("a presence-gated confirmation is denied and a late tap verdict cannot flip it", async () => {
     const presented = fakeProvider((p) => installPresenceProvider(p));
     const verdict = confirmWithUser(REQ()); // eval routes to the presence provider
     await vi.advanceTimersByTimeAsync(0);
     const shown = presented[0];
-    expect(shown && isHardwareGated(shown.payload)).toBe(true);
+    expect(shown && isPresenceGated(shown.payload)).toBe(true);
 
     attach(collaborator);
     route({ type: "confirm_deny_kill" }, confirmSender, () => {});
     await expect(verdict).resolves.toBe(false);
     expect(shown!.dismissed).toBe(true);
 
-    // The Touch ID prompt's signed approval lands AFTER the panic: the
-    // settle is single-use, so the late verdict changes nothing.
+    // The host's verdict on the tap lands AFTER the panic: the settle is
+    // single-use, so the late verdict changes nothing.
     shown!.approve();
     await vi.advanceTimersByTimeAsync(0);
     await expect(verdict).resolves.toBe(false);

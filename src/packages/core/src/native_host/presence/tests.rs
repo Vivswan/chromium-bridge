@@ -1017,3 +1017,33 @@ fn a_refused_presence_begin_leaves_the_outstanding_request_as_it_was() {
         ]
     );
 }
+
+/// An enrollment store that cannot be read refuses the request before anything is pending, with the store's
+/// error named, and the trail carries it: a page op never runs on a guess about who is enrolled.
+#[test]
+fn a_presence_begin_over_an_unreadable_trust_record_is_refused_as_a_store_error() {
+    let _dir = scratch_runtime_dir();
+    let mut brave = Exchange::new(label("brave"));
+    enroll_tofu(&mut brave, &Authenticator::new(0x11));
+    std::fs::write(crate::trust::Trust::path().unwrap(), b"{ not the record").unwrap();
+
+    let replies = brave.presence_begin("page_eval", "https://example.com");
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    let reason = presence_reason(&replies[0]).unwrap();
+    assert!(reason.starts_with("store_error: "), "{reason}");
+    let replies = brave.presence_confirm("anything");
+    assert_eq!(
+        presence_reason(&replies[0]).as_deref(),
+        Some("no_request_outstanding")
+    );
+    let refusals: Vec<String> = audit_records(AuditKind::PresenceAssert)
+        .into_iter()
+        .filter(|r| r.outcome.as_deref() == Some("refused"))
+        .map(|r| r.detail.unwrap())
+        .collect();
+    assert_eq!(refusals.len(), 1, "{refusals:?}");
+    assert!(
+        refusals[0].starts_with("act=presence_begin; store_error: "),
+        "{refusals:?}"
+    );
+}

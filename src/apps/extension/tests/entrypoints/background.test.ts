@@ -35,8 +35,10 @@ vi.mock("@/lib/background/cdp/registry", () => ({ installCdpLifecycleListeners: 
 vi.mock("@/lib/background/allowlist-store", () => ({ syncPendingMirror: sweepPending }));
 vi.mock("@/lib/background/confirm/service", () => ({
   installConfirmationProvider: installConfirm,
+  installPresenceProvider: vi.fn(),
 }));
 vi.mock("@/lib/background/confirm/surface", () => ({ ExtensionWindowProvider: class {} }));
+vi.mock("@/lib/background/confirm/presence", () => ({ PresenceExchangeProvider: class {} }));
 vi.mock("@/lib/background/port", () => ({ connectNative: connect }));
 
 // defineBackground returns its callback as `.main`; capture it.

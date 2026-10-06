@@ -3,8 +3,9 @@
 // popup window; the isolated-browser suite proves the guarded page cannot
 // reach it.
 
-import { type ConfirmPayload, isHardwareGated } from "@chromium-bridge/shared/confirm";
+import { type ConfirmPayload, isPresenceGated } from "@chromium-bridge/shared/confirm";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { readRing } from "@/lib/background/audit-log";
 import { currentPanicEpoch } from "@/lib/background/brake";
 import type { Presentation } from "@/lib/background/confirm/service";
 import {
@@ -253,6 +254,42 @@ describe("getPendingConfirm", () => {
   });
 });
 
+describe("the shown record follows the surface", () => {
+  // The presence route asks the host before any window opens, so a presentation may end with no surface ever
+  // in front of the user; the trail must not say one was shown. The ring persists across this file's tests,
+  // so each case reads what it alone appended.
+  async function appendedKinds(run: () => Promise<unknown>): Promise<string[]> {
+    const before = (await readRing()).length;
+    await run();
+    await vi.advanceTimersByTimeAsync(0); // the ring write trails the verdict (log-after-decide)
+    return (await readRing()).slice(before).map((e) => e.kind);
+  }
+
+  test("a presentation that ends before any surface opened leaves a denial and no confirm_shown row", async () => {
+    installPresenceProvider({
+      present() {
+        return { verdict: Promise.resolve(false), shown: Promise.resolve(false), dismiss() {} };
+      },
+    });
+    const kinds = await appendedKinds(() =>
+      expect(confirmWithUser({ ...REQ, presenceRouting: true })).resolves.toBe(false),
+    );
+    expect(kinds).toEqual(["confirm_denied"]);
+  });
+
+  test("a surface that opens is recorded shown before its verdict", async () => {
+    installPresenceProvider({
+      present() {
+        return { verdict: Promise.resolve(true), shown: Promise.resolve(true), dismiss() {} };
+      },
+    });
+    const kinds = await appendedKinds(() =>
+      expect(confirmWithUser({ ...REQ, presenceRouting: true })).resolves.toBe(true),
+    );
+    expect(kinds).toEqual(["confirm_shown", "confirm_allowed"]);
+  });
+});
+
 describe("presence routing (the verdict travels in the request)", () => {
   // The routing decision is computed by the CALLER at decision time from its
   // per-request policy snapshot and carried in the ConfirmRequest (one snapshot
@@ -260,7 +297,7 @@ describe("presence routing (the verdict travels in the request)", () => {
   // nor a provider/predicate reinstall during the queue wait can re-route an
   // in-flight confirmation - the old paired-predicate race is gone with the
   // predicate itself.
-  test("a true decision-time verdict presents on the presence provider, hardware-marked", async () => {
+  test("a true decision-time verdict presents on the presence provider, presence-marked", async () => {
     const windowShown = fakeProvider();
     const hwShown: ConfirmPayload[] = [];
     installPresenceProvider({
@@ -273,11 +310,11 @@ describe("presence routing (the verdict travels in the request)", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(windowShown.length).toBe(0);
     expect(hwShown.length).toBe(1);
-    expect(isHardwareGated(hwShown[0]!)).toBe(true);
+    expect(isPresenceGated(hwShown[0]!)).toBe(true);
     await expect(verdict).resolves.toBe(false);
   });
 
-  test("a false verdict routes to the window, consulting no hardware provider", async () => {
+  test("a false verdict routes to the window, consulting no presence provider", async () => {
     const windowShown = fakeProvider();
     const hwShown: ConfirmPayload[] = [];
     installPresenceProvider({
@@ -290,7 +327,7 @@ describe("presence routing (the verdict travels in the request)", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(hwShown.length).toBe(0);
     expect(windowShown.length).toBe(1);
-    expect(isHardwareGated(windowShown[0]!.payload)).toBe(false);
+    expect(isPresenceGated(windowShown[0]!.payload)).toBe(false);
     resolveConfirm(windowShown[0]!.payload.id, false);
     await expect(verdict).resolves.toBe(false);
   });

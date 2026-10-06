@@ -8,7 +8,7 @@
 import {
   type ConfirmKind,
   type ConfirmPayload,
-  isHardwareGated,
+  isPresenceGated,
 } from "@chromium-bridge/shared/confirm";
 import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
 import pLimit from "p-limit";
@@ -23,7 +23,7 @@ interface ConfirmRequestBase {
    * SAME per-request policy snapshot as the rest of the decision, so a policy push landing while
    * the confirmation waits in the queue cannot re-route it. Only the "eval"/"upload" kinds honor it
    * (providerFor); false, or no presence provider, is the off-DOM window confirmation: still
-   * confirmed, not hardware-gated. */
+   * confirmed, not presence-gated. */
   presenceRouting: boolean;
   /** The panic epoch captured at DECISION START (currentPanicEpoch), synchronously beside the policy
    * snapshot and BEFORE the decision's first await. Every await the decision performs (the policy read,
@@ -52,15 +52,28 @@ export interface Presentation {
   /** The provider-observed outcome. The window provider only ever reports
    * denials here (surface closed / failed to open) - approvals arrive
    * through resolveConfirm(), from the extension page, via the router. The
-   * presence provider resolves true here from its own verified user-presence
-   * answer instead. */
+   * presence provider resolves true here from the host's verdict on the
+   * window's answer to its presence request instead. */
   verdict: Promise<boolean>;
+  /** Whether a surface reached the user: true once one is up, false when the
+   * presentation ends without one. Absent means the surface is up from
+   * present() on (the window provider). The confirm_shown audit record waits
+   * on it, so a confirmation denied before any surface opened leaves no shown
+   * row. */
+  shown?: Promise<boolean>;
   /** Tear the surface down (deadline hit, or resolved through the router). */
   dismiss(): void;
 }
 
 export interface ConfirmationProvider {
   present(payload: ConfirmPayload): Presentation;
+}
+
+/** The two payload kinds the presence route carries; the type is what keeps every other kind out of it. */
+export type PresencePayload = Extract<ConfirmPayload, { kind: "eval" | "upload" }>;
+
+export interface PresenceProvider {
+  present(payload: PresencePayload): Presentation;
 }
 
 interface Active {
@@ -83,31 +96,50 @@ export function installConfirmationProvider(p: ConfirmationProvider): void {
 }
 
 // The presence provider slot. Whether a confirmation routes to it is the request's own
-// presenceRouting field (ConfirmRequestBase); providerFor never re-reads live policy.
-const presence = inLife<ConfirmationProvider | null>(() => null);
+// presenceRouting field (ConfirmRequestBase); the route is chosen without re-reading live policy.
+const presence = inLife<PresenceProvider | null>(() => null);
 
-export function installPresenceProvider(p: ConfirmationProvider): void {
+export function installPresenceProvider(p: PresenceProvider): void {
   presence.value = p;
 }
 
-/** The provider for one request. "eval" and "upload" go to the presence provider's
- * user-presence gate when the request's decision-time routing verdict says
- * so and a provider is installed; everything else (and every fallback)
- * keeps the window. `hardware` marks the payload so the window renders
- * display-only and resolveConfirm refuses a window approval. Synchronous on
- * purpose: no await sits between the front-of-queue latch check and the
- * `active` registration below, so a panic can never land "mid-selection"
- * INSIDE the service; the awaits that remain in a decision (the caller-side
- * routing probe, the queue wait) are covered by the decision-start epoch the
- * request carries (ConfirmRequest.panicEpoch). */
-function providerFor(req: ConfirmRequest): {
-  provider: ConfirmationProvider | null;
-  hardware: boolean;
-} {
-  if ((req.kind === "eval" || req.kind === "upload") && presence.value && req.presenceRouting) {
-    return { provider: presence.value, hardware: true };
+/** The payload and the provider that shows it, for one request. "eval" and
+ * "upload" go to the presence provider when the request's decision-time
+ * routing verdict says so and a provider is installed, their payload marked
+ * `presence` so the window answers the host's request instead of offering
+ * Allow and resolveConfirm refuses a window approval; everything else (and
+ * every fallback) keeps the window. Built per arm of the request union, so
+ * each payload carries exactly its kind's fields: `presence` exists only on
+ * the two presence-gated kinds, and a policy_relax payload is structurally
+ * page-less. Synchronous on purpose: no await sits between the front-of-queue
+ * latch check and the `active` registration below, so a panic can never land
+ * "mid-selection" INSIDE the service; the awaits that remain in a decision
+ * (the caller-side routing probe, the queue wait) are covered by the
+ * decision-start epoch the request carries (ConfirmRequest.panicEpoch). */
+function routeFor(
+  req: ConfirmRequest,
+  common: { id: string; deadline: number },
+): { payload: ConfirmPayload; present: (() => Presentation) | null } {
+  if (req.kind === "policy_relax") {
+    const payload: ConfirmPayload = {
+      ...common,
+      kind: "policy_relax",
+      origin: "",
+      tabTitle: "",
+      detail: req.detail,
+    };
+    const window = defaultProvider.value;
+    return { payload, present: window && (() => window.present(payload)) };
   }
-  return { provider: defaultProvider.value, hardware: false };
+  const page = { origin: req.origin, tabTitle: req.tabTitle, detail: req.detail };
+  if ((req.kind === "eval" || req.kind === "upload") && presence.value && req.presenceRouting) {
+    const provider = presence.value;
+    const payload: PresencePayload = { ...common, ...page, kind: req.kind, presence: true };
+    return { payload, present: () => provider.present(payload) };
+  }
+  const payload: ConfirmPayload = { ...common, ...page, kind: req.kind };
+  const window = defaultProvider.value;
+  return { payload, present: window && (() => window.present(payload)) };
 }
 
 /** The confirm window hit the brake. Settling the active entry lets the lane advance; the router follows this with
@@ -171,39 +203,15 @@ async function presentOne(
     resolve(false);
     return;
   }
-  const { provider, hardware } = providerFor(req);
-  // Built per arm of the request union, so each payload carries exactly its
-  // kind's fields: `hardware` can only ride the two presence-gated kinds
-  // (providerFor only raises it there, and the payload union would refuse it
-  // anywhere else), and a policy_relax payload is structurally page-less.
-  const common = {
+  const { payload, present } = routeFor(req, {
     // The attempt's id doubles as the surface routing handle
     // (getPendingConfirm/resolveConfirm match on it). Same value the
     // audit events above and below carry, so the shown row and its
     // verdict join exactly.
     id: cid,
     deadline: Date.now() + req.timeoutMs,
-  };
-  const payload: ConfirmPayload =
-    req.kind === "policy_relax"
-      ? { ...common, kind: "policy_relax", origin: "", tabTitle: "", detail: req.detail }
-      : req.kind === "eval" || req.kind === "upload"
-        ? {
-            ...common,
-            kind: req.kind,
-            origin: req.origin,
-            tabTitle: req.tabTitle,
-            detail: req.detail,
-            ...(hardware ? { hardware: true } : {}),
-          }
-        : {
-            ...common,
-            kind: req.kind,
-            origin: req.origin,
-            tabTitle: req.tabTitle,
-            detail: req.detail,
-          };
-  if (!provider) {
+  });
+  if (!present) {
     console.error("[bb] no confirmation provider installed; denying", req.kind);
     resolve(false);
     return;
@@ -211,7 +219,7 @@ async function presentOne(
 
   let presentation: Presentation;
   try {
-    presentation = provider.present(payload);
+    presentation = present();
   } catch (e) {
     console.error("[bb] confirmation provider threw; denying", e);
     resolve(false);
@@ -245,9 +253,14 @@ async function presentOne(
     };
     const timer = setTimeout(() => settle(false), req.timeoutMs);
     active.value = { payload, settle };
-    // The surface is up in front of the user from here, so audit it now.
-    // Same cid as the verdict above, so the panel joins the pair exactly.
-    auditEvent("confirm_shown", { tool: req.kind, name: req.origin, cid });
+    // Audited once a surface is in front of the user (at once for the window;
+    // when the host's request lands for the presence route). Same cid as the
+    // verdict above, so the panel joins the pair exactly; a presentation that
+    // ends before any surface opened leaves no shown row, like a denial at the
+    // door.
+    void (presentation.shown ?? Promise.resolve(true)).then((up) => {
+      if (up) auditEvent("confirm_shown", { tool: req.kind, name: req.origin, cid });
+    });
     try {
       presentation.verdict.then(settle, (e: unknown) => {
         console.error("[bb] confirmation presentation failed; denying", e);
@@ -271,19 +284,19 @@ export function getPendingConfirm(id: string): ConfirmPayload | null {
 }
 
 /** messages.ts routes this ONLY from the confirmation window; that sender check is what makes
- * page-side auto-approval impossible. A hardware-gated payload is approved only by the verified
- * presence provider's answer, so even the trusted window cannot stand in for the tap.
- *   hardware-gated + approve  -> refused; only the presence provider approves
+ * page-side auto-approval impossible. A presence-gated payload is approved only by the host's verdict
+ * on the window's answer to its presence request, so even the trusted window cannot stand in for it.
+ *   presence-gated + approve  -> refused; only the host's verdict approves
  *   any payload + deny        -> accepted; removing capability is always friction-free */
 export function resolveConfirm(id: string, approved: boolean): RuntimeResponse<"confirm_resolve"> {
   const current = active.value;
   if (!current || current.payload.id !== id) {
     return { ok: false, error: "no such pending confirmation" };
   }
-  if (approved && isHardwareGated(current.payload)) {
+  if (approved && isPresenceGated(current.payload)) {
     return {
       ok: false,
-      error: "hardware-gated confirmation: approval requires the presence provider",
+      error: "presence-gated confirmation: approval is the host's verdict on the presence request",
     };
   }
   current.settle(approved);

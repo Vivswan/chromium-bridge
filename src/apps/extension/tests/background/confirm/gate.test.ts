@@ -2,12 +2,16 @@
 // settings gates, grace-window behavior, and the deny paths - driven with a
 // fake backend and a fake confirmation provider.
 
-import type { ConfirmPayload } from "@chromium-bridge/shared/confirm";
+import { type ConfirmPayload, isPresenceGated } from "@chromium-bridge/shared/confirm";
 import { beforeEach, describe, expect, test } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 import { currentPanicEpoch } from "@/lib/background/brake";
 import { bindOrigin, preflightPageOp, resetClickGraceWindow } from "@/lib/background/confirm/gate";
-import { installConfirmationProvider, resolveConfirm } from "@/lib/background/confirm/service";
+import {
+  installConfirmationProvider,
+  installPresenceProvider,
+  resolveConfirm,
+} from "@/lib/background/confirm/service";
 import { withFreshPolicy } from "@/lib/background/effective-policy";
 import type { PageBackend } from "@/lib/background/page-backend";
 import type { ResolvedTab } from "@/lib/background/tabs";
@@ -199,5 +203,55 @@ describe("the preflight -> guard split", () => {
 
   test("bindOrigin refuses an empty origin - an unbound act cannot exist", () => {
     expect(() => bindOrigin({}, "")).toThrow("no origin to bind");
+  });
+});
+
+describe("the presence route", () => {
+  // The routing verdict is the policy's presenceConfirm, snapshotted into the decision; the presence
+  // provider receives the page's kind and origin, which the host binds into the request it mints.
+  beforeEach(() => applyPolicy({ pageEvalEnabled: true }));
+
+  function presenceProvider(approve: boolean) {
+    const asked: ConfirmPayload[] = [];
+    installPresenceProvider({
+      present(payload) {
+        asked.push(payload);
+        return { verdict: Promise.resolve(approve), dismiss() {} };
+      },
+    });
+    return asked;
+  }
+
+  test("presenceConfirm=true routes page_eval to the presence provider with the page's kind and origin", async () => {
+    await applyPolicy({ pageEvalEnabled: true, presenceConfirm: true });
+    const window = autoProvider(false); // would deny if the window were asked
+    const asked = presenceProvider(true);
+    await preflight("page_eval", { code: "return 1;" }, TAB, fakeBackend(PLAIN));
+    expect(window.length).toBe(0);
+    expect(asked.length).toBe(1);
+    expect(asked[0]).toMatchObject({
+      kind: "eval",
+      origin: "https://example.com",
+      detail: "return 1;",
+      presence: true,
+    });
+  });
+
+  test("presenceConfirm=false keeps the window, consulting no presence provider", async () => {
+    await applyPolicy({ pageEvalEnabled: true, presenceConfirm: false });
+    const window = autoProvider(true);
+    const asked = presenceProvider(true);
+    await preflight("page_eval", { code: "return 1;" }, TAB, fakeBackend(PLAIN));
+    expect(asked.length).toBe(0);
+    expect(window.length).toBe(1);
+    expect(isPresenceGated(window[0]!)).toBe(false);
+  });
+
+  test("the presence provider's denial is the op's denial", async () => {
+    await applyPolicy({ pageEvalEnabled: true, presenceConfirm: true });
+    presenceProvider(false);
+    await expect(
+      preflight("page_eval", { code: "return 1;" }, TAB, fakeBackend(PLAIN)),
+    ).rejects.toThrow("user denied page_eval");
   });
 });

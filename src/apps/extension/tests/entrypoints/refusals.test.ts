@@ -4,7 +4,7 @@
 // worker's own phrases pass through. Which codes exist is the generated RefusalCode union, not a test here.
 
 import { describe, expect, test } from "vitest";
-import { refusalSentence } from "@/entrypoints/options/refusals";
+import { refusalSentence } from "@/lib/refusals";
 
 const t = (key: string, substitutions?: string[]) => `${key}[${substitutions?.join(",") ?? ""}]`;
 

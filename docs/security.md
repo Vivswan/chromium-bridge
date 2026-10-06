@@ -95,7 +95,12 @@ One record ties the hops together: `trust.json` in the runtime directory holds t
 | the extension, where the rule admits no credential: the browser has none for its own acts, the machine has none for enrolling | a click on the confirmation window, labelled a software confirmation | silent and scripted acts, not a hostile same-user process |
 | the CLI (`pair`, `pair-client`, `unkill`, `policy set`) | a phrase typed on a real terminal; a piped stdin is refused before any prompt | scripted, piped, and accidental grants, not a same-user process that allocates a pty |
 
-An enrolled browser is never demoted to the window. The acts behind the gate: releasing the kill switch and enrolling another browser, which the browser's own credential or any enrolled credential answer respectively; minting the host key, pairing a client, and relaxing the policy, which the CLI's terminal answers.
+An enrolled browser is never demoted to the window. The acts behind the gate, and who answers each:
+
+- releasing the kill switch: the browser's own credential;
+- enrolling another browser: any enrolled credential;
+- `page_eval` and `page_upload` where the policy's `presenceConfirm` is on: the browser's own credential, the request naming the op and the page's origin;
+- minting the host key, pairing a client, and relaxing the policy: the CLI's terminal.
 
 **Two policy lanes.** A policy change that grants capability is signed by the host key behind the typed confirmation; a change that only restricts travels unsigned and free, because a forged restriction can only remove capability. The [CLI page](cli.md#host-owned-policy-policy) owns the commands; the [defaults table](../.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe) owns what relaxing each gate costs you.
 
@@ -107,8 +112,8 @@ Each gap below is accepted on purpose. The ledger entry it links to states what 
 - **A click grace window on approved sites.** The cost of the window [above](#what-you-confirm-and-what-counts-as-presence): unrelated same-origin code can ride one approval for its duration. Owner: [the defaults table](../.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe).
 - **Same-user re-execution of our own binary is accepted.** Attestation rejects a different program, not the genuine binary started by a same-user attacker. Owner: [boundary 2](security/trust-boundaries.md#boundary-2-rust-mcp-server---native-host--bridge-socket-ndjson).
 - **A compromised paired harness keeps its admitted identity.** Attestation identifies a binary, not an intention, so a paired client that turns hostile stays trusted until revoked. Owner: [boundary 1](security/trust-boundaries.md#boundary-1-mcp-client---rust-mcp-server--stdio-json-rpc-20).
-- **The software floors are labelled, not hidden.** The window for an unenrolled browser and the terminal for the CLI attest intent on a trusted surface, not hardware, and every audited grant names the path that authorized it; `pair` alone leaves no record of its own. Owner: [boundary 3](security/trust-boundaries.md#boundary-3-chrome---native-host--native-messaging-framing).
-- **`page_eval` and `page_upload` confirm on the window, not the authenticator.** A WebAuthn route for those two is not built; the window reconfirms every call meanwhile. Owner: [boundary 4](security/trust-boundaries.md#boundary-4-extension---web-page--chrome-api--content-script--dom).
+- **The software floors are labelled, not hidden.** The window for an unenrolled browser and the terminal for the CLI attest intent on a trusted surface, not hardware, and every audited grant names the path that authorized it, `pair`'s included. Owner: [boundary 3](security/trust-boundaries.md#boundary-3-chrome---native-host--native-messaging-framing).
+- **A credential deleted from the authenticator stays enrolled.** The host never learns that an authenticator or an OS passkey store dropped a credential, so that browser keeps refusing the window and loses its presence-gated acts until `revoke <browser>` forgets the enrollment. Owner: [boundary 3](security/trust-boundaries.md#boundary-3-chrome---native-host--native-messaging-framing).
 
 ## Where the bar holds today, per OS
 

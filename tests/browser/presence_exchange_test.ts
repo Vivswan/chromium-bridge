@@ -19,7 +19,11 @@
  *   7  a wrong challenge             -> an assertion over another challenge is refused challenge_mismatch
  *   8  the window on an enrolled browser -> presence_confirm is refused software_confirmation_not_allowed
  *   9  the refusals are audited       -> the host's audit.log names every refusal, under the extension surface
- *  10  a browser forgets itself       -> A's "Forget this browser" removes its enrollment through its own host;
+ *  10  a page operation behind a tap  -> A asks for page_eval's presence request on an origin over a raw native
+ *                                     port (the frame the confirmation service posts); the request names the op
+ *                                     and the origin, an assertion over a superseded request's challenge is
+ *                                     refused, its own credential's tap approves, and the trail names all three
+ *  11  a browser forgets itself       -> A's "Forget this browser" removes its enrollment through its own host;
  *                                     the panel reads not enrolled, the trail names the credential, B's stays
  *
  * The host runs in control-plane mode (the kill switch is engaged first in the isolated runtime dir), so no
@@ -392,6 +396,79 @@ async function pendingRequest(page: Page): Promise<PresenceRequest | null> {
   return null;
 }
 
+/** A page operation's presence exchange, driven at the frame level over a raw native-messaging port from the
+ * options page: a second host process for the same browser label (the wrapper names it), since the frame the
+ * confirmation service posts (presence_begin) has no page-side message. One port carries the whole exchange,
+ * because the host holds the outstanding request per connection. */
+interface PageOpExchange {
+  first: PresenceRequest;
+  second: PresenceRequest;
+  stale: { ok: boolean; reason?: string };
+  approved: { ok: boolean; reason?: string };
+}
+
+function pageOpExchange(page: Page, credentialId: string, origin: string): Promise<PageOpExchange> {
+  return page.evaluate(
+    async (hostId: string, credId: string, target: string) => {
+      const port = chrome.runtime.connectNative(hostId);
+      const next = <T>(type: string): Promise<T> =>
+        new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error(`no ${type} from the host`)), 15000);
+          const onMessage = (msg: { type?: string }) => {
+            if (msg?.type !== type) return;
+            clearTimeout(timer);
+            port.onMessage.removeListener(onMessage);
+            resolve(msg as T);
+          };
+          port.onMessage.addListener(onMessage);
+          port.onDisconnect.addListener(() => {
+            clearTimeout(timer);
+            reject(new Error(`the host disconnected before ${type}`));
+          });
+        });
+      const begin = async () => {
+        const reply = next<PresenceRequest>("presence_request");
+        port.postMessage({ type: "presence_begin", action: "page_eval", origin: target });
+        return reply;
+      };
+      const assertOver = async (challenge: string) => {
+        const publicKey = PublicKeyCredential.parseRequestOptionsFromJSON({
+          rpId: chrome.runtime.id,
+          challenge,
+          allowCredentials: [{ type: "public-key", id: credId, transports: ["internal"] }],
+          userVerification: "preferred",
+        });
+        const credential = (await navigator.credentials.get({ publicKey })) as PublicKeyCredential;
+        const json = credential.toJSON();
+        const response = json.response as AuthenticatorAssertionResponseJSON;
+        const reply = next<{ ok: boolean; reason?: string }>("presence_result");
+        port.postMessage({
+          type: "presence_assert",
+          credential_id: json.rawId,
+          authenticator_data: response.authenticatorData,
+          client_data_json: response.clientDataJSON,
+          signature: response.signature,
+        });
+        return reply;
+      };
+      try {
+        const first = await begin();
+        // A newer request supersedes the first; a tap over the first's challenge answers nothing.
+        const second = await begin();
+        const stale = await assertOver(first.challenge);
+        const third = await begin();
+        const approved = await assertOver(third.challenge);
+        return { first, second, stale, approved };
+      } finally {
+        port.disconnect();
+      }
+    },
+    NATIVE_HOST_ID,
+    credentialId,
+    origin,
+  ) as Promise<PageOpExchange>;
+}
+
 /** `enroll_begin` on an enrolled machine: the reply is presence_required and a request is pushed. */
 async function openLaterEnrollment(
   page: Page,
@@ -680,7 +757,42 @@ async function main(): Promise<void> {
       refusals,
     );
 
-    // 10: a browser forgets itself from its panel, through its own host; the other browser's enrollment stays.
+    // 10: a page operation's request, as the confirmation service asks for it, answered by A's own tap.
+    const pageOp = await pageOpExchange(a.page, aId, "https://example.com");
+    check(
+      pageOp.first.action === "page_eval on https://example.com" &&
+        pageOp.first.allowed_credential_ids.length === 1 &&
+        pageOp.first.allowed_credential_ids[0] === aId &&
+        pageOp.first.nonce !== pageOp.second.nonce,
+      "presence_begin is answered with a request naming the op and the origin, hinting A's credential alone",
+      pageOp,
+    );
+    check(
+      !pageOp.stale.ok && pageOp.stale.reason === "challenge_mismatch",
+      "a tap over a superseded request's challenge is refused",
+      pageOp.stale,
+    );
+    check(
+      pageOp.approved.ok,
+      "A's enrolled credential approves the page operation",
+      pageOp.approved,
+    );
+    const pageOpRecords = auditRecords(work).filter(
+      (r) => r.event_kind === "presence_assert" && (r.detail ?? "").startsWith("act=page_eval; "),
+    );
+    check(
+      pageOpRecords.length === 2 &&
+        pageOpRecords[0]?.outcome === "refused" &&
+        (pageOpRecords[0].detail ?? "").startsWith("act=page_eval; origin=https://example.com; ") &&
+        pageOpRecords[1]?.outcome === "ok" &&
+        pageOpRecords[1].surface === "extension" &&
+        pageOpRecords[1].detail ===
+          `act=page_eval; origin=https://example.com; auth=${credentialFingerprint(aId)}`,
+      "audit.log names the page operation, its origin, the refused stale tap, and the approving credential",
+      pageOpRecords,
+    );
+
+    // 11: a browser forgets itself from its panel, through its own host; the other browser's enrollment stays.
     a.page.once("dialog", (dialog) => void dialog.accept());
     await clickButton(a.page, UI.forget);
     await waitForText(a.page, UI.forgotten);

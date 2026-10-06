@@ -8,19 +8,21 @@
 // from extension pages. A content script or page script can therefore
 // neither read a pending confirmation nor answer one.
 //
-// ConfirmKind "eval" and "upload" are the two kinds a presence provider may
-// authorize instead of the window (the service's ConfirmRequestBase.presenceRouting
-// decides per request). The surface then stays a display-only window;
-// `hardware: true` marks such a payload, and the service refuses a window-side
-// approval for it - the provider's verdict is the approval.
+// ConfirmKind "eval" and "upload" are the two kinds the host's presence exchange
+// may answer instead of the window's Allow (the service's
+// ConfirmRequestBase.presenceRouting decides per request). `presence: true`
+// marks such a payload: the window shows it and runs the answer (a tap on the
+// browser's enrolled authenticator, or its software confirmation where none is
+// enrolled), the host verifies and audits it, and the service refuses a
+// window-side approval - the host's verdict is the approval.
 //
 // The payload is a discriminated union on `kind`, each arm carrying exactly
 // its own fields, so the combinations the service never produces cannot even
-// parse: `hardware` exists only on the two presence-gated kinds (a
-// `policy_relax` or `click` payload claiming hardware attestation is a
-// schema error, not a rendering decision), and `policy_relax` - where no
-// page is involved - pins origin/tabTitle to the empty string instead of
-// merely defaulting them there.
+// parse: `presence` exists only on the two presence-gated kinds (a
+// `policy_relax` or `click` payload claiming the presence route is a schema
+// error, not a rendering decision), and `policy_relax` - where no page is
+// involved - pins origin/tabTitle to the empty string instead of merely
+// defaulting them there.
 
 import { z } from "zod";
 
@@ -62,22 +64,23 @@ const confirmPage = {
   detail: z.string(),
 } as const;
 
-/** Approval comes from the host's Enclave user-presence tap, not the window.
- * The window renders display-only (no Allow button) and the service refuses a
- * window-side approval; denial stays window-reachable (removing capability is
- * always friction-free). Only the two presence-gated kinds ("eval"/"upload")
- * may carry it, and only as the literal `true`: the service never emits
- * `hardware: false` (absence IS the not-gated state), so the boolean's dead
- * false arm is unrepresentable. */
-const hardware = z.literal(true).optional();
+/** Approval comes through the host's presence exchange, not the window's Allow:
+ * the window answers the host's request (the authenticator's tap, or the
+ * software confirmation where this browser has no credential) and the service
+ * refuses a window-side approval; denial stays window-reachable (removing
+ * capability is always friction-free). Only the two presence-gated kinds
+ * ("eval"/"upload") may carry it, and only as the literal `true`: the service
+ * never emits `presence: false` (absence IS the not-gated state), so the
+ * boolean's dead false arm is unrepresentable. */
+const presence = z.literal(true).optional();
 
 export const ConfirmPayloadSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("click"), ...confirmCommon, ...confirmPage }),
   z.strictObject({ kind: z.literal("press"), ...confirmCommon, ...confirmPage }),
   z.strictObject({ kind: z.literal("select"), ...confirmCommon, ...confirmPage }),
   z.strictObject({ kind: z.literal("tab_close"), ...confirmCommon, ...confirmPage }),
-  z.strictObject({ kind: z.literal("eval"), ...confirmCommon, ...confirmPage, hardware }),
-  z.strictObject({ kind: z.literal("upload"), ...confirmCommon, ...confirmPage, hardware }),
+  z.strictObject({ kind: z.literal("eval"), ...confirmCommon, ...confirmPage, presence }),
+  z.strictObject({ kind: z.literal("upload"), ...confirmCommon, ...confirmPage, presence }),
   z.strictObject({
     kind: z.literal("policy_relax"),
     ...confirmCommon,
@@ -94,10 +97,10 @@ export const ConfirmPayloadSchema = z.discriminatedUnion("kind", [
 
 export type ConfirmPayload = z.infer<typeof ConfirmPayloadSchema>;
 
-/** Whether this payload's approval belongs to the hardware tap. The union
- * already confines `hardware` to the two presence-gated kinds; this is the one
- * place consumers read it, so the narrowing lives here instead of at every call
- * site. */
-export function isHardwareGated(payload: ConfirmPayload): boolean {
-  return (payload.kind === "eval" || payload.kind === "upload") && payload.hardware === true;
+/** Whether this payload's approval belongs to the host's presence exchange. The
+ * union already confines `presence` to the two presence-gated kinds; this is the
+ * one place consumers read it, so the narrowing lives here instead of at every
+ * call site. */
+export function isPresenceGated(payload: ConfirmPayload): boolean {
+  return (payload.kind === "eval" || payload.kind === "upload") && payload.presence === true;
 }

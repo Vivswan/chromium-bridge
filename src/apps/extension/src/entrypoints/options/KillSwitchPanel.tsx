@@ -5,8 +5,8 @@ import { browser } from "wxt/browser";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/hooks/useI18n";
 import { send } from "@/lib/messages";
+import { ceremonyFailure, refusalSentence } from "@/lib/refusals";
 import { assert } from "@/lib/shared/webauthn-ceremony";
-import { ceremonyFailure, refusalSentence } from "./refusals";
 
 // The kill-switch panel: one prominent switch that halts all bridge activity everywhere, and its release behind
 // the host's presence request. Everything here goes through the SW router (extension-page senders only) and is

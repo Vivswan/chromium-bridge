@@ -104,7 +104,7 @@ impl Refusal {
 }
 
 /// Every reason code a refused `presence_result` or `enroll_result` can carry: the one vocabulary the
-/// options page keys its sentences on (src/apps/extension/src/entrypoints/options/refusals.ts, typed from
+/// extension's pages key their sentences on (src/apps/extension/src/lib/refusals.ts, typed from
 /// the roster `emit_contract` walks). The host mints a reason from a variant alone, so a code the page has
 /// no sentence for cannot leave this crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, strum::Display, strum::VariantArray)]
@@ -156,7 +156,8 @@ pub enum RefusalCode {
     NotEnrolled,
     /// A `presence_begin` named something other than the two page operations the host mints requests for.
     InvalidAction,
-    /// A `presence_begin` named an origin not shaped as a browser serializes one (an opaque `null` included).
+    /// A `presence_begin` named an origin the host mints no statement for: an opaque `null`, or one shaped
+    /// outside what `Origin::parse` admits.
     InvalidOrigin,
 }
 

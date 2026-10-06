@@ -17,7 +17,7 @@
 // What only the CHROME_BIN isolated-browser suite can verify remains a REAL
 // mid-confirmation policy push surviving SW timing; flagged, not attempted.
 
-import { type ConfirmPayload, isHardwareGated } from "@chromium-bridge/shared/confirm";
+import { type ConfirmPayload, isPresenceGated } from "@chromium-bridge/shared/confirm";
 import type { BridgeReq } from "@chromium-bridge/shared/envelope";
 import { POLICY_DEFAULTS, type PolicyValues } from "@chromium-bridge/shared/policy.gen";
 import { beforeEach, describe, expect, test, vi } from "vitest";
@@ -618,7 +618,7 @@ describe("presence routing is decided from the per-request snapshot", () => {
     ).rejects.toThrow("user denied page_eval");
     expect(hw.length).toBe(0);
     expect(asked.length).toBe(1);
-    expect(asked[0] !== undefined && isHardwareGated(asked[0])).toBe(false);
+    expect(asked[0] !== undefined && isPresenceGated(asked[0])).toBe(false);
   });
 
   test("grant: policy presenceConfirm=true routes to the installed presence provider", async () => {
@@ -638,7 +638,7 @@ describe("presence routing is decided from the per-request snapshot", () => {
     ).rejects.toThrow("user denied page_eval");
     expect(asked.length).toBe(0);
     expect(hw.length).toBe(1);
-    expect(hw[0] !== undefined && isHardwareGated(hw[0])).toBe(true);
+    expect(hw[0] !== undefined && isPresenceGated(hw[0])).toBe(true);
   });
 });
 

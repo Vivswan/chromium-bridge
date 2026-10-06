@@ -1,8 +1,9 @@
 import {
   type ConfirmKind,
   type ConfirmPayload,
-  isHardwareGated,
+  isPresenceGated,
 } from "@chromium-bridge/shared/confirm";
+import type { PresenceRequestFrame } from "@chromium-bridge/shared/envelope.gen";
 import type { OpName } from "@chromium-bridge/shared/ops.gen";
 import { isPolicyFieldName, type PolicyFieldName } from "@chromium-bridge/shared/policy.gen";
 import { useEffect, useRef, useState } from "react";
@@ -10,6 +11,8 @@ import { Button } from "@/components/ui/button";
 import { useI18n } from "@/hooks/useI18n";
 import type { MessageKey } from "@/lib/i18n";
 import { send } from "@/lib/messages";
+import { ceremonyFailure, refusalSentence } from "@/lib/refusals";
+import { assert } from "@/lib/shared/webauthn-ceremony";
 
 // The confirmation window: an extension-owned page a guarded page cannot reach,
 // read, or click. It fetches the pending payload by the id in its URL, renders
@@ -17,6 +20,16 @@ import { send } from "@/lib/messages";
 // confirm_resolve - which the router accepts only from this exact document.
 // Escape / closing the window / timeout all deny; Allow arms after a short
 // delay so stray input cannot approve.
+//
+// A presence-gated payload (page_eval / page_upload under the presence route)
+// has no Allow of its own: the user answers the host's presence request from
+// here instead. With a credential enrolled from this browser the answer is the
+// authenticator's tap (navigator.credentials.get, posted as
+// webauthn_presence_assert); with none it is the software confirmation
+// (webauthn_presence_confirm). The host verifies and audits either, and the
+// service closes this window on the host's verdict, refused or approved. An
+// answer that never reached the host (the authenticator prompt dismissed, a
+// busy worker) is shown here and the request stays answerable.
 //
 // Control Tower restyle: the security behavior above is untouched. The exact
 // payload is the ONLY contained surface; Deny is the filled, easy default.
@@ -208,6 +221,40 @@ export function ConfirmApp() {
   // The footer's engage control fired: disabled from the first click (the SW
   // closes this window moments later; no second click, no release here).
   const [killBusy, setKillBusy] = useState(false);
+  // The host's presence request this window answers, for a presence-gated payload. The worker holding none
+  // (the request ended before this window read it) and a read that failed are each their own state, so a
+  // failed read never shows as an absence; either way only Deny remains.
+  const [request, setRequest] = useState<
+    | { at: "loading" }
+    | { at: "pending"; frame: PresenceRequestFrame }
+    | { at: "absent" }
+    | { at: "unreadable"; error: string }
+  >({ at: "loading" });
+  // The answer in flight, or why the last one was not accepted (by the authenticator, the worker, or the host).
+  const [answer, setAnswer] = useState<"idle" | "running" | { refused: string }>("idle");
+
+  // Answer the host's request from this window. An ok closes the window (the service's dismiss follows the
+  // host's verdict too). A host refusal is shown, and the service's dismiss closes the window; a failure
+  // before the host (the authenticator, the worker) is shown and the request stays answerable.
+  const answerPresence = async (req: PresenceRequestFrame) => {
+    setAnswer("running");
+    let reply: { ok: true } | { ok: false; error: string };
+    if (req.allowed_credential_ids.length > 0) {
+      try {
+        const response = await assert(req);
+        reply = await send({ type: "webauthn_presence_assert", nonce: req.nonce, ...response });
+      } catch (e) {
+        reply = { ok: false, error: ceremonyFailure(e) };
+      }
+    } else {
+      reply = await send({ type: "webauthn_presence_confirm", nonce: req.nonce });
+    }
+    if (reply.ok) {
+      window.close();
+      return;
+    }
+    setAnswer({ refused: reply.error });
+  };
 
   useEffect(() => {
     const id = new URLSearchParams(location.search).get("id") || "";
@@ -215,6 +262,19 @@ export function ConfirmApp() {
       setPayload(resp.ok ? resp.payload : null),
     );
   }, []);
+
+  useEffect(() => {
+    if (payload === "loading" || payload === null || !isPresenceGated(payload)) return;
+    void send({ type: "webauthn_presence_pending" }).then((resp) =>
+      setRequest(
+        !resp.ok
+          ? { at: "unreadable", error: resp.error }
+          : resp.request
+            ? { at: "pending", frame: resp.request }
+            : { at: "absent" },
+      ),
+    );
+  }, [payload]);
 
   useEffect(() => {
     if (payload === "loading" || payload === null) return;
@@ -242,12 +302,15 @@ export function ConfirmApp() {
   }
 
   const warnKey = WARNING_KEY[payload.kind];
-  // A hardware-gated confirmation renders display-only. Approval is the Touch
-  // ID tap on the host's system prompt (the service refuses a window-side
+  // A presence-gated confirmation offers no Allow of its own: the answer is the
+  // host's presence request, run below (the service refuses a window-side
   // approval); Deny stays - removing capability is friction-free. The payload
-  // union confines `hardware` to the eval/upload arms; the shared narrowing
-  // helper is the one reader.
-  const hardware = isHardwareGated(payload);
+  // union confines `presence` to the eval/upload arms; the shared narrowing
+  // helper is the one reader. The host gate renders held only where an
+  // authenticator answers; a software confirmation is the browser gate.
+  const presence = isPresenceGated(payload);
+  const pendingRequest = request.at === "pending" ? request.frame : null;
+  const authenticator = presence && (pendingRequest?.allowed_credential_ids.length ?? 0) > 0;
   // An unsigned policy relaxation on an unpinned extension. No page is involved
   // (origin/tabTitle are ""), the chip names the wire frame instead of a tool,
   // and the host segment renders unattested.
@@ -268,9 +331,9 @@ export function ConfirmApp() {
           scroll, as the final bound. flex-1 also absorbs the slack under
           small payloads, keeping the actions pinned to the bottom. */}
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
-        <FiringStrip hardware={hardware} hostUnattested={policyRelax} t={t} />
+        <FiringStrip hardware={authenticator} hostUnattested={policyRelax} t={t} />
         <p className="text-[11px] leading-snug text-text-3">
-          {t(hardware ? "confirm.spoof_note_host" : "confirm.spoof_note_browser")}{" "}
+          {t(authenticator ? "confirm.spoof_note_host" : "confirm.spoof_note_browser")}{" "}
           {t("confirm.spoof_note_drawn")}
         </p>
 
@@ -342,21 +405,16 @@ export function ConfirmApp() {
         >
           {t("confirm.deny")} <span className="kbd">esc</span>
         </Button>
-        {hardware ? (
-          <span
-            role="status"
-            className="inline-flex flex-1 items-center justify-center gap-1.5 py-2 text-xs font-semibold text-pending"
-          >
-            <svg width="11" height="12" viewBox="0 0 12 14" fill="none" aria-hidden="true">
-              <path
-                d="M6 3.5c2.5 0 4 1.8 4 4.2 0 2-.4 3.6-1 4.8M6 6c1.3 0 2 .9 2 2.1 0 1.6-.3 2.9-.8 3.9M6 8.6c0 1.6-.4 2.9-1.1 3.9M3 5.2C2.3 6 2 7 2 8c0 1.3-.2 2.4-.6 3.3"
-                stroke="currentColor"
-                strokeWidth="1.1"
-                strokeLinecap="round"
-              />
-            </svg>
-            {t("confirm.touchid_wait")}
-          </span>
+        {presence ? (
+          pendingRequest && (
+            <Button
+              className="flex-1 py-2 text-[13px]"
+              disabled={!armed || answer === "running"}
+              onClick={() => void answerPresence(pendingRequest)}
+            >
+              {t(authenticator ? "confirm.approve_authenticator" : "confirm.approve_software")}
+            </Button>
+          )
         ) : (
           <Button
             className="flex-1 py-2 text-[13px]"
@@ -368,15 +426,27 @@ export function ConfirmApp() {
         )}
       </div>
       <p className="text-[11px] leading-snug text-text-3">
-        {t(hardware ? "confirm.hardware_note" : "confirm.arm_note", [String(ARM_DELAY_MS)])}
+        {t(presence ? "confirm.presence_note" : "confirm.arm_note", [String(ARM_DELAY_MS)])}
       </p>
+      {presence && (request.at === "absent" || request.at === "unreadable") && (
+        <p role="status" className="text-[11px] leading-snug text-text-3">
+          {request.at === "unreadable"
+            ? t("confirm.answer_refused", [refusalSentence(t, request.error)])
+            : t("confirm.gone")}
+        </p>
+      )}
+      {typeof answer === "object" && (
+        <p role="status" className="text-[11px] leading-snug text-danger">
+          {t("confirm.answer_refused", [refusalSentence(t, answer.refused)])}
+        </p>
+      )}
 
       {/* Footer, OUTSIDE the scroll region like the actions above it: the
           request-id/timestamp line plus the compact panic exit (the kill
           switch's one-action brake, present on every surface). Engage only,
           never release; last in DOM order so Deny keeps the default focus. It
           denies this request first and then severs everything - both are
-          capability reduction, so it stays available in hardware mode too. */}
+          capability reduction, so it stays available on the presence route too. */}
       <div className="flex items-center gap-2 border-t border-edge pt-2 font-mono text-[10px] text-text-3">
         <span className="min-w-0 flex-1 truncate">{t("confirm.request_id", [payload.id])}</span>
         <span className="tnum whitespace-nowrap">{new Date(openedAt).toLocaleString()}</span>

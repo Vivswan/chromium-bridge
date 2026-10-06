@@ -10,6 +10,8 @@
 //   enroll_finish     -> enroll_result; an ok records the credential for the options page (recordedEnrollment)
 //   kill_release      -> the pushed presence_request is the reply; the answer to that request is settled through
 //                        claimKillRelease (kill.ts's handoff), not by presence_result
+//   presence_begin    -> the pushed presence_request is the reply (a page operation's, asked by the confirmation
+//                        service); the answer's verdict reaches the asker (beginPresence's onVerdict)
 //   presence_request  -> held as the pending request; the page fetches it, runs get, answers
 //   presence_assert   -> presence_result
 //   presence_confirm  -> presence_result (the window's answer, for a browser with no enrolled credential)
@@ -30,6 +32,7 @@ import {
   EnrollResultFrameSchema,
   type KillReleaseWire,
   type PresenceAssertWire,
+  type PresenceBeginWire,
   type PresenceConfirmWire,
   type PresenceRequestFrame,
   PresenceRequestFrameSchema,
@@ -57,18 +60,25 @@ export type EnrollBeginView = { ok: true; options: EnrollOptionsFrame } | Refuse
 export type EnrollFinishView = { ok: true; credentialId: string } | Refused;
 export type PresenceAssertView = { ok: true } | Refused;
 export type KillReleaseView = { ok: true; request: PresenceRequestFrame } | Refused;
+export type PresenceBeginView = { ok: true; request: PresenceRequestFrame } | Refused;
 export type EnrollmentNoteView = { ok: true; enrollment: WebAuthnEnrollment | null } | Refused;
 export type ForgetView = { ok: true } | Refused;
+
+/** The page operations the host mints a presence request for; the wire spelling of presence_begin's action. */
+export type PresenceAction = "page_eval" | "page_upload";
 
 /** The reply kill.ts hands over for a release (claimKillRelease), beside the host's own frames. */
 type ReleaseOutcome = { type: "release_outcome"; view: PresenceAssertView };
 
-/** The host-pushed request awaiting the page's answer; `forRelease` when a kill_release asked for it, so the
- * answer's verdict is the release outcome rather than the presence verdict. */
-interface PendingRequest {
-  frame: PresenceRequestFrame;
-  forRelease: boolean;
-}
+/** The host-pushed request awaiting the page's answer, and who asked for it: nobody (the options page answers
+ * it), a kill_release (the answer's verdict is the release outcome, not the presence verdict), or a page
+ * operation's confirmation (the answer's verdict reaches it through `onVerdict`, once, false on every path
+ * that ends the request without the host's ok). */
+type PendingRequest = { frame: PresenceRequestFrame } & (
+  | { asked: "nobody" }
+  | { asked: "release" }
+  | { asked: "page_op"; onVerdict: (ok: boolean) => void }
+);
 
 const ceremony = exchange<WebAuthnInboundFrame | ReleaseOutcome>(
   "a WebAuthn exchange is already in flight",
@@ -80,7 +90,7 @@ export const collaborator: PortCollaborator = {
     ceremony.attach(c);
   },
   onDetach() {
-    pendingRequest.value = null;
+    dropPending();
     ceremony.detach();
   },
   onFrame(msg) {
@@ -185,11 +195,66 @@ export function beginKillRelease(): Promise<KillReleaseView> {
     replies: ["presence_request"],
     read(frame): KillReleaseView {
       const parsed = PresenceRequestFrameSchema.safeParse(frame);
-      return parsed.success
-        ? { ok: true, request: parsed.data }
-        : { ok: false, error: "malformed presence_request from host" };
+      if (!parsed.success) return { ok: false, error: "malformed presence_request from host" };
+      hold({ frame: parsed.data, asked: "release" });
+      return { ok: true, request: parsed.data };
     },
   }).view;
+}
+
+/** Ask the host for a presence request for a page operation on `origin`, on behalf of its confirmation. The
+ * reply is the request the host pushes, held for the confirmation window to answer; `onVerdict` receives the
+ * host's verdict on that answer, or false once the request ends any other way (superseded, detached, or the
+ * answer's exchange failed after posting). A refusal here (the host would not mint a request, the exchange is
+ * busy, or the host is gone) is the view's error and calls nothing: the caller denies on it. */
+export function beginPresence(
+  action: PresenceAction,
+  origin: string,
+  onVerdict: (ok: boolean) => void,
+): Promise<PresenceBeginView> {
+  return ceremony.request({ type: "presence_begin", action, origin } satisfies PresenceBeginWire, {
+    replies: ["presence_request", "presence_result"],
+    read(frame): PresenceBeginView {
+      if (frame.type === "presence_result") {
+        const result = PresenceResultFrameSchema.safeParse(frame);
+        return {
+          ok: false,
+          error:
+            result.success && !result.data.ok
+              ? result.data.reason
+              : "malformed presence_result from host",
+        };
+      }
+      const parsed = PresenceRequestFrameSchema.safeParse(frame);
+      if (!parsed.success) return { ok: false, error: "malformed presence_request from host" };
+      hold({ frame: parsed.data, asked: "page_op", onVerdict });
+      return { ok: true, request: parsed.data };
+    },
+  }).view;
+}
+
+/** Forget the page-op request named by `nonce`, with no verdict: its confirmation is over (settled or past
+ * its deadline), so a tap made for it from now on answers nothing here. A request someone else holds, or a
+ * newer one, stays. */
+export function abandonPresence(nonce: string): void {
+  const pending = pendingRequest.value;
+  if (pending?.asked === "page_op" && pending.frame.nonce === nonce) pendingRequest.value = null;
+}
+
+/** Hold `next` as the pending request. A newer request replaces an unanswered older one, since the host has
+ * moved on; a page op's confirmation waiting on the older one learns it ended without an approval. */
+function hold(next: PendingRequest): void {
+  if (pendingRequest.value)
+    console.warn("[bb] a newer presence request replaces the unanswered one");
+  dropPending();
+  pendingRequest.value = next;
+}
+
+/** Clear the pending request, telling a page op's confirmation that the request ended without an approval. */
+function dropPending(): void {
+  const pending = pendingRequest.value;
+  pendingRequest.value = null;
+  if (pending?.asked === "page_op") pending.onVerdict(false);
 }
 
 /** The handoff from kill.ts, the one statement of it. The host's reply to a kill_release crosses the two
@@ -249,7 +314,9 @@ export function confirmPresence(nonce: string): Promise<PresenceAssertView> {
 
 /** The one lifecycle of an answer to the pending request, whichever frame carries it: the answer must name the
  * pending request's nonce (an answer to a superseded request answers nothing), and the request is consumed only
- * once the answer is on the pipe. A release's verdict comes through claimKillRelease, not presence_result. */
+ * once the answer is on the pipe. A release's verdict comes through claimKillRelease, not presence_result; a
+ * page op's confirmation gets the verdict through its onVerdict, false too when the posted answer's exchange
+ * fails (a timeout, a detach), since that request is gone with it. */
 function answerPending(
   nonce: string,
   frame: PresenceAssertWire | PresenceConfirmWire,
@@ -261,41 +328,45 @@ function answerPending(
   if (pending.frame.nonce !== nonce) {
     return Promise.resolve({ ok: false, error: "the presence request was superseded" });
   }
+  const verdict = (view: PresenceAssertView): PresenceAssertView => {
+    if (pending.asked === "page_op") pending.onVerdict(view.ok);
+    return view;
+  };
   const { posted, view } = ceremony.request(frame, {
     replies: ["presence_result"],
     read(reply): PresenceAssertView | Promise<PresenceAssertView> {
       const result = PresenceResultFrameSchema.safeParse(reply);
-      if (!result.success) return { ok: false, error: "malformed presence_result from host" };
-      if (!result.data.ok) return { ok: false, error: result.data.reason };
-      if (!pending.forRelease) return { ok: true };
+      if (!result.success)
+        return verdict({ ok: false, error: "malformed presence_result from host" });
+      if (!result.data.ok) return verdict({ ok: false, error: result.data.reason });
+      if (pending.asked !== "release") return verdict({ ok: true });
       return ceremony.hold({ replies: ["release_outcome"], read: (outcome) => outcome.view });
+    },
+    refused(failure): PresenceAssertView {
+      const view: PresenceAssertView = { ok: false, error: failure.error };
+      return failure.posted ? verdict(view) : view;
     },
   });
   if (posted) pendingRequest.value = null;
   return view;
 }
 
-/** Route one inbound WebAuthn frame: a presence request is held for the page (a newer one replaces an
- * unanswered older one, since the host has moved on) and answers a kill_release that asked for it; anything
- * else answers the outstanding exchange or, with none outstanding, is dropped. */
+/** Route one inbound WebAuthn frame: a presence request answers the kill_release or presence_begin that asked
+ * for it (whose reader holds it for the page), or, pushed with nobody asking, is held and opens the page where
+ * the tap happens, which shows the action before asking for it; anything else answers the outstanding exchange
+ * or, with none outstanding, is dropped. */
 export function handleWebAuthnFrame(msg: WebAuthnInboundFrame): void {
   if (msg.type === "presence_request") {
+    if (ceremony.answer(msg)) return;
     const parsed = PresenceRequestFrameSchema.safeParse(msg);
     if (!parsed.success) {
       console.warn("[bb] dropping malformed presence_request");
       return;
     }
-    if (pendingRequest.value)
-      console.warn("[bb] a newer presence request replaces the unanswered one");
-    // A kill_release awaiting this request is answered by it; a push nobody asked for opens the page where
-    // the tap happens, which shows the action before asking for it.
-    const forRelease = ceremony.answer(msg);
-    pendingRequest.value = { frame: parsed.data, forRelease };
-    if (!forRelease) {
-      void browser.runtime.openOptionsPage().catch((e: unknown) => {
-        console.warn("[bb] could not open the options page for the presence request", e);
-      });
-    }
+    hold({ frame: parsed.data, asked: "nobody" });
+    void browser.runtime.openOptionsPage().catch((e: unknown) => {
+      console.warn("[bb] could not open the options page for the presence request", e);
+    });
     return;
   }
   if (!ceremony.answer(msg)) console.warn(`[bb] dropping unsolicited ${msg.type}`);
