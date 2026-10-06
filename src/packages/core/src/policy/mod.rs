@@ -570,7 +570,7 @@ impl Default for PolicyDoc {
 
 impl PolicyDoc {
     /// Structural validity of the bytes: the schema version is ours, the revision fits the JS-safe bound, and
-    /// `disabledTools` fits its bounds. The parse enforces none of the three, so the read path
+    /// `disabledTools` fits its bounds. The parse enforces only the revision bound, so the read path
     /// ([`PolicyStore::baseline_doc`]) runs it, and `set_signed` runs it before any presence prompt. Whether the
     /// revision is acceptable for a write is the store's question, not the bytes'.
     pub fn validate(&self) -> Result<(), &'static str> {
