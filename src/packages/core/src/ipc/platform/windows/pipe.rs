@@ -128,12 +128,9 @@ impl PipeListener {
         }
     }
 
-    /// Create the next instance before the connected one is handed out, so a
-    /// client arriving between two `accept` calls finds the name listening:
-    /// with only connected instances it would wait out its deadline on
-    /// ERROR_PIPE_BUSY, and with none the name is gone. A failure here only
-    /// costs that early arrival; the next `accept` creates its own instance
-    /// and reports the error if it persists.
+    /// Create the next instance before the connected one is handed out: with only connected instances a client
+    /// arriving between accepts waits out its deadline on ERROR_PIPE_BUSY, and with none the name is gone. A
+    /// failure costs that early arrival alone; the next `accept` creates its own instance.
     fn listen_again(&self) {
         match self.create_instance(false) {
             Ok(next) => {

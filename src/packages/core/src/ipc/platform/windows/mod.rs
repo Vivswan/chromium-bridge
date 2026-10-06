@@ -51,12 +51,9 @@ const PIPE_NAME_MAX: usize = 256;
 pub struct PipeName(String);
 
 impl PipeName {
-    /// The pipe one broker binds. The pipe namespace is machine-global and
-    /// flat, so the per-user runtime directory's path is hashed into the leaf
-    /// (one pipe per user, another per test scratch directory), and the
-    /// broker's pid follows it: a surviving broker of another build keeps its
-    /// name and its connections while the new one binds a fresh name, which a
-    /// name held across instances would refuse.
+    /// The pipe one broker binds. The namespace is machine-global and flat, so the runtime directory's path
+    /// is hashed into the leaf (one pipe per user or scratch dir) and the pid follows it (a surviving broker
+    /// keeps its name while the new one binds a fresh one).
     pub fn for_broker(runtime_dir: &Path, pid: u32) -> PipeName {
         let digest = Sha256::digest(runtime_dir.to_string_lossy().as_bytes());
         let leaf = hex::encode(digest.get(..16).unwrap_or_default());

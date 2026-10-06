@@ -49,10 +49,7 @@ fn open_private(opts: fs::OpenOptions, path: &Path) -> io::Result<fs::File> {
         opts
     };
     let f = opts.open(path)?;
-    // The mode above applies only on create; re-assert it on the open handle
-    // so a pre-planted looser file cannot keep group/other bits. Propagated:
-    // a file we cannot tighten (e.g. planted by a more-privileged writer) is
-    // refused like any other failed open, never written through.
+    // A file we cannot tighten (planted by a more-privileged writer) is refused, never written through.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
