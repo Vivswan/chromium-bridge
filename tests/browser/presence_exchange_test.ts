@@ -23,7 +23,11 @@
  *                                     port (the frame the confirmation service posts); the request names the op
  *                                     and the origin, an assertion over a superseded request's challenge is
  *                                     refused, its own credential's tap approves, and the trail names all three
- *  11  a browser forgets itself       -> A's "Forget this browser" removes its enrollment through its own host;
+ *  11  a policy grant from the page   -> the host key is minted into the isolated runtime dir (`pair --file-store`
+ *                                     on a Python pty), A loosens a setting in its Security policy section,
+ *                                     its credential signs the host's request, and `policy show` in the same dir
+ *                                     reads the signed revision back; the trail names the credential
+ *  12  a browser forgets itself       -> A's "Forget this browser" removes its enrollment through its own host;
  *                                     the panel reads not enrolled, the trail names the credential, B's stays
  *
  * The host runs in control-plane mode (the kill switch is engaged first in the isolated runtime dir), so no
@@ -38,7 +42,7 @@
  * Run:  CHROME_BIN=/path/to/chrome-for-testing bun tests/browser/presence_exchange_test.ts
  */
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -258,6 +262,73 @@ async function waitForAnyText(page: Page, texts: string[], timeoutMs = 30000): P
   return (await handle.jsonValue()) as string;
 }
 
+/** Click the switch whose label reads `label`: the label's `for` names the switch, as the editor renders it. */
+async function clickSwitch(page: Page, label: string): Promise<void> {
+  const handle = await page.waitForFunction(
+    (l: string) => {
+      const target = [...document.querySelectorAll("label")].find(
+        (el) => el.textContent?.trim() === l,
+      );
+      const control = target && document.getElementById(target.htmlFor);
+      return control instanceof HTMLButtonElement && !control.disabled ? control : null;
+    },
+    { timeout: 30000 },
+    label,
+  );
+  await (handle.asElement() as ElementHandle<Element>).click();
+}
+
+/** The first audit record `matches`, polled: the host writes the trail after it answers the page. */
+async function waitForAuditRecord(
+  work: string,
+  matches: (r: AuditRecord) => boolean,
+): Promise<AuditRecord | undefined> {
+  for (let i = 0; i < 100; i++) {
+    const hit = auditRecords(work).find(matches);
+    if (hit) return hit;
+    await sleep(100);
+  }
+  return undefined;
+}
+
+/** Mint the host key into the isolated runtime dir's file store. `pair` reads its confirmation phrase from a
+ * terminal and refuses a pipe, so it runs on a pseudo-terminal from Python's stdlib pty module (BSD `script`
+ * refuses a non-terminal stdin, which is what a test runner has); the phrase is typed once the prompt shows.
+ * The transcript travels with any failure. */
+function pairHostKey(env: Record<string, string>): Promise<string> {
+  const pty = "import os, pty, sys; sys.exit(os.waitstatus_to_exitcode(pty.spawn(sys.argv[1:])))";
+  return new Promise((resolve, reject) => {
+    const child = spawn("python3", ["-c", pty, BIN, "pair", "--file-store"], {
+      env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let transcript = "";
+    let typed = false;
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error(`pair --file-store timed out:\n${transcript}`));
+    }, 20000);
+    const onData = (chunk: Buffer) => {
+      transcript += chunk.toString();
+      if (!typed && transcript.includes("to confirm:")) {
+        typed = true;
+        child.stdin.write("release\n");
+      }
+    };
+    child.stdout.on("data", onData);
+    child.stderr.on("data", onData);
+    child.on("error", (e) => {
+      clearTimeout(timer);
+      reject(new Error(`pair --file-store could not start: ${e.message}`));
+    });
+    child.on("exit", (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve(transcript);
+      else reject(new Error(`pair --file-store exited ${code}:\n${transcript}`));
+    });
+  });
+}
+
 /** Click the enabled button whose whole label is `label`, once it exists. */
 async function clickButton(page: Page, label: string): Promise<void> {
   const handle = await page.waitForFunction(
@@ -273,6 +344,7 @@ async function clickButton(page: Page, label: string): Promise<void> {
 
 // The panel's English copy (src/apps/extension/src/locales/en.yml); the throwaway profile's UI language is en.
 const UI = {
+  cdpMode: "Route page operations through CDP",
   killed: "Engaged - all bridge activity is refused",
   alive: ["Off - the bridge is serving", "Last known: alive (host unreachable - unverified)"],
   release: "Release kill switch",
@@ -679,7 +751,7 @@ async function main(): Promise<void> {
 
     // 6: a credential the host never enrolled. A second, roaming authenticator mints it: Chrome refuses to
     // register on an authenticator that already holds an excluded credential (InvalidStateError).
-    await addAuthenticator(a.cdp, "usb");
+    const { authenticatorId: roamingId } = await addAuthenticator(a.cdp, "usb");
     const strayChallenge = Buffer.from("stray enrollment, never shown to the host").toString(
       "base64url",
     );
@@ -793,7 +865,48 @@ async function main(): Promise<void> {
       pageOpRecords,
     );
 
-    // 11: a browser forgets itself from its panel, through its own host; the other browser's enrollment stays.
+    // 11: A signs the first policy baseline from its page. The grant lane exists only as the host key's
+    // signature, so the key is minted first; the editor's loosening switch posts the grant, A's credential
+    // signs the request the host pushes for it, and the CLI reads the result back from the same runtime dir.
+    // The page's request names no transport, and Chrome cannot dispatch to one of two attached authenticators
+    // without one, so the roaming stand-in from step 6 leaves first.
+    await a.cdp.send("WebAuthn.removeVirtualAuthenticator", { authenticatorId: roamingId });
+    const pairTranscript = await pairHostKey(env);
+    await clickSwitch(a.page, UI.cdpMode);
+    const grant = await waitForAuditRecord(
+      work,
+      (r) => r.event_kind === "policy_write" && r.outcome !== undefined,
+    );
+    const shown = JSON.parse(
+      execFileSync(BIN, ["policy", "show", "--json"], {
+        env,
+        stdio: "pipe",
+        timeout: 15000,
+      }).toString(),
+    ) as { store: string; revision?: number; signed?: boolean; effective?: { cdpMode?: boolean } };
+    check(
+      grant?.outcome === "ok" &&
+        grant.surface === "extension" &&
+        grant.detail === `auth=${credentialFingerprint(aId)}; touched=cdpMode` &&
+        shown.store === "present" &&
+        shown.revision === 1 &&
+        shown.signed === true &&
+        shown.effective?.cdpMode === true,
+      "browser A: loosening a setting in its policy editor signs the first baseline behind its tap, and `policy show` reads the signed revision back",
+      {
+        grant,
+        shown,
+        // What the page said when the grant did not land: its alerts, and the pairing's last line.
+        alerts: await a.page.evaluate(() =>
+          [...document.querySelectorAll("[role=alert]")]
+            .map((el) => el.textContent)
+            .filter(Boolean),
+        ),
+        paired: pairTranscript.trim().split("\n").at(-1),
+      },
+    );
+
+    // 12: a browser forgets itself from its panel, through its own host; the other browser's enrollment stays.
     a.page.once("dialog", (dialog) => void dialog.accept());
     await clickButton(a.page, UI.forget);
     await waitForText(a.page, UI.forgotten);

@@ -65,12 +65,12 @@ Chrome spawns the host per the host manifest, whose `allowed_origins` pins the e
 | Family | From the extension | From the host |
 | --- | --- | --- |
 | host key | `enclave_challenge`, `enclave_revoke` | `enclave_proof`, `enclave_error` (`not_enrolled` when no key exists), `enclave_revoked` |
-| client admin | `client_list`, `client_revoke` | `client_list_result`, `client_revoke_result` |
+| client admin | `client_list`, `client_revoke`, `client_pair` | `client_list_result`, `client_revoke_result`, `client_pair_result`; `client_pair` opens the presence exchange first |
 | kill switch | `kill_status`, `kill_engage`, `kill_release` | `kill_status_result` |
 | WebAuthn | `enroll_begin`, `enroll_finish`, `presence_begin`, `presence_assert`, `presence_confirm`, `browser_revoke` | `enroll_options`, `enroll_result`, `presence_request`, `presence_result`, `browser_revoke_result` |
 | registration | `registration_status`, `registration_repair` | `registration_status_result` |
 | health report | `doctor_report` | `doctor_report_result` |
-| policy and language | `policy_get`, `policy_restrict`, `lang_get`, `lang_set` | `policy_current`, `policy_restrict_result`, `lang_current` |
+| policy and language | `policy_get`, `policy_restrict`, `policy_set`, `policy_history`, `policy_rollback`, `lang_get`, `lang_set` | `policy_current`, `policy_restrict_result`, `policy_set_result`, `policy_history_result`, `policy_rollback_result`, `lang_current`; `policy_set` and a relaxing `policy_rollback` open the presence exchange first |
 | audit | `audit_event` (fire-and-forget), `audit_read` | `audit_read_result` |
 
 - **`audit_event`** is kind-whitelisted (the extension-owned confirmation and enrollment kinds only) and the host stamps the surface itself, so the browser leg cannot forge a host-side event into the trail.

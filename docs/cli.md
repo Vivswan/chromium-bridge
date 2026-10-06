@@ -145,7 +145,7 @@ The host-key ceremony gives the extension one host identity to pin:
 - When the credential store does not answer, a `--file-store` reset proceeds with a warning that an entry the store may hold stays behind. Run `pair --reset` again once the store answers; `revoke --all` would also forget every browser and client.
 - `chromium-bridge enclave-status [--json]` reports the current state read-only: whether a key is present, which store holds it, and its fingerprint.
 
-User presence for the browser's own acts (releasing the kill switch, enrolling a second browser) is a WebAuthn tap on the browser's authenticator, verified by the host. The options page's identity section enrolls the authenticator, and its kill panel answers the host's presence request with the tap.
+User presence for the browser's own acts (releasing the kill switch, enrolling a second browser) is a WebAuthn tap on the browser's authenticator, verified by the host. The options page's identity section enrolls the authenticator; its kill panel, its policy editor, and its trusted-clients form each answer the host's presence request with the proof the kill-switch table below describes.
 
 Forgetting is friction-free, because it only removes capability:
 
@@ -174,6 +174,7 @@ chromium-bridge revoke-client --name codex
 - Authorization keys on the attested anchor, never the `--name` label, which labels logs and revocation. What each platform measures is on the [trust boundaries page](security/trust-boundaries.md#boundary-1-mcp-client---rust-mcp-server--stdio-json-rpc-20).
 - Hash anchors change when the client updates; re-run `pair-client` with the same name to replace the entry (the re-pair path).
 - Adding a client is a capability grant, so it is presence-gated: a confirmation typed on an interactive terminal, with a piped stdin refused. Revoking is friction-free by design; a live broker drops the revoked client and refuses its re-attach.
+- The options page's Trusted MCP clients section pairs a client the same way (a name plus a hash or signer anchor) behind this browser's presence proof; `--this-parent` exists only on the CLI, because a page has no parent process to measure.
 
 Once the allowlist exists, anything unmatched fails closed, including an identity that cannot be measured and an unreadable allowlist. The Windows measurement is in [SECURITY.md](../.github/SECURITY.md#platform-support).
 
@@ -228,12 +229,14 @@ chromium-bridge policy rollback --revision <n> [--json]
 - **`policy set` is the grant lane:** it folds the edits over the current baseline (untouched fields carry baseline values, never effective ones), embeds the touched-field set in the document, and signs the exact document bytes with the host key once the typed terminal confirmation passes.
 - **No host key, no grant:** on a machine that has not run `pair` the CLI refuses UP FRONT, before any prompt could appear, so no baseline can exist that the extension's pin could not verify.
 - **`policy restrict` is the free lane:** no prompt, no signature, and the seam's direction check refuses any edit that would relax the effective policy, so a scripted or forged restriction is at worst a denial of service against your own bridge.
+- **The options page's Security policy section runs the same two lanes:** a tightening applies at once, a loosening signs a fresh baseline behind this browser's presence proof, and a keyless host refuses it up front with the same words. Before any baseline exists every edit there is a grant, since there is nothing to restrict yet.
 
 **Rollback never replays.** `policy rollback --revision <n>` re-derives that revision's effective policy, diffs it against the current one, and applies the difference as a FRESH write.
 
 - **A rollback that only tightens** rides the free restrict lane with no prompt.
 - **One that relaxes anything** is one fresh terminal confirmation and signature, exactly like any other grant.
 - **The old signed artifact is never written back:** a lower revision must keep failing the extension's ratchet, which is the anti-replay property, not a limitation.
+- **The options page's Previous revisions list** shows the same ring as `policy history` and rolls back the same way, taking the lane the direction decides.
 
 **`--json` contracts.** `show`, `history`, `set`, and `rollback` accept `--json`, which swaps the prose for a versioned report on stdout (and, for the write lanes, a versioned error object on refusal). Check the `v` field first and refuse a newer value before reading anything else (fail closed).
 
