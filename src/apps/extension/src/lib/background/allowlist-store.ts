@@ -15,8 +15,8 @@ import {
   originGlobOf,
 } from "../shared/allowlist";
 import { inLife } from "../shared/in-life";
+import { readKey } from "../shared/read-key";
 import { getSetting } from "../shared/settings";
-import { readKey } from "../shared/storage";
 import { BADGE_PENDING_COLOR } from "../shared/theme-colors";
 
 const STORAGE_KEY = "allowlist";

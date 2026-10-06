@@ -81,8 +81,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  // Drain anything a failed assertion left pending, so the service's shared
-  // FIFO can never wedge the next test's confirmation behind a stale one.
+  // A failed assertion leaves its one confirmation active; settle it so the
+  // next test's does not queue behind it.
   denyActiveConfirmation();
 });
 

@@ -100,9 +100,7 @@ export function advance(event: BrakeEvent): void {
   brake.value = transition(brake.value, event, arrivals.value);
 }
 
-/** Captured at the START of a decision, before its first await, and carried by every confirmation the decision
- * raises (ConfirmRequest.panicEpoch): the service denies a confirmation whose epoch is not the current one, so a
- * deny-kill that crossed the decision denies it even after the latch lifted. */
+/** The epoch a decision captures at its start; ConfirmRequestBase.panicEpoch (confirm/service.ts) owns when and why. */
 export function currentPanicEpoch(): number {
   return panics.value;
 }

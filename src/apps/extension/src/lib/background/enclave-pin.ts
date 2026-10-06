@@ -20,7 +20,7 @@ import {
 } from "@chromium-bridge/shared/enclave";
 import { browser } from "wxt/browser";
 import { z } from "zod";
-import { readKey, readKeyOr, type Stored } from "../shared/storage";
+import { readKey, readKeyOr, type Stored } from "../shared/read-key";
 import { computeKeyId, parsePubkey } from "./enclave-verify";
 
 const PIN_KEY = "enclavePin";

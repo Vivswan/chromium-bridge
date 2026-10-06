@@ -46,7 +46,7 @@ import { browser } from "wxt/browser";
 import type { PortCollaborator } from "../background/connection";
 import { exchange } from "../background/exchange";
 import { inLife } from "../shared/in-life";
-import { readKey } from "../shared/storage";
+import { readKey } from "../shared/read-key";
 
 export type Refused = { ok: false; error: string };
 export type EnrollBeginView = { ok: true; options: EnrollOptionsFrame } | Refused;

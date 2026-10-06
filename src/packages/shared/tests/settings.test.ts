@@ -2,20 +2,7 @@
 // not vouch for, and one bad field never takes the healthy fields down with it.
 
 import { describe, expect, test } from "bun:test";
-import { DEFAULTS, salvageSetting, salvageSettings } from "../src/settings";
-
-describe("salvageSetting", () => {
-  test.each([
-    ["missing", "groupTabs", undefined, DEFAULTS.groupTabs],
-    ["valid boolean", "allowAllSites", true, true],
-    ["valid locale", "uiLanguage", "zh_TW", "zh_TW"],
-    ["mistyped boolean", "allowAllSites", "yes", DEFAULTS.allowAllSites],
-    ["number for a boolean", "groupTabs", 1, DEFAULTS.groupTabs],
-    ["unsupported locale", "uiLanguage", "fr", DEFAULTS.uiLanguage],
-  ] as const)("%s %s", (_case, key, stored, expected) => {
-    expect(salvageSetting(key, stored)).toBe(expected);
-  });
-});
+import { DEFAULTS, salvageSettings } from "../src/settings";
 
 describe("salvageSettings", () => {
   test("a non-object bag yields the defaults", () => {

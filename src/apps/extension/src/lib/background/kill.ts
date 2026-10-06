@@ -29,7 +29,7 @@ import type {
 import pLimit from "p-limit";
 import { browser } from "wxt/browser";
 import { inLife } from "../shared/in-life";
-import { readKey, readKeyOr, type Stored } from "../shared/storage";
+import { readKey, readKeyOr, type Stored } from "../shared/read-key";
 import { claimKillRelease, type PresenceAssertView } from "../webauthn/exchange";
 import { auditEvent } from "./audit-log";
 import { advance, engageOutstanding, resetBrakeForTests, stampArrival } from "./brake";

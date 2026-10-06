@@ -30,7 +30,7 @@ import pLimit from "p-limit";
 import { browser } from "wxt/browser";
 import { z } from "zod";
 import { inLife } from "../shared/in-life";
-import { readKeyOr } from "../shared/storage";
+import { readKeyOr } from "../shared/read-key";
 import type { Connection, PortCollaborator } from "./connection";
 
 const AUDIT_RING_KEY = "auditRing";

@@ -7,7 +7,7 @@
 
 import { DEFAULTS, type Settings, SettingsSchema } from "@chromium-bridge/shared/settings";
 import type { ZodType } from "zod";
-import { readKeyOr } from "./storage";
+import { readKeyOr } from "./read-key";
 
 // The shape viewed per key: indexed by a generic K, the raw shape yields the
 // union of every field's schema, this view yields ZodType<Settings[K]>.

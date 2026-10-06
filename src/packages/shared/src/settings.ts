@@ -59,12 +59,3 @@ export function salvageSettings(stored: unknown): Settings {
     }),
   ) as Settings;
 }
-
-/**
- * Validate one setting read from storage, falling back to the field's
- * default when the stored value is missing or fails its schema.
- */
-export function salvageSetting<K extends SettingKey>(key: K, value: unknown): Settings[K] {
-  const parsed = SettingsSchema.shape[key].safeParse(value);
-  return parsed.success ? (parsed.data as Settings[K]) : DEFAULTS[key];
-}
