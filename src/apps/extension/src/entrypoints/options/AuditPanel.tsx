@@ -115,7 +115,7 @@ function HostTrailLine({ entry }: { entry: AuditTrailEntry }) {
       <span className="tnum shrink-0 text-text-3">{new Date(entry.ts_ms).toLocaleString()}</span>
       <span className="min-w-0">
         <span className="text-xs font-medium text-text-1">{entry.kind}</span>
-        {entry.fields && <span className="ml-2 break-all text-text-3">{entry.fields.trim()}</span>}
+        {entry.fields && <span className="ml-2 break-all text-text-3">{entry.fields}</span>}
       </span>
     </li>
   );

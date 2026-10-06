@@ -13,7 +13,7 @@ import { fakeBrowser } from "wxt/testing/fake-browser";
 const RING: AuditEntry[] = [{ at: 1_700_000_000_000, kind: "confirm_denied", tool: "page_eval" }];
 
 const TRAIL: AuditTrailEntry[] = [
-  { entry: "record", ts_ms: 3000, kind: "pair_client", fields: " surface=cli outcome=ok" },
+  { entry: "record", ts_ms: 3000, kind: "pair_client", fields: "surface=cli outcome=ok" },
   { entry: "unrecognized", text: "UNRECOGNIZED RECORD (corrupt, tampered, or newer schema)" },
   { entry: "record", ts_ms: 2000, kind: "kill_release", fields: "" },
 ];

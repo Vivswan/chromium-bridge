@@ -816,6 +816,34 @@ fn doctor_outcome_maps_onto_the_pinned_wire_shapes() {
 }
 
 #[test]
+fn a_record_past_the_js_safe_timestamp_travels_as_unrecognized_not_as_a_refused_reply() {
+    // The page's generated reader refuses an integer past 2^53 - 1 (its safe-integer rule), so a record the
+    // CLI renders fine would otherwise sink the whole audit_read_result; it travels as the stand-in entry
+    // instead. The bound itself, exactly, is the positive control.
+    use crate::audit::{AuditEntry, AuditKind, AuditRecord, Surface};
+    use crate::policy::JS_SAFE_INT_MAX;
+    let at = |ts_ms: u64| {
+        let mut rec = AuditRecord::new(AuditKind::KillEngage).surface(Surface::Cli);
+        rec.ts_ms = ts_ms;
+        AuditTrailEntry::from(&AuditEntry::Record(Box::new(rec)))
+    };
+    assert_eq!(
+        at(JS_SAFE_INT_MAX + 1),
+        AuditTrailEntry::Unrecognized {
+            text: crate::audit::UNRECOGNIZED_RECORD.into(),
+        }
+    );
+    assert_eq!(
+        at(JS_SAFE_INT_MAX),
+        AuditTrailEntry::Record {
+            ts_ms: crate::tools::args::JsInt::MAX,
+            kind: "kill_engage".into(),
+            fields: "surface=cli".into(),
+        }
+    );
+}
+
+#[test]
 fn audit_report_maps_onto_the_pinned_wire_shapes() {
     // The wire contract the extension's audit reader consumes: the page's three fields travel exactly when
     // `ok`, the error exactly when not, and an entry is the CLI line's parts under its `entry` tag.
@@ -824,9 +852,9 @@ fn audit_report_maps_onto_the_pinned_wire_shapes() {
             AuditReport::Page {
                 entries: vec![
                     AuditTrailEntry::Record {
-                        ts_ms: 3_000,
+                        ts_ms: crate::tools::args::JsInt::from(3_000),
                         kind: "pair_client".into(),
-                        fields: " surface=cli outcome=ok".into(),
+                        fields: "surface=cli outcome=ok".into(),
                     },
                     AuditTrailEntry::Unrecognized {
                         text: "UNRECOGNIZED RECORD (corrupt, tampered, or newer schema)".into(),
@@ -843,7 +871,7 @@ fn audit_report_maps_onto_the_pinned_wire_shapes() {
             "ok": true,
             "entries": [
                 { "entry": "record", "ts_ms": 3000, "kind": "pair_client",
-                  "fields": " surface=cli outcome=ok" },
+                  "fields": "surface=cli outcome=ok" },
                 { "entry": "unrecognized",
                   "text": "UNRECOGNIZED RECORD (corrupt, tampered, or newer schema)" },
             ],

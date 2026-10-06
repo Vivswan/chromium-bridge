@@ -307,9 +307,9 @@ fn audit_read_answers_the_lines_the_cli_prints() {
             AuditReport::Page {
                 entries: vec![
                     AuditTrailEntry::Record {
-                        ts_ms: 3_000,
+                        ts_ms: crate::tools::args::JsInt::from(3_000),
                         kind: "pair_client".into(),
-                        fields: " surface=cli outcome=ok".into(),
+                        fields: "surface=cli outcome=ok".into(),
                     },
                     AuditTrailEntry::Unrecognized {
                         text: crate::audit::UNRECOGNIZED_RECORD.into(),

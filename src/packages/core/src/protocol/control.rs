@@ -165,7 +165,7 @@ pub enum AdminControl {
     /// Extension -> host: read the newest records of the host's audit trail.
     AuditRead {
         #[serde(skip_serializing_if = "Option::is_none")]
-        limit: Option<usize>,
+        limit: Option<AuditReadLimit>,
     },
     /// Host -> extension: the trail page. `entries`, `older`, and `path` travel exactly when `ok`, `error`
     /// exactly when not ([`AuditReport::into_frame`]).
@@ -269,15 +269,16 @@ impl DoctorOutcome {
 }
 
 /// One line of the host's audit trail as the options page shows it: the three parts of the line
-/// `chromium-bridge audit` prints, spelled by `audit.rs` alone (the kind's wire name and the ` key=value`
+/// `chromium-bridge audit` prints, spelled by `audit.rs` alone (the kind's wire name and the `key=value`
 /// fields), with the timestamp left raw for the page to localize. An unparsable line keeps its position and
-/// carries the CLI's stand-in text.
+/// carries the CLI's stand-in text; so does a record whose timestamp lies past the JS-safe bound the page's
+/// parser enforces, so one such line cannot sink the whole reply.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(tag = "entry", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AuditTrailEntry {
     Record {
-        ts_ms: u64,
+        ts_ms: crate::tools::args::JsInt,
         kind: String,
         fields: String,
     },
@@ -288,15 +289,24 @@ pub enum AuditTrailEntry {
 
 impl From<&crate::audit::AuditEntry> for AuditTrailEntry {
     fn from(entry: &crate::audit::AuditEntry) -> Self {
+        let unrecognized = AuditTrailEntry::Unrecognized {
+            text: crate::audit::UNRECOGNIZED_RECORD.into(),
+        };
         match entry {
-            crate::audit::AuditEntry::Record(rec) => AuditTrailEntry::Record {
-                ts_ms: rec.ts_ms,
-                kind: rec.kind_name(),
-                fields: rec.fields_display(),
-            },
-            crate::audit::AuditEntry::Unrecognized => AuditTrailEntry::Unrecognized {
-                text: crate::audit::UNRECOGNIZED_RECORD.into(),
-            },
+            crate::audit::AuditEntry::Record(rec) => {
+                let ts_ms = i64::try_from(rec.ts_ms)
+                    .ok()
+                    .and_then(|ms| crate::tools::args::JsInt::try_from(ms).ok());
+                match ts_ms {
+                    Some(ts_ms) => AuditTrailEntry::Record {
+                        ts_ms,
+                        kind: rec.kind_name(),
+                        fields: rec.fields_display(),
+                    },
+                    None => unrecognized,
+                }
+            }
+            crate::audit::AuditEntry::Unrecognized => unrecognized,
         }
     }
 }
@@ -400,10 +410,27 @@ impl<'de> Deserialize<'de> for RepairBrowsers {
 pub const MAX_AUDIT_READ_LIMIT: usize = 1000;
 
 /// An `audit_read` limit, parsed once at the frame boundary into `1..=MAX_AUDIT_READ_LIMIT`: a zero or
-/// over-cap limit fails the frame parse, so the handler never sees one. Travels as the plain integer.
+/// over-cap limit fails the frame parse, so the handler never sees one. Travels as the plain integer, and
+/// its schema carries the same bounds, so the extension's generated writer type refuses what the host
+/// refuses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
 pub struct AuditReadLimit(usize);
+
+#[cfg(feature = "envelope-schema")]
+impl schemars::JsonSchema for AuditReadLimit {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "AuditReadLimit".into()
+    }
+
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({ "type": "integer", "minimum": 1, "maximum": MAX_AUDIT_READ_LIMIT })
+    }
+}
 
 impl AuditReadLimit {
     pub fn get(self) -> usize {
@@ -1169,7 +1196,6 @@ pub enum HostRequest {
     DoctorReport {},
     /// Read-only; an absent `limit` reads as the CLI's default.
     AuditRead {
-        #[cfg_attr(feature = "envelope-schema", schemars(with = "Option<usize>"))]
         #[serde(skip_serializing_if = "Option::is_none")]
         limit: Option<AuditReadLimit>,
     },

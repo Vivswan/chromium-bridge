@@ -53,7 +53,7 @@ const ROWS: RegistrationRow[] = [
 const rowsResult = { type: "registration_status_result" as const, ok: true, browsers: ROWS };
 
 const TRAIL: AuditTrailEntry[] = [
-  { entry: "record", ts_ms: 3000, kind: "pair_client", fields: " surface=cli outcome=ok" },
+  { entry: "record", ts_ms: 3000, kind: "pair_client", fields: "surface=cli outcome=ok" },
   { entry: "unrecognized", text: "UNRECOGNIZED RECORD (corrupt, tampered, or newer schema)" },
 ];
 

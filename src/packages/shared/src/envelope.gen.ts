@@ -138,7 +138,7 @@ export const AuditTrailEntryWireSchema = z.union([
       "entry": z.literal("record"),
       "fields": z.string(),
       "kind": z.string(),
-      "ts_ms": z.number().int().gte(0),
+      "ts_ms": z.number().int().gte(-9007199254740991).lte(9007199254740991),
     })
     .strict(),
   z.object({ "entry": z.literal("unrecognized"), "text": z.string() }).strict(),
@@ -150,7 +150,7 @@ export const AuditTrailEntrySchema = z.union([
       "entry": z.literal("record"),
       "fields": z.string(),
       "kind": z.string(),
-      "ts_ms": z.number().int().gte(0),
+      "ts_ms": z.number().int().gte(-9007199254740991).lte(9007199254740991),
     })
     .catchall(z.unknown()),
   z.object({ "entry": z.literal("unrecognized"), "text": z.string() }).catchall(z.unknown()),
@@ -699,7 +699,7 @@ export type AuditEventWire = z.infer<typeof AuditEventWireSchema>;
 
 export const AuditReadWireSchema = z
   .object({
-    "limit": z.union([z.number().int().gte(0), z.null()]).optional(),
+    "limit": z.union([z.number().int().gte(1).lte(1000), z.null()]).optional(),
     "type": z.literal("audit_read"),
   })
   .strict();

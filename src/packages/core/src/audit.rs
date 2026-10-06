@@ -530,13 +530,13 @@ fn parse_record(line: &str) -> Option<AuditRecord> {
 /// so the words a reader sees are spelled here alone.
 impl fmt::Display for AuditRecord {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}  {:<15}{}",
-            format_utc_ms(self.ts_ms),
-            self.kind_name(),
-            self.fields_display()
-        )
+        write!(f, "{}  {:<15}", format_utc_ms(self.ts_ms), self.kind_name())?;
+        let fields = self.fields_display();
+        if fields.is_empty() {
+            Ok(())
+        } else {
+            write!(f, " {fields}")
+        }
     }
 }
 
@@ -546,21 +546,21 @@ impl AuditRecord {
         serde_variant_name(&self.event_kind)
     }
 
-    /// Every field the record carries after its kind, as the `audit` line prints them (` key=value`
-    /// each, a leading space included); empty when the record carries none.
+    /// Every field the record carries after its kind, as the `audit` line prints them (`key=value`, space
+    /// separated); empty when the record carries none.
     pub fn fields_display(&self) -> String {
-        let mut out = String::new();
+        let mut parts: Vec<String> = Vec::new();
         if let Some(surface) = &self.surface {
-            out.push_str(&format!(" surface={}", serde_variant_name(surface)));
+            parts.push(format!("surface={}", serde_variant_name(surface)));
         }
         if let Some(r) = self.req {
-            out.push_str(&format!(" req={r}"));
+            parts.push(format!("req={r}"));
         }
         if let Some(c) = self.conn {
-            out.push_str(&format!(" conn={c}"));
+            parts.push(format!("conn={c}"));
         }
         if let Some(c) = &self.cid {
-            out.push_str(&format!(" cid={c}"));
+            parts.push(format!("cid={c}"));
         }
         for (k, v) in [
             ("tool", &self.tool),
@@ -570,16 +570,16 @@ impl AuditRecord {
             ("detail", &self.detail),
         ] {
             if let Some(v) = v.as_deref() {
-                out.push_str(&format!(" {k}={v}"));
+                parts.push(format!("{k}={v}"));
             }
         }
         if let Some(d) = self.dur_ms {
-            out.push_str(&format!(" dur_ms={d}"));
+            parts.push(format!("dur_ms={d}"));
         }
         if let Some(d) = self.dropped {
-            out.push_str(&format!(" dropped={d}"));
+            parts.push(format!("dropped={d}"));
         }
-        out
+        parts.join(" ")
     }
 }
 

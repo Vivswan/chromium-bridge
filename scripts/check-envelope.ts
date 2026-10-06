@@ -140,7 +140,7 @@ const FRAMES: Readonly<Record<string, FrameArms>> = {
       type: "audit_read_result",
       ok: true,
       entries: [
-        { entry: "record", ts_ms: 3000, kind: "pair_client", fields: " surface=cli outcome=ok" },
+        { entry: "record", ts_ms: 3000, kind: "pair_client", fields: "surface=cli outcome=ok" },
         { entry: "unrecognized", text: "UNRECOGNIZED RECORD (corrupt, tampered, or newer schema)" },
       ],
       older: 1,
