@@ -269,6 +269,23 @@ export const ASYMMETRIES: Readonly<Record<string, Readonly<Record<string, Asymme
       },
     ),
   },
+  browser_revoke_result: {
+    $: okSplit(
+      "browser_revoke_result",
+      { required: [], forbidden: ["reason"] },
+      { required: ["reason"], forbidden: [] },
+      {
+        refuses: [
+          { type: "browser_revoke_result", ok: true, reason: "r" },
+          { type: "browser_revoke_result", ok: false },
+        ],
+        accepts: [
+          { type: "browser_revoke_result", ok: true },
+          { type: "browser_revoke_result", ok: false, reason: "not_enrolled" },
+        ],
+      },
+    ),
+  },
   registration_status_result: {
     $: okSplit(
       "registration_status_result",

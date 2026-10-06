@@ -30,6 +30,7 @@ const REASON_KEYS: Readonly<Record<RefusalCode | CeremonyCode, MessageKey>> = {
   no_request_outstanding: "webauthn.reason_no_request_outstanding",
   no_enrollment_outstanding: "webauthn.reason_no_enrollment_outstanding",
   machine_already_enrolled: "webauthn.reason_machine_already_enrolled",
+  not_enrolled: "webauthn.reason_not_enrolled",
   store_error: "webauthn.reason_store_error",
   nonce: "webauthn.reason_nonce",
   not_interactive: "webauthn.reason_terminal",

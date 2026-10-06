@@ -405,7 +405,7 @@ flowchart LR
 
 The host is the relying party and the extension is the WebAuthn client, with the extension id as the RP ID. Enrollment runs the same exchange with `enroll_begin`, `enroll_options`, `enroll_finish`, and `enroll_result`; the first enrollment on a machine is trust on first use, every later one needs a tap from a credential already enrolled on the machine, under any browser.
 
-The options page runs the ceremony and answers: it enrolls this browser's authenticator and releases the kill switch. A release is a tap on this browser's enrolled credential; when the host's request names no credential, the page asks for a confirmation instead.
+The options page runs the ceremony and answers: it enrolls this browser's authenticator and releases the kill switch. Its Forget this browser action sends `browser_revoke`, and the host forgets the credentials enrolled under that connection's own label, the same act as `chromium-bridge revoke <browser>`. A release is a tap on this browser's enrolled credential; when the host's request names no credential, the page asks for a confirmation instead.
 
 A `presence_confirm` from the confirmation window is accepted only when no enrolled credential could have answered, so an enrolled browser is never demoted to a click.
 

@@ -29,6 +29,7 @@ import {
   beginKillRelease,
   confirmPresence,
   finishEnrollment,
+  forgetBrowser,
   pendingPresenceRequest,
   recordedEnrollment,
 } from "../webauthn/exchange";
@@ -130,6 +131,7 @@ const HANDLERS: { [K in RuntimeMsgType]: Handler<K> } = {
     signature,
   }) => assertPresence({ nonce, credential_id, authenticator_data, client_data_json, signature }),
   webauthn_presence_confirm: ({ nonce }) => confirmPresence(nonce),
+  webauthn_forget: forgetBrowser,
   get_registration: requestRegistrationStatus,
   repair_registration: repairRegistration,
   get_policy: async () => ({ ok: true, posture: await getPolicyPosture() }),

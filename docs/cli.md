@@ -140,7 +140,7 @@ User presence for the browser's own acts (releasing the kill switch, enrolling a
 
 Forgetting is friction-free, because it only removes capability:
 
-- `chromium-bridge revoke <browser>` forgets every authenticator enrolled under that label (`brave`, `chrome`, the label the browser's host manifest carries). The browser's acts fall back to the confirmation window until it enrolls again from its options page; when it was the last enrolled browser, the next enrollment is first-time again.
+- `chromium-bridge revoke <browser>` forgets every authenticator enrolled under that label (`brave`, `chrome`, the label the browser's host manifest carries). The browser's acts fall back to the confirmation window until it enrolls again from its options page; when it was the last enrolled browser, the next enrollment is first-time again. The options page offers the same for its own browser: Forget this browser, in the identity section's authenticator block.
 - `chromium-bridge revoke --all` starts over in one step: the host key is deleted, the policy record goes (the signed baseline and any restriction overlay), every browser is forgotten, and every trusted client is revoked, so a paired machine admits no client until `pair-client` trusts one again. The kill switch is not touched; release it with `unkill`.
 - After `revoke --all` a connected extension fails closed either way: by the revocation push when the credential store confirmed the key gone and the record write landed, otherwise at its next key verification. `revoke <browser>` leaves the host key and the pin alone.
 - A bare `chromium-bridge revoke` names neither and is refused with the usage.

@@ -10,6 +10,7 @@
 //! kill_release      -> presence_request (this browser's credentials); on approval presence_result, kill_status_result
 //! presence_assert   -> presence_result, then the pending act
 //! presence_confirm  -> presence_result (the window's answer; only where the request admits no credential)
+//! browser_revoke    -> browser_revoke_result: this browser's enrollments forgotten (no proof: it removes capability)
 //! ```
 
 use std::time::{Duration, Instant};
@@ -19,7 +20,7 @@ use crate::ipc::BrowserLabel;
 use crate::presence::request::PresenceRequest;
 use crate::presence::{PresenceAttestation, PresenceError, PresencePath};
 use crate::protocol::control::{
-    EnrollOutcome, HostReply, KillStatus, PresenceOutcome, WebAuthnControl,
+    EnrollOutcome, HostReply, KillStatus, PresenceOutcome, RevokeOutcome, WebAuthnControl,
 };
 use crate::trust::TrustState;
 use crate::webauthn::{
@@ -238,6 +239,31 @@ impl Exchange {
         replies
     }
 
+    /// `browser_revoke`: forget every authenticator enrolled from this browser. The label is the host's own, so
+    /// a browser forgets itself and no other. Whatever was outstanding is void once the store holds nothing
+    /// for this browser; a store that refused changed nothing, so the request stays for the worker's answer.
+    pub(super) fn browser_revoke(&mut self) -> Vec<HostReply> {
+        let outcome = match webauthn::revoke_browser(&self.label, Surface::Extension) {
+            Ok(Some(revoked)) => {
+                log_info!(
+                    "native-host",
+                    "browser '{}' forgot its {} enrolled credential(s)",
+                    self.label,
+                    revoked.forgotten.len()
+                );
+                RevokeOutcome::Forgotten
+            }
+            Ok(None) => revoke_refused(RefusalCode::NotEnrolled),
+            Err(e) => {
+                return vec![revoke_refused(RefusalCode::StoreError.detailed(e))
+                    .into_frame()
+                    .into()]
+            }
+        };
+        self.pending = None;
+        vec![outcome.into_frame().into()]
+    }
+
     /// `enroll_finish`: verify the registration against the outstanding enrollment statement and store it.
     pub(super) fn enroll_finish(
         &mut self,
@@ -390,6 +416,12 @@ fn presence_refused(reason: impl Into<Reason>) -> HostReply {
     }
     .into_frame()
     .into()
+}
+
+fn revoke_refused(reason: impl Into<Reason>) -> RevokeOutcome {
+    RevokeOutcome::Refused {
+        reason: reason.into().to_string(),
+    }
 }
 
 fn kill_unreadable(error: String) -> HostReply {

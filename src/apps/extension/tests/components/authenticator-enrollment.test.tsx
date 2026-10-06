@@ -68,6 +68,12 @@ const EN = Object.fromEntries(
     webauthn_reason_credential_exists: "<exists sentence>",
     webauthn_reason_presence_required: "<presence sentence>",
     webauthn_reason_store_error: "<store sentence>",
+    webauthn_btn_forget: "Forget this browser",
+    webauthn_forget_confirm: "forget?",
+    webauthn_step_forgetting: "forgetting",
+    webauthn_forgotten_now: "forgotten now",
+    webauthn_forget_failed: "Forget refused: $1",
+    webauthn_reason_not_enrolled: "<not enrolled sentence>",
     common_cancel: "Cancel",
   }).map(([key, message]) => [key, { message }]),
 );
@@ -106,12 +112,21 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function mount() {
+/** happy-dom has no confirm dialog; the panel's Forget action asks through it, so one is installed per test. */
+function stubConfirm(answer: boolean) {
+  const confirm = vi.fn(() => answer);
+  vi.stubGlobal("confirm", confirm);
+  return confirm;
+}
+
+/** Render the block and wait for the worker's note to land: the not-enrolled line by default, the enrolled
+ * line when the test's note carries a credential. */
+async function mount(settled: string | RegExp = "no authenticator enrolled") {
   const { AuthenticatorEnrollment } = await import("@/entrypoints/options/AuthenticatorEnrollment");
   const { initI18n } = await import("@/lib/i18n");
   await initI18n();
   const view = render(<AuthenticatorEnrollment />);
-  await screen.findByText("no authenticator enrolled");
+  await screen.findByText(settled);
   return view;
 }
 
@@ -168,6 +183,38 @@ describe("AuthenticatorEnrollment", () => {
       create: [creationOptions(OPTIONS, EXT_ID)],
       get: [requestOptions(REQUEST, EXT_ID)],
     });
+  });
+
+  // The "Forget this browser" action is the panel's half of `chromium-bridge revoke <browser>`: shown only
+  // with a note, behind a confirm, one message, and the host's sentence on refusal.
+  test("an enrolled browser forgets itself: the confirm, one webauthn_forget, and the forgotten line", async () => {
+    replies.webauthn_enrollment = () => ({
+      ok: true,
+      enrollment: { credentialId: "Y3JlZC1h", enrolledAt: 1_700_000_000_000 },
+    });
+    replies.webauthn_forget = () => ({ ok: true });
+    const confirm = stubConfirm(true);
+    await mount(/^enrolled at /);
+    await userEvent.click(await screen.findByRole("button", { name: "Forget this browser" }));
+    await screen.findByText("forgotten now");
+    expect(confirm).toHaveBeenCalledWith("forget?");
+    expect(sent.map((m) => m.type)).toEqual(["webauthn_enrollment", "webauthn_forget"]);
+  });
+
+  test("a declined confirm sends nothing, and a host refusal shows its sentence", async () => {
+    replies.webauthn_enrollment = () => ({
+      ok: true,
+      enrollment: { credentialId: "Y3JlZC1h", enrolledAt: 1_700_000_000_000 },
+    });
+    replies.webauthn_forget = () => ({ ok: false, error: "not_enrolled" });
+    const confirm = stubConfirm(false);
+    await mount(/^enrolled at /);
+    await userEvent.click(await screen.findByRole("button", { name: "Forget this browser" }));
+    expect(sent.map((m) => m.type)).toEqual(["webauthn_enrollment"]);
+    confirm.mockReturnValue(true);
+    await userEvent.click(screen.getByRole("button", { name: "Forget this browser" }));
+    await screen.findByText("Forget refused: <not enrolled sentence>");
+    expect(sent.map((m) => m.type)).toEqual(["webauthn_enrollment", "webauthn_forget"]);
   });
 
   test("Cancel on the approval step returns to Enroll without answering the request", async () => {

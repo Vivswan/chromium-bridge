@@ -717,3 +717,91 @@ fn an_enrollment_approval_expires_and_does_not_outlive_the_enrollments_it_presup
     );
     assert_eq!(TrustState::current().unwrap().enrollments().len(), 1);
 }
+
+/// A browser forgets itself through its own host and only itself: the other browser's enrollment stays, the
+/// trail names the forgotten credential under the extension surface, and a second forget is refused.
+#[test]
+fn a_browser_forgets_itself_and_only_itself() {
+    let _dir = scratch_runtime_dir();
+    let mut brave = Exchange::new(label("brave"));
+    let mut brave_auth = Authenticator::new(0x11);
+    enroll_tofu(&mut brave, &brave_auth);
+    let mut chrome = Exchange::new(label("chrome"));
+    let chrome_auth = Authenticator::new(0x22);
+    let challenge = approve_enrollment(&mut chrome, &mut brave_auth);
+    let replies = chrome.enroll_finish(Ok(chrome_auth.register(&challenge)));
+    assert_enrolled(&replies[0], &chrome_auth);
+
+    let replies = brave.browser_revoke();
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    assert!(
+        matches!(
+            unwrap_webauthn(&replies[0]),
+            WebAuthnControl::BrowserRevokeResult {
+                ok: true,
+                reason: None
+            }
+        ),
+        "{replies:?}"
+    );
+    let remaining: Vec<(String, String)> = TrustState::current()
+        .unwrap()
+        .enrollments()
+        .iter()
+        .map(|e| (e.label.as_str().to_string(), e.credential.id.to_base64url()))
+        .collect();
+    assert_eq!(
+        remaining,
+        vec![("chrome".to_string(), chrome_auth.id_b64())]
+    );
+    let records = audit_records(AuditKind::RevokeBrowser);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(
+        (
+            records[0].surface,
+            records[0].name.as_deref(),
+            records[0].detail.as_deref()
+        ),
+        (
+            Some(Surface::Extension),
+            Some("brave"),
+            Some(format!("credential={}", brave_auth.audit_label()).as_str())
+        )
+    );
+
+    let replies = brave.browser_revoke();
+    let WebAuthnControl::BrowserRevokeResult { ok: false, reason } = unwrap_webauthn(&replies[0])
+    else {
+        panic!("expected a refused browser_revoke_result, got {replies:?}")
+    };
+    assert_eq!(reason.as_deref(), Some("not_enrolled"));
+}
+
+/// A forget the store refused leaves the outstanding request in place: the worker still holds that request, so
+/// its answer must find it rather than `no_request_outstanding`.
+#[test]
+fn a_refused_forget_keeps_the_outstanding_request() {
+    let _dir = scratch_runtime_dir();
+    let mut brave = Exchange::new(label("brave"));
+    enroll_tofu(&mut brave, &Authenticator::new(0x11));
+    crate::kill::engage(Surface::Cli).unwrap();
+    let replies = brave.kill_release();
+    presence_request(&replies[0]);
+    std::fs::write(crate::trust::Trust::path().unwrap(), b"{ not a record").unwrap();
+
+    let replies = brave.browser_revoke();
+    let WebAuthnControl::BrowserRevokeResult { ok: false, reason } = unwrap_webauthn(&replies[0])
+    else {
+        panic!("expected a refused browser_revoke_result, got {replies:?}")
+    };
+    assert!(
+        reason.as_deref().unwrap_or("").starts_with("store_error: "),
+        "{reason:?}"
+    );
+    let replies = brave.presence_confirm("not-the-outstanding-nonce");
+    assert_eq!(
+        presence_reason(&replies[0]).as_deref(),
+        Some("request_mismatch"),
+        "the request is still outstanding"
+    );
+}

@@ -164,6 +164,10 @@ const FRAMES: Readonly<Record<string, FrameArms>> = {
     { type: "presence_result", ok: true },
     { type: "presence_result", ok: false, reason: "sign_count_not_increased" },
   ],
+  browser_revoke_result: [
+    { type: "browser_revoke_result", ok: true },
+    { type: "browser_revoke_result", ok: false, reason: "not_enrolled" },
+  ],
 };
 
 /** Every reader the gate proves, keyed like the asymmetry table. */

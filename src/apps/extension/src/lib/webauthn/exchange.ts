@@ -13,12 +13,16 @@
 //   presence_request  -> held as the pending request; the page fetches it, runs get, answers
 //   presence_assert   -> presence_result
 //   presence_confirm  -> presence_result (the window's answer, for a browser with no enrolled credential)
+//   browser_revoke    -> browser_revoke_result; the host forgets this browser's credentials, and the note goes
 //
 // One exchange carries every request, each naming the reply tags that answer it: the host answers in order on
 // one pipe, so a second ceremony is refused, never queued behind the first. A detach also drops the pending
 // request, since the host that asked is gone with the port.
 
 import {
+  type BrowserRevokeResultFrame,
+  BrowserRevokeResultFrameSchema,
+  type BrowserRevokeWire,
   type EnrollBeginWire,
   type EnrollFinishWire,
   type EnrollOptionsFrame,
@@ -54,6 +58,7 @@ export type EnrollFinishView = { ok: true; credentialId: string } | Refused;
 export type PresenceAssertView = { ok: true } | Refused;
 export type KillReleaseView = { ok: true; request: PresenceRequestFrame } | Refused;
 export type EnrollmentNoteView = { ok: true; enrollment: WebAuthnEnrollment | null } | Refused;
+export type ForgetView = { ok: true } | Refused;
 
 /** The reply kill.ts hands over for a release (claimKillRelease), beside the host's own frames. */
 type ReleaseOutcome = { type: "release_outcome"; view: PresenceAssertView };
@@ -85,7 +90,7 @@ export const collaborator: PortCollaborator = {
   },
 };
 
-/** Classification for the port demux: one of the four host->extension WebAuthn frames. */
+/** Classification for the port demux: one of the five host->extension WebAuthn frames. */
 export function isWebAuthnFrame(msg: unknown): msg is WebAuthnInboundFrame {
   return WebAuthnInboundFrameSchema.safeParse(msg).success;
 }
@@ -148,6 +153,28 @@ export async function recordedEnrollment(): Promise<EnrollmentNoteView> {
     case "valid":
       return { ok: true, enrollment: stored.value };
   }
+}
+
+/** Ask the host to forget every authenticator enrolled from this browser; the host acts on its own label, so
+ * no other browser can be named. The host's trust record is what stops trusting the credential; the worker's
+ * note goes when the host says the browser holds nothing now (an ok, or `not_enrolled` for a note the CLI's
+ * `revoke <browser>` left behind), and a pending presence request with it, since its credential is gone. */
+export async function forgetBrowser(): Promise<ForgetView> {
+  const view = await ceremony.request({ type: "browser_revoke" } satisfies BrowserRevokeWire, {
+    replies: ["browser_revoke_result"],
+    read(frame): ForgetView {
+      const result = BrowserRevokeResultFrameSchema.safeParse(frame);
+      if (!result.success) return { ok: false, error: "malformed browser_revoke_result from host" };
+      return result.data.ok ? { ok: true } : { ok: false, error: result.data.reason };
+    },
+  }).view;
+  if (view.ok || view.error === ("not_enrolled" satisfies BrowserRevokeResultFrame["reason"])) {
+    pendingRequest.value = null;
+    await browser.storage.local.remove(WEBAUTHN_ENROLLMENT_KEY).catch((e: unknown) => {
+      console.warn("[bb] could not clear the enrollment note", e);
+    });
+  }
+  return view;
 }
 
 /** Ask the host to release the kill switch. The reply is the presence request the host pushes for it, which
