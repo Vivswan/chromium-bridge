@@ -240,9 +240,12 @@ tasks:
   # ----- typescript aggregates ----------------------------------------------
 
   typecheck:
-    description: 'Type-check every TS project (extension, tests, scripts, src/packages/shared)'
+    # The extension's tsconfig extends the gitignored .wxt/tsconfig.json and its i18n module types against the
+    # generated #i18n key structure, so tsc needs them regenerated first; no earlier gate step does that.
+    description: 'Type-check every TS project (extension, tests, scripts, src/packages/shared); regenerates the WXT types first'
     script: |
       set -e
+      bun run --cwd src/apps/extension wxt prepare
       bun run tsc -p src/apps/extension
       bun run tsc -p tests/browser
       bun run tsc -p tests/interop
