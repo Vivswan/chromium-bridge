@@ -830,15 +830,13 @@ fn plan_traversable_dirs(dir: &Path, root: &Path) -> std::io::Result<Vec<PathBuf
 /// since other accounts' browsers read what sits under them.
 fn create_traversable_dirs(planned: &[PathBuf]) -> Result<(), String> {
     for path in planned {
-        let made = fs::create_dir(path).and_then(|()| {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
-            }
-            Ok(())
-        });
-        made.map_err(|e| format!("could not create {}: {e}", path.display()))?;
+        let could_not = |e: std::io::Error| format!("could not create {}: {e}", path.display());
+        fs::create_dir(path).map_err(could_not)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).map_err(could_not)?;
+        }
     }
     Ok(())
 }
