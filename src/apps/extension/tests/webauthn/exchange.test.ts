@@ -148,12 +148,15 @@ describe("forgetting this browser", () => {
     expect(pendingPresenceRequest()).toBeNull();
   });
 
-  test("not_enrolled clears a note the CLI left stale; any other refusal keeps the note", async () => {
+  test("not_enrolled clears a note the CLI left stale but keeps the pending request; any other refusal keeps the note", async () => {
     await fakeBrowser.storage.local.set({ [WEBAUTHN_ENROLLMENT_KEY]: note });
+    vi.spyOn(fakeBrowser.runtime, "openOptionsPage").mockResolvedValue(undefined);
+    handleWebAuthnFrame(presenceRequest as never);
     const stale = forgetBrowser();
     handleWebAuthnFrame({ type: "browser_revoke_result", ok: false, reason: "not_enrolled" });
     await expect(stale).resolves.toEqual({ ok: false, error: "not_enrolled" });
     await expect(recordedEnrollment()).resolves.toEqual({ ok: true, enrollment: null });
+    expect(pendingPresenceRequest()).toEqual(presenceRequest);
     await fakeBrowser.storage.local.set({ [WEBAUTHN_ENROLLMENT_KEY]: note });
     const refused = forgetBrowser();
     handleWebAuthnFrame({

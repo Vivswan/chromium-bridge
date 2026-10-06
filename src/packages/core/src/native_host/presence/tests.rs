@@ -777,31 +777,39 @@ fn a_browser_forgets_itself_and_only_itself() {
     assert_eq!(reason.as_deref(), Some("not_enrolled"));
 }
 
-/// A forget the store refused leaves the outstanding request in place: the worker still holds that request, so
-/// its answer must find it rather than `no_request_outstanding`.
+/// A refused forget leaves the outstanding request in place, whether the store held nothing for the browser
+/// (its window may still answer its own request) or could not be read: the worker still holds that request,
+/// so its answer must find it rather than `no_request_outstanding`.
 #[test]
 fn a_refused_forget_keeps_the_outstanding_request() {
     let _dir = scratch_runtime_dir();
     let mut brave = Exchange::new(label("brave"));
     enroll_tofu(&mut brave, &Authenticator::new(0x11));
     crate::kill::engage(Surface::Cli).unwrap();
-    let replies = brave.kill_release();
-    presence_request(&replies[0]);
-    std::fs::write(crate::trust::Trust::path().unwrap(), b"{ not a record").unwrap();
-
-    let replies = brave.browser_revoke();
-    let WebAuthnControl::BrowserRevokeResult { ok: false, reason } = unwrap_webauthn(&replies[0])
-    else {
-        panic!("expected a refused browser_revoke_result, got {replies:?}")
+    let request_kept = |exchange: &mut Exchange, expected_reason: &str| {
+        let replies = exchange.browser_revoke();
+        let WebAuthnControl::BrowserRevokeResult { ok: false, reason } =
+            unwrap_webauthn(&replies[0])
+        else {
+            panic!("expected a refused browser_revoke_result, got {replies:?}")
+        };
+        assert!(
+            reason.as_deref().unwrap_or("").starts_with(expected_reason),
+            "{reason:?}"
+        );
+        let replies = exchange.presence_confirm("not-the-outstanding-nonce");
+        assert_eq!(
+            presence_reason(&replies[0]).as_deref(),
+            Some("request_mismatch"),
+            "the request is still outstanding"
+        );
     };
-    assert!(
-        reason.as_deref().unwrap_or("").starts_with("store_error: "),
-        "{reason:?}"
-    );
-    let replies = brave.presence_confirm("not-the-outstanding-nonce");
-    assert_eq!(
-        presence_reason(&replies[0]).as_deref(),
-        Some("request_mismatch"),
-        "the request is still outstanding"
-    );
+
+    let mut chrome = Exchange::new(label("chrome"));
+    presence_request(&chrome.kill_release()[0]);
+    request_kept(&mut chrome, "not_enrolled");
+
+    presence_request(&brave.kill_release()[0]);
+    std::fs::write(crate::trust::Trust::path().unwrap(), b"{ not a record").unwrap();
+    request_kept(&mut brave, "store_error: ");
 }

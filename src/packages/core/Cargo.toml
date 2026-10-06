@@ -14,6 +14,7 @@ coset.workspace = true
 futures.workspace = true
 getrandom.workspace = true
 hex.workspace = true
+itertools.workspace = true
 hmac.workspace = true
 libc.workspace = true
 loom = { workspace = true, optional = true }

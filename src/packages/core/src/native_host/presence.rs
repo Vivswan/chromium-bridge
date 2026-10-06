@@ -47,8 +47,9 @@ enum Pending {
         act: PendingAct,
     },
     /// Presence was attested for enrolling another credential; the next `enroll_begin` consumes it. Any
-    /// other WebAuthn request supersedes it, [`APPROVAL_TTL`] bounds it, and an emptied store voids it (first
-    /// use governs again), so an approval never outlives the ceremony it was given for.
+    /// other WebAuthn request supersedes it (a refused `browser_revoke` excepted: it changed nothing),
+    /// [`APPROVAL_TTL`] bounds it, and an emptied store voids it (first use governs again), so an approval
+    /// never outlives the ceremony it was given for.
     EnrollmentApproved {
         auth: PresenceAttestation,
         since: Instant,
@@ -241,8 +242,9 @@ impl Exchange {
 
     /// `browser_revoke`: forget every authenticator enrolled under this host's label. The frame names no label,
     /// so the reach is exactly this host's: one browser, or every browser sharing an unlabelled manifest
-    /// (`default`). Whatever was outstanding is void once the store holds nothing
-    /// for this browser; a store that refused changed nothing, so the request stays for the worker's answer.
+    /// (`default`). Whatever was outstanding is void once the store forgot this browser; a refusal changed
+    /// nothing, so the request stays for the worker's answer (a browser with no credential still answers
+    /// its own request through the window).
     pub(super) fn browser_revoke(&mut self) -> Vec<HostReply> {
         let outcome = match webauthn::revoke_browser(&self.label, Surface::Extension) {
             Ok(revoked) => {
@@ -252,18 +254,16 @@ impl Exchange {
                     self.label,
                     revoked.forgotten.len()
                 );
+                self.pending = None;
                 RevokeOutcome::Forgotten
             }
             Err(webauthn::RevokeBrowserError::NotEnrolled { .. }) => {
                 revoke_refused(RefusalCode::NotEnrolled)
             }
             Err(webauthn::RevokeBrowserError::Io(e)) => {
-                return vec![revoke_refused(RefusalCode::StoreError.detailed(e))
-                    .into_frame()
-                    .into()]
+                revoke_refused(RefusalCode::StoreError.detailed(e))
             }
         };
-        self.pending = None;
         vec![outcome.into_frame().into()]
     }
 

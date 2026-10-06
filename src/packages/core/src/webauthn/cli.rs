@@ -47,7 +47,7 @@ pub fn run_revoke_browser(label: &BrowserLabel) -> i32 {
             1
         }
         Err(RevokeBrowserError::Io(e)) => {
-            eprintln!("revoke: could not write the trust record: {e}");
+            eprintln!("revoke: could not update the trust record: {e}");
             1
         }
     }

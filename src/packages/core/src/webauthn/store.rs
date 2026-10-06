@@ -5,6 +5,7 @@
 
 use std::io;
 
+use itertools::Itertools as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::audit::{self, AuditKind, AuditRecord, Surface};
@@ -122,12 +123,12 @@ pub fn revoke_browser(
     let revoked = ipc::with_runtime_lock(|lock| {
         let current = TrustState::current()?;
         if !current.enrollments().iter().any(|e| &e.label == label) {
-            let mut enrolled: Vec<BrowserLabel> = Vec::new();
-            for e in current.enrollments() {
-                if !enrolled.contains(&e.label) {
-                    enrolled.push(e.label.clone());
-                }
-            }
+            let enrolled = current
+                .enrollments()
+                .iter()
+                .map(|e| e.label.clone())
+                .unique()
+                .collect();
             return Ok(Err(RevokeBrowserError::NotEnrolled { enrolled }));
         }
         let (trust, forgotten) =

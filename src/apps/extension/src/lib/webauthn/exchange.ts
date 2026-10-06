@@ -158,7 +158,8 @@ export async function recordedEnrollment(): Promise<EnrollmentNoteView> {
 /** Ask the host to forget every authenticator enrolled from this browser; the host acts on its own label, so
  * no other browser can be named. The host's trust record is what stops trusting the credential; the worker's
  * note goes when the host says the browser holds nothing now (an ok, or `not_enrolled` for a note the CLI's
- * `revoke <browser>` left behind), and a pending presence request with it, since its credential is gone. */
+ * `revoke <browser>` left behind). Only an ok drops the pending presence request: the host keeps its request
+ * through a refusal, and a browser with no credential still answers its own through the window. */
 export async function forgetBrowser(): Promise<ForgetView> {
   const view = await ceremony.request({ type: "browser_revoke" } satisfies BrowserRevokeWire, {
     replies: ["browser_revoke_result"],
@@ -168,8 +169,8 @@ export async function forgetBrowser(): Promise<ForgetView> {
       return result.data.ok ? { ok: true } : { ok: false, error: result.data.reason };
     },
   }).view;
+  if (view.ok) pendingRequest.value = null;
   if (view.ok || view.error === ("not_enrolled" satisfies BrowserRevokeResultFrame["reason"])) {
-    pendingRequest.value = null;
     await browser.storage.local.remove(WEBAUTHN_ENROLLMENT_KEY).catch((e: unknown) => {
       console.warn("[bb] could not clear the enrollment note", e);
     });
