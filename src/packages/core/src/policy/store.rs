@@ -122,12 +122,9 @@ pub struct PolicyHistoryEntry {
     pub superseded_unix: u64,
 }
 
-/// Push the superseded store record onto the ring, inside the caller's
-/// runtime-lock hold. Best-effort by contract: history failures NEVER fail
-/// the policy write they trail - an unreadable ring is logged and replaced
-/// (it is rollback data, never authority; refusing the policy write over it
-/// would let a corrupt convenience file deny service to enforcement), and a
-/// failed write is logged and dropped.
+/// Push the superseded store record onto the ring, inside the caller's runtime-lock hold. A history failure
+/// never fails the policy write it trails: an unreadable ring is replaced and a failed write dropped, both
+/// logged, because a corrupt convenience file must not deny service to enforcement.
 fn push_history_locked(lock: &ipc::RuntimeLockToken, prev: &PolicyStore) {
     let mut history = match PolicyHistory::load() {
         Ok(Some(history)) => history,
@@ -271,13 +268,8 @@ pub fn set_signed(
             "the touched set is empty (a write must name the fields it edits)",
         ));
     }
-    // The pre-prompt observation the user's tap covers; the locked write refuses (Conflict) if a concurrent
-    // writer moved any of it, since landing THESE bytes over another store would silently discard that write.
-    //   baseline revision  -> a concurrent signed write
-    //   overlay            -> a restrict landing mid-prompt
-    //   host-key epoch     -> a disposal completing mid-prompt; it clears the baseline, so a first write sees None
-    //                         before AND after and the store guard alone would land a baseline signed by a dead key
-    // Read before the prompt and fail closed on an unreadable record: no sheet for a write that cannot land.
+    // The pre-prompt observation the user's tap covers ([`PrePromptObservation`]), read before the prompt and
+    // failing closed on an unreadable record: no sheet for a write that cannot land.
     let host_key_epoch = crate::trust::TrustState::current()
         .map_err(PolicyWriteError::Io)?
         .host_key_epoch();
@@ -285,10 +277,8 @@ pub fn set_signed(
         match PolicyStore::load().map_err(PolicyWriteError::Io)? {
             Some(store) => {
                 let doc = store.baseline_doc().map_err(PolicyWriteError::Io)?;
-                // effective() direction-checks the fold, so a tampered store
-                // (an overlay relaxing its baseline) refuses the write here
-                // rather than anchoring the relaxation checks on values
-                // nobody vouched for.
+                // effective() direction-checks the fold: a tampered store refuses here instead of anchoring
+                // the relaxation checks on values nobody vouched for.
                 let anchor = store.effective().map_err(PolicyWriteError::Io)?;
                 (
                     Some(StoreObservation {
@@ -299,11 +289,8 @@ pub fn set_signed(
                     anchor,
                 )
             }
-            // With no store, the anchor for "what does this write relax" is
-            // the deny baseline: it is what the extension enforces in the
-            // no-stored-policy state, so a first
-            // write's grants are relaxations against it and must be named in
-            // `touched`.
+            // No store: the anchor is the deny baseline the extension enforces, so a first write's grants
+            // are relaxations against it and must be named in `touched`.
             None => (None, PolicyValues::default(), PolicyValues::default()),
         };
     let observed = PrePromptObservation {
@@ -311,13 +298,9 @@ pub fn set_signed(
         host_key_epoch,
     };
     let revision = next_revision(observed.store.as_ref().map(|o| o.revision))?;
-    // The signed document carries BASELINE values, not effective ones, on
-    // fields it does not touch. An untouched field departing from the
-    // current baseline (in either direction - a restrictive drift is still
-    // an unnamed edit) would break the invariant every retained overlay
-    // entry depends on: an entry written at-or-under the old baseline value
-    // stays at-or-under it only if untouched baseline values carry.
-    // Promptless, like every validity refusal here.
+    // Untouched fields carry BASELINE values: every retained overlay entry was written at-or-under the old
+    // baseline value and stays there only if those values carry, so a departure in either direction is an
+    // unnamed edit, refused promptless.
     if PolicyField::ALL
         .iter()
         .any(|f| !touched.contains(f) && field_differs(*f, &values, &baseline_anchor))
@@ -327,10 +310,9 @@ pub fn set_signed(
              carries baseline values on fields it does not touch)",
         ));
     }
-    // Every field this write relaxes must be named in `touched`, or the signed set would under-state what the tap
-    // granted. The anchor is the post-write EFFECTIVE policy: an untouched field whose overlay entry survives is not
-    // relaxed by baseline bytes the overlay still covers, and the extension's ratchet compares the same fold (it
-    // independently refuses a push relaxing a field outside the signed touched set).
+    // Every field this write relaxes must be in `touched`, or the signed set under-states what the tap granted.
+    // The anchor is the post-write EFFECTIVE policy, the same fold the extension's ratchet compares: a surviving
+    // overlay entry still covers the baseline bytes beneath it.
     let would_be_effective = fold(
         &values,
         &retained_overlay(
@@ -397,25 +379,22 @@ pub fn set_signed(
     )
 }
 
-/// The store state [`set_signed`] observed before its prompt: the baseline
-/// revision AND the restriction overlay. The locked write re-checks both,
-/// so a concurrent signed write (revision moved) or a concurrent restrict
-/// (overlay moved) surfaces as [`PolicyWriteError::Conflict`] instead of
-/// being silently half-clobbered.
+/// The store half of a [`PrePromptObservation`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct StoreObservation {
     revision: u64,
     overlay: Option<PolicyOverlay>,
 }
 
-/// Everything [`set_signed`] observed before its prompt: the store state
-/// (`None` when no store exists) plus the trust record's host-key
-/// epoch. The epoch travels separately from the store observation because
-/// the guard it feeds must fire even when both sides of the store
-/// comparison are `None` - a disposal completing during the prompt clears
-/// the store, so on a first write only the epoch (bumped inside the
-/// disposal's critical section) betrays that the signing key died
-/// mid-prompt.
+/// What [`set_signed`] observed before its prompt. The locked write refuses with [`PolicyWriteError::Conflict`]
+/// when any of it moved, since landing the signed bytes over another store would silently discard that write.
+///
+/// ```text
+/// baseline revision  -> a concurrent signed write
+/// overlay            -> a restrict landing mid-prompt
+/// host-key epoch     -> a disposal completing mid-prompt; it clears the baseline, so a first write sees no store
+///                       before AND after and the store half alone would land a baseline signed by a dead key
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PrePromptObservation {
     store: Option<StoreObservation>,
@@ -477,8 +456,7 @@ fn commit_signed_baseline(
     result.map(|()| rung)
 }
 
-/// The critical section of a grant write. The host-key epoch is re-checked with the revision and overlay because
-/// that is what makes "a baseline never survives its key" hold across the prompt gap (see [`PrePromptObservation`]).
+/// The critical section of a grant write; the re-check is the [`PrePromptObservation`] guard.
 /// ```text
 /// re-check guard -> write store -> bump policy epoch -> push the superseded record to history
 /// ```
@@ -530,15 +508,14 @@ fn write_baseline_locked(
     Ok(())
 }
 
-/// Apply an unsigned restriction overlay, the free lane.
-/// Takes no attestation and can never prompt, by construction: restrictions
-/// only remove capability, and failing closed is the direction every
-/// forgery is allowed to point. The given overlay merges over the stored
-/// one entry-wise (a present entry wins, absent entries keep their stored
-/// value), and the merged result must restrict-or-hold the CURRENT
-/// EFFECTIVE policy field by field - an "undo" of an earlier restriction
-/// relaxes the effective policy and is refused here; it belongs to the
-/// signed lane.
+/// Apply an unsigned restriction overlay, the free lane: restrictions only remove capability, and failing
+/// closed is the direction every forgery is allowed to point, so no attestation is taken.
+///
+/// ```text
+/// merge                  -> entry-wise over the stored overlay; a present entry wins
+/// merged result          -> must restrict-or-hold the CURRENT EFFECTIVE policy, field by field
+/// "undo" of an earlier restriction -> relaxes the effective policy: refused, the signed lane's business
+/// ```
 pub fn restrict(
     overlay: PolicyOverlay,
     surface: crate::audit::Surface,
@@ -548,10 +525,8 @@ pub fn restrict(
         Ok(inner) => inner,
         Err(e) => Err(PolicyWriteError::Io(e)),
     };
-    // auth=none is deliberate: restrictions are free, and the trail must
-    // never suggest a presence rung vouched for one. Only the promptless
-    // preconditions (NoBaseline, Invalid) stay unaudited, the pair_client
-    // InvalidName precedent.
+    // auth=none: the trail must never suggest a presence rung vouched for a free write. The promptless
+    // preconditions (NoBaseline, Invalid) stay unaudited.
     let record =
         crate::audit::AuditRecord::new(crate::audit::AuditKind::PolicyWrite).surface(surface);
     match &result {
@@ -586,10 +561,8 @@ fn restrict_locked(
     };
     let baseline = prev.baseline_doc().map_err(PolicyWriteError::Io)?.values();
     let stored = prev.overlay.clone().unwrap_or_default();
-    // The validating read, not a raw fold: restricting on top of a tampered
-    // store (an overlay already relaxing its baseline) would quietly write a
-    // fresh record over evidence; refusing surfaces the tamper here, the
-    // same posture as set_signed's anchor read.
+    // The validating read, not a raw fold: a restriction over a tampered store would write a fresh record
+    // over evidence.
     let effective_now = prev.effective().map_err(PolicyWriteError::Io)?;
     let merged = merge_overlay(&stored, overlay);
     if let Some(tools) = &merged.disabled_tools {
@@ -609,10 +582,8 @@ fn restrict_locked(
 }
 
 /// Bump the trust record's policy epoch inside the caller's runtime-lock hold, so the native host's watch
-/// pushes `policy_current` to a connected extension on the next tick. Best-effort by the same contract as the
-/// host-key bump: the epoch is a change notice, not authority (the signed baseline just written is the
-/// authority), so a failed bump loses only the proactive push - a connected extension still picks the change
-/// up on its next connect - and is logged, never fatal to the write it trails.
+/// pushes `policy_current` on its next tick. The epoch is a change notice, not authority: a failed bump loses
+/// only the proactive push and is logged, never fatal to the write it trails.
 fn bump_policy_epoch_locked(lock: &ipc::RuntimeLockToken) {
     if let Err(e) = crate::trust::Trust::mutate_locked(lock, crate::trust::Scope::Policy, |_| {}) {
         log_warn!(
@@ -639,18 +610,14 @@ pub fn clear_baseline_locked(lock: &ipc::RuntimeLockToken) -> io::Result<()> {
     };
     push_history_locked(lock, &prev);
     PolicyStore::remove(lock)?;
-    // The clear is a policy change like any write: bump the policy epoch (best-effort, same contract as
-    // the write paths) so a connected host pushes the cleared state - the extension drops to its deny
-    // baseline now, not at its next connect.
+    // A clear is a policy change like any write: the push drops the extension to its deny baseline now.
     bump_policy_epoch_locked(lock);
     Ok(())
 }
 
-/// The overlay a grant write leaves behind: the stored entries minus those
-/// on the `touched` fields (the tapped edit supersedes them). One function
-/// on purpose - the pre-prompt relaxation-coverage check and the locked
-/// write must compute the same retention or the check guards a different
-/// store than the one written.
+/// The overlay a grant write leaves behind: the stored entries minus those on the `touched` fields. The
+/// pre-prompt coverage check and the locked write both call this, or the check would guard a different store
+/// than the one written.
 fn retained_overlay(mut overlay: PolicyOverlay, touched: &[PolicyField]) -> PolicyOverlay {
     for field in touched {
         overlay.clear(*field);

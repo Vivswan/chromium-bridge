@@ -38,24 +38,16 @@ use serde::{Deserialize, Serialize};
 /// misinterpreted by an older binary.
 pub const POLICY_DOC_VERSION: u32 = 1;
 
-/// The JS-safe integer bound, 2^53 - 1. [`PolicyDoc::revision`] and every
-/// [`Ms`] value are constrained to it so the Rust parser and the generated
-/// Zod parser read the same number - the same posture as
-/// [`crate::protocol::BridgeReq::id`], which stays inside the bound by
-/// construction (server-assigned counter) with the Zod validator enforcing
-/// it wire-side. A value the generated Zod would refuse must never sign or
-/// store, or the host signs a baseline the extension can only reject.
+/// The JS-safe integer bound, 2^53 - 1. [`PolicyDoc::revision`] and every [`Ms`] value are constrained to it
+/// so the Rust parser and the generated Zod parser read the same number: a value Zod would refuse must never
+/// sign or store, or the host signs a baseline the extension can only reject.
 pub const JS_SAFE_INT_MAX: u64 = 9_007_199_254_740_991;
 
 /// Bounds on `disabledTools`: at most this many entries...
 pub const DISABLED_TOOLS_MAX_ENTRIES: usize = 256;
 
-/// ...of 1 to this many bytes each. Together with
-/// [`DISABLED_TOOLS_MAX_ENTRIES`] this keeps any valid document or overlay
-/// far under the store's read cap (never write what load cannot read back)
-/// and bounds what an audit detail naming entries can carry; both bounds are
-/// mirrored into the generated Zod validator so the two parsers stay
-/// equivalent. Far above any real tool catalogue.
+/// ...of 1 to this many bytes each. Together the two bounds keep any valid document or overlay far under the
+/// store's read cap and bound an audit detail naming entries; the generated Zod validator mirrors both.
 pub const DISABLED_TOOL_NAME_MAX_BYTES: usize = 128;
 
 /// The shared `disabledTools` bound check: [`PolicyDoc::validate`] applies it to documents, [`restrict`] to
@@ -451,12 +443,9 @@ macro_rules! policy_fields {
     };
 }
 
-// The catalogue: every host-owned field with its wire name and, where the
-// kind has more than one possible pole, which way it grants. This is the one
-// place a field's direction is declared; the comparisons read it through
-// `kind()` and the pole/order accessors, so no field can exist whose
-// comparison ignores its direction. Declaration order is wire order for the
-// document, the values, and the overlay (the signed bytes depend on it).
+// The one place a field's direction is declared; the comparisons read it through `kind()`, so no field can
+// exist whose comparison ignores its direction. Declaration order is wire order, and the signed bytes depend
+// on it.
 policy_fields! {
     bool {
         CdpMode: cdp_mode "cdpMode" => TruePermissive,
@@ -580,16 +569,9 @@ impl Default for PolicyDoc {
 }
 
 impl PolicyDoc {
-    /// Structural validity: the facts that make this a well-formed v1
-    /// document no matter who produced it or how it will be used - the
-    /// schema version is ours, the revision fits the JS-safe bound, and
-    /// `disabledTools` fits its entry bounds (a parsed document already
-    /// satisfies all of these; this covers documents constructed in code,
-    /// which `set_signed` must validate BEFORE any presence prompt can
-    /// appear). Deliberately nothing more: whether the revision is acceptable
-    /// for a signed write (>= 1, strictly above the stored baseline's) is a
-    /// property of the write, not of the bytes, and belongs to the store /
-    /// `set_signed` lane.
+    /// Structural validity of the bytes, for documents constructed in code (a parsed one already satisfies it):
+    /// `set_signed` validates before any presence prompt. Whether the revision is acceptable for a write is the
+    /// store's question, not the bytes'.
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.v != POLICY_DOC_VERSION {
             return Err("unsupported policy document version");

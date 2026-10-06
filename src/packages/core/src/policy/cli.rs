@@ -67,10 +67,8 @@ pub enum PolicyStatusReport {
         v: u32,
         /// The signed baseline's monotonic revision.
         revision: u64,
-        /// Whether the stored baseline carries an enclave signature (`true`)
-        /// or not (`false`). Host-side this is
-        /// only "a signature is stored" - the host never self-certifies; the
-        /// extension verifies it against its pinned key.
+        /// Whether a signature is stored; the host never self-certifies, the extension verifies against its
+        /// pinned key.
         signed: bool,
         /// Whether an unsigned restriction overlay is active on top of the
         /// baseline.
@@ -137,13 +135,8 @@ pub struct PolicyHistoryEntryReport {
     pub superseded_unix: u64,
 }
 
-/// The versioned failure object the WRITE subcommands print on stdout under
-/// `--json` (`policy set --json` / `policy rollback --json`): the same
-/// frozen-wire posture as [`PolicyStatusReport`] - a consumer refuses an
-/// unrecognized `v` before trusting `error`, and `deny_unknown_fields` makes
-/// an unexpected shape a loud refusal. Success prints the post-write
-/// [`PolicyStatusReport`] instead; the exit code (1) is unchanged from the
-/// prose path.
+/// The failure object the WRITE subcommands print on stdout under `--json`, with the same frozen-wire posture as
+/// [`PolicyStatusReport`]; success prints the post-write status report instead, and the exit code stays 1.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyErrorReport {
@@ -363,14 +356,13 @@ enum RollbackPlan {
         overlay: PolicyOverlay,
         fields: Vec<PolicyField>,
     },
-    /// The target relaxes something: one signed tap mints a fresh baseline -
-    /// the CURRENT baseline with only the changed fields set to the target
-    /// (the signed document carries baseline values on fields it
-    /// does not touch), the changed fields as its touched set (a superset of
-    /// the relaxed fields, which is what the coverage check requires). NEVER
-    /// the old signed bytes back, and never the historical effective
-    /// wholesale (that would silently fold overlay-covered untouched fields
-    /// into the baseline).
+    /// The target relaxes something: one signed tap mints a fresh baseline, never the old signed bytes back.
+    ///
+    /// ```text
+    /// values   -> the CURRENT baseline with only the changed fields set to the target; the historical effective
+    ///             wholesale would fold overlay-covered untouched fields into the baseline
+    /// touched  -> the changed fields, a superset of the relaxed ones as the coverage check requires
+    /// ```
     Relax {
         values: PolicyValues,
         touched: Vec<PolicyField>,
@@ -482,8 +474,7 @@ fn refuse_write(sub: &str, json: bool, error: String) -> i32 {
     1
 }
 
-/// `policy show [--json]`: read-only. `--json` emits the typed report through
-/// `Value` (sorted keys, the enclave-status precedent).
+/// `policy show [--json]`: read-only.
 fn run_show(json: bool) -> i32 {
     let report = gather_policy_status();
     if json {
@@ -608,15 +599,10 @@ fn run_restrict(overlay: PolicyOverlay) -> i32 {
     }
 }
 
-/// `policy rollback --revision <n> [--json]`: re-derive revision `n`'s
-/// effective policy and re-apply it as a FRESH write - tighten-only rides
-/// `restrict` free, any relaxation is one `set_signed` tap. The old signed
-/// artifact is never written back: a lower revision must keep failing the
-/// extension's ratchet. Under `--json` the planning prose is suppressed
-/// (stdout is the report, nothing else): success - a no-op included -
-/// prints the post-write status report, any refusal the versioned error
-/// object. `terminal` is the witness (or the precondition failure that stands for it), taken by the
-/// dispatcher and consumed only by a relaxing plan.
+/// `policy rollback --revision <n> [--json]`: the plan is [`plan_rollback`]'s (module docs). Under `--json`
+/// stdout is the report alone: success, a no-op included, prints the post-write status report, a refusal the
+/// error object. `terminal` is the witness, or the precondition failure that stands for it, consumed only by a
+/// relaxing plan.
 fn run_rollback(
     revision: u64,
     json: bool,
