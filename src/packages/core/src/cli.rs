@@ -37,8 +37,8 @@ pub enum Command {
         #[arg(long)]
         file_store: bool,
     },
-    /// Delete the host key (a pinning extension then fails closed)
-    Revoke,
+    /// Forget one browser's enrolled authenticators, or start over with --all
+    Revoke(RevokeTarget),
     /// Print the host key state
     EnclaveStatus {
         /// One machine-readable object instead of prose
@@ -179,6 +179,41 @@ fn scope_flag(system: bool) -> Scope {
         Scope::System
     } else {
         Scope::User
+    }
+}
+
+/// `revoke` as exactly one of its two forms; a bare `revoke` is refused with the usage.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RevokeTarget {
+    /// `revoke <browser>`: forget every authenticator enrolled under that label, the host manifest's `--label`
+    /// (`default` for every browser sharing an unlabelled manifest). Not presence-gated.
+    Browser(BrowserLabel),
+    /// `revoke --all`: the host key, the signed policy baseline, every enrollment, every client pairing.
+    All,
+}
+
+/// The flag surface clap parses `revoke` from; the required, single-member group is what makes a bare
+/// `revoke` a usage error and `<browser> --all` a conflict.
+#[derive(Args)]
+#[command(group(ArgGroup::new("revoke_target").required(true).multiple(false)))]
+struct RevokeFlags {
+    /// The browser whose enrolled authenticators to forget (its label, e.g. brave)
+    #[arg(group = "revoke_target", value_parser = browser_label, value_name = "BROWSER")]
+    browser: Option<BrowserLabel>,
+    /// Start over: delete the host key and the signed policy baseline, forget every browser and every trusted client
+    #[arg(long, group = "revoke_target")]
+    all: bool,
+}
+
+impl From<RevokeFlags> for RevokeTarget {
+    fn from(flags: RevokeFlags) -> Self {
+        match flags.browser {
+            Some(browser) => RevokeTarget::Browser(browser),
+            None => {
+                debug_assert!(flags.all, "clap requires exactly one target");
+                RevokeTarget::All
+            }
+        }
     }
 }
 
@@ -406,6 +441,7 @@ macro_rules! typed_args {
 }
 
 typed_args!(DoctorCommand, DoctorFlags);
+typed_args!(RevokeTarget, RevokeFlags);
 typed_args!(PairClientArgs, PairClientFlags);
 typed_args!(UninstallArgs, UninstallFlags);
 
@@ -671,7 +707,15 @@ mod tests {
                     file_store: true,
                 },
             ),
-            (vec!["revoke"], Command::Revoke),
+            (
+                vec!["revoke", "brave"],
+                Command::Revoke(RevokeTarget::Browser(BrowserLabel::parse("brave").unwrap())),
+            ),
+            (
+                vec!["revoke", "default"],
+                Command::Revoke(RevokeTarget::Browser(BrowserLabel::default_label())),
+            ),
+            (vec!["revoke", "--all"], Command::Revoke(RevokeTarget::All)),
             (
                 vec!["enclave-status", "--json"],
                 Command::EnclaveStatus { json: true },
@@ -805,6 +849,11 @@ mod tests {
             (&["pare"], InvalidSubcommand),
             (&["install"], InvalidSubcommand),
             (&["pair", "--rest"], UnknownArgument),
+            // revoke: exactly one target, typed.
+            (&["revoke"], MissingRequiredArgument),
+            (&["revoke", "brave", "--all"], ArgumentConflict),
+            (&["revoke", "bad label"], ValueValidation),
+            (&["revoke", "brave", "chrome"], UnknownArgument),
             (&["revoke", "--force"], UnknownArgument),
             (&["enclave-status", "--json", "x"], UnknownArgument),
             (&["kill", "--force"], UnknownArgument),

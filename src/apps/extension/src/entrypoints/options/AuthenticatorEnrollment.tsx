@@ -19,6 +19,8 @@ import { ceremonyFailure, refusalSentence } from "./refusals";
 //   enrolled machine     enroll_begin -> presence_required; the pushed request is shown and the user approves it
 //                        with an authenticator already enrolled here; the approved tap is good for 60 s, so the
 //                        page asks again at once and the ceremony continues as above
+//   forget               webauthn_forget -> the host forgets this browser's credentials (its own label, no proof)
+//                        and the worker clears its note; the same act as `chromium-bridge revoke <browser>`
 //
 // Every refusal is one sentence (refusals.ts), never a raw code.
 
@@ -29,9 +31,12 @@ type Step =
   | { kind: "approval_needed"; request: PresenceRequestFrame }
   | { kind: "approving" }
   | { kind: "enrolled" }
-  | { kind: "refused"; reason: string };
+  | { kind: "refused"; reason: string }
+  | { kind: "forgetting" }
+  | { kind: "forgotten" }
+  | { kind: "forget_refused"; reason: string };
 
-const BUSY: ReadonlySet<Step["kind"]> = new Set(["asking", "creating", "approving"]);
+const BUSY: ReadonlySet<Step["kind"]> = new Set(["asking", "creating", "approving", "forgetting"]);
 
 export function AuthenticatorEnrollment() {
   const { t } = useI18n();
@@ -106,7 +111,20 @@ export function AuthenticatorEnrollment() {
     await enroll();
   };
 
+  const forget = async () => {
+    if (!window.confirm(t("webauthn.forget_confirm"))) return;
+    setStep({ kind: "forgetting" });
+    const r = await send({ type: "webauthn_forget" });
+    setStep(r.ok ? { kind: "forgotten" } : { kind: "forget_refused", reason: r.error });
+  };
+
   const enrolled = note?.ok === true && note.enrollment !== null;
+  const refusal =
+    step.kind === "refused"
+      ? t("webauthn.failed", [refusalSentence(t, step.reason)])
+      : step.kind === "forget_refused"
+        ? t("webauthn.forget_failed", [refusalSentence(t, step.reason)])
+        : null;
   const busy = BUSY.has(step.kind);
 
   return (
@@ -163,6 +181,7 @@ export function AuthenticatorEnrollment() {
           {step.kind === "asking" && t("webauthn.step_asking")}
           {step.kind === "creating" && t("webauthn.step_creating")}
           {step.kind === "approving" && t("webauthn.step_approving")}
+          {step.kind === "forgetting" && t("webauthn.step_forgetting")}
         </div>
       )}
       {step.kind === "enrolled" && (
@@ -170,11 +189,13 @@ export function AuthenticatorEnrollment() {
           {t("webauthn.enrolled_now")}
         </div>
       )}
-      <div
-        role="alert"
-        className={step.kind === "refused" ? "mt-2 text-xs font-semibold text-danger" : "sr-only"}
-      >
-        {step.kind === "refused" && t("webauthn.failed", [refusalSentence(t, step.reason)])}
+      {step.kind === "forgotten" && (
+        <div role="status" className="mt-2 text-xs font-semibold">
+          {t("webauthn.forgotten_now")}
+        </div>
+      )}
+      <div role="alert" className={refusal ? "mt-2 text-xs font-semibold text-danger" : "sr-only"}>
+        {refusal}
       </div>
 
       {step.kind !== "approval_needed" && (
@@ -186,6 +207,11 @@ export function AuthenticatorEnrollment() {
           >
             {t(enrolled ? "webauthn.btn_enroll_another" : "webauthn.btn_enroll")}
           </Button>
+          {enrolled && (
+            <Button variant="ghost" disabled={busy} onClick={() => void forget()}>
+              {t("webauthn.btn_forget")}
+            </Button>
+          )}
         </div>
       )}
     </div>

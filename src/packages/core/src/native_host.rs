@@ -613,6 +613,7 @@ fn handle_request<W: Write>(
         HostRequest::PresenceConfirm { nonce } => {
             write_replies(out, exchange.presence_confirm(&nonce))
         }
+        HostRequest::BrowserRevoke {} => write_replies(out, exchange.browser_revoke()),
         HostRequest::EnclaveRevoke {} => write_control_reply(out, &revoke_host_key()),
         HostRequest::ClientList {} => write_control_reply(out, &admin_client_list()),
         HostRequest::ClientRevoke { name } => write_control_reply(out, &admin_client_revoke(&name)),

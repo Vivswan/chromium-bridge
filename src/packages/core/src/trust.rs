@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::allowlist::{Anchor, ClientEntry};
 use crate::audit::{self, AuditKind, AuditRecord};
-use crate::ipc::{ClientIdentity, RuntimeLockToken};
+use crate::ipc::{BrowserLabel, ClientIdentity, RuntimeLockToken};
 use crate::runtime_record::{Ladder, Record, RuntimeRecord};
 use crate::webauthn::{CredentialId, Enrollment};
 
@@ -143,6 +143,26 @@ impl Trust {
         self.enrollments.push(enrollment);
     }
 
+    /// Forget every enrollment under `label`; returns the ones that went, for the trail.
+    pub(crate) fn revoke_browser(&mut self, label: &BrowserLabel) -> Vec<Enrollment> {
+        let (gone, kept) = std::mem::take(&mut self.enrollments)
+            .into_iter()
+            .partition(|e| &e.label == label);
+        self.enrollments = kept;
+        gone
+    }
+
+    /// Forget every enrollment and every client pairing; returns what went, for the trail. A paired list
+    /// stays paired (empty: nobody admitted until the next `pair-client`); a never-paired machine has no
+    /// pairing to forget and keeps its bootstrap posture. The kill latch is not a pairing and stays.
+    pub(crate) fn forget_pairings(&mut self) -> (Vec<Enrollment>, Vec<ClientEntry>) {
+        let clients = match &mut self.clients {
+            Clients::Paired(clients) => std::mem::take(clients),
+            Clients::NeverPaired => Vec::new(),
+        };
+        (std::mem::take(&mut self.enrollments), clients)
+    }
+
     /// Whether the sign counter an accepted assertion carried may land: the credential must be enrolled and
     /// `sign_count` must move its stored counter forward. A counter another host already moved past is stale.
     /// The writer decides under the lock, against the record as it stands then.
@@ -228,7 +248,8 @@ pub enum Scope {
     Policy,
     /// The shared `uiLanguage` preference changed.
     Lang,
-    /// A credential was enrolled or its sign counter advanced; the enrollments are re-read per act, so no marker.
+    /// A credential was enrolled or forgotten, or its sign counter advanced; the enrollments are re-read per
+    /// act, so no marker.
     Enrollments,
 }
 
@@ -260,10 +281,20 @@ impl Trust {
         scope: Scope,
         f: impl FnOnce(&mut Trust),
     ) -> io::Result<TrustState> {
+        Self::mutate_locked_with(lock, scope, f).map(|(state, ())| state)
+    }
+
+    /// [`mutate_locked`](Self::mutate_locked), handing back what `f` returned beside the snapshot: a writer
+    /// that forgets entries gets them for its trail exactly when the write landed, never from a side channel.
+    pub(crate) fn mutate_locked_with<T>(
+        lock: &RuntimeLockToken,
+        scope: Scope,
+        f: impl FnOnce(&mut Trust) -> T,
+    ) -> io::Result<(TrustState, T)> {
         let mut next = TrustState::current()?.0.bumped(scope)?;
-        f(&mut next);
+        let out = f(&mut next);
         next.write(lock)?;
-        Ok(TrustState(next))
+        Ok((TrustState(next), out))
     }
 }
 

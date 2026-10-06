@@ -5,14 +5,15 @@
 
 import { z } from "zod";
 
-// Classification only: the four host->extension WebAuthn frames. The three extension->host frames
-// (enroll_begin, enroll_finish, presence_assert) are outbound only and never classify inbound.
-// scripts/check-envelope.ts holds this array to the generated reader plan.
+// Classification only: the five host->extension WebAuthn frames. The extension->host frames (enroll_begin,
+// enroll_finish, presence_assert, presence_confirm, browser_revoke) are outbound only and never classify
+// inbound. scripts/check-envelope.ts holds this array to the generated reader plan.
 export const WEBAUTHN_FRAME_TYPES = [
   "enroll_options",
   "enroll_result",
   "presence_request",
   "presence_result",
+  "browser_revoke_result",
 ] as const;
 
 export const WebAuthnInboundFrameSchema = z.looseObject({

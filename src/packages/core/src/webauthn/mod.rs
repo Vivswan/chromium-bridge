@@ -17,6 +17,7 @@
 
 mod authenticator_data;
 mod base64url;
+mod cli;
 mod client_data;
 mod credential;
 #[cfg(any(test, feature = "fuzzing"))]
@@ -36,6 +37,7 @@ pub use authenticator_data::{
     MAX_CREDENTIAL_ID_LEN, MIN_CREDENTIAL_ID_LEN,
 };
 pub use base64url::{decode as base64url_decode, encode as base64url_encode};
+pub use cli::run_revoke_browser;
 pub use credential::{
     CosePublicKey, Credential, CredentialId, CredentialIdError, KeyRefusal, RpId,
 };
@@ -45,7 +47,9 @@ pub use statement::{
     Action, Challenge, Nonce, Statement, StatementDomain, ENROLL_DOMAIN, MAX_ACTION_LEN,
     MAX_NONCE_LEN, PRESENCE_DOMAIN,
 };
+pub(crate) use store::audit_browsers_revoked;
 pub use store::{
-    advance_sign_count, counter_advances, record, CounterError, Enrollment, EnrollmentAuthority,
+    advance_sign_count, counter_advances, record, revoke_browser, BrowserRevoked, CounterError,
+    Enrollment, EnrollmentAuthority, RevokeBrowserError,
 };
 pub use verify::{verify_assertion, Assertion, Verified};

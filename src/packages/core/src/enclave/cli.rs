@@ -1,11 +1,18 @@
-//! CLI runners: `pair` / `revoke` / `enclave-status`.
+//! CLI runners: `pair` / `revoke --all` / `enclave-status`, and the one disposal seam every host-key removal
+//! runs through.
+
+use std::io;
 
 use serde::{Deserialize, Serialize};
 
 use super::key::{EnrollmentKey, Revoked, StoreOutcome};
 use super::record::KeyStore;
 use super::{EnclaveError, KEY_LABEL};
+use crate::allowlist::ClientEntry;
+use crate::audit::Surface;
 use crate::presence::{self, TerminalStdin};
+use crate::trust::{Clients, Scope, Trust, TrustState};
+use crate::webauthn::Enrollment;
 
 /// `chromium-bridge pair [--reset] [--file-store]`: mint the host identity key and print the fingerprint the
 /// user compares against the extension's enrollment screen. Minting is a capability grant (the extension will
@@ -131,53 +138,168 @@ fn store_name(store: KeyStore) -> &'static str {
     }
 }
 
-/// `chromium-bridge revoke` (also `pair --reset` uses the same deletion): delete the host key and the signed
-/// policy baseline and bump the host-key epoch, so a live native host pushes `enclave_revoked` and a pinned
-/// extension fails closed without waiting for a reverify.
-pub fn run_revoke() -> i32 {
-    match dispose_enrollment_and_policy_baseline() {
-        Ok(revoked) => {
-            audit_host_key_revoke(crate::audit::Surface::Cli, &revoked);
-            if let StoreOutcome::Unanswered(e) = &revoked.store {
-                if revoked.file {
-                    println!(
-                        "note: the credential store did not answer ({e}); the file key is revoked, a \
-                         store entry it may hold stays behind"
-                    );
+/// `chromium-bridge revoke --all`: start over. The host key, the signed policy baseline, every browser's
+/// enrollment, and every client pairing go in one critical section; the kill latch stays, since releasing it
+/// is presence-gated everywhere else. Every part that committed is printed before any failure decides the
+/// exit code, so a partial reset never reads as nothing done. Returns a process exit code.
+pub fn run_revoke_all() -> i32 {
+    let reset = match dispose_everything(Surface::Cli) {
+        Ok(reset) => reset,
+        Err(e) => {
+            eprintln!("revoke --all failed: {e}");
+            return 1;
+        }
+    };
+    let mut code = 0;
+    match &reset.pairings {
+        Ok(forgotten) => {
+            println!(
+                "forgot {} browser credential{} and {} trusted client{}",
+                forgotten.enrollments.len(),
+                if forgotten.enrollments.len() == 1 {
+                    ""
                 } else {
-                    println!("revoke could not consult the credential store: {e}");
-                    return 1;
+                    "s"
+                },
+                forgotten.clients.len(),
+                if forgotten.clients.len() == 1 {
+                    ""
+                } else {
+                    "s"
                 }
+            );
+            println!("the next browser enrollment is first-time (trust on first use)");
+            match forgotten.trust.clients() {
+                Clients::Paired(_) => println!(
+                    "no MCP client is admitted until `chromium-bridge pair-client` trusts one again"
+                ),
+                Clients::NeverPaired => {}
             }
-            if revoked.existed() {
-                println!("host key revoked. re-run `chromium-bridge pair` to re-enroll.");
-                println!(
-                    "a connected extension is notified and fails closed; \
-                     otherwise it notices on its next connect."
-                );
-            } else {
-                println!("no host key found; nothing to revoke.");
-            }
-            0
         }
         Err(e) => {
-            println!("revoke failed: {e}");
-            1
+            eprintln!(
+                "the trust record could not be rewritten ({e}): the browsers' enrollments and the trusted \
+                 clients stay as they were"
+            );
+            code = 1;
         }
     }
+    match &reset.baseline {
+        Ok(true) => {
+            println!("cleared the policy record (the signed baseline and any restriction overlay)")
+        }
+        Ok(false) => {}
+        Err(e) => {
+            eprintln!("the policy record could not be cleared ({e}); it stays in place");
+            code = 1;
+        }
+    }
+    match &reset.revoked.store {
+        StoreOutcome::Unanswered(e) if !reset.revoked.file => {
+            eprintln!("revoke --all could not consult the credential store: {e}");
+            return 1;
+        }
+        StoreOutcome::Unanswered(e) => println!(
+            "note: the credential store did not answer ({e}); the file key is revoked, a store entry it \
+             may hold stays behind"
+        ),
+        StoreOutcome::Cleared { .. } => {}
+    }
+    if reset.revoked.existed() {
+        println!("host key revoked. re-run `chromium-bridge pair` to re-enroll.");
+        // The host pushes the revocation only on a moved host-key marker (the record write that also forgets
+        // the pairings) AND a store that confirms the key absent; short of either, the extension learns when
+        // its next key verification fails.
+        if reset.pairings.is_ok() && matches!(reset.revoked.store, StoreOutcome::Cleared { .. }) {
+            println!(
+                "a connected extension is notified and fails closed; otherwise it notices on its next \
+                 connect."
+            );
+        } else {
+            println!("a connected extension notices at its next key verification.");
+        }
+    } else {
+        println!("no host key found.");
+    }
+    code
 }
 
-/// The shared disposal seam: `chromium-bridge revoke`, `pair --reset`, and the extension-originated
-/// `enclave_revoke` all route here, under ONE runtime-lock hold, so no concurrent WRITER (a policy write under
-/// the doomed key) can land a baseline between the key deletion and the clear. Returns what each place
-/// confirmed; the surfaces decide what a store that did not answer means for them.
+/// What `revoke --all` did, each part on its own: the key and what the store said, the policy record clear
+/// (`true` when one existed), and the record rewrite that forgets the pairings (an error there means nothing
+/// was forgotten).
+struct Reset {
+    revoked: Revoked,
+    baseline: io::Result<bool>,
+    pairings: io::Result<Forgotten>,
+}
+
+/// The pairings the record forgot, and the record as it stands after: the posture the user is told about is
+/// read from that snapshot, not inferred from the counts.
+struct Forgotten {
+    trust: TrustState,
+    enrollments: Vec<Enrollment>,
+    clients: Vec<ClientEntry>,
+}
+
+/// The shared disposal seam: `pair --reset` and the extension-originated `enclave_revoke` route here, under
+/// ONE runtime-lock hold, so no concurrent WRITER (a policy write under the doomed key) can land a baseline
+/// between the key deletion and the clear. Returns what each place confirmed; the surfaces decide what a
+/// store that did not answer means for them.
 ///
 /// ```text
 /// file removal fails                 -> the error bubbles and the baseline stays: the key, and its valid signature, may still exist
 /// baseline clear or epoch bump fails -> logged, not fatal: only cleanup or the proactive push is lost, never the deletion
 /// ```
 pub fn dispose_enrollment_and_policy_baseline() -> Result<Revoked, EnclaveError> {
-    match crate::ipc::with_runtime_lock(dispose_locked) {
+    let disposal = with_lock(|lock| dispose_locked(lock, |_| {}))?;
+    if let Err(e) = disposal.baseline {
+        log_warn!(
+            "enclave",
+            "host key deleted but the signed policy baseline could not be cleared ({e}); it \
+             survives as an artifact of the dead key until the next policy write"
+        );
+    }
+    if let Err(e) = disposal.trust {
+        log_warn!(
+            "enclave",
+            "host key deleted but the host-key revocation epoch bump failed ({e}); other \
+             surfaces notice only at their next key verification"
+        );
+    }
+    Ok(disposal.revoked)
+}
+
+/// `revoke --all`'s seam: the same critical section, with the host-key epoch write also forgetting every
+/// enrollment and client pairing ([`Trust::forget_pairings`]). Nothing is best-effort here: each part's
+/// outcome is returned for the caller to report. Audited HERE under `surface`, after the lock (the key, then
+/// one record per forgotten credential and client), so the trail is written whatever the caller does next.
+fn dispose_everything(surface: Surface) -> Result<Reset, EnclaveError> {
+    let disposal = with_lock(|lock| dispose_locked(lock, Trust::forget_pairings))?;
+    audit_host_key_revoke(surface, &disposal.revoked);
+    let pairings = disposal
+        .trust
+        .map(|(trust, (enrollments, clients))| Forgotten {
+            trust,
+            enrollments,
+            clients,
+        });
+    if let Ok(forgotten) = &pairings {
+        crate::webauthn::audit_browsers_revoked(surface, &forgotten.enrollments);
+        for client in &forgotten.clients {
+            crate::allowlist::audit_client_revoked(surface, client.name.as_str());
+        }
+    }
+    Ok(Reset {
+        revoked: disposal.revoked,
+        baseline: disposal.baseline,
+        pairings,
+    })
+}
+
+fn with_lock<T>(
+    dispose: impl FnOnce(&crate::ipc::RuntimeLockToken) -> io::Result<Result<Disposal<T>, EnclaveError>>,
+) -> Result<Disposal<T>, EnclaveError> {
+    match crate::ipc::with_runtime_lock(dispose) {
         Ok(inner) => inner,
         Err(e) => Err(EnclaveError::Keychain(format!(
             "runtime lock unavailable during host key disposal: {e}"
@@ -185,28 +307,30 @@ pub fn dispose_enrollment_and_policy_baseline() -> Result<Revoked, EnclaveError>
     }
 }
 
-fn dispose_locked(
+/// One disposal's three outcomes. The key removal is the gate (its failure is the `Err` of
+/// [`dispose_locked`]); the baseline clear and the host-key epoch write (carrying the caller's edit) each
+/// report their own.
+struct Disposal<T> {
+    revoked: Revoked,
+    baseline: io::Result<bool>,
+    trust: io::Result<(TrustState, T)>,
+}
+
+fn dispose_locked<T>(
     lock: &crate::ipc::RuntimeLockToken,
-) -> std::io::Result<Result<Revoked, EnclaveError>> {
+    edit: impl FnOnce(&mut Trust) -> T,
+) -> io::Result<Result<Disposal<T>, EnclaveError>> {
     let revoked = match EnrollmentKey::revoke(lock) {
         Ok(revoked) => revoked,
         Err(e) => return Ok(Err(e)),
     };
-    if let Err(e) = crate::policy::clear_baseline_locked(lock) {
-        log_warn!(
-            "enclave",
-            "host key deleted but the signed policy baseline could not be cleared ({e}); it \
-             survives as an artifact of the dead key until the next policy write"
-        );
-    }
-    if let Err(e) = crate::trust::Trust::mutate_locked(lock, crate::trust::Scope::HostKey, |_| {}) {
-        log_warn!(
-            "enclave",
-            "host key deleted but the host-key revocation epoch bump failed ({e}); other \
-             surfaces notice only at their next key verification"
-        );
-    }
-    Ok(Ok(revoked))
+    let baseline = crate::policy::clear_baseline_locked(lock);
+    let trust = Trust::mutate_locked_with(lock, Scope::HostKey, edit);
+    Ok(Ok(Disposal {
+        revoked,
+        baseline,
+        trust,
+    }))
 }
 
 /// Record a host-key revocation in the audit trail, log-after-decide, as the verdict says: `ok` when a key
@@ -335,66 +459,4 @@ fn key_report() -> EnclaveStatusReport {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::super::pubkey::EnclavePublicKey;
-    use super::*;
-
-    /// `enclave-status --json` is the CLI's machine-readable contract: the bytes, sorted keys and each state's
-    /// exact field set are pinned at the one place they leave the program.
-    #[test]
-    fn json_report_wire_bytes_for_each_key_state() {
-        let mut bytes = vec![0x04u8];
-        bytes.extend(std::iter::repeat_n(0xabu8, 64));
-        let public = EnclavePublicKey::from_x963(bytes).unwrap();
-        let (b64, fingerprint) = (public.to_base64(), public.fingerprint_display());
-        let label = KEY_LABEL.to_string();
-        let cases = [
-            (
-                EnclaveStatusReport::Present {
-                    v: 1,
-                    key_label: label.clone(),
-                    store: KeyStore::File,
-                    public_key_b64: b64.clone(),
-                    fingerprint: fingerprint.clone(),
-                },
-                format!(
-                    "{{\"fingerprint\":\"{fingerprint}\",\"key\":\"present\",\"key_label\":\"{KEY_LABEL}\",\
-                     \"public_key_b64\":\"{b64}\",\"store\":\"file\",\"v\":1}}"
-                ),
-            ),
-            (
-                EnclaveStatusReport::None {
-                    v: 1,
-                    key_label: label.clone(),
-                },
-                format!("{{\"key\":\"none\",\"key_label\":\"{KEY_LABEL}\",\"v\":1}}"),
-            ),
-            (
-                EnclaveStatusReport::Invalid {
-                    v: 1,
-                    key_label: label.clone(),
-                    detail: "planted scalar".into(),
-                },
-                format!(
-                    "{{\"detail\":\"planted scalar\",\"key\":\"invalid\",\"key_label\":\"{KEY_LABEL}\",\"v\":1}}"
-                ),
-            ),
-            (
-                EnclaveStatusReport::Error {
-                    v: 1,
-                    key_label: label,
-                    detail: "store unreachable".into(),
-                },
-                format!(
-                    "{{\"detail\":\"store unreachable\",\"key\":\"error\",\"key_label\":\"{KEY_LABEL}\",\"v\":1}}"
-                ),
-            ),
-        ];
-        for (report, want) in cases {
-            let emitted = serde_json::to_value(&report).unwrap().to_string();
-            assert_eq!(emitted, want);
-            let back: EnclaveStatusReport = serde_json::from_str(&emitted).unwrap();
-            assert_eq!(back, report, "round trip");
-        }
-    }
-}
+mod tests;

@@ -401,6 +401,18 @@ fn classification_matrix() {
             Malformed(Tag::PresenceConfirm),
         ),
         (
+            json!({ "type": "browser_revoke" }),
+            Handle(HostRequest::BrowserRevoke {}),
+        ),
+        (
+            json!({ "type": "browser_revoke", "extra": 1 }),
+            Malformed(Tag::BrowserRevoke),
+        ),
+        (
+            json!({ "type": "browser_revoke_result", "ok": true }),
+            Malformed(Tag::BrowserRevokeResult),
+        ),
+        (
             json!({ "type": "presence_assert", "credential_id": "Y3JlZA", "signature": 5 }),
             Malformed(Tag::PresenceAssert),
         ),
@@ -566,6 +578,12 @@ fn malformed_replies_match_the_request_type() {
             Frame(json!({ "type": "presence_result", "ok": false,
                           "reason": "malformed presence_confirm frame" })),
         ),
+        (
+            Tag::BrowserRevoke,
+            Frame(json!({ "type": "browser_revoke_result", "ok": false,
+                          "reason": "malformed browser_revoke frame" })),
+        ),
+        (Tag::BrowserRevokeResult, Nothing),
         (Tag::EnrollOptions, Nothing),
         (Tag::EnrollResult, Nothing),
         (Tag::PresenceRequest, Nothing),

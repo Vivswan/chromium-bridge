@@ -763,6 +763,10 @@ export const READER_FRAMES: Record<
     enroll_result: { wire: "EnrollResultWireSchema", enforced: "EnrollResultFrameSchema" },
     presence_request: { wire: "PresenceRequestWireSchema", enforced: "PresenceRequestFrameSchema" },
     presence_result: { wire: "PresenceResultWireSchema", enforced: "PresenceResultFrameSchema" },
+    browser_revoke_result: {
+      wire: "BrowserRevokeResultWireSchema",
+      enforced: "BrowserRevokeResultFrameSchema",
+    },
   },
 };
 
@@ -804,6 +808,7 @@ export const WRITER_FRAMES: Record<Group, Readonly<Record<string, string>>> = {
     enroll_finish: "EnrollFinishWireSchema",
     presence_assert: "PresenceAssertWireSchema",
     presence_confirm: "PresenceConfirmWireSchema",
+    browser_revoke: "BrowserRevokeWireSchema",
   },
 };
 

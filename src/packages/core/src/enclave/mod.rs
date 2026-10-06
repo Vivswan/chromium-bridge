@@ -25,7 +25,7 @@ pub use challenge::{
     POLICY_DOMAIN,
 };
 pub use cli::{
-    audit_host_key_revoke, dispose_enrollment_and_policy_baseline, run_pair, run_revoke,
+    audit_host_key_revoke, dispose_enrollment_and_policy_baseline, run_pair, run_revoke_all,
     run_status, run_status_json, EnclaveStatusReport,
 };
 pub use key::{respond_to_challenge, EnrollmentKey, Revoked, StoreOutcome};

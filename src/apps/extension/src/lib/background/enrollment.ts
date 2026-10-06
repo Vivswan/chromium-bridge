@@ -352,7 +352,7 @@ export function handleEnclaveFrame(msg: EnclaveInboundFrame): Promise<void> {
 
 /** The host says the enrollment key is gone: the acknowledgement of our own
  * `enclave_revoke`, or a host-originated push after an out-of-band
- * `chromium-bridge revoke` / `pair --reset`. Pure capability reduction, so the
+ * `chromium-bridge revoke --all` / `pair --reset`. Pure capability reduction, so the
  * (unauthenticated) frame is safe to honor: with a pin it fails the bridge
  * closed until the user re-pairs; without one it only settles the
  * pending-unpair bookkeeping. */

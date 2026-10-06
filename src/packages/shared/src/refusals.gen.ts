@@ -46,6 +46,7 @@ export const REFUSAL_CODES = [
   "no_request_outstanding",
   "no_enrollment_outstanding",
   "machine_already_enrolled",
+  "not_enrolled",
 ] as const;
 
 export type RefusalCode = (typeof REFUSAL_CODES)[number];

@@ -10,6 +10,7 @@
 //! kill_release      -> presence_request (this browser's credentials); on approval presence_result, kill_status_result
 //! presence_assert   -> presence_result, then the pending act
 //! presence_confirm  -> presence_result (the window's answer; only where the request admits no credential)
+//! browser_revoke    -> browser_revoke_result: this browser's enrollments forgotten (no proof: it removes capability)
 //! ```
 
 use std::time::{Duration, Instant};
@@ -19,7 +20,7 @@ use crate::ipc::BrowserLabel;
 use crate::presence::request::PresenceRequest;
 use crate::presence::{PresenceAttestation, PresenceError, PresencePath};
 use crate::protocol::control::{
-    EnrollOutcome, HostReply, KillStatus, PresenceOutcome, WebAuthnControl,
+    EnrollOutcome, HostReply, KillStatus, PresenceOutcome, RevokeOutcome, WebAuthnControl,
 };
 use crate::trust::TrustState;
 use crate::webauthn::{
@@ -46,8 +47,9 @@ enum Pending {
         act: PendingAct,
     },
     /// Presence was attested for enrolling another credential; the next `enroll_begin` consumes it. Any
-    /// other WebAuthn request supersedes it, [`APPROVAL_TTL`] bounds it, and an emptied store voids it (first
-    /// use governs again), so an approval never outlives the ceremony it was given for.
+    /// other WebAuthn request supersedes it (a refused `browser_revoke` excepted: it changed nothing),
+    /// [`APPROVAL_TTL`] bounds it, and an emptied store voids it (first use governs again), so an approval
+    /// never outlives the ceremony it was given for.
     EnrollmentApproved {
         auth: PresenceAttestation,
         since: Instant,
@@ -238,6 +240,33 @@ impl Exchange {
         replies
     }
 
+    /// `browser_revoke`: forget every authenticator enrolled under this host's label. The frame names no label,
+    /// so the reach is exactly this host's: one browser, or every browser sharing an unlabelled manifest
+    /// (`default`). Whatever was outstanding is void once the store forgot this browser; a refusal changed
+    /// nothing, so the request stays for the worker's answer (a browser with no credential still answers
+    /// its own request through the window).
+    pub(super) fn browser_revoke(&mut self) -> Vec<HostReply> {
+        let outcome = match webauthn::revoke_browser(&self.label, Surface::Extension) {
+            Ok(revoked) => {
+                log_info!(
+                    "native-host",
+                    "browser '{}' forgot its {} enrolled credential(s)",
+                    self.label,
+                    revoked.forgotten.len()
+                );
+                self.pending = None;
+                RevokeOutcome::Forgotten
+            }
+            Err(webauthn::RevokeBrowserError::NotEnrolled { .. }) => {
+                revoke_refused(RefusalCode::NotEnrolled)
+            }
+            Err(webauthn::RevokeBrowserError::Io(e)) => {
+                revoke_refused(RefusalCode::StoreError.detailed(e))
+            }
+        };
+        vec![outcome.into_frame().into()]
+    }
+
     /// `enroll_finish`: verify the registration against the outstanding enrollment statement and store it.
     pub(super) fn enroll_finish(
         &mut self,
@@ -390,6 +419,12 @@ fn presence_refused(reason: impl Into<Reason>) -> HostReply {
     }
     .into_frame()
     .into()
+}
+
+fn revoke_refused(reason: impl Into<Reason>) -> RevokeOutcome {
+    RevokeOutcome::Refused {
+        reason: reason.into().to_string(),
+    }
 }
 
 fn kill_unreadable(error: String) -> HostReply {

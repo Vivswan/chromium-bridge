@@ -318,6 +318,12 @@ export const RUNTIME_CONTRACT = contract({
     }),
     res: Acknowledged,
   },
+  // Forget this browser's enrolled authenticators: the host acts on its own label and needs no proof.
+  webauthn_forget: {
+    gate: "extension-page",
+    req: z.strictObject({ type: z.literal("webauthn_forget") }),
+    res: Acknowledged,
+  },
   // The host-registration panel: the per-browser manifest rows the host's doctor diagnoses, and the repair
   // `doctor --fix` runs, both answered with the fresh rows (a repair that failed is a refusal; the panel re-asks).
   get_registration: {

@@ -14,6 +14,7 @@ import {
   claimKillRelease,
   collaborator,
   finishEnrollment,
+  forgetBrowser,
   handleWebAuthnFrame,
   pendingPresenceRequest,
   recordedEnrollment,
@@ -129,6 +130,42 @@ describe("the enrollment note for the options page", () => {
       ok: false,
       error: "the stored enrollment note is malformed",
     });
+  });
+});
+
+describe("forgetting this browser", () => {
+  const note = { credentialId: "Y3JlZC1h", enrolledAt: 1 };
+
+  test("browser_revoke posts the frame; the host's ok clears the note and the pending request", async () => {
+    await fakeBrowser.storage.local.set({ [WEBAUTHN_ENROLLMENT_KEY]: note });
+    vi.spyOn(fakeBrowser.runtime, "openOptionsPage").mockResolvedValue(undefined);
+    handleWebAuthnFrame(presenceRequest as never);
+    const p = forgetBrowser();
+    expect(posted).toEqual([{ type: "browser_revoke" }]);
+    handleWebAuthnFrame({ type: "browser_revoke_result", ok: true });
+    await expect(p).resolves.toEqual({ ok: true });
+    await expect(recordedEnrollment()).resolves.toEqual({ ok: true, enrollment: null });
+    expect(pendingPresenceRequest()).toBeNull();
+  });
+
+  test("not_enrolled clears a note the CLI left stale but keeps the pending request; any other refusal keeps the note", async () => {
+    await fakeBrowser.storage.local.set({ [WEBAUTHN_ENROLLMENT_KEY]: note });
+    vi.spyOn(fakeBrowser.runtime, "openOptionsPage").mockResolvedValue(undefined);
+    handleWebAuthnFrame(presenceRequest as never);
+    const stale = forgetBrowser();
+    handleWebAuthnFrame({ type: "browser_revoke_result", ok: false, reason: "not_enrolled" });
+    await expect(stale).resolves.toEqual({ ok: false, error: "not_enrolled" });
+    await expect(recordedEnrollment()).resolves.toEqual({ ok: true, enrollment: null });
+    expect(pendingPresenceRequest()).toEqual(presenceRequest);
+    await fakeBrowser.storage.local.set({ [WEBAUTHN_ENROLLMENT_KEY]: note });
+    const refused = forgetBrowser();
+    handleWebAuthnFrame({
+      type: "browser_revoke_result",
+      ok: false,
+      reason: "store_error: disk full",
+    });
+    await expect(refused).resolves.toEqual({ ok: false, error: "store_error: disk full" });
+    await expect(recordedEnrollment()).resolves.toEqual({ ok: true, enrollment: note });
   });
 });
 

@@ -152,6 +152,8 @@ pub enum RefusalCode {
     NoRequestOutstanding,
     NoEnrollmentOutstanding,
     MachineAlreadyEnrolled,
+    /// `browser_revoke` from a browser with nothing enrolled.
+    NotEnrolled,
 }
 
 impl RefusalCode {

@@ -19,6 +19,8 @@
  *   7  a wrong challenge             -> an assertion over another challenge is refused challenge_mismatch
  *   8  the window on an enrolled browser -> presence_confirm is refused software_confirmation_not_allowed
  *   9  the refusals are audited       -> the host's audit.log names every refusal, under the extension surface
+ *  10  a browser forgets itself       -> A's "Forget this browser" removes its enrollment through its own host;
+ *                                     the panel reads not enrolled, the trail names the credential, B's stays
  *
  * The host runs in control-plane mode (the kill switch is engaged first in the isolated runtime dir), so no
  * broker is needed and the control frames are the whole conversation. A release ends that mode (the host exits
@@ -115,6 +117,7 @@ interface AuditRecord {
   event_kind: string;
   surface?: string;
   outcome?: string;
+  name?: string;
   detail?: string;
 }
 
@@ -275,6 +278,8 @@ const UI = {
   enrolledNow: "Enrolled. The host recorded this credential.",
   approvalTitle: "Approval needed: this machine already has an enrolled browser",
   approve: "Approve with an enrolled authenticator",
+  forget: "Forget this browser",
+  forgotten: "Forgotten. The host no longer trusts an authenticator enrolled from this browser.",
 };
 
 /** Engage the switch from the CLI and wait until the reconnecting hosts have pushed it to every panel. */
@@ -673,6 +678,29 @@ async function main(): Promise<void> {
       ),
       "audit.log names the replay, the unknown credential, the challenge mismatch, and the window refusal",
       refusals,
+    );
+
+    // 10: a browser forgets itself from its panel, through its own host; the other browser's enrollment stays.
+    a.page.once("dialog", (dialog) => void dialog.accept());
+    await clickButton(a.page, UI.forget);
+    await waitForText(a.page, UI.forgotten);
+    await waitForText(a.page, UI.notEnrolled);
+    const forgot = auditRecords(work).filter((r) => r.event_kind === "revoke_browser");
+    check(
+      forgot.length === 1 &&
+        forgot[0]?.surface === "extension" &&
+        forgot[0].name === BROWSER_A &&
+        forgot[0].detail === `credential=${credentialFingerprint(aId)}`,
+      "browser A: Forget this browser removes its enrollment through its own host and the trail names it",
+      forgot,
+    );
+    const trust = JSON.parse(
+      fs.readFileSync(path.join(work, "runtime", "chromium-bridge", "trust.json"), "utf8"),
+    ) as { enrollments: Array<{ label: string }> };
+    check(
+      trust.enrollments.map((e) => e.label).join(",") === BROWSER_B,
+      "the trust record keeps exactly browser B's enrollment after A's forget",
+      trust.enrollments,
     );
   } catch (e) {
     // What each panel showed when the step gave up: a refusal sentence is the usual answer.

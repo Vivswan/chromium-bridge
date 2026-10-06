@@ -407,6 +407,9 @@ impl RestrictOutcome {
 ///                      base64url(sha256(statement)), the action the user is approving, the nonce, and the
 ///                      credential ids enrolled from this browser (the allowCredentials list)
 /// presence_assert   -> presence_result { ok, reason? }; every refusal is a webauthn::Refusal code
+/// browser_revoke    -> browser_revoke_result { ok, reason? }: the enrollments under this host's label forgotten
+///                      (the frame names none, so the reach is the host's: one browser, or the browsers sharing
+///                      an unlabelled manifest); no proof, since it removes capability
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
@@ -456,6 +459,16 @@ pub enum WebAuthnControl {
     /// Host -> extension: the presence verdict. `reason` travels exactly when not `ok`
     /// ([`PresenceOutcome::into_frame`]).
     PresenceResult {
+        ok: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    /// Extension -> host: forget every authenticator enrolled from this browser. The host binds its own label,
+    /// so the frame carries none. Not presence-gated: forgetting only removes capability.
+    BrowserRevoke {},
+    /// Host -> extension: the forgetting verdict. `reason` travels exactly when not `ok`
+    /// ([`RevokeOutcome::into_frame`]).
+    BrowserRevokeResult {
         ok: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
@@ -510,6 +523,28 @@ impl PresenceOutcome {
     }
 }
 
+/// The browser-forgetting verdict as the host decides it; same discipline as [`EnrollOutcome`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RevokeOutcome {
+    Forgotten,
+    Refused { reason: String },
+}
+
+impl RevokeOutcome {
+    pub fn into_frame(self) -> WebAuthnControl {
+        match self {
+            RevokeOutcome::Forgotten => WebAuthnControl::BrowserRevokeResult {
+                ok: true,
+                reason: None,
+            },
+            RevokeOutcome::Refused { reason } => WebAuthnControl::BrowserRevokeResult {
+                ok: false,
+                reason: Some(reason),
+            },
+        }
+    }
+}
+
 /// The wire `type` tag of every host-handled control frame: the variants of [`EnclaveControl`],
 /// [`AdminControl`], [`PolicyControl`], and [`WebAuthnControl`], spelled by serde. Both pumps key on this
 /// one set ([`FrameDisposition`], [`host_control_type`]); the `host_control_tags_mirror_the_wire_enums`
@@ -550,6 +585,8 @@ pub enum HostControlTag {
     PresenceAssert,
     PresenceConfirm,
     PresenceResult,
+    BrowserRevoke,
+    BrowserRevokeResult,
 }
 
 /// Which way a control frame travels. The browser->host set is the [`HostRequest`] roster; the
@@ -582,7 +619,8 @@ impl HostControlTag {
             | HostControlTag::EnrollBegin
             | HostControlTag::EnrollFinish
             | HostControlTag::PresenceAssert
-            | HostControlTag::PresenceConfirm => Direction::BrowserToHost,
+            | HostControlTag::PresenceConfirm
+            | HostControlTag::BrowserRevoke => Direction::BrowserToHost,
             HostControlTag::EnclaveProof
             | HostControlTag::EnclaveError
             | HostControlTag::EnclaveRevoked
@@ -596,7 +634,8 @@ impl HostControlTag {
             | HostControlTag::EnrollOptions
             | HostControlTag::EnrollResult
             | HostControlTag::PresenceRequest
-            | HostControlTag::PresenceResult => Direction::HostToBrowser,
+            | HostControlTag::PresenceResult
+            | HostControlTag::BrowserRevokeResult => Direction::HostToBrowser,
         }
     }
 
@@ -677,6 +716,13 @@ impl HostControlTag {
                 .into_frame()
                 .into(),
             )),
+            HostControlTag::BrowserRevoke => MalformedReply::Send(Box::new(
+                RevokeOutcome::Refused {
+                    reason: "malformed browser_revoke frame".into(),
+                }
+                .into_frame()
+                .into(),
+            )),
             HostControlTag::PresenceConfirm => MalformedReply::Send(Box::new(
                 PresenceOutcome::Refused {
                     reason: "malformed presence_confirm frame".into(),
@@ -701,7 +747,8 @@ impl HostControlTag {
             | HostControlTag::EnrollOptions
             | HostControlTag::EnrollResult
             | HostControlTag::PresenceRequest
-            | HostControlTag::PresenceResult => MalformedReply::Drop,
+            | HostControlTag::PresenceResult
+            | HostControlTag::BrowserRevokeResult => MalformedReply::Drop,
         }
     }
 }
@@ -854,6 +901,8 @@ pub enum HostRequest {
     PresenceConfirm {
         nonce: String,
     },
+    /// Forget this browser's enrollments; not presence-gated (it only reduces capability).
+    BrowserRevoke {},
 }
 
 /// How the native host's stdin->socket pump must treat one inbound frame. Only `Forward` reaches the

@@ -456,6 +456,33 @@ export const PresenceResultFrameSchema = z.discriminatedUnion("ok", [
 
 export type PresenceResultFrame = z.infer<typeof PresenceResultFrameSchema>;
 
+export const BrowserRevokeResultWireSchema = z
+  .object({
+    "ok": z.boolean(),
+    "reason": z.union([z.string(), z.null()]).optional(),
+    "type": z.literal("browser_revoke_result"),
+  })
+  .strict();
+
+export const BrowserRevokeResultFrameSchema = z.discriminatedUnion("ok", [
+  z
+    .object({
+      "ok": z.literal(true),
+      "reason": z.undefined().optional(),
+      "type": z.literal("browser_revoke_result"),
+    })
+    .catchall(z.unknown()),
+  z
+    .object({
+      "ok": z.literal(false),
+      "reason": z.string(),
+      "type": z.literal("browser_revoke_result"),
+    })
+    .catchall(z.unknown()),
+]);
+
+export type BrowserRevokeResultFrame = z.infer<typeof BrowserRevokeResultFrameSchema>;
+
 // Which control-frame tags have a generated reader above, and which are bare classification tags.
 // scripts/check-envelope.ts holds the extension's inbound classifiers to these.
 export const GENERATED_WIRE_FRAMES = {
@@ -467,7 +494,13 @@ export const GENERATED_WIRE_FRAMES = {
     "registration_status_result",
   ],
   policy: ["policy_current", "policy_restrict_result", "lang_current"],
-  webauthn: ["enroll_options", "enroll_result", "presence_request", "presence_result"],
+  webauthn: [
+    "enroll_options",
+    "enroll_result",
+    "presence_request",
+    "presence_result",
+    "browser_revoke_result",
+  ],
 } as const;
 
 export const BARE_TAG_FRAMES = {
@@ -615,6 +648,10 @@ export const PresenceConfirmWireSchema = z
 
 export type PresenceConfirmWire = z.infer<typeof PresenceConfirmWireSchema>;
 
+export const BrowserRevokeWireSchema = z.object({ "type": z.literal("browser_revoke") }).strict();
+
+export type BrowserRevokeWire = z.infer<typeof BrowserRevokeWireSchema>;
+
 // Which extension->host frames have a generated writer schema above.
 export const GENERATED_WRITER_FRAMES = {
   enclave: ["enclave_challenge", "enclave_revoke"],
@@ -629,5 +666,11 @@ export const GENERATED_WRITER_FRAMES = {
     "registration_repair",
   ],
   policy: ["policy_get", "policy_restrict", "lang_set", "lang_get"],
-  webauthn: ["enroll_begin", "enroll_finish", "presence_assert", "presence_confirm"],
+  webauthn: [
+    "enroll_begin",
+    "enroll_finish",
+    "presence_assert",
+    "presence_confirm",
+    "browser_revoke",
+  ],
 } as const;

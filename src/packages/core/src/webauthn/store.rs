@@ -5,10 +5,12 @@
 
 use std::io;
 
+use itertools::Itertools as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::audit::{self, AuditKind, AuditRecord, Surface};
 use crate::ipc::{self, BrowserLabel};
-use crate::presence::PresenceAttestation;
+use crate::presence::{PresenceAttestation, PresencePath};
 use crate::trust::{CounterAdvance, Scope, Trust, TrustState};
 
 use super::credential::{Credential, CredentialId};
@@ -89,6 +91,69 @@ pub fn record(
         }
         Trust::mutate_locked(lock, Scope::Enrollments, |t| t.enroll(enrollment))
     })
+}
+
+/// What `revoke <browser>` did.
+#[derive(Debug)]
+pub struct BrowserRevoked {
+    /// The credentials that went, in record order.
+    pub forgotten: Vec<Enrollment>,
+    /// The record after the write.
+    pub trust: TrustState,
+}
+
+/// Why a browser was not forgotten. Either way nothing was written.
+#[derive(Debug, thiserror::Error)]
+pub enum RevokeBrowserError {
+    /// No enrollment carries the label; `enrolled` names the labels that are present, in record order, so
+    /// the user sees which browser the record knows (a shared manifest's browsers all enroll as `default`).
+    #[error("no browser is enrolled under that label")]
+    NotEnrolled { enrolled: Vec<BrowserLabel> },
+    #[error("trust record: {0}")]
+    Io(#[from] io::Error),
+}
+
+/// Forget every enrollment under `label`. Not presence-gated: forgetting an authenticator only removes
+/// capability, and the browser enrolls again from its options page (first use when it was the last one).
+/// Audited HERE, log-after-decide, so no surface can forget an enrollment without a trail entry.
+pub fn revoke_browser(
+    label: &BrowserLabel,
+    surface: Surface,
+) -> Result<BrowserRevoked, RevokeBrowserError> {
+    let revoked = ipc::with_runtime_lock(|lock| {
+        let current = TrustState::current()?;
+        if !current.enrollments().iter().any(|e| &e.label == label) {
+            let enrolled = current
+                .enrollments()
+                .iter()
+                .map(|e| e.label.clone())
+                .unique()
+                .collect();
+            return Ok(Err(RevokeBrowserError::NotEnrolled { enrolled }));
+        }
+        let (trust, forgotten) =
+            Trust::mutate_locked_with(lock, Scope::Enrollments, |t| t.revoke_browser(label))?;
+        Ok(Ok(BrowserRevoked { forgotten, trust }))
+    })??;
+    audit_browsers_revoked(surface, &revoked.forgotten);
+    Ok(revoked)
+}
+
+/// One [`AuditKind::RevokeBrowser`] record per forgotten credential: under the per-field bound however many a
+/// browser held, and the shape an enrollment's own record has. Call it after the write, outside the lock.
+pub(crate) fn audit_browsers_revoked(surface: Surface, forgotten: &[Enrollment]) {
+    for e in forgotten {
+        audit::record(
+            AuditRecord::new(AuditKind::RevokeBrowser)
+                .surface(surface)
+                .name(e.label.as_str())
+                .outcome("ok")
+                .detail(&format!(
+                    "credential={}",
+                    PresencePath::WebAuthn(e.credential.id.clone()).audit_label()
+                )),
+        );
+    }
 }
 
 /// Why the sign counter did not advance.

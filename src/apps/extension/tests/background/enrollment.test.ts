@@ -630,7 +630,7 @@ describe("ceremony state machine", () => {
   });
 
   test("a host-originated enclave_revoked fails a pinned bridge closed", async () => {
-    // The any-side revocation push: `chromium-bridge revoke` ran out-of-band,
+    // The any-side revocation push: `chromium-bridge revoke --all` ran out-of-band,
     // the host noticed and pushed enclave_revoked. A pinned extension must flip
     // to the fail-closed compromised state without waiting for an opt-in
     // reverify.
