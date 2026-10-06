@@ -4,6 +4,7 @@
 // unions from the asymmetry table).
 
 import { z } from "zod";
+import type { RefusalCode } from "./refusals.gen";
 
 // Classification only: the four host->extension WebAuthn frames. The three extension->host frames
 // (enroll_begin, enroll_finish, presence_assert) are outbound only and never classify inbound.
@@ -20,6 +21,10 @@ export const WebAuthnInboundFrameSchema = z.looseObject({
 });
 
 export type WebAuthnInboundFrame = z.infer<typeof WebAuthnInboundFrameSchema>;
+
+/** The one refusal code a page acts on instead of showing: enroll_begin on an enrolled machine is answered with
+ * it beside a pushed presence_request, and the page runs the approval step for that request. */
+export const PRESENCE_REQUIRED = "presence_required" satisfies RefusalCode;
 
 // ---- page <-> worker shapes ---------------------------------------------------------
 

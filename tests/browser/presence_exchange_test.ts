@@ -38,6 +38,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { NATIVE_HOST_ID } from "@chromium-bridge/shared/identity.gen";
+import { PRESENCE_REQUIRED } from "@chromium-bridge/shared/webauthn";
 import puppeteer, {
   type Browser,
   type CDPSession,
@@ -551,7 +552,7 @@ async function main(): Promise<void> {
     const approvalTarget = await openLaterEnrollment(a.page);
     check(
       !approvalTarget.reply.ok &&
-        approvalTarget.reply.error === "presence_required" &&
+        approvalTarget.reply.error === PRESENCE_REQUIRED &&
         approvalTarget.request !== null &&
         approvalTarget.request.allowed_credential_ids.length === 2,
       "enrolled machine: enroll_begin is answered presence_required beside a request naming both credentials",
