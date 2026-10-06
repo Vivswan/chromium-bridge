@@ -109,6 +109,21 @@ describe("RuntimeMsgSchema", () => {
     webauthn_presence_confirm: [
       { name: "with an empty nonce", msg: { type: "webauthn_presence_confirm", nonce: "" } },
     ],
+    repair_registration: [
+      {
+        name: "with a non-array browsers",
+        msg: { type: "repair_registration", browsers: "brave" },
+      },
+      { name: "with an empty browsers list", msg: { type: "repair_registration", browsers: [] } },
+      {
+        name: "with a browser outside the enum",
+        msg: { type: "repair_registration", browsers: ["brave", "firefox"] },
+      },
+      {
+        name: "with a non-string browser",
+        msg: { type: "repair_registration", browsers: [42] },
+      },
+    ],
     restrict_policy: [
       {
         name: "with an overlay field the catalogue does not own",
