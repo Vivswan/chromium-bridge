@@ -560,8 +560,8 @@ impl fmt::Display for AuditRecord {
     }
 }
 
-/// Unix milliseconds as `YYYY-MM-DD HH:MM:SS.mmmZ`. Past chrono's range (year 262143) the value is not a
-/// clock reading, so it prints raw.
+/// Unix milliseconds as `YYYY-MM-DD HH:MM:SS.mmmZ`. Past chrono's last representable year the value is not
+/// a clock reading, so it prints raw.
 fn format_utc_ms(ts_ms: u64) -> String {
     i64::try_from(ts_ms)
         .ok()
