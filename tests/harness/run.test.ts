@@ -17,6 +17,7 @@ import { seedsDirOutsideRepo } from "./run";
 const REPO = resolve(import.meta.dir, "..", "..");
 const RUN = resolve(import.meta.dir, "run.ts");
 const OWNED_DIRS = resolve(import.meta.dir, "owned-dirs.ts");
+const FAKE_LLM = resolve(import.meta.dir, "fake-llm.ts");
 
 test("--mint-seeds refuses an output dir inside the repository (the captured-corpus incident)", () => {
   const outside = mkdtempSync(join(tmpdir(), "harness-seeds-"));
@@ -64,26 +65,46 @@ test("--mint-seeds refuses an output dir inside the repository (the captured-cor
     });
     expect(verdicts).toEqual(cases.map(([reason, , expected]) => [reason, expected]));
 
-    // The trailing bad flag keeps a regressed guard from launching the harnesses: parsing then
-    // fails on that flag instead, and the refusal text is what tells the two apart.
+    // A regressed guard would go on to launch the harnesses: TMPDIR names a dir that does not exist,
+    // so the stale-dir sweep right after parsing dies instead, and the refusal text is what tells the
+    // two apart.
     const inside = join(REPO, "build", "seeds");
-    const refused = spawnSync(process.execPath, [RUN, "--mint-seeds", inside, "--not-a-flag"], {
+    const env = { ...process.env, TMPDIR: join(outside, "no-such-tmp") };
+    const refused = spawnSync(process.execPath, [RUN, "--mint-seeds", inside], {
       encoding: "utf8",
+      env,
     });
-    const missing = spawnSync(process.execPath, [RUN, "--mint-seeds"], { encoding: "utf8" });
+    const missing = spawnSync(process.execPath, [RUN, "--mint-seeds"], { encoding: "utf8", env });
     expect({
       refused: { status: refused.status, stderr: refused.stderr.split("\n")[0] },
-      missing: { status: missing.status, stderr: missing.stderr.split("\n")[0] },
+      missing: { status: missing.status, stderr: missing.stderr },
     }).toEqual({
       refused: {
         status: 2,
         stderr: `error: refusing to write captured frames inside the repository: ${inside}`,
       },
-      missing: { status: 2, stderr: "error: --mint-seeds needs <dir>" },
+      missing: { status: 2, stderr: expect.stringMatching(/usage:/) },
     });
   } finally {
     rmSync(outside, { recursive: true, force: true });
   }
+});
+
+// The driver passes --portfile on the command line: a mistyped flag or one without its path must exit
+// before a port is bound, or the driver would wait on a portfile that never appears. A regressed parse
+// starts the server, which runs until its lifetime bound, so the spawn is bounded well under that.
+test("fake-llm exits 2 with its usage on an unknown flag or a --portfile without its path", () => {
+  const outcomes = [["--bogus"], ["--portfile"]].map((args) => {
+    const result = spawnSync(process.execPath, [FAKE_LLM, ...args], {
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+  });
+  expect(outcomes).toEqual([
+    { status: 2, stdout: "", stderr: expect.stringMatching(/usage:/) },
+    { status: 2, stdout: "", stderr: expect.stringMatching(/usage:/) },
+  ]);
 });
 
 // The fixture roots are owned dirs under the driver's own prefixes, so a cancelled test run leaves

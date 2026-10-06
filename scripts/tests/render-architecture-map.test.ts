@@ -51,6 +51,12 @@ test("spliceMap replaces the live region, leaves the quoted markers, and is idem
     ].join("\n"),
   );
   expect(spliceMap(once, "architecture-map", "graph TD\n  a --> b")).toBe(once);
+  // A lone CR above the markers is a line break to the parser, and the marker lookup counts it the same
+  // way; with no blank line before the live BEGIN, a count that skips the CR lands the marker on the fence.
+  const tight = PAGE.replace("```\n\n<!-- BEGIN", "```\n<!-- BEGIN");
+  expect(
+    spliceMap(tight.replace("page text:", "page\rtext:"), "architecture-map", "graph TD"),
+  ).toBe(spliceMap(tight, "architecture-map", "graph TD").replace("page text:", "page\rtext:"));
   expect(() => spliceMap("# No region\n", "architecture-map", "graph TD")).toThrow(
     'region "architecture-map" needs exactly one BEGIN and one END marker, found 0 and 0',
   );
@@ -96,4 +102,25 @@ test("the CLI's --check fails on drift, a render writes the map, and --check the
     stdout: "render-architecture-map: docs/page.md region architecture-map is current\n",
     stderr: "",
   });
+});
+
+// The check-architecture task's flags reach the renderer through this parser: a mistyped or valueless flag
+// or a missing --page must fail the task, never render with defaults.
+test("the CLI exits 2 with the usage on an unknown flag, a flag without its value, and a missing --page", () => {
+  const root = scratch.dir("render-map-args");
+  const cases: ReadonlyArray<readonly [args: string[], stderr: RegExp]> = [
+    [["--page", "docs/page.md", "--bogus"], /usage:/],
+    [["--page"], /usage:/],
+    [[], /--page is required/],
+  ];
+  const outcomes = cases.map(([args]) => {
+    const result = spawnSync("bun", [script, "--root", root, ...args], {
+      encoding: "utf8",
+      cwd: root,
+    });
+    return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+  });
+  expect(outcomes).toEqual(
+    cases.map(([, stderr]) => ({ status: 2, stdout: "", stderr: expect.stringMatching(stderr) })),
+  );
 });

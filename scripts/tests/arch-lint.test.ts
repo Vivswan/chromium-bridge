@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { lintArchitecture, readArchitecture } from "../arch-lint";
+import { lintArchitecture, parseCli, readArchitecture } from "../arch-lint";
 import { Scratch, writeTree } from "../lib";
 
 const scratch = new Scratch();
@@ -85,4 +85,11 @@ describe("lintArchitecture", () => {
   test.each(cases)("%s", (_name, declaration, problems) => {
     expect(lint(tree(declaration))).toEqual(problems);
   });
+});
+
+// The check-architecture task's flags reach the lint through this parser: a mistyped or valueless flag must
+// fail the task, never lint with defaults.
+test("the CLI refuses an unknown flag and a flag without its value", () => {
+  expect(() => parseCli(["--bogus"])).toThrow(/usage:/);
+  expect(() => parseCli(["--config"])).toThrow(/usage:/);
 });

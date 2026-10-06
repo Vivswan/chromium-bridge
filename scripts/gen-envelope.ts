@@ -41,6 +41,9 @@
 //       required and forbidden fields exist on the frame, and the reader is emitted as a z.discriminatedUnion
 //       whose arms require and refuse exactly those fields, so a frame the typed producer cannot emit (ok with
 //       an error, a refusal without its reason) fails the reader rather than a consumer's re-check
+//   A4  every faithful base and writer schema the file exports is held to Zod's own reading of the prepared
+//       node it came from (z.fromJSONSchema): both serialize to the same JSON Schema, so a keyword this
+//       emitter stops modeling, or a claim it adds that the node does not carry, is a diff against the library
 
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -940,6 +943,31 @@ export function assertGeneratedMatches(
   }
 }
 
+// ---- A4: the library's reading of each faithful schema ---------------------------------
+
+/** Hold an exported schema to Zod's own reading of the prepared node it was emitted from: the two readings
+ * must serialize to the same JSON Schema of their INPUT (the output schema of a stripping object also says
+ * additionalProperties: false, so only the input side tells strict from strip). The enforced readers carry
+ * this pass's own node forms ($loose, $generated, $discriminant, $forbidden), which the library does not
+ * read, so the oracle covers the faithful bases and the writer schemas. */
+export function assertLibraryReadingMatches(
+  name: string,
+  prepared: unknown,
+  emitted: z.ZodType,
+): void {
+  const library = z.toJSONSchema(
+    z.fromJSONSchema(prepared as Parameters<typeof z.fromJSONSchema>[0]),
+    { io: "input" },
+  );
+  const ours = z.toJSONSchema(emitted, { io: "input" });
+  if (!Bun.deepEquals(library, ours, true)) {
+    throw new Error(
+      `gen-envelope: ${name}: the emitted schema reads as ${show(ours)} but zod reads the Rust node as ` +
+        `${show(library)} (A4)`,
+    );
+  }
+}
+
 // ---- main ----------------------------------------------------------------------------
 
 async function main(): Promise<void> {
@@ -1004,6 +1032,17 @@ async function main(): Promise<void> {
 
   const pieces: string[] = [];
   const typeOf = (schemaName: string) => schemaName.replace(/Schema$/, "");
+  /** Every faithful base and writer schema with the prepared node it was emitted from, for A4; the export
+   * line and the registration are one operation so no emission site can skip the oracle. */
+  const faithful = new Map<string, unknown>();
+  const exportFaithful = (
+    name: string,
+    node: unknown,
+    override?: (node: unknown) => string | undefined,
+  ): string => {
+    faithful.set(name, node);
+    return `export const ${name} = ${convert(node, name, override)};`;
+  };
 
   // G6: the typed command is split off; its per-op args schemas reach the extension through scripts/gen-ops.ts.
   const request = prepare(
@@ -1017,9 +1056,9 @@ async function main(): Promise<void> {
   pieces.push(
     "// The request envelope (BridgeReq) and the response envelope (BridgeResp): the faithful bases, then the",
     "// enforced validators the extension runs (the base plus the asymmetry table; strict like the host).",
-    `export const BridgeReqWireSchema = ${convert(request, "BridgeReqWireSchema")};`,
+    exportFaithful("BridgeReqWireSchema", request),
     "",
-    `export const BridgeRespWireSchema = ${convert(response, "BridgeRespWireSchema")};`,
+    exportFaithful("BridgeRespWireSchema", response),
     "",
     `export const BridgeReqSchema = ${convert(enforced("request", request, false), "BridgeReqSchema")};`,
     "",
@@ -1039,7 +1078,7 @@ async function main(): Promise<void> {
     kindsWithEntries.delete(tag);
     const base = prepare(signals.get(tag), `$.signal.${tag}`);
     pieces.push(
-      `export const ${names.wire} = ${convert(base, names.wire)};`,
+      exportFaithful(names.wire, base),
       "",
       `export const ${names.enforced} = ${convert(enforced(tag, base, false), names.enforced)};`,
       "",
@@ -1122,7 +1161,7 @@ async function main(): Promise<void> {
     namedNodes.set(enforcedNode, item.enforced);
     pieces.push(
       `// ${item.doc}`,
-      `export const ${item.wire} = ${convert(wireNode, item.wire)};`,
+      exportFaithful(item.wire, wireNode),
       "",
       `export const ${item.enforced} = ${convert(enforcedNode, item.enforced)};`,
       "",
@@ -1142,7 +1181,7 @@ async function main(): Promise<void> {
       const base = preparedBases.get(tag) ?? preparedFrame(group, tag);
       const reader = enforcedReaders.get(tag) ?? enforced(tag, base, true);
       pieces.push(
-        `export const ${names.wire} = ${convert(base, names.wire, byName)};`,
+        exportFaithful(names.wire, base, byName),
         "",
         `export const ${names.enforced} = ${convert(reader, names.enforced, byName)};`,
         "",
@@ -1199,9 +1238,8 @@ async function main(): Promise<void> {
   );
   for (const group of GROUPS) {
     for (const [tag, name] of Object.entries(WRITER_FRAMES[group])) {
-      const code = convert(preparedFrame(group, tag), name);
       pieces.push(
-        `export const ${name} = ${code};`,
+        exportFaithful(name, preparedFrame(group, tag)),
         "",
         `export type ${typeOf(name)} = z.infer<typeof ${name}>;`,
         "",
@@ -1239,7 +1277,18 @@ ${importLines.join("\n")}
 ${pieces.join("\n")}
 `;
 
-  writeFileSync(join(root, "src/packages/shared/src/envelope.gen.ts"), out);
+  const outPath = join(root, "src/packages/shared/src/envelope.gen.ts");
+  writeFileSync(outPath, out);
+
+  // A4 reads the schemas back from the written module, so it judges the file as the extension will import it.
+  const generated = (await import(outPath)) as Record<string, unknown>;
+  for (const [name, node] of faithful) {
+    const emitted = generated[name];
+    if (!(emitted instanceof z.ZodType)) {
+      throw new Error(`gen-envelope: the written module exports no Zod schema named ${name} (A4)`);
+    }
+    assertLibraryReadingMatches(name, node, emitted);
+  }
   console.log("generated src/packages/shared/src/envelope.gen.ts from the Rust wire types");
 }
 

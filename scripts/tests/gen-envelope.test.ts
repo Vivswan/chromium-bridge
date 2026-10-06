@@ -13,6 +13,7 @@ import {
   applyAsymmetries,
   assertFramePlan,
   assertGeneratedMatches,
+  assertLibraryReadingMatches,
   convert,
   prepare,
   splitFlattenedCommand,
@@ -720,6 +721,46 @@ describe("assertGeneratedMatches (A2)", () => {
     expect(() =>
       assertGeneratedMatches(replacement, z.looseObject({ cdpMode: z.boolean().optional() })),
     ).toThrow("admits unknown fields where the Rust node refuses them");
+  });
+});
+
+// The hand emitter and z.fromJSONSchema are two readings of one node; the oracle holds the emitted schema to
+// the library's, so an integer claim the emitter drops (or invents) is a diff, not a quietly weaker parser.
+describe("assertLibraryReadingMatches (A4)", () => {
+  const node = strictObject(
+    {
+      id: { type: "integer", format: "uint64", minimum: 0 },
+      name: { type: ["string", "null"] },
+      tags: { type: "array", items: { type: "string", enum: ["a", "b"] } },
+    },
+    ["id", "tags"],
+  );
+  test("the pinned emission agrees with the library; one that loses the integer claim or the strict closing is refused", () => {
+    const agreeing = z
+      .object({
+        id: z.number().int().gte(0),
+        name: z.union([z.string(), z.null()]).optional(),
+        tags: z.array(z.enum(["a", "b"])),
+      })
+      .strict();
+    expect(() => assertLibraryReadingMatches("X", node, agreeing)).not.toThrow();
+    const widened = z
+      .object({
+        id: z.number().gte(0),
+        name: z.union([z.string(), z.null()]).optional(),
+        tags: z.array(z.enum(["a", "b"])),
+      })
+      .strict();
+    expect(() => assertLibraryReadingMatches("X", node, widened)).toThrow(
+      /^gen-envelope: X: .*\(A4\)$/,
+    );
+    // A stripping object describes the same OUTPUT as a strict one; the oracle reads the input side.
+    const stripping = z.object({
+      id: z.number().int().gte(0),
+      name: z.union([z.string(), z.null()]).optional(),
+      tags: z.array(z.enum(["a", "b"])),
+    });
+    expect(() => assertLibraryReadingMatches("X", node, stripping)).toThrow(/\(A4\)$/);
   });
 });
 

@@ -17,6 +17,7 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { parseArgs } from "node:util";
 import { type Node, parseSync, type TemplateElement } from "oxc-parser";
 import { z } from "zod";
 import { realpath } from "./repo-paths";
@@ -451,29 +452,32 @@ export function pathLabel(root: string, path: string): string {
   return rel === "" || rel.startsWith("..") || isAbsolute(rel) ? toPosix(path) : rel;
 }
 
-export function parseArgs(argv: readonly string[]): CliOptions {
-  let root = realpath(process.cwd());
-  let config: string | undefined;
-  let mermaid = false;
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    const value = (): string => {
-      const next = argv[++i];
-      if (next === undefined) throw new Error(`${arg} needs a value\n${USAGE}`);
-      return next;
+export function parseCli(argv: readonly string[]): CliOptions {
+  try {
+    const { values } = parseArgs({
+      args: [...argv],
+      options: {
+        config: { type: "string" },
+        root: { type: "string" },
+        mermaid: { type: "boolean" },
+      },
+      strict: true,
+    });
+    const root = realpath(values.root ?? process.cwd());
+    return {
+      root,
+      config: values.config === undefined ? join(root, DEFAULT_CONFIG) : realpath(values.config),
+      mermaid: values.mermaid === true,
     };
-    if (arg === "--root") root = realpath(value());
-    else if (arg === "--config") config = realpath(value());
-    else if (arg === "--mermaid") mermaid = true;
-    else throw new Error(`unknown argument: ${arg}\n${USAGE}`);
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\n${USAGE}`);
   }
-  return { root, config: config ?? join(root, DEFAULT_CONFIG), mermaid };
 }
 
 if (import.meta.main) {
   let options: CliOptions;
   try {
-    options = parseArgs(process.argv.slice(2));
+    options = parseCli(process.argv.slice(2));
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(2);

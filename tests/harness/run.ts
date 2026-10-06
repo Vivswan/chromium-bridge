@@ -39,6 +39,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 // fake-llm.ts and owned-dirs.ts are builtins-only like this file, and fake-llm's main() is guarded by
 // import.meta.main, so these value imports keep the suite zero-install.
 import {
@@ -119,28 +120,21 @@ function realpathOfDeepestExistingAncestor(path: string): string {
 }
 
 function parseOptions(argv: string[]): Options {
-  const options: Options = { seedsDir: undefined, requireAny: false };
-  const fail = (message: string): never => {
-    console.error(`error: ${message}\n${usage}`);
+  try {
+    const { values } = parseArgs({
+      args: argv,
+      options: { "mint-seeds": { type: "string" }, "require-any": { type: "boolean" } },
+      strict: true,
+    });
+    const dir = values["mint-seeds"];
+    return {
+      seedsDir: dir === undefined ? undefined : seedsDirOutsideRepo(dir),
+      requireAny: values["require-any"] === true,
+    };
+  } catch (error) {
+    console.error(`error: ${error instanceof Error ? error.message : String(error)}\n${usage}`);
     process.exit(2);
-  };
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i] as string;
-    if (arg === "--mint-seeds") {
-      i += 1;
-      const dir = argv[i];
-      if (dir === undefined || dir.startsWith("--")) fail("--mint-seeds needs <dir>");
-      else {
-        try {
-          options.seedsDir = seedsDirOutsideRepo(dir);
-        } catch (e) {
-          fail((e as Error).message);
-        }
-      }
-    } else if (arg === "--require-any") options.requireAny = true;
-    else fail(`invalid argument: ${arg}`);
   }
-  return options;
 }
 
 interface RunResult {

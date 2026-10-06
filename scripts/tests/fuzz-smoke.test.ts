@@ -61,7 +61,7 @@ describe("parseOptions", () => {
     });
   });
 
-  test("an unknown or malformed flag exits 2 before any toolchain probe", () => {
+  test("an unknown or malformed flag exits 2 with the usage before any toolchain probe", () => {
     // parseOptions calls process.exit, so the rejection paths are exercised
     // through a real subprocess. --seed=0 is malformed (seeds are positive),
     // the oversized values would wrap inside libFuzzer's 32-bit parsing, and
@@ -85,7 +85,7 @@ describe("parseOptions", () => {
         encoding: "utf8",
       });
       expect(run.status).toBe(2);
-      expect(run.stderr).toContain("invalid argument");
+      expect(run.stderr).toContain("usage: bun scripts/fuzz-smoke.ts");
     }
   });
 

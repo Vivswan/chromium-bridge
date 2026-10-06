@@ -29,6 +29,7 @@ import {
 } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 
 const usage =
   "usage: bun scripts/fuzz-smoke.ts [--runs=N] [--max-total-time=SECONDS] [--cmin] [--seed=N] [--failure-dir=PATH] [--require-toolchain]";
@@ -57,47 +58,58 @@ export function isSafeFailureDir(path: string): boolean {
   );
 }
 
-export function parseOptions(argv: string[]): Options {
-  const options: Options = {
-    runs: 4096,
-    maxTotalTime: 30,
-    cmin: false,
-    seed: undefined,
-    failureDir: "fuzz/failures",
-    requireToolchain: false,
-  };
-  for (const arg of argv) {
-    if (arg === "--cmin") {
-      options.cmin = true;
-      continue;
-    }
-    if (arg === "--require-toolchain") {
-      options.requireToolchain = true;
-      continue;
-    }
-    const dir = /^--failure-dir=(.+)$/.exec(arg)?.[1];
-    if (dir && isSafeFailureDir(dir)) {
-      options.failureDir = dir;
-      continue;
-    }
-    // nightly-fuzz.yml passes its dispatch input verbatim, blank on a scheduled run: no seed given.
-    if (arg === "--seed=") continue;
-    const match = /^--(runs|max-total-time|seed)=(\d+)$/.exec(arg);
-    const value = Number(match?.[2]);
-    // libFuzzer parses -runs/-max_total_time as signed 32-bit and -seed as
-    // unsigned 32-bit; anything larger silently wraps (a wrapped seed of 0
-    // means "random", the opposite of what the caller asked for).
-    const limit = match?.[1] === "seed" ? 0xffffffff : 0x7fffffff;
-    if (match && Number.isSafeInteger(value) && value > 0 && value <= limit) {
-      if (match[1] === "runs") options.runs = value;
-      else if (match[1] === "max-total-time") options.maxTotalTime = value;
-      else options.seed = value;
-      continue;
-    }
-    console.error(`error: invalid argument: ${arg}\n${usage}`);
-    process.exit(2);
+function refuse(message: string): never {
+  console.error(`error: ${message}\n${usage}`);
+  process.exit(2);
+}
+
+function parseFlags(argv: string[]) {
+  try {
+    return parseArgs({
+      args: argv,
+      options: {
+        runs: { type: "string" },
+        "max-total-time": { type: "string" },
+        cmin: { type: "boolean" },
+        seed: { type: "string" },
+        "failure-dir": { type: "string" },
+        "require-toolchain": { type: "boolean" },
+      },
+      strict: true,
+    });
+  } catch (error) {
+    return refuse(error instanceof Error ? error.message : String(error));
   }
-  return options;
+}
+
+export function parseOptions(argv: string[]): Options {
+  const { values: flags } = parseFlags(argv);
+  // libFuzzer parses -runs/-max_total_time as signed 32-bit and -seed as unsigned 32-bit; anything larger
+  // silently wraps (a wrapped seed of 0 means "random", the opposite of what the caller asked for).
+  const bounded = (name: "runs" | "max-total-time" | "seed", raw: string): number => {
+    const limit = name === "seed" ? 0xffffffff : 0x7fffffff;
+    const value = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+    if (!Number.isSafeInteger(value) || value <= 0 || value > limit) {
+      refuse(`invalid argument: --${name}=${raw}`);
+    }
+    return value;
+  };
+  const failureDir = flags["failure-dir"];
+  if (failureDir !== undefined && !isSafeFailureDir(failureDir)) {
+    refuse(`invalid argument: --failure-dir=${failureDir}`);
+  }
+  return {
+    runs: flags.runs === undefined ? 4096 : bounded("runs", flags.runs),
+    maxTotalTime:
+      flags["max-total-time"] === undefined
+        ? 30
+        : bounded("max-total-time", flags["max-total-time"]),
+    cmin: flags.cmin === true,
+    // nightly-fuzz.yml passes its dispatch input verbatim, blank on a scheduled run: no seed given.
+    seed: flags.seed === undefined || flags.seed === "" ? undefined : bounded("seed", flags.seed),
+    failureDir: failureDir ?? "fuzz/failures",
+    requireToolchain: flags["require-toolchain"] === true,
+  };
 }
 
 // Dictionaries steer mutation toward the target's input grammar. A byte dictionary is meaningless against

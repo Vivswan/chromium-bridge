@@ -14,6 +14,7 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { parseArgs } from "node:util";
 import { parseSync } from "oxc-parser";
 import { pathLabel, SOURCE_EXTENSIONS } from "./arch-lint";
 import { type Fence, linkFile, type Page, readPage } from "./markdown-page";
@@ -386,35 +387,38 @@ interface CliOptions extends PageCheckOptions {
   expectDiagrams?: number;
 }
 
-function parseArgs(argv: readonly string[]): CliOptions {
-  let root = realpath(process.cwd());
-  let page: string | undefined;
-  let repoUrl: string | undefined;
-  let expectDiagrams: number | undefined;
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    const value = (): string => {
-      const next = argv[++i];
-      if (next === undefined) throw new Error(`${arg} needs a value\n${USAGE}`);
-      return next;
+function parseCli(argv: readonly string[]): CliOptions {
+  try {
+    const { values } = parseArgs({
+      args: [...argv],
+      options: {
+        root: { type: "string" },
+        page: { type: "string" },
+        "repo-url": { type: "string" },
+        "expect-diagrams": { type: "string" },
+      },
+      strict: true,
+    });
+    if (values.page === undefined) throw new Error("--page is required");
+    const count = values["expect-diagrams"];
+    if (count !== undefined && !/^\d+$/.test(count)) {
+      throw new Error("--expect-diagrams needs a whole number");
+    }
+    return {
+      root: realpath(values.root ?? process.cwd()),
+      pagePath: realpath(values.page),
+      repoUrl: values["repo-url"],
+      expectDiagrams: count === undefined ? undefined : Number(count),
     };
-    if (arg === "--root") root = realpath(value());
-    else if (arg === "--page") page = realpath(value());
-    else if (arg === "--repo-url") repoUrl = value();
-    else if (arg === "--expect-diagrams") {
-      const count = value();
-      if (!/^\d+$/.test(count)) throw new Error(`--expect-diagrams needs a whole number\n${USAGE}`);
-      expectDiagrams = Number(count);
-    } else throw new Error(`unknown argument: ${arg}\n${USAGE}`);
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\n${USAGE}`);
   }
-  if (page === undefined) throw new Error(`--page is required\n${USAGE}`);
-  return { root, pagePath: page, repoUrl, expectDiagrams };
 }
 
 if (import.meta.main) {
   let options: CliOptions;
   try {
-    options = parseArgs(process.argv.slice(2));
+    options = parseCli(process.argv.slice(2));
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(2);

@@ -5,6 +5,7 @@
 
 import { statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
+import { parseArgs } from "node:util";
 
 export const LOCALES = ["zh-cn", "zh-tw"] as const;
 export type Locale = (typeof LOCALES)[number];
@@ -88,23 +89,23 @@ const USAGE = [
     " 1: problems, each printed; 2: usage or no docs/ under the root",
 ].join("\n");
 
-function parseArgs(argv: readonly string[]): { root: string } {
-  let root = process.cwd();
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === "--root") {
-      const next = argv[++i];
-      if (next === undefined) throw new Error(`--root needs a value\n${USAGE}`);
-      root = resolve(next);
-    } else throw new Error(`unknown argument: ${arg}\n${USAGE}`);
+function parseCli(argv: readonly string[]): { root: string } {
+  try {
+    const { values } = parseArgs({
+      args: [...argv],
+      options: { root: { type: "string" } },
+      strict: true,
+    });
+    return { root: resolve(values.root ?? process.cwd()) };
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\n${USAGE}`);
   }
-  return { root };
 }
 
 if (import.meta.main) {
   let reports: LocaleReport[];
   try {
-    reports = checkLocales(parseArgs(process.argv.slice(2)).root);
+    reports = checkLocales(parseCli(process.argv.slice(2)).root);
   } catch (error) {
     console.error(`check-docs-locales: ${error instanceof Error ? error.message : String(error)}`);
     process.exit(2);
