@@ -22,6 +22,8 @@ allow = [
   "MIT",
   "Unicode-3.0",
   "BSD-3-Clause",
+  # foldhash, hashbrown's default hasher, reached only through governor (the per-relay rate limiter).
+  "Zlib",
 ]
 confidence-threshold = 0.9
 
