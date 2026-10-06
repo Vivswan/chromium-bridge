@@ -18,7 +18,8 @@ use chromium_bridge_core::protocol::control::{
 };
 use chromium_bridge_core::protocol::{
     bridge_read, bridge_write, mcp_read, mcp_write, nm_read_frame, nm_write_frame, AttachRequest,
-    BridgeReq, Handshake, JsonRpc, ParsedResp, BRIDGE_MAX_LINE, MCP_MAX_LINE, NM_MAX_OUTGOING,
+    BridgeReq, BridgeResp, Handshake, JsonRpc, ParsedResp, BRIDGE_MAX_LINE, MCP_MAX_LINE,
+    NM_MAX_OUTGOING,
 };
 use chromium_bridge_core::registration::{
     fuzz_api, manifest_ownership, pointer_ownership, Ownership,
@@ -29,6 +30,8 @@ use chromium_bridge_core::webauthn::{
     parse_registration, verify_assertion, Action, Assertion, AuthenticatorData, CosePublicKey,
     Credential, CredentialId, Nonce, Registration, RpId, Statement, StatementDomain,
 };
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use serde_json::Value;
 
 /// One byte-input target: its binary and seed-directory name, and the body the binary runs.
@@ -74,6 +77,30 @@ pub const WEBAUTHN_AUTHDATA: Target = Target {
     name: "webauthn_authdata",
     run: webauthn_authdata,
 };
+
+/// The identity oracle over the bridge framing, shared by the handshake, attach, and envelope targets.
+/// Compared through `Value`, so a `T` without `PartialEq` qualifies. An over-cap re-encoding is not a
+/// finding: BRIDGE_MAX_LINE counts the newline the writer adds (see its doc), so exactly-cap input
+/// re-encodes over it.
+fn bridge_round_trips<T: Serialize + DeserializeOwned>(data: &[u8], label: &str) {
+    let Ok(Some(first)) = bridge_read::<_, T>(&mut Cursor::new(data)) else {
+        return;
+    };
+    let mut bytes = Vec::new();
+    bridge_write(&mut bytes, &first)
+        .unwrap_or_else(|e| panic!("a decoded {label} must encode: {e}"));
+    if bytes.len() > BRIDGE_MAX_LINE {
+        return;
+    }
+    let second: T = bridge_read(&mut Cursor::new(bytes.as_slice()))
+        .expect("the encoded line must decode")
+        .expect("the encoded line is one line");
+    assert_eq!(
+        serde_json::to_value(&first).unwrap_or_else(|e| panic!("{label} serializes: {e}")),
+        serde_json::to_value(&second).unwrap_or_else(|e| panic!("{label} serializes: {e}")),
+        "{label} decode -> encode -> decode must be identity"
+    );
+}
 
 /// The Chrome Native-Messaging frame decoder (4-byte LE length prefix + JSON) on the extension<->host
 /// boundary. Oracle: a decoded frame re-encodes to a frame that decodes to the same value, and the
@@ -126,59 +153,72 @@ pub fn mcp_jsonrpc(data: &[u8]) {
     );
 }
 
-/// The internal bridge NDJSON envelope reader (server<->native host): arbitrary bytes decoded as a JSON
-/// value and as the two typed frames must never panic. `ParsedResp` is the session's production read
-/// path, whose `TryFrom` refuses contradictory responses; `BridgeReq` is only written by Rust (the
-/// extension parses it inbound), but its flattened command pins the shape the extension must accept.
+/// The one reading a `{ ok, data?, error? }` triple admits, or `None` for a contradictory triple; the oracle's
+/// own statement of the rule `ParsedResp`'s `TryFrom` enforces.
+fn consistent_reading(wire: &BridgeResp) -> Option<Result<Value, String>> {
+    match (wire.ok, &wire.data, &wire.error) {
+        (true, data, None) => Some(Ok(data.clone().unwrap_or(Value::Null))),
+        (false, None, Some(error)) => Some(Err(error.clone())),
+        (true, _, Some(_)) | (false, Some(_), _) | (false, None, None) => None,
+    }
+}
+
+/// The internal bridge NDJSON envelope reader (server<->native host), read three ways: as the JSON value the
+/// native host's pump relays, as the `BridgeReq` the extension parses inbound (only Rust writes it, but its
+/// flattened command pins the shape the extension must accept), and as the `ParsedResp` the session reads.
+/// Oracles: the value and the request each decode -> encode -> decode to identity, and `ParsedResp` accepts
+/// exactly the `BridgeResp` frames with a [`consistent_reading`], reads that reading, and reads the same
+/// one from the frame's re-encoding.
 pub fn bridge_envelope(data: &[u8]) {
-    let _: std::io::Result<Option<Value>> = bridge_read(&mut Cursor::new(data));
-    let _: std::io::Result<Option<BridgeReq>> = bridge_read(&mut Cursor::new(data));
-    let _: std::io::Result<Option<ParsedResp>> = bridge_read(&mut Cursor::new(data));
+    bridge_round_trips::<Value>(data, "bridge Value");
+    bridge_round_trips::<BridgeReq>(data, "BridgeReq");
+    let wire = bridge_read::<_, BridgeResp>(&mut Cursor::new(data));
+    let parsed = bridge_read::<_, ParsedResp>(&mut Cursor::new(data));
+    match (wire, parsed) {
+        (Ok(Some(wire)), Ok(Some(parsed))) => {
+            let Some(expected) = consistent_reading(&wire) else {
+                panic!("ParsedResp accepted a contradictory response: {wire:?}");
+            };
+            assert_eq!(
+                (parsed.id, parsed.outcome.clone()),
+                (wire.id, expected),
+                "ParsedResp is the wire triple's one consistent reading"
+            );
+            let mut bytes = Vec::new();
+            bridge_write(&mut bytes, &wire).expect("a decoded BridgeResp must encode");
+            if bytes.len() <= BRIDGE_MAX_LINE {
+                let again: ParsedResp = bridge_read(&mut Cursor::new(bytes.as_slice()))
+                    .expect("the encoded line must decode")
+                    .expect("the encoded line is one line");
+                assert_eq!(
+                    (again.id, again.outcome),
+                    (parsed.id, parsed.outcome),
+                    "ParsedResp reads the same from the wire frame's re-encoding"
+                );
+            }
+        }
+        (Ok(Some(wire)), Ok(None) | Err(_)) => assert!(
+            consistent_reading(&wire).is_none(),
+            "ParsedResp refused a consistent response: {wire:?}"
+        ),
+        (Ok(None) | Err(_), Ok(Some(parsed))) => {
+            panic!("ParsedResp accepted a frame BridgeResp refused: {parsed:?}")
+        }
+        (Ok(None) | Err(_), Ok(None) | Err(_)) => {}
+    }
 }
 
 /// The authenticated-handshake frame decoder (Challenge / Response), run before the peer is trusted.
 /// Oracle: a decoded frame re-encodes to a frame that decodes to the same value, so the MAC and label
 /// a verifier reads are the ones the peer wrote.
 pub fn handshake(data: &[u8]) {
-    let Ok(Some(first)) = bridge_read::<_, Handshake>(&mut Cursor::new(data)) else {
-        return;
-    };
-    let mut bytes = Vec::new();
-    bridge_write(&mut bytes, &first).expect("a decoded Handshake must encode");
-    // BRIDGE_MAX_LINE counts the newline the writer adds (see its doc), so exactly-cap input re-encodes over it.
-    if bytes.len() > BRIDGE_MAX_LINE {
-        return;
-    }
-    let second: Handshake = bridge_read(&mut Cursor::new(bytes.as_slice()))
-        .expect("the encoded frame must decode")
-        .expect("the encoded frame is one line");
-    assert_eq!(
-        serde_json::to_value(&first).expect("Handshake serializes"),
-        serde_json::to_value(&second).expect("Handshake serializes"),
-        "Handshake decode -> encode -> decode must be identity"
-    );
+    bridge_round_trips::<Handshake>(data, "Handshake");
 }
 
 /// The post-handshake role-declaration frame decoder (`AttachRequest`): a malformed or hostile frame
 /// must fail closed, never panic the broker. Oracle: decode -> encode -> decode is identity.
 pub fn attach(data: &[u8]) {
-    let Ok(Some(first)) = bridge_read::<_, AttachRequest>(&mut Cursor::new(data)) else {
-        return;
-    };
-    let mut bytes = Vec::new();
-    bridge_write(&mut bytes, &first).expect("a decoded AttachRequest must encode");
-    // BRIDGE_MAX_LINE counts the newline the writer adds (see its doc), so exactly-cap input re-encodes over it.
-    if bytes.len() > BRIDGE_MAX_LINE {
-        return;
-    }
-    let second: AttachRequest = bridge_read(&mut Cursor::new(bytes.as_slice()))
-        .expect("the encoded frame must decode")
-        .expect("the encoded frame is one line");
-    assert_eq!(
-        serde_json::to_value(&first).expect("AttachRequest serializes"),
-        serde_json::to_value(&second).expect("AttachRequest serializes"),
-        "AttachRequest decode -> encode -> decode must be identity"
-    );
+    bridge_round_trips::<AttachRequest>(data, "AttachRequest");
 }
 
 /// The tag `type_field` spells, by serde's own reading of the string, or `None`.
