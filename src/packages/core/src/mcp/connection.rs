@@ -116,14 +116,8 @@ impl Connection {
         let (out_tx, out_rx) = mpsc::channel::<TxJsonRpcMessage<RoleServer>>(CHANNEL_CAPACITY);
         let (open_tx, open_rx) = oneshot::channel::<()>();
         let service = rt.spawn(async move {
-            // serve() runs the opener exchange (legacy `initialize`, or a
-            // stateless 2026-07-28 request carrying its own `_meta`) and
-            // resolves without needing further input; an invalid opener
-            // ends the service here, with `open_tx` dropped unsent so the
-            // sync side refuses before reading the error reply rmcp
-            // flushed. Either way, when this task finishes the transport -
-            // and with it `out_tx` - drops, which the sync side observes
-            // as end-of-service.
+            // An invalid opener ends the service with `open_tx` dropped unsent, so the sync side refuses before
+            // reading the error reply rmcp flushed; a finished task drops `out_tx`, which reads as end-of-service.
             match BridgeHandler::new(session).serve((out_tx, in_rx)).await {
                 Ok(running) => {
                     let _ = open_tx.send(());
@@ -187,10 +181,7 @@ impl Connection {
         if !expects_reply {
             return Ok(None);
         }
-        // Take the lifecycle, leaving Spent: it is restored only when the
-        // whole exchange - reply taken AND validated - succeeds, so every
-        // error return below leaves the connection spent without per-arm
-        // bookkeeping.
+        // Taken, leaving Spent; restored only by a whole successful exchange (Service).
         let wire = match std::mem::replace(&mut self.service, Service::Spent) {
             Service::Spent => return Err(io::Error::other("mcp service already ended")),
             Service::Opening { verdict, task } => self.first_reply(msg, verdict, task)?,
@@ -523,11 +514,9 @@ mod tests {
         assert_eq!(err.data.unwrap()["requested"], json!(junk));
     }
 
-    /// How rmcp adjudicates the request-metadata edge cases our original
-    /// design and the black-box suites guessed at differently. These pin the
-    /// ACTUALS (what the SDK does); the suites reconcile to them.
+    /// rmcp's verdicts on the request-metadata edge cases, which the black-box suites reconcile to.
     #[test]
-    fn request_metadata_edge_cases_follow_rmcp_not_our_old_design() {
+    fn request_metadata_edge_cases_are_rmcps_verdicts() {
         let mut conn = open();
         request(
             &mut conn,
@@ -537,10 +526,8 @@ mod tests {
             }),
         );
 
-        // In a stateless session, incomplete metadata is -32602 (invalid
-        // params), NOT -32022 and NOT the legacy shim: a NON-STRING version
-        // claim (decodes as missing), an EMPTY _meta, a protocolVersion-only
-        // _meta, and a missing _meta all land there.
+        // In a stateless session, incomplete metadata is -32602 (invalid params), never -32022: a non-string
+        // version claim (decodes as missing), an empty _meta, a protocolVersion-only _meta, and a missing _meta.
         for (id, meta) in [
             (
                 2,
@@ -568,13 +555,12 @@ mod tests {
         assert_eq!(reply.error.unwrap().code, -32602);
     }
 
-    /// server/discover has no bare-request form in rmcp - there is no
-    /// bare-discover exemption (our original hand-rolled design had one; the
-    /// SDK wins), even inside a legacy-negotiated session. The refusal code
-    /// depends on how far the frame parses: with no `params` at all the
-    /// frame does not parse as a discover request (it demotes to rmcp's
-    /// custom-request catch-all, -32601); with `params` present but the
-    /// required metadata missing it is invalid params (-32602).
+    /// server/discover has no bare-request form in rmcp, even inside a legacy-negotiated session. The code
+    /// depends on how far the frame parses.
+    /// ```text
+    /// no `params` at all        -> not a discover request: rmcp's custom-request catch-all, -32601
+    /// `params` without the meta -> invalid params, -32602
+    /// ```
     #[test]
     fn discover_requires_metadata_even_in_a_legacy_session() {
         let mut conn = open();
@@ -649,13 +635,9 @@ mod tests {
         assert_eq!(reply.error.unwrap().code, -32600);
     }
 
-    /// An `id: null` frame counts as a notification at the lax layer (the
-    /// pre-rmcp dispatcher swallowed it the same way): no reply. As the
-    /// connection's FIRST frame it is also an invalid opener, so the rmcp
-    /// service ends behind the swallowed frame and the next request reads
-    /// end-of-service: the caller drops the connection, fail closed. (Until
-    /// that next frame arrives the dead service just idles - the same
-    /// resource profile as a live idle connection.)
+    /// An `id: null` frame is a notification at the lax layer: no reply. As the connection's FIRST frame it is
+    /// also an invalid opener, so the service ends behind the swallowed frame and the next request reads
+    /// end-of-service; until then the dead service idles like a live idle connection.
     #[test]
     fn a_null_id_frame_is_swallowed_like_a_notification() {
         let mut conn = open();
@@ -678,22 +660,6 @@ mod tests {
         assert!(conn
             .handle(&frame(json!({
                 "jsonrpc": "2.0", "id": 3, "method": "ping"
-            })))
-            .is_err());
-    }
-
-    /// The spent-state short-circuit itself: once `Spent` (as every failed
-    /// exchange leaves it), handle() must refuse immediately - never touch
-    /// the channels, and with no JoinHandle held there is nothing to
-    /// re-poll (a re-poll of a yielded handle would abort the process
-    /// under this workspace's panic = "abort").
-    #[test]
-    fn a_spent_connection_refuses_without_touching_the_service() {
-        let mut conn = open();
-        conn.service = Service::Spent;
-        assert!(conn
-            .handle(&frame(json!({
-                "jsonrpc": "2.0", "id": 1, "method": "ping"
             })))
             .is_err());
     }

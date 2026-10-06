@@ -176,22 +176,15 @@ mod tests {
     }
 
     #[test]
-    fn absent_policy_allows_every_tool() {
-        // Pre-cutover: no store, so the honest-host gate stays out of the way.
+    fn the_load_state_decides_before_any_grant_is_read() {
+        // Pre-cutover (no store) allows every tool; an unreadable store denies every tool, gated or not,
+        // with the stable TOOL_DISABLED code.
         for tool in all() {
             assert!(
                 verdict(&tool, Ok(None)).is_ok(),
                 "absent policy must allow {}",
                 tool.name
             );
-        }
-    }
-
-    #[test]
-    fn corrupt_store_denies_every_tool() {
-        // An unreadable store fails closed as deny-all, carrying the stable
-        // TOOL_DISABLED code for every tool, gated or not.
-        for tool in all() {
             let err = verdict(&tool, Err("policy store decode: bad".into())).unwrap_err();
             assert!(
                 matches!(

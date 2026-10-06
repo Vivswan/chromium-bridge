@@ -16,9 +16,6 @@ use super::platform::windows::{pipe, PipeName};
 use super::rand::generate_secret;
 use super::runtime_dir::RuntimeDir;
 
-/// The bridge listener and stream types, unified across platforms so the rest
-/// of the crate is transport-agnostic: a Unix-domain socket on Unix, a named
-/// pipe on Windows.
 #[cfg(unix)]
 pub type BridgeListener = UnixListener;
 #[cfg(unix)]
@@ -33,10 +30,8 @@ pub type BridgeStream = pipe::PipeStream;
 #[cfg(windows)]
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Server side: bind the bridge socket and return the listener plus the
-/// lock-file contents to publish. Private to the ipc module: callers go through
-/// [`super::lockfile::listen_and_publish`], which serializes the
-/// unlink-bind-publish sequence against other instances.
+/// Bind the bridge socket and return the listener plus the lock-file contents to publish. Module-private:
+/// only [`super::lockfile::listen_and_publish`] may bind (module docs).
 #[cfg(unix)]
 pub(super) fn listen() -> io::Result<(BridgeListener, LockFile)> {
     use std::fs;
@@ -69,11 +64,8 @@ pub(super) fn listen() -> io::Result<(BridgeListener, LockFile)> {
     Ok((listener, lf))
 }
 
-/// Client side (native host): read the lock file and connect. Authentication
-/// happens afterwards via [`super::handshake::client_handshake`]. On a stale
-/// lock (server crashed) the connect fails fast and the lock is removed so the
-/// next server start wins cleanly - see
-/// [`super::lockfile::cleanup_stale_lock`] for the conditions.
+/// Read the lock file and connect; authentication follows in [`super::handshake::client_handshake`]. A failed
+/// connect hands the lock to [`super::lockfile::cleanup_stale_lock`], which decides whether it is stale.
 #[cfg(unix)]
 pub fn connect() -> io::Result<BridgeStream> {
     let lf = read_lock_or_err()?;

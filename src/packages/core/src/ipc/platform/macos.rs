@@ -44,14 +44,14 @@ pub(crate) fn own_identity() -> io::Result<HashDigest> {
     Ok(validated_identity(&me, "self")?.hash)
 }
 
-/// The peer's running-image identity, measured the same way as
-/// [`own_identity`] and identified by its kernel audit token so the
-/// measurement binds to the running image. We fall back to identifying by
-/// pid ONLY when the kernel reports the audit-token option itself is
-/// unsupported (`ENOPROTOOPT`, older systems without `LOCAL_PEERTOKEN`); the
-/// pid path is still running-image-validated but reopens the narrow pid-reuse
-/// race. Any OTHER audit-token failure (short read, permission error) fails
-/// closed rather than silently downgrading.
+/// The peer's running-image identity, identified by its kernel audit token so the measurement binds to the
+/// running image.
+///
+/// ```text
+/// ENOPROTOOPT (no LOCAL_PEERTOKEN on this system) -> the pid path: still running-image-validated, but it
+///                                                     reopens the narrow pid-reuse race
+/// any other audit-token failure                   -> fails closed, never a silent downgrade
+/// ```
 pub(crate) fn peer_identity(stream: &BridgeStream) -> io::Result<HashDigest> {
     use std::os::unix::io::AsRawFd;
 

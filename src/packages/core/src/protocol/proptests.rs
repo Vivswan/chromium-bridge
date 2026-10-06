@@ -200,21 +200,11 @@ proptest! {
 
     // --- 2. Never panics on arbitrary input (the fuzz property) ---------
 
-    /// `nm_read_frame` on arbitrary bytes yields `Ok`/`Err`, never a panic.
+    /// Every reader on arbitrary bytes yields `Ok`/`Err`, never a panic.
     #[test]
-    fn nm_read_never_panics(data in prop::collection::vec(any::<u8>(), 0..1024)) {
-        let _ = nm_read_frame(&mut Cursor::new(data));
-    }
-
-    /// `mcp_read` on arbitrary bytes yields `Ok`/`Err`, never a panic.
-    #[test]
-    fn mcp_read_never_panics(data in prop::collection::vec(any::<u8>(), 0..1024)) {
-        let _ = mcp_read(&mut Cursor::new(data));
-    }
-
-    /// `bridge_read` on arbitrary bytes yields `Ok`/`Err`, never a panic.
-    #[test]
-    fn bridge_read_never_panics(data in prop::collection::vec(any::<u8>(), 0..1024)) {
+    fn readers_never_panic(data in prop::collection::vec(any::<u8>(), 0..1024)) {
+        let _ = nm_read_frame(&mut Cursor::new(data.clone()));
+        let _ = mcp_read(&mut Cursor::new(data.clone()));
         let _: io::Result<Option<Value>> = bridge_read(&mut Cursor::new(data));
     }
 

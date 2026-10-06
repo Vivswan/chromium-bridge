@@ -9,13 +9,9 @@
 //! This library exposes every module so the modules are reachable from the
 //! host binary, integration tests, and future consumers.
 
-// No-panic security core: the panic-family and numeric-strictness lints are
-// denied workspace-wide in the root Cargo.toml. clippy.toml's
-// allow-*-in-tests switches exempt test code from the panic family;
-// arithmetic_side_effects and as_conversions have no such config, so the
-// test-harness build is exempted here (the non-test lib target still
-// enforces both on production code). Production exceptions require a
-// structural proof that the panic path cannot exist, not a lint exception.
+// clippy.toml's allow-*-in-tests switches exempt test code from the panic family; these two lints have no such
+// switch, so the test build is exempted here. Production code gets no exception: a panic path is removed
+// structurally, never allowed.
 #![cfg_attr(
     test,
     expect(

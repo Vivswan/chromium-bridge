@@ -21,13 +21,9 @@ pub const NATIVE_HOST_ID: &str = "com.vivswan.chromium_bridge.host";
 /// `allowed_origins`, so a build without this key is rejected by Chrome.
 pub const EXTENSION_MANIFEST_KEY: &str = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuE+qrxaJ5pXhQu4k+ecB0cvAXk1bKdCNjwV49Nepgj4j6aj4EGb6LS8rnnnkpPN3Ixh/tFFS4CU/vDa2ZBZS8pUOcLTOUjii6/MyIDNCCs4D6fg/746ko0ISBWEOynVGBFRaA9YYFm3F6K1Damnw3uZnr2nnTAvnDAoBvHyCVry1phyY7XCVFSQ6R7S2vZHUTBgJhd2dEGI7+OqKbPXgnFLVwITbDk8A8Z4S3lZlbVQidwtUZuhe9cPt3Jgxj+ytxcoftmR1zssj3QJ2NAhuk/NDmlyrJ4CL9tk1/ludMdJbd6pcPmHcV3EDm7btheksLERX6+5/N+vL+46VOg4PLQIDAQAB";
 
-/// The extension ID Chrome derives from [`EXTENSION_MANIFEST_KEY`] (sha256
-/// of the DER key bytes, first 16 bytes, hex mapped onto a-p). Pinned as a
-/// constant because the host manifest's `allowed_origins` and the
-/// registration/doctor surfaces need it without a crypto round-trip; the
-/// derivation is recomputed and asserted against this literal by
-/// `scripts/gen-ops.ts` (`moon run gen`, held fresh by `moon run check-gen`),
-/// so this value cannot drift from the key.
+/// The extension ID Chrome derives from [`EXTENSION_MANIFEST_KEY`], pinned so the host manifest and the
+/// registration and doctor surfaces need no crypto round-trip; `scripts/gen-ops.ts` recomputes the derivation
+/// and asserts it against this literal under `moon run check-gen`.
 pub const PINNED_EXTENSION_ID: &str = "mkjjlmjbcljpcfkfadfmhblmmddkdihf";
 
 #[cfg(test)]
