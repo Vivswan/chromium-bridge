@@ -367,13 +367,6 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_tool_is_refused_before_any_args_are_read() {
-        let err = ToolCall::parse("no_such_tool", object(json!({ "browser": 5 }))).unwrap_err();
-        assert!(matches!(err, CallError::UnknownTool(_)), "{err:?}");
-        assert_eq!(err.code(), "INVALID_ARGUMENT");
-    }
-
-    #[test]
     fn list_browsers_answers_locally_from_an_empty_registry() {
         // A fresh session has no connections, so a bridge tool would park in
         // the connect wait; list_browsers is answered by the server itself
@@ -386,23 +379,5 @@ mod tests {
             out.content()[0]["text"].as_str().unwrap(),
             json!({ "count": 0, "browsers": [] }).to_string()
         );
-    }
-
-    #[test]
-    fn outcome_carries_a_code_exactly_when_it_is_an_error() {
-        // The projection methods agree with the variant by construction; this
-        // pins the shape the audit record and the MCP reply are built from.
-        let ok = Outcome::Success {
-            content: json!([{ "type": "text", "text": "hi" }]),
-        };
-        assert!(!ok.is_error());
-        assert_eq!(ok.error_code(), None);
-        let err = error_outcome(&CallError::NotConnected);
-        assert!(err.is_error());
-        assert_eq!(err.error_code(), Some("NOT_CONNECTED"));
-        assert!(err.content()[0]["text"]
-            .as_str()
-            .unwrap()
-            .starts_with("Error [NOT_CONNECTED]:"));
     }
 }

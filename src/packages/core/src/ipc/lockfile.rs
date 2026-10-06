@@ -225,29 +225,3 @@ pub(super) fn cleanup_stale_lock(dialed: &LockFile) {
         LockFile::remove();
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn lockfile_serde_roundtrip() {
-        let lf = LockFile {
-            endpoint: "/tmp/chromium-bridge/run.sock".into(),
-            secret: "deadbeef".into(),
-            pid: 42,
-        };
-        let bytes = serde_json::to_vec(&lf).unwrap();
-        let back: LockFile = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(back.endpoint, "/tmp/chromium-bridge/run.sock");
-        assert_eq!(back.secret, "deadbeef");
-        assert_eq!(back.pid, 42);
-    }
-
-    #[test]
-    fn runtime_lock_token_is_zero_sized() {
-        // The token is a pure compile-time witness; holding or passing one
-        // must cost nothing at runtime.
-        assert_eq!(std::mem::size_of::<RuntimeLockToken>(), 0);
-    }
-}

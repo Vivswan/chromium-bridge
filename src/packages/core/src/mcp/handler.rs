@@ -374,34 +374,49 @@ mod tests {
     }
 
     #[test]
-    fn a_success_outcome_becomes_a_non_error_result() {
-        let out = tools::Outcome::Success {
-            content: json!([{ "type": "text", "text": "{\"tabs\":[]}" }]),
-        };
-        let result = call_tool_result(&out);
-        assert_eq!(result.is_error, Some(false));
-        assert_eq!(result.content.len(), 1);
-    }
-
-    #[test]
-    fn an_error_outcome_stays_a_tool_level_error() {
-        let out = tools::Outcome::Error {
-            content: json!([{ "type": "text", "text": "Error [BRIDGE_KILLED]: killed" }]),
-            code: "BRIDGE_KILLED",
-        };
-        let result = call_tool_result(&out);
-        assert_eq!(result.is_error, Some(true));
-    }
-
-    #[test]
-    fn an_image_content_block_survives_the_mapping() {
-        // page_screenshot returns an image block; it must reach the client
-        // as image content, not a stringified fallback.
-        let out = tools::Outcome::Success {
-            content: json!([{ "type": "image", "data": "aGk=", "mimeType": "image/png" }]),
-        };
-        let result = call_tool_result(&out);
-        assert!(matches!(result.content[0], ContentBlock::Image(_)));
+    fn call_tool_result_keeps_each_outcome_class_and_content_block() {
+        // rmcp's content model is the external side: an outcome's blocks must reach the client typed (an
+        // image stays an image, never the stringified fallback) and tool failures stay isError results,
+        // never protocol errors.
+        let text = json!([{ "type": "text", "text": "{\"tabs\":[]}" }]);
+        let image = json!([{ "type": "image", "data": "aGk=", "mimeType": "image/png" }]);
+        let cases = [
+            (
+                "success text",
+                tools::Outcome::Success {
+                    content: text.clone(),
+                },
+                false,
+            ),
+            (
+                "success image",
+                tools::Outcome::Success { content: image },
+                false,
+            ),
+            (
+                "error",
+                tools::Outcome::Error {
+                    content: json!([{ "type": "text", "text": "Error [BRIDGE_KILLED]: killed" }]),
+                    code: "BRIDGE_KILLED",
+                },
+                true,
+            ),
+        ];
+        for (case, out, is_error) in cases {
+            let result = call_tool_result(&out);
+            assert_eq!(result.is_error, Some(is_error), "{case}");
+            assert_eq!(
+                serde_json::to_value(&result.content).unwrap(),
+                *out.content(),
+                "{case}: the blocks must survive typed"
+            );
+            if case == "success image" {
+                assert!(
+                    matches!(result.content[0], ContentBlock::Image(_)),
+                    "{case}"
+                );
+            }
+        }
     }
 
     fn call(name: &str, args: serde_json::Value) -> Result<ToolCall, CallError> {

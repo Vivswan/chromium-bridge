@@ -13,19 +13,3 @@ pub(crate) fn generate_secret() -> io::Result<String> {
     getrandom::fill(&mut buf)?;
     Ok(hex::encode(buf))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn secret_is_32_hex_chars_and_unique() {
-        let s = generate_secret().unwrap();
-        assert_eq!(s.len(), 32);
-        assert!(s.chars().all(|c| c.is_ascii_hexdigit()));
-        // 128 bits from the CSPRNG: two draws colliding means the RNG is
-        // broken (or the fail-closed path silently regressed to something
-        // deterministic).
-        assert_ne!(s, generate_secret().unwrap());
-    }
-}

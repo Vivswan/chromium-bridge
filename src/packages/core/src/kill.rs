@@ -191,23 +191,27 @@ mod tests {
     }
 
     #[test]
-    fn verdict_allows_only_a_readable_unkilled_record() {
-        assert!(verdict(Ok(trust(false))).is_ok());
-    }
-
-    #[test]
-    fn verdict_refuses_while_killed_with_the_stable_code() {
-        let err = verdict(Ok(trust(true))).unwrap_err();
-        assert!(matches!(err, CallError::Killed));
-        assert_eq!(err.code(), "BRIDGE_KILLED");
-    }
-
-    #[test]
-    fn verdict_fails_closed_on_an_unreadable_record() {
-        // An unreadable record is indistinguishable from a suppressed kill,
-        // so the call is refused with the same stable code.
-        let err = verdict(Err(io::Error::other("corrupt"))).unwrap_err();
-        assert!(matches!(err, CallError::KillStateUnknown(_)));
-        assert_eq!(err.code(), "BRIDGE_KILLED");
+    fn verdict_refuses_killed_and_unreadable_records_with_one_code() {
+        // An unreadable record is indistinguishable from a suppressed kill, so both refusals carry the one
+        // stable code the harness keys on.
+        let cases = [
+            ("readable, off", Ok(trust(false)), None),
+            ("readable, killed", Ok(trust(true)), Some("BRIDGE_KILLED")),
+            (
+                "unreadable",
+                Err(io::Error::other("corrupt")),
+                Some("BRIDGE_KILLED"),
+            ),
+        ];
+        for (case, record, want_code) in cases {
+            let got = verdict(record);
+            assert_eq!(got.as_ref().err().map(CallError::code), want_code, "{case}");
+            match (case, got) {
+                ("readable, killed", Err(CallError::Killed)) => {}
+                ("unreadable", Err(CallError::KillStateUnknown(_))) => {}
+                ("readable, off", Ok(())) => {}
+                (case, got) => panic!("{case}: unexpected {got:?}"),
+            }
+        }
     }
 }

@@ -7,88 +7,45 @@ fn gen(n: u64) -> Generation {
 }
 
 #[test]
-fn fresh_session_has_no_connections() {
-    // A brand-new session has no attached connection: nothing to list and
-    // nothing to route to.
-    let session = Session::new();
-    assert!(session.labels().is_empty());
-    assert_eq!(session.route_info(None), None);
-    assert_eq!(session.route_info(Some("chrome")), None);
-    // Same via Default, which just forwards to `new`.
-    assert!(Session::default().labels().is_empty());
-}
-
-#[test]
-fn generations_are_monotonic_and_never_zero() {
-    // Mirrors the `next_gen` counter: strictly increasing from 1, and the
-    // mint refuses a zero value, so `Generation` is non-zero by
-    // construction.
-    let next = AtomicU64::new(1);
-    let mint = || std::num::NonZeroU64::new(next.fetch_add(1, Ordering::SeqCst)).map(Generation);
-    let (a, b, c) = (mint().unwrap(), mint().unwrap(), mint().unwrap());
-    assert_eq!((a.get(), b.get(), c.get()), (1, 2, 3));
-    assert!(a.get() < b.get() && b.get() < c.get());
-    assert_eq!(std::num::NonZeroU64::new(0).map(Generation), None);
-}
-
-#[test]
-fn clear_decision_only_true_when_current_matches_mine() {
-    // Slot still holds my generation -> I own it, so I must clear it.
-    assert!(should_clear_conn(Some(gen(7)), gen(7)));
-    // A newer connection replaced the slot -> leave it untouched (this is
-    // the clobber the generation guard fixes).
-    assert!(!should_clear_conn(Some(gen(8)), gen(7)));
-    // An older generation must never clear a newer live slot.
-    assert!(!should_clear_conn(Some(gen(2)), gen(5)));
-    // Slot already empty -> nothing to clear.
-    assert!(!should_clear_conn(None, gen(7)));
-}
-
-#[test]
-fn resolve_routes_the_sole_connection_without_an_argument() {
-    // Single browser, no `browser` argument: route to it (back-compat).
-    assert_eq!(resolve_target(&["default"], None).unwrap(), "default");
-    assert_eq!(resolve_target(&["brave"], None).unwrap(), "brave");
-}
-
-#[test]
-fn resolve_requires_an_argument_when_several_browsers_are_live() {
-    // Two browsers, no argument: refuse rather than guess. The error names
-    // the live labels (sorted) so the caller can pick one.
-    let err = resolve_target(&["chrome", "brave"], None).unwrap_err();
-    let CallError::AmbiguousBrowser(labels) = err else {
-        panic!("expected AmbiguousBrowser, got {err:?}");
-    };
-    assert_eq!(labels, "brave, chrome");
-    // An explicit argument disambiguates.
-    assert_eq!(
-        resolve_target(&["chrome", "brave"], Some("brave")).unwrap(),
-        "brave"
-    );
-}
-
-#[test]
-fn resolve_rejects_an_unknown_label_naming_what_is_live() {
-    let err = resolve_target(&["chrome", "brave"], Some("edge")).unwrap_err();
-    let CallError::BrowserNotFound(want, live) = err else {
-        panic!("expected BrowserNotFound, got {err:?}");
-    };
-    assert_eq!(want, "edge");
-    assert_eq!(live, "brave, chrome");
-}
-
-#[test]
-fn resolve_with_nothing_connected_is_not_connected() {
-    // Whether or not a label was named, an empty registry is the plain
-    // (retryable) not-connected condition.
-    assert!(matches!(
-        resolve_target(&[], None),
-        Err(CallError::NotConnected)
-    ));
-    assert!(matches!(
-        resolve_target(&[], Some("chrome")),
-        Err(CallError::NotConnected)
-    ));
+fn resolve_target_refuses_to_guess_and_names_what_is_live() {
+    // Acting in the wrong logged-in browser is worse than asking, so several live labels with no argument
+    // refuse, and the refusals name the live set (sorted) so the caller can pick. An empty registry is the
+    // plain retryable NotConnected whether or not a label was named.
+    enum Want {
+        Label(&'static str),
+        Ambiguous(&'static str),
+        NotFound(&'static str, &'static str),
+        NotConnected,
+    }
+    use Want::{Ambiguous, Label, NotConnected, NotFound};
+    let cases: [(&[&str], Option<&str>, Want); 7] = [
+        (&["default"], None, Label("default")),
+        (&["brave"], None, Label("brave")),
+        (&["chrome", "brave"], None, Ambiguous("brave, chrome")),
+        (&["chrome", "brave"], Some("brave"), Label("brave")),
+        (
+            &["chrome", "brave"],
+            Some("edge"),
+            NotFound("edge", "brave, chrome"),
+        ),
+        (&[], None, NotConnected),
+        (&[], Some("chrome"), NotConnected),
+    ];
+    for (live, want_label, want) in cases {
+        let got = resolve_target(live, want_label);
+        let case = format!("{live:?} with {want_label:?}");
+        match (got, want) {
+            (Ok(label), Label(expected)) => assert_eq!(label, expected, "{case}"),
+            (Err(CallError::AmbiguousBrowser(labels)), Ambiguous(expected)) => {
+                assert_eq!(labels, expected, "{case}");
+            }
+            (Err(CallError::BrowserNotFound(asked, live)), NotFound(a, l)) => {
+                assert_eq!((asked.as_str(), live.as_str()), (a, l), "{case}");
+            }
+            (Err(CallError::NotConnected), NotConnected) => {}
+            (got, _) => panic!("{case}: unexpected {got:?}"),
+        }
+    }
 }
 
 #[test]

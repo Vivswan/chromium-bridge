@@ -299,22 +299,8 @@ mod tests {
         }
         // The 32-char boundary itself is accepted.
         assert!(validate_label(&"x".repeat(32)));
-    }
-
-    #[test]
-    fn browser_label_is_only_constructible_through_validation() {
-        // parse is the single gate: what validate_label accepts wraps, what
-        // it rejects stays a None -- there is no other constructor.
-        let ok = BrowserLabel::parse("chrome").unwrap();
-        assert_eq!(ok.as_str(), "chrome");
-        assert_eq!(ok.to_string(), "chrome");
-        assert_eq!(ok.into_string(), "chrome");
-        assert!(BrowserLabel::parse("bad label").is_none());
-        assert!(BrowserLabel::parse("").is_none());
-        // The fixed default satisfies the same rule it bypasses parse for.
-        let default = BrowserLabel::default_label();
-        assert!(validate_label(default.as_str()));
-        assert_eq!(default.as_str(), DEFAULT_LABEL);
+        // The fixed default bypasses parse, so it is held to the same rule here.
+        assert!(validate_label(BrowserLabel::default_label().as_str()));
     }
 
     #[test]

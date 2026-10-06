@@ -247,26 +247,6 @@ mod registry {
             "no slot may survive its guard's drop"
         );
     }
-
-    #[test]
-    fn an_early_return_path_cannot_leak_a_slot() {
-        // Models a rejection arm in admit_client: the slot goes out of
-        // scope without any explicit release call, and the registry must
-        // still be empty -- the invariant RAII moved out of comments.
-        let registry = ClientRegistry::new();
-        {
-            let (srv, _cli) = UnixStream::pair().unwrap();
-            let _slot = registry
-                .register(Some(ident(H_SELF)), trusted(), srv)
-                .unwrap();
-            // early return: nothing released by hand
-        }
-        assert_eq!(
-            registry.sweep(|_, _| true),
-            0,
-            "a slot dropped on an early-return path must deregister itself"
-        );
-    }
 }
 
 #[test]

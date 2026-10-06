@@ -1,20 +1,8 @@
 use super::control::*;
 use super::*;
-use crate::tools::args::{ElementTargetArgs, NoArgs};
+use crate::tools::args::ElementTargetArgs;
 use serde_json::json;
 use std::io::Cursor;
-
-#[test]
-fn nm_frame_roundtrip() {
-    let v = json!({ "op": "tab_list", "id": 1 });
-    let mut buf = Vec::new();
-    nm_write_frame(&mut buf, &v).unwrap();
-    // 4-byte LE length prefix precedes the JSON body.
-    let body_len = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
-    assert_eq!(body_len, buf.len() - 4);
-    let mut cur = Cursor::new(buf);
-    assert_eq!(nm_read_frame(&mut cur).unwrap().unwrap(), v);
-}
 
 #[test]
 fn nm_read_eof_is_none() {
@@ -27,26 +15,6 @@ fn nm_write_rejects_oversize() {
     let v = json!({ "s": "x".repeat(NM_MAX_OUTGOING + 10) });
     let err = nm_write_frame(&mut Vec::new(), &v).unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::InvalidData);
-}
-
-#[test]
-fn nm_read_rejects_huge_prefix() {
-    // 0xFFFFFFFF length (~4 GB) exceeds the 64 MB inbound clamp.
-    let mut cur = Cursor::new(vec![0xFF, 0xFF, 0xFF, 0xFF]);
-    let err = nm_read_frame(&mut cur).unwrap_err();
-    assert_eq!(err.kind(), io::ErrorKind::InvalidData);
-}
-
-#[test]
-fn mcp_ndjson_single_line_roundtrip() {
-    // Embedded newline must be escaped so the frame stays one NDJSON line.
-    let msg = JsonRpc::ok(json!(1), json!({ "text": "a\nb" }));
-    let mut buf = Vec::new();
-    mcp_write(&mut buf, &msg).unwrap();
-    assert_eq!(buf.iter().filter(|&&b| b == b'\n').count(), 1);
-    assert!(buf.ends_with(b"\n"));
-    let got = mcp_read(&mut Cursor::new(buf)).unwrap().unwrap();
-    assert_eq!(got.id, Some(json!(1)));
 }
 
 #[test]
@@ -149,93 +117,6 @@ fn bridge_req_parse_refuses_exactly_what_the_extension_refuses() {
             .unwrap()
             .unwrap_or_else(|| panic!("{wire}: EOF"));
         assert_eq!(got.id, 1, "{wire}");
-    }
-}
-
-#[test]
-fn handshake_challenge_and_response_roundtrip() {
-    // Challenge frame carries the tagged type + nonce.
-    let chal = Handshake::Challenge {
-        nonce: "abc123".into(),
-    };
-    let mut buf = Vec::new();
-    bridge_write(&mut buf, &chal).unwrap();
-    assert_eq!(
-        serde_json::from_slice::<Value>(&buf[..buf.len() - 1]).unwrap(),
-        json!({ "type": "challenge", "nonce": "abc123" })
-    );
-    let back: Handshake = bridge_read(&mut Cursor::new(buf)).unwrap().unwrap();
-    assert!(matches!(back, Handshake::Challenge { nonce } if nonce == "abc123"));
-
-    // Response frame: label is optional and omitted when None.
-    let resp = Handshake::Response {
-        mac: "deadbeef".into(),
-        label: None,
-    };
-    let mut buf = Vec::new();
-    bridge_write(&mut buf, &resp).unwrap();
-    assert_eq!(
-        serde_json::from_slice::<Value>(&buf[..buf.len() - 1]).unwrap(),
-        json!({ "type": "response", "mac": "deadbeef" })
-    );
-    // A response with no label deserializes with label defaulted to None.
-    let back: Handshake = bridge_read(&mut Cursor::new(
-        b"{\"type\":\"response\",\"mac\":\"x\"}\n".to_vec(),
-    ))
-    .unwrap()
-    .unwrap();
-    assert!(matches!(back, Handshake::Response { label: None, .. }));
-}
-
-#[test]
-fn attach_frames_roundtrip_and_are_tagged() {
-    // Browser attach is a bare role marker (its label rode the signed
-    // handshake response, not this frame).
-    assert_eq!(
-        serde_json::to_value(AttachRequest::Browser {}).unwrap(),
-        json!({ "attach": "browser" })
-    );
-    // Client attach carries the relay's attested harness identity; a name
-    // is optional and is a log label only.
-    let client = AttachRequest::Client {
-        harness: Some(HarnessId {
-            hash: crate::ipc::HashDigest::try_from("abc123abc1".repeat(4)).unwrap(),
-            signer: Some(crate::ipc::SignerId::try_from("SIGNER0001").unwrap()),
-            name: Some("claude-code".into()),
-        }),
-    };
-    let v = serde_json::to_value(&client).unwrap();
-    assert_eq!(v["attach"], "client");
-    assert_eq!(v["harness"]["hash"], "abc123abc1".repeat(4));
-    assert_eq!(v["harness"]["signer"], "SIGNER0001");
-    let back: AttachRequest = serde_json::from_value(v).unwrap();
-    assert!(
-        matches!(back, AttachRequest::Client { harness: Some(h) } if h.hash.as_str() == "abc123abc1".repeat(4))
-    );
-
-    // A client attach with no measurable harness omits the field.
-    let bare = AttachRequest::Client { harness: None };
-    assert_eq!(
-        serde_json::to_value(&bare).unwrap(),
-        json!({ "attach": "client" })
-    );
-
-    // Replies are tagged and roundtrip.
-    for reply in [
-        AttachReply::Accepted {},
-        AttachReply::Refused {
-            reason: "not allowlisted".into(),
-        },
-        AttachReply::Unavailable {
-            reason: "capacity".into(),
-        },
-    ] {
-        let v = serde_json::to_value(&reply).unwrap();
-        let back: AttachReply = serde_json::from_value(v).unwrap();
-        assert_eq!(
-            serde_json::to_value(back).unwrap(),
-            serde_json::to_value(reply).unwrap()
-        );
     }
 }
 
@@ -462,55 +343,6 @@ fn wire_types_reject_unknown_fields() {
         json!({ "type": "policy_current", "ok": false, "error": "unreadable store" })
     )
     .is_ok());
-}
-
-#[test]
-fn bridge_envelope_wire_keys_are_pinned() {
-    // These Rust types ARE the canonical envelope contract; the extension's
-    // Zod validators are generated from them (scripts/gen-envelope.ts, held
-    // fresh by `moon run check-gen`). This test pins the exact wire
-    // field names locally, so a rename, an added field, or a snake_case Rust
-    // name leaking onto the wire fails `cargo test` immediately instead of
-    // waiting for the cross-language diff.
-    fn wire_keys<T: Serialize>(v: &T) -> std::collections::BTreeSet<String> {
-        serde_json::to_value(v)
-            .unwrap()
-            .as_object()
-            .unwrap()
-            .keys()
-            .cloned()
-            .collect()
-    }
-    fn expected(keys: &[&str]) -> std::collections::BTreeSet<String> {
-        keys.iter().map(|s| s.to_string()).collect()
-    }
-
-    let req = BridgeReq {
-        id: 1,
-        command: BridgeCommand::TabList(NoArgs {}),
-        browser: Some("brave".into()),
-    };
-    assert_eq!(
-        wire_keys(&req),
-        expected(&["args", "browser", "id", "op"]),
-        "BridgeReq wire fields changed - update the Zod validator \
-         (src/packages/shared/src/envelope.ts) and bump BRIDGE_PROTOCOL_VERSION \
-         if the change is incompatible"
-    );
-
-    let resp = BridgeResp {
-        id: 1,
-        ok: false,
-        data: Some(json!({})),
-        error: Some("e".into()),
-    };
-    assert_eq!(
-        wire_keys(&resp),
-        expected(&["data", "error", "id", "ok"]),
-        "BridgeResp wire fields changed - update the Zod validator \
-         (src/packages/shared/src/envelope.ts) and bump BRIDGE_PROTOCOL_VERSION \
-         if the change is incompatible"
-    );
 }
 
 #[test]

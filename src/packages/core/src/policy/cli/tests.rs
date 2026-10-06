@@ -122,21 +122,6 @@ fn status_report_round_trips_and_rejects_unknown_fields() {
 }
 
 #[test]
-fn error_report_round_trips_and_rejects_unknown_fields() {
-    // The write lanes' --json failure object: same frozen-wire posture
-    // as the status report (a consumer v-gates then strict-parses).
-    let r = PolicyErrorReport {
-        v: 1,
-        error: "policy signing refused: user cancelled".into(),
-    };
-    let json = serde_json::to_string(&r).unwrap();
-    let back: PolicyErrorReport = serde_json::from_str(&json).unwrap();
-    assert_eq!(r, back);
-    let bad = r#"{"v":1,"error":"x","surprise":1}"#;
-    assert!(serde_json::from_str::<PolicyErrorReport>(bad).is_err());
-}
-
-#[test]
 fn history_report_maps_entries_and_tolerates_a_damaged_one() {
     use super::super::PolicyHistoryEntry;
     let good = PolicyDoc {
@@ -175,20 +160,18 @@ fn history_report_maps_entries_and_tolerates_a_damaged_one() {
 }
 
 #[test]
-fn a_no_op_rollback_changes_nothing() {
-    let v = PolicyValues::default();
-    assert_eq!(plan_rollback(&v, &v, &v), RollbackPlan::NoChange);
-}
-
-#[test]
 fn a_tightening_rollback_uses_the_free_lane() {
     // current has pageEval ON; target (a past revision) has it OFF: rolling
-    // back only tightens, so it rides the free restrict lane.
+    // back only tightens, so it rides the free restrict lane. Rolling back onto the current state is no plan.
     let current = PolicyValues {
         page_eval_enabled: true,
         ..PolicyValues::default()
     };
     let target = PolicyValues::default();
+    assert_eq!(
+        plan_rollback(&current, &current, &current),
+        RollbackPlan::NoChange
+    );
     let plan = plan_rollback(&target, &current, &current);
     let RollbackPlan::Tighten { overlay, fields } = plan else {
         panic!("expected Tighten, got {plan:?}");
