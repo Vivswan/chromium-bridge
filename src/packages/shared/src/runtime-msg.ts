@@ -8,11 +8,14 @@ import { z } from "zod";
 import { ConfirmPayloadSchema } from "./confirm";
 import { AuditEntrySchema, KillMirrorSchema } from "./enclave";
 import {
+  AuditTrailEntrySchema,
   EnrollOptionsFrameSchema,
+  HealthReportSchema,
   PresenceRequestFrameSchema,
   RegistrationRowSchema,
   TrustedClientSchema,
 } from "./envelope.gen";
+import { BROWSER_KEYS } from "./host.gen";
 import { PolicyOverlaySchema, PolicyValuesSchema } from "./policy.gen";
 import { UI_LANGUAGES } from "./settings";
 import { PresenceAnswerSchema, RegistrationResponseSchema } from "./webauthn";
@@ -216,6 +219,18 @@ export const RUNTIME_CONTRACT = contract({
     req: z.strictObject({ type: z.literal("get_audit") }),
     res: z.object({ ok: z.literal(true), entries: z.array(AuditEntrySchema) }),
   },
+  // The host's durable trail (its audit_read_result): the newest records `chromium-bridge audit` prints,
+  // newest first, with the count of older lines left out and the live file for the CLI's empty state.
+  get_host_audit: {
+    gate: "extension-page",
+    req: z.strictObject({ type: z.literal("get_host_audit") }),
+    res: z.object({
+      ok: z.literal(true),
+      entries: z.array(AuditTrailEntrySchema),
+      older: z.number().int().nonnegative(),
+      path: z.string(),
+    }),
+  },
   // The popup found a pendingAllow record it cannot parse and asks the worker
   // to re-derive the mirror through its one serialized store path; a
   // popup-side remove could race a freshly minted live request.
@@ -324,8 +339,17 @@ export const RUNTIME_CONTRACT = contract({
     req: z.strictObject({ type: z.literal("webauthn_forget") }),
     res: Acknowledged,
   },
+  // The health report plain `chromium-bridge doctor` prints (its doctor_report_result), rows worded by the
+  // host, plus the `key:` line of `enclave-status`.
+  get_doctor: {
+    gate: "extension-page",
+    req: z.strictObject({ type: z.literal("get_doctor") }),
+    res: z.object({ ok: z.literal(true), report: HealthReportSchema }),
+  },
   // The host-registration panel: the per-browser manifest rows the host's doctor diagnoses, and the repair
   // `doctor --fix` runs, both answered with the fresh rows (a repair that failed is a refusal; the panel re-asks).
+  // `browsers` names exactly the known browsers to register (`--browser`), enum-pinned here at the trust
+  // boundary; absent is every detected one.
   get_registration: {
     gate: "extension-page",
     req: z.strictObject({ type: z.literal("get_registration") }),
@@ -333,7 +357,10 @@ export const RUNTIME_CONTRACT = contract({
   },
   repair_registration: {
     gate: "extension-page",
-    req: z.strictObject({ type: z.literal("repair_registration") }),
+    req: z.strictObject({
+      type: z.literal("repair_registration"),
+      browsers: z.array(z.enum(BROWSER_KEYS)).min(1).optional(),
+    }),
     res: RegistrationViewSchema,
   },
   // The policy editor reads the posture the worker enforces and tightens it through the host's unsigned

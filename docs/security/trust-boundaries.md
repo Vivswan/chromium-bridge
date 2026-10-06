@@ -69,11 +69,13 @@ Chrome spawns the host per the host manifest, whose `allowed_origins` pins the e
 | kill switch | `kill_status`, `kill_engage`, `kill_release` | `kill_status_result` |
 | WebAuthn | `enroll_begin`, `enroll_finish`, `presence_begin`, `presence_assert`, `presence_confirm`, `browser_revoke` | `enroll_options`, `enroll_result`, `presence_request`, `presence_result`, `browser_revoke_result` |
 | registration | `registration_status`, `registration_repair` | `registration_status_result` |
+| health report | `doctor_report` | `doctor_report_result` |
 | policy and language | `policy_get`, `policy_restrict`, `lang_get`, `lang_set` | `policy_current`, `policy_restrict_result`, `lang_current` |
-| audit | `audit_event` (fire-and-forget) | - |
+| audit | `audit_event` (fire-and-forget), `audit_read` | `audit_read_result` |
 
 - **`audit_event`** is kind-whitelisted (the extension-owned confirmation and enrollment kinds only) and the host stamps the surface itself, so the browser leg cannot forge a host-side event into the trail.
-- **The audit trail:** security decisions (admissions, refusals, confirmations shown, allowed, and denied, revocations per surface, kill transitions, policy writes, tool calls) are recorded to stderr and to a private `audit.log` with size-capped rotation, read by `chromium-bridge audit`. The [CLI page](../cli.md#logging-and-audit-bb_log--bb_log_format) owns the format; the extension mirrors its own events into a bounded ring (200 entries) behind the confined storage at boundary 4, read by the read-only options panel.
+- **The audit trail:** security decisions (admissions, refusals, confirmations shown, allowed, and denied, revocations per surface, kill transitions, policy writes, tool calls) are recorded to stderr and to a private `audit.log` with size-capped rotation, read by `chromium-bridge audit` and by the options page over the read-only `audit_read` frame. The [CLI page](../cli.md#logging-and-audit-bb_log--bb_log_format) owns the format.
+  - **The extension's own ring:** its events also go to a bounded ring (200 entries) behind the confined storage at boundary 4, shown by the same panel beside the host trail.
   - **Not every decision reaches the host's trail:** the two extension-local kinds, `policy_refused` and `policy_compromised`, stay in the ring by design, and a failed storage write drops the record (the compromise-mark entry in the [policy ledger](#host-owned-policy-residual-ledger)).
 - **Killed mode:** while the latch is set, or the trust record is unreadable, the host runs control-plane only. It never dials the broker, drops bridge frames, and keeps the control frames working so status, engage, and the policy pull stay reachable. The brake (`kill_engage`) is one frame with no gate; the release opens the presence exchange below.
 
@@ -118,7 +120,7 @@ Residuals at this hop:
   - **Sequence:** the store becomes unreachable, the user pairs into a file, later revokes that file key while the store is still unreachable, and the store comes back: the old key is live again.
   - **Bounds:** an extension that re-pinned to the file key holds no pin the resurfaced key matches. One still pinned to the old store key (the re-pin never finished, or the revocation push was withheld because the host pushes it only on a clean absence) trusts it again.
   - **Either way** `chromium-bridge enclave-status` reports a key the user believed gone, and `policy set` signs with it, until `pair --reset` (or `revoke --all`, which also forgets every browser and client) runs again once the store answers.
-- **Registration repair is not presence-gated.** The options page's repair frame re-registers the detected browsers through the same seam as `doctor --fix`: idempotent, pointing browsers at this binary and nothing else, the same posture as the CLI path, which has no gate either. A compromised extension gains only what any same-user process already has.
+- **Registration repair is not presence-gated.** The options page's repair frame re-registers the detected browsers, or the known browsers it names, through the same seam as `doctor --fix` and `--browser`: idempotent, in this account's scope only, pointing browsers at this binary and nothing else, the same posture as the CLI path, which has no gate either. A compromised extension gains only what any same-user process already has.
   - **The one difference:** a manifest another tool wrote at our host id is replaced by the CLI's explicit `--fix` and left by the frame.
 
 ## Boundary 4: Extension <-> web page  (Chrome API / content script / DOM)

@@ -8,11 +8,13 @@ use std::path::PathBuf;
 
 use clap::builder::ArgGroup;
 use clap::{Arg, ArgAction, ArgMatches, Args, FromArgMatches, Parser, Subcommand};
+use itertools::Itertools as _;
 
 use crate::allowlist::ClientName;
 use crate::audit::DEFAULT_AUDIT_LIMIT;
 use crate::browsers::{Browser, Scope};
 use crate::ipc::{BrowserLabel, HashDigest, SignerId};
+use crate::lang::{UiLang, UI_LANGUAGES};
 use crate::policy::{FieldKind, Ms, PolicyField, PolicyOverlay};
 use crate::registration::known_keys;
 
@@ -70,6 +72,40 @@ pub enum Command {
     /// Read or edit the host-owned policy
     #[command(subcommand)]
     Policy(PolicyCommand),
+    /// Read or set the display language the options page shows (`show` when no subcommand is given)
+    Lang(LangCommand),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum LangCommand {
+    Show,
+    Set { value: UiLang },
+}
+
+#[derive(Args)]
+struct LangFlags {
+    #[command(subcommand)]
+    action: Option<LangAction>,
+}
+
+#[derive(Subcommand)]
+enum LangAction {
+    /// Print the current display language
+    Show,
+    /// Apply a display language; a connected browser swaps on the host's next push
+    Set {
+        #[arg(value_parser = ui_lang, value_name = "LANG", help = format!("One of: {}", UI_LANGUAGES.join(", ")))]
+        value: UiLang,
+    },
+}
+
+impl From<LangFlags> for LangCommand {
+    fn from(flags: LangFlags) -> Self {
+        match flags.action {
+            None | Some(LangAction::Show) => LangCommand::Show,
+            Some(LangAction::Set { value }) => LangCommand::Set { value },
+        }
+    }
 }
 
 /// `doctor` / `status` as exactly one of its four forms, so a contradictory
@@ -154,13 +190,7 @@ impl From<DoctorFlags> for DoctorCommand {
         let targets = if flags.all {
             FixTargets::All
         } else if !flags.browser.is_empty() {
-            let mut browsers: Vec<Browser> = Vec::new();
-            for browser in flags.browser {
-                if !browsers.contains(&browser) {
-                    browsers.push(browser);
-                }
-            }
-            FixTargets::Browsers(browsers)
+            FixTargets::Browsers(flags.browser.into_iter().unique().collect())
         } else if !flags.manifest_dir.is_empty() {
             FixTargets::ManifestDirs(flags.manifest_dir)
         } else {
@@ -444,8 +474,13 @@ typed_args!(DoctorCommand, DoctorFlags);
 typed_args!(RevokeTarget, RevokeFlags);
 typed_args!(PairClientArgs, PairClientFlags);
 typed_args!(UninstallArgs, UninstallFlags);
+typed_args!(LangCommand, LangFlags);
 
 // ---- Value parsers: each newtype is validated once, here ----------------------
+
+fn ui_lang(value: &str) -> Result<UiLang, String> {
+    UiLang::parse(value).ok_or_else(|| format!("takes one of {}", UI_LANGUAGES.join(", ")))
+}
 
 /// One comma-separated `--browser` entry, trimmed so `chrome, brave` reads
 /// as two keys.
@@ -808,6 +843,14 @@ mod tests {
                     json: true,
                 }),
             ),
+            (vec!["lang"], Command::Lang(LangCommand::Show)),
+            (vec!["lang", "show"], Command::Lang(LangCommand::Show)),
+            (
+                vec!["lang", "set", "zh_CN"],
+                Command::Lang(LangCommand::Set {
+                    value: UiLang::parse("zh_CN").unwrap(),
+                }),
+            ),
         ];
         for (argv, expected) in &cases {
             let parsed = parse(&args(argv)).unwrap_or_else(|e| panic!("{argv:?}: {e}"));
@@ -972,6 +1015,13 @@ mod tests {
             (&["policy", "show", "extra"], UnknownArgument),
             (&["policy", "rollback"], MissingRequiredArgument),
             (&["policy", "rollback", "--revision", "x"], ValueValidation),
+            // lang: `set` takes exactly one accepted value, `show` takes nothing.
+            (&["lang", "set"], MissingRequiredArgument),
+            (&["lang", "set", "fr"], ValueValidation),
+            (&["lang", "set", "EN"], ValueValidation),
+            (&["lang", "set", "en", "zh_CN"], UnknownArgument),
+            (&["lang", "show", "en"], UnknownArgument),
+            (&["lang", "get"], InvalidSubcommand),
             // native host: a validated label, once, with a value.
             (&["--native-host", "--label"], InvalidValue),
             (&["--native-host", "--label", "bad label"], ValueValidation),

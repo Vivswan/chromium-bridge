@@ -131,6 +131,72 @@ export const RegistrationRowSchema = z
 
 export type RegistrationRow = z.infer<typeof RegistrationRowSchema>;
 
+// One line of the host's audit trail (protocol::control::AuditTrailEntry), embedded in audit_read_result's `entries` array.
+export const AuditTrailEntryWireSchema = z.union([
+  z
+    .object({
+      "entry": z.literal("record"),
+      "fields": z.string(),
+      "kind": z.string(),
+      "ts_ms": z.number().int().gte(0).lte(9007199254740991),
+    })
+    .strict(),
+  z.object({ "entry": z.literal("unrecognized"), "text": z.string() }).strict(),
+]);
+
+export const AuditTrailEntrySchema = z.union([
+  z
+    .object({
+      "entry": z.literal("record"),
+      "fields": z.string(),
+      "kind": z.string(),
+      "ts_ms": z.number().int().gte(0).lte(9007199254740991),
+    })
+    .catchall(z.unknown()),
+  z.object({ "entry": z.literal("unrecognized"), "text": z.string() }).catchall(z.unknown()),
+]);
+
+export type AuditTrailEntry = z.infer<typeof AuditTrailEntrySchema>;
+
+// The health report (protocol::control::HealthReport), embedded as doctor_report_result's `report`.
+export const HealthReportWireSchema = z
+  .object({
+    "healthy": z.boolean(),
+    "host_key": z.string(),
+    "kill_switch": z.object({ "details": z.array(z.string()), "value": z.string() }).strict(),
+    "lock_file": z.object({ "details": z.array(z.string()), "value": z.string() }).strict(),
+    "mcp_server": z.object({ "details": z.array(z.string()), "value": z.string() }).strict(),
+    "platform": z.string(),
+    "policy_baseline": z.object({ "details": z.array(z.string()), "value": z.string() }).strict(),
+    "summary": z.string(),
+    "version": z.string(),
+  })
+  .strict();
+
+export const HealthReportSchema = z
+  .object({
+    "healthy": z.boolean(),
+    "host_key": z.string(),
+    "kill_switch": z
+      .object({ "details": z.array(z.string()), "value": z.string() })
+      .catchall(z.unknown()),
+    "lock_file": z
+      .object({ "details": z.array(z.string()), "value": z.string() })
+      .catchall(z.unknown()),
+    "mcp_server": z
+      .object({ "details": z.array(z.string()), "value": z.string() })
+      .catchall(z.unknown()),
+    "platform": z.string(),
+    "policy_baseline": z
+      .object({ "details": z.array(z.string()), "value": z.string() })
+      .catchall(z.unknown()),
+    "summary": z.string(),
+    "version": z.string(),
+  })
+  .catchall(z.unknown());
+
+export type HealthReport = z.infer<typeof HealthReportSchema>;
+
 // The host->extension control frames: the faithful base, then the enforced reader (the base plus the
 // asymmetry table, read loose under its loose-frames rule).
 export const EnclaveProofWireSchema = z
@@ -252,6 +318,72 @@ export const RegistrationStatusResultSchema = z.discriminatedUnion("ok", [
 ]);
 
 export type RegistrationStatusResult = z.infer<typeof RegistrationStatusResultSchema>;
+
+export const AuditReadResultWireSchema = z
+  .object({
+    "entries": z.union([z.array(AuditTrailEntryWireSchema), z.null()]).optional(),
+    "error": z.union([z.string(), z.null()]).optional(),
+    "ok": z.boolean(),
+    "older": z.union([z.number().int().gte(0), z.null()]).optional(),
+    "path": z.union([z.string(), z.null()]).optional(),
+    "type": z.literal("audit_read_result"),
+  })
+  .strict();
+
+export const AuditReadResultSchema = z.discriminatedUnion("ok", [
+  z
+    .object({
+      "entries": z.array(AuditTrailEntrySchema),
+      "error": z.undefined().optional(),
+      "ok": z.literal(true),
+      "older": z.number().int().gte(0),
+      "path": z.string(),
+      "type": z.literal("audit_read_result"),
+    })
+    .catchall(z.unknown()),
+  z
+    .object({
+      "entries": z.undefined().optional(),
+      "error": z.string(),
+      "ok": z.literal(false),
+      "older": z.undefined().optional(),
+      "path": z.undefined().optional(),
+      "type": z.literal("audit_read_result"),
+    })
+    .catchall(z.unknown()),
+]);
+
+export type AuditReadResult = z.infer<typeof AuditReadResultSchema>;
+
+export const DoctorReportResultWireSchema = z
+  .object({
+    "error": z.union([z.string(), z.null()]).optional(),
+    "ok": z.boolean(),
+    "report": z.union([HealthReportWireSchema, z.null()]).optional(),
+    "type": z.literal("doctor_report_result"),
+  })
+  .strict();
+
+export const DoctorReportResultSchema = z.discriminatedUnion("ok", [
+  z
+    .object({
+      "error": z.undefined().optional(),
+      "ok": z.literal(true),
+      "report": HealthReportSchema,
+      "type": z.literal("doctor_report_result"),
+    })
+    .catchall(z.unknown()),
+  z
+    .object({
+      "error": z.string(),
+      "ok": z.literal(false),
+      "report": z.undefined().optional(),
+      "type": z.literal("doctor_report_result"),
+    })
+    .catchall(z.unknown()),
+]);
+
+export type DoctorReportResult = z.infer<typeof DoctorReportResultSchema>;
 
 export const PolicyCurrentWireSchema = z
   .object({
@@ -492,6 +624,8 @@ export const GENERATED_WIRE_FRAMES = {
     "client_revoke_result",
     "kill_status_result",
     "registration_status_result",
+    "audit_read_result",
+    "doctor_report_result",
   ],
   policy: ["policy_current", "policy_restrict_result", "lang_current"],
   webauthn: [
@@ -563,6 +697,19 @@ export const AuditEventWireSchema = z
 
 export type AuditEventWire = z.infer<typeof AuditEventWireSchema>;
 
+export const AuditReadWireSchema = z
+  .object({
+    "limit": z.union([z.number().int().gte(1).lte(1000), z.null()]).optional(),
+    "type": z.literal("audit_read"),
+  })
+  .strict();
+
+export type AuditReadWire = z.infer<typeof AuditReadWireSchema>;
+
+export const DoctorReportWireSchema = z.object({ "type": z.literal("doctor_report") }).strict();
+
+export type DoctorReportWire = z.infer<typeof DoctorReportWireSchema>;
+
 export const RegistrationStatusWireSchema = z
   .object({ "type": z.literal("registration_status") })
   .strict();
@@ -570,7 +717,15 @@ export const RegistrationStatusWireSchema = z
 export type RegistrationStatusWire = z.infer<typeof RegistrationStatusWireSchema>;
 
 export const RegistrationRepairWireSchema = z
-  .object({ "type": z.literal("registration_repair") })
+  .object({
+    "browsers": z
+      .union([
+        z.array(z.enum(["chrome", "chromium", "brave", "edge", "vivaldi", "opera"])).min(1),
+        z.null(),
+      ])
+      .optional(),
+    "type": z.literal("registration_repair"),
+  })
   .strict();
 
 export type RegistrationRepairWire = z.infer<typeof RegistrationRepairWireSchema>;
@@ -668,6 +823,8 @@ export const GENERATED_WRITER_FRAMES = {
     "kill_engage",
     "kill_release",
     "audit_event",
+    "audit_read",
+    "doctor_report",
     "registration_status",
     "registration_repair",
   ],

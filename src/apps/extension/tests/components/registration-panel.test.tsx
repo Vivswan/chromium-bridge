@@ -1,10 +1,12 @@
 // The registration panel's render path over the SW contract: the rows the host reports render with their state
-// and location, a repair posts repair_registration and shows the post-repair rows, a failed repair shows the
-// host's error and re-asks for the rows, and a not-connected worker renders the refusal with the repair
-// disabled, never an empty healthy-looking table. While a status read is outstanding both actions are disabled,
+// and location, a repair posts repair_registration and shows the post-repair rows, an undetected row alone
+// offers a register action that names its browser, a failed repair shows the host's error and re-asks for the
+// rows, and a not-connected worker renders the refusal with the repair disabled, never an empty
+// healthy-looking table. While a status read is outstanding both actions are disabled,
 // since status and repair share one worker slot and a repair sent then is refused as already in flight.
 
-import type { RegistrationRow } from "@chromium-bridge/shared/envelope.gen";
+import type { HealthReport, RegistrationRow } from "@chromium-bridge/shared/envelope.gen";
+import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -23,12 +25,36 @@ const ROWS: RegistrationRow[] = [
     state: { kind: "stale", detail: "launch path missing" },
     location: "/home/user/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts/host.json",
   },
+  {
+    browser: "edge",
+    detected: false,
+    state: { kind: "missing" },
+    location: "/home/user/.config/microsoft-edge/NativeMessagingHosts/host.json",
+  },
 ];
 
-type Reply = { ok: true; browsers: RegistrationRow[] } | { ok: false; error: string };
+const REPORT: HealthReport = {
+  version: "1.2.3",
+  platform: "linux/x86_64",
+  lock_file: {
+    value: "/run/user/1000/chromium-bridge/run.lock",
+    details: ["present: yes", "endpoint: /run/user/1000/chromium-bridge/run.sock", "pid:     4242"],
+  },
+  mcp_server: { value: "reachable (socket connect OK)", details: [] },
+  kill_switch: { value: "off (bridge activity permitted)", details: [] },
+  policy_baseline: { value: "revision 3, unsigned", details: ["restriction overlay: active"] },
+  host_key: "none (run `chromium-bridge pair`)",
+  summary: "OK",
+  healthy: true,
+};
 
-let sent: Array<{ type: string }>;
-let replies: Record<"get_registration" | "repair_registration", () => Reply | Promise<Reply>>;
+type Reply = { ok: true; browsers: RegistrationRow[] } | { ok: false; error: string };
+type DoctorReply = RuntimeResponse<"get_doctor">;
+
+let sent: Array<{ type: string; browsers?: string[] }>;
+let replies: Record<"get_registration" | "repair_registration", () => Reply | Promise<Reply>> & {
+  get_doctor: () => DoctorReply;
+};
 
 beforeEach(() => {
   fakeBrowser.reset();
@@ -37,6 +63,7 @@ beforeEach(() => {
   replies = {
     get_registration: () => ({ ok: true, browsers: ROWS }),
     repair_registration: () => ({ ok: true, browsers: ROWS }),
+    get_doctor: () => ({ ok: true, report: REPORT }),
   };
   (fakeBrowser.i18n as unknown as Record<string, unknown>).getUILanguage = () => "en-US";
   (fakeBrowser.i18n as unknown as Record<string, unknown>).getMessage = () => "";
@@ -56,6 +83,20 @@ beforeEach(() => {
     registration_state_unreadable: { message: "unreadable" },
     registration_empty: { message: "The host knows no browser on this platform." },
     registration_restart_note: { message: "After a repair, restart the browser." },
+    registration_register_one: { message: "Register $1" },
+    registration_cli_only_note: {
+      message: "Directory and machine-wide registration stay in the terminal.",
+    },
+    registration_rows_title: { message: "Registrations" },
+    doctor_title: { message: "Host report" },
+    doctor_loading: { message: "Loading..." },
+    doctor_error: { message: "Could not read the host report: $1" },
+    doctor_version: { message: "version" },
+    doctor_lock_file: { message: "lock file" },
+    doctor_mcp_server: { message: "mcp server" },
+    doctor_kill_switch: { message: "kill switch" },
+    doctor_policy_baseline: { message: "policy baseline" },
+    doctor_summary: { message: "verdict" },
   };
   vi.stubGlobal(
     "fetch",
@@ -89,7 +130,28 @@ describe("RegistrationPanel", () => {
     expect(screen.getByText("stale")).toBeInTheDocument();
     expect(screen.getByText("launch path missing")).toBeInTheDocument();
     expect(screen.getByText(ROWS[1]?.location ?? "")).toBeInTheDocument();
-    expect(sent).toEqual([{ type: "get_registration" }]);
+    expect(sent).toEqual([{ type: "get_registration" }, { type: "get_doctor" }]);
+  });
+
+  test("the host report renders every row's value and details as the host spelled them, and the verdict", async () => {
+    await mount();
+    await screen.findByText("1.2.3 (linux/x86_64)");
+    // Every value and every detail the host sent, raw (the details render pre-wrap, so the CLI's own
+    // spacing survives), and the verdict; the key line belongs to the identity section, not here.
+    const raw = { normalizer: (text: string) => text };
+    const rows = [REPORT.lock_file, REPORT.mcp_server, REPORT.kill_switch, REPORT.policy_baseline];
+    for (const text of rows.flatMap((row) => [row.value, ...row.details])) {
+      expect(screen.getByText(text, raw)).toBeInTheDocument();
+    }
+    expect(screen.getByText("OK")).toBeInTheDocument();
+    expect(screen.queryByText(/chromium-bridge pair/)).toBeNull();
+  });
+
+  test("an unreadable host report shows the error while the registration rows still render", async () => {
+    replies.get_doctor = () => ({ ok: false, error: "native host not connected" });
+    await mount();
+    await screen.findByText("Could not read the host report: native host not connected");
+    expect(screen.getByText("chrome")).toBeInTheDocument();
   });
 
   test("repair posts repair_registration and shows the post-repair rows", async () => {
@@ -100,9 +162,29 @@ describe("RegistrationPanel", () => {
     await mount();
     await screen.findByText("stale");
     await userEvent.click(screen.getByRole("button", { name: "Repair registrations" }));
-    await waitFor(() => expect(screen.getAllByText("ok")).toHaveLength(2));
+    await waitFor(() => expect(screen.getAllByText("ok")).toHaveLength(ROWS.length));
     expect(screen.queryByText("stale")).toBeNull();
-    expect(sent).toEqual([{ type: "get_registration" }, { type: "repair_registration" }]);
+    expect(sent).toEqual([
+      { type: "get_registration" },
+      { type: "get_doctor" },
+      { type: "repair_registration" },
+      { type: "get_doctor" },
+    ]);
+  });
+
+  test("an undetected row alone offers a register action, which names that browser", async () => {
+    await mount();
+    await screen.findByText("edge");
+    expect(screen.getAllByRole("button", { name: /^Register / })).toHaveLength(1);
+    await userEvent.click(screen.getByRole("button", { name: "Register edge" }));
+    await waitFor(() =>
+      expect(sent).toEqual([
+        { type: "get_registration" },
+        { type: "get_doctor" },
+        { type: "repair_registration", browsers: ["edge"] },
+        { type: "get_doctor" },
+      ]),
+    );
   });
 
   test("a failed repair shows the host's error and re-asks for the rows", async () => {
@@ -113,8 +195,10 @@ describe("RegistrationPanel", () => {
     await screen.findByText("Repair failed: brave: permission denied");
     expect(sent).toEqual([
       { type: "get_registration" },
+      { type: "get_doctor" },
       { type: "repair_registration" },
       { type: "get_registration" },
+      { type: "get_doctor" },
     ]);
     // The rows shown are the re-read ones, never a table the failed repair left unvouched.
     expect(screen.getByText("stale")).toBeInTheDocument();
@@ -141,7 +225,12 @@ describe("RegistrationPanel", () => {
     expect(repair).toBeDisabled();
     expect(screen.getByRole("button", { name: "Refresh" })).toBeDisabled();
     await userEvent.click(repair);
-    expect(sent).toEqual([{ type: "get_registration" }, { type: "get_registration" }]);
+    expect(sent).toEqual([
+      { type: "get_registration" },
+      { type: "get_doctor" },
+      { type: "get_registration" },
+      { type: "get_doctor" },
+    ]);
     release({ ok: true, browsers: ROWS });
     await waitFor(() => expect(repair).toBeEnabled());
   });

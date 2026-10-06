@@ -33,6 +33,8 @@ import {
   READER_RULES,
 } from "../src/packages/shared/src/envelope-asymmetries";
 import {
+  AUDIT_READ_FRAME_TYPES,
+  DOCTOR_FRAME_TYPES,
   POLICY_RESTRICT_FRAME_TYPES,
   REGISTRATION_FRAME_TYPES,
 } from "../src/packages/shared/src/host-admin";
@@ -108,6 +110,43 @@ const FRAMES: Readonly<Record<string, FrameArms>> = {
   policy_restrict_result: [
     { type: "policy_restrict_result", ok: true },
     { type: "policy_restrict_result", ok: false, error: "relaxes the effective policy" },
+  ],
+  doctor_report_result: [
+    {
+      type: "doctor_report_result",
+      ok: true,
+      report: {
+        version: "1.2.3",
+        platform: "macos/aarch64",
+        lock_file: {
+          value: "/tmp/run.lock",
+          details: ["present: yes", "endpoint: /tmp/run.sock", "pid:     4242"],
+        },
+        mcp_server: { value: "reachable (socket connect OK)", details: [] },
+        kill_switch: { value: "off (bridge activity permitted)", details: [] },
+        policy_baseline: {
+          value: "revision 3, unsigned",
+          details: ["restriction overlay: active"],
+        },
+        host_key: "present (com.example.key, the OS credential store)",
+        summary: "OK",
+        healthy: true,
+      },
+    },
+    { type: "doctor_report_result", ok: false, error: "malformed doctor_report frame" },
+  ],
+  audit_read_result: [
+    {
+      type: "audit_read_result",
+      ok: true,
+      entries: [
+        { entry: "record", ts_ms: 3000, kind: "pair_client", fields: "surface=cli outcome=ok" },
+        { entry: "unrecognized", text: "UNRECOGNIZED RECORD (corrupt, tampered, or newer schema)" },
+      ],
+      older: 1,
+      path: "/run/user/1000/chromium-bridge/audit.log",
+    },
+    { type: "audit_read_result", ok: false, error: "cannot read audit.log: permission denied" },
   ],
   policy_current: [
     {
@@ -424,7 +463,13 @@ export function readerRuleProblems(kind: string, pair: ReaderPair): string[] {
 // kill_status_result has no classification array: isKillStatusFrame (enclave.ts) classifies by full parse.
 export const CLASSIFIED_TAGS: Record<Group, ReadonlySet<string>> = {
   enclave: new Set(ENCLAVE_FRAME_TYPES),
-  admin: new Set([...ADMIN_RESULT_FRAME_TYPES, "kill_status_result", ...REGISTRATION_FRAME_TYPES]),
+  admin: new Set([
+    ...ADMIN_RESULT_FRAME_TYPES,
+    "kill_status_result",
+    ...REGISTRATION_FRAME_TYPES,
+    ...AUDIT_READ_FRAME_TYPES,
+    ...DOCTOR_FRAME_TYPES,
+  ]),
   policy: new Set([...POLICY_FRAME_TYPES, ...POLICY_RESTRICT_FRAME_TYPES]),
   webauthn: new Set(WEBAUTHN_FRAME_TYPES),
 };

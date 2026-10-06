@@ -16,8 +16,8 @@ futures.workspace = true
 getrandom.workspace = true
 governor.workspace = true
 hex.workspace = true
-itertools.workspace = true
 hmac.workspace = true
+itertools.workspace = true
 libc.workspace = true
 loom = { workspace = true, optional = true }
 p256.workspace = true

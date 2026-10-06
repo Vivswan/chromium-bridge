@@ -225,6 +225,7 @@ enroll:
   confirm_revoke: "解除配對? 這也會刪除主機的金鑰; 在重新配對之前, 橋接將維持封鎖狀態。"
   confirm_revoke_compromised: "解除配對會清除已釘選的金鑰和失敗紀錄, 並刪除主機的金鑰。要繼續嗎?"
   host_revoke_pending: "主機金鑰刪除待處理: 將在下次連線主機時完成。"
+  host_key_line: "主機金鑰: $1"
   no_status: "無法讀取配對狀態 (背景程式未回應)。"
 
 clients:
@@ -257,6 +258,20 @@ registration:
   state_unreadable: "無法讀取"
   empty: "主機在此平台上不認識任何瀏覽器。"
   restart_note: "修復後請重新啟動瀏覽器, 讓它重新讀取註冊資訊。"
+  rows_title: "註冊狀態"
+  register_one: "註冊 $1"
+  cli_only_note: "依目錄註冊某個 Chromium 變體, 或為所有帳戶在整機範圍內註冊, 仍需在終端機完成 (`chromium-bridge doctor --fix --manifest-dir`, `sudo chromium-bridge doctor --fix --system`): 目錄需要輸入, root 需要持有, 此頁面兩者皆無。"
+
+doctor:
+  title: "主機報告"
+  loading: "載入中..."
+  error: "無法讀取主機報告: $1"
+  version: "版本"
+  lock_file: "鎖定檔"
+  mcp_server: "MCP 伺服器"
+  kill_switch: "緊急停止"
+  policy_baseline: "政策基線"
+  summary: "結論"
 
 policy:
   desc: "主機允許用戶端在此瀏覽器中做什麼。收緊立即生效; 放寬需要一次在場確認, 本頁暫時無法提供, 請用 `chromium-bridge policy set`。"
@@ -299,8 +314,15 @@ kill:
   no_reply: "原生主機沒有回應"
 
 audit:
-  desc: "最近的安全決定, 僅限此瀏覽器。唯讀; 持久紀錄保存在主機上 (`chromium-bridge audit`)。"
+  desc: "最近的安全決定, 唯讀: 先是此瀏覽器自己的環形紀錄, 然後是主機的持久紀錄。"
+  browser_title: "此瀏覽器"
   empty: "尚無稽核事件。"
+  host_title: "主機紀錄"
+  host_desc: "主機的 audit.log, 與 `chromium-bridge audit` 列印的紀錄相同 (預設頁); 更多請用 `chromium-bridge audit --limit <n>`。"
+  refresh: "重新整理"
+  host_loading: "載入中..."
+  host_error: "無法讀取主機紀錄: $1"
+  host_empty: "尚無稽核紀錄 (查找位置: $1)"
   kind_confirm_shown: "已顯示確認框"
   kind_confirm_allowed: "確認已核准"
   kind_confirm_denied: "確認已拒絕"

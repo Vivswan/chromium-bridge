@@ -21,12 +21,13 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use crate::cli::FixTargets;
 use crate::enclave::EnrollmentKey;
 use crate::ipc::{self, BrowserLabel};
 use crate::protocol::control::{
-    classify_nm_frame, host_control_type, AdminControl, EnclaveControl, FrameDisposition,
-    HostRequest, KillStatus, MalformedReply, PolicyControl, PolicyStatus, RegistrationReport,
-    RegistrationRow, RestrictOutcome,
+    classify_nm_frame, host_control_type, AdminControl, AuditReadLimit, AuditReport, DoctorOutcome,
+    EnclaveControl, FrameDisposition, HostRequest, KillStatus, MalformedReply, PolicyControl,
+    PolicyStatus, RegistrationReport, RegistrationRow, RepairBrowsers, RestrictOutcome,
 };
 use crate::protocol::{bridge_read, bridge_write, nm_read_frame, nm_write_frame};
 use crate::runtime_record::RuntimeRecord as _;
@@ -145,6 +146,26 @@ fn admin_client_revoke(name: &str) -> AdminControl {
     }
 }
 
+/// Handle a `doctor_report` frame: the facts plain `doctor` gathers and the host key's state, through the
+/// same gather, so the page reads what the terminal prints.
+fn doctor_report_reply() -> AdminControl {
+    DoctorOutcome::Report(Box::new(crate::doctor::wire_report())).into_frame()
+}
+
+/// Handle an `audit_read` frame: the newest records of the host's trail through the reader behind
+/// `chromium-bridge audit`, the CLI's default page size when the frame names none. Read-only; an unreadable
+/// trail answers its error and no entries.
+fn audit_read_reply(limit: Option<AuditReadLimit>) -> AdminControl {
+    let limit = limit.map_or(crate::audit::DEFAULT_AUDIT_LIMIT, AuditReadLimit::get);
+    match crate::audit::read(limit) {
+        Ok(page) => AuditReport::from(page),
+        Err(e) => AuditReport::Unavailable {
+            error: e.to_string(),
+        },
+    }
+    .into_frame()
+}
+
 /// Handle a `registration_status` frame: the per-browser rows `doctor` diagnoses, from one read of the
 /// resolver.
 fn registration_status_reply() -> AdminControl {
@@ -161,13 +182,15 @@ fn registration_report(
     }
 }
 
-/// Handle a `registration_repair` frame: `doctor --fix` for the detected browsers through the same seam, then
-/// the fresh rows. The lines the CLI prints go to the log instead (stdout is the protocol here), and a repair
-/// that failed on any target answers that failure in place of rows, so the extension re-asks for the state it
-/// should show.
-fn registration_repair_reply() -> AdminControl {
+/// Handle a `registration_repair` frame: `doctor --fix` for the detected browsers, or `--browser` for the
+/// named ones, through the same seam, then the fresh rows. The frame never widens the scope (this account's)
+/// or the foreign-manifest rule. The lines the CLI prints go to the log instead (stdout is the protocol
+/// here), and a repair that failed on any target answers that failure in place of rows, so the extension
+/// re-asks for the state it should show.
+fn registration_repair_reply(browsers: Option<RepairBrowsers>) -> AdminControl {
+    let targets = browsers.map_or(FixTargets::Detected, RepairBrowsers::into_targets);
     let outcomes = match crate::registration::fix(
-        &crate::cli::FixTargets::Detected,
+        &targets,
         crate::browsers::Scope::User,
         crate::registration::ForeignManifest::Refuse,
     ) {
@@ -319,14 +342,14 @@ fn lang_current_frame() -> Option<PolicyControl> {
 /// `lang_current`); a valid value is applied, bumping the sequence only if it changed, and the resulting
 /// `lang_current` is the reply. `None` only when the store is unreadable (see [`lang_current_frame`]).
 fn handle_lang_set(value: String) -> Option<PolicyControl> {
-    if !crate::lang::is_valid_lang(&value) {
+    let Some(value) = crate::lang::UiLang::parse(&value) else {
         log_warn!(
             "native-host",
             "refusing out-of-enum lang_set {value:?}; the previous language stands"
         );
         return lang_current_frame();
-    }
-    match crate::lang::set(&value) {
+    };
+    match crate::lang::set(value) {
         Ok((value, seq)) => Some(PolicyControl::LangCurrent { value, seq }),
         Err(e) => {
             log_warn!(
@@ -623,11 +646,13 @@ fn handle_request<W: Write>(
         HostRequest::KillStatus {} => write_control_reply(out, &kill_status_reply()),
         HostRequest::KillEngage {} => write_control_reply(out, &handle_kill_engage()),
         HostRequest::KillRelease {} => write_replies(out, exchange.kill_release()),
+        HostRequest::DoctorReport {} => write_control_reply(out, &doctor_report_reply()),
+        HostRequest::AuditRead { limit } => write_control_reply(out, &audit_read_reply(limit)),
         HostRequest::RegistrationStatus {} => {
             write_control_reply(out, &registration_status_reply())
         }
-        HostRequest::RegistrationRepair {} => {
-            write_control_reply(out, &registration_repair_reply())
+        HostRequest::RegistrationRepair { browsers } => {
+            write_control_reply(out, &registration_repair_reply(browsers))
         }
         HostRequest::PolicyGet {} => write_control_reply(out, &policy_current_reply()),
         HostRequest::PolicyRestrict { overlay } => policy_restrict_replies(overlay)

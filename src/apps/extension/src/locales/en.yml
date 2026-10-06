@@ -227,6 +227,7 @@ enroll:
   confirm_revoke: "Unpair? This also deletes the host's key, and the bridge stays blocked until you pair again."
   confirm_revoke_compromised: "Unpairing clears the pinned key and the failure record, and deletes the host's key. Continue?"
   host_revoke_pending: "Host key deletion pending: it completes on the next host connection."
+  host_key_line: "Host key: $1"
   no_status: "Could not read the pairing status (background did not respond)."
 
 clients:
@@ -259,6 +260,20 @@ registration:
   state_unreadable: "unreadable"
   empty: "The host knows no browser on this platform."
   restart_note: "After a repair, restart the browser so it re-reads its registrations."
+  rows_title: "Registrations"
+  register_one: "Register $1"
+  cli_only_note: "Registering a Chromium variant by its directory, or machine-wide for every account, stays in the terminal (`chromium-bridge doctor --fix --manifest-dir`, `sudo chromium-bridge doctor --fix --system`): a directory is typed, and root is held, where this page has neither."
+
+doctor:
+  title: "Host report"
+  loading: "Loading..."
+  error: "Could not read the host report: $1"
+  version: "version"
+  lock_file: "lock file"
+  mcp_server: "mcp server"
+  kill_switch: "kill switch"
+  policy_baseline: "policy baseline"
+  summary: "verdict"
 
 policy:
   desc: "What the host lets clients do in this browser. Tightening applies at once; loosening needs a presence tap this page cannot give yet, so use `chromium-bridge policy set`."
@@ -301,8 +316,15 @@ kill:
   no_reply: "no reply from the native host"
 
 audit:
-  desc: "Recent security decisions, this browser only. Read-only; the durable trail lives on the host (`chromium-bridge audit`)."
+  desc: "Recent security decisions, read-only: this browser's own ring, then the host's durable trail."
+  browser_title: "This browser"
   empty: "No audit events recorded yet."
+  host_title: "Host trail"
+  host_desc: "The host's audit.log, the same records `chromium-bridge audit` prints (its default page); for more, `chromium-bridge audit --limit <n>`."
+  refresh: "Refresh"
+  host_loading: "Loading..."
+  host_error: "Could not read the host trail: $1"
+  host_empty: "no audit records yet (looked in $1)"
   kind_confirm_shown: "Confirmation shown"
   kind_confirm_allowed: "Confirmation approved"
   kind_confirm_denied: "Confirmation denied"

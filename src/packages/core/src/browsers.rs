@@ -20,7 +20,7 @@ use crate::identity::{NATIVE_HOST_ID, PINNED_EXTENSION_ID};
 /// The Chromium-family browsers we know how to register with by name. Any
 /// other Chromium build is reachable through `doctor --fix`'s explicit
 /// `--manifest-dir` escape hatch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Browser {
     Chrome,
     Chromium,

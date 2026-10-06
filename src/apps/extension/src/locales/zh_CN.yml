@@ -225,6 +225,7 @@ enroll:
   confirm_revoke: "解除配对? 这也会删除主机的密钥; 在重新配对之前, 桥接将保持被阻止状态。"
   confirm_revoke_compromised: "解除配对会清除已固定的密钥和失败记录, 并删除主机的密钥。继续?"
   host_revoke_pending: "主机密钥删除待处理: 将在下次连接主机时完成。"
+  host_key_line: "主机密钥: $1"
   no_status: "无法读取配对状态 (后台未响应)。"
 
 clients:
@@ -257,6 +258,20 @@ registration:
   state_unreadable: "不可读"
   empty: "主机在此平台上不认识任何浏览器。"
   restart_note: "修复后请重启浏览器, 让它重新读取注册信息。"
+  rows_title: "注册状态"
+  register_one: "注册 $1"
+  cli_only_note: "按目录注册某个 Chromium 变体, 或为所有账户在整机范围内注册, 仍需在终端完成 (`chromium-bridge doctor --fix --manifest-dir`, `sudo chromium-bridge doctor --fix --system`): 目录需要键入, root 需要持有, 此页面两者皆无。"
+
+doctor:
+  title: "主机报告"
+  loading: "加载中..."
+  error: "无法读取主机报告: $1"
+  version: "版本"
+  lock_file: "锁文件"
+  mcp_server: "MCP 服务器"
+  kill_switch: "紧急停止"
+  policy_baseline: "策略基线"
+  summary: "结论"
 
 policy:
   desc: "主机允许客户端在此浏览器中做什么。收紧立即生效; 放宽需要一次在场确认, 本页暂时无法提供, 请用 `chromium-bridge policy set`。"
@@ -299,8 +314,15 @@ kill:
   no_reply: "原生主机没有响应"
 
 audit:
-  desc: "最近的安全决定, 仅限此浏览器。只读; 持久记录保存在主机上 (`chromium-bridge audit`)。"
+  desc: "最近的安全决定, 只读: 先是此浏览器自己的环形记录, 然后是主机的持久记录。"
+  browser_title: "此浏览器"
   empty: "尚无审计事件。"
+  host_title: "主机记录"
+  host_desc: "主机的 audit.log, 与 `chromium-bridge audit` 打印的记录相同 (默认页); 更多请用 `chromium-bridge audit --limit <n>`。"
+  refresh: "刷新"
+  host_loading: "加载中..."
+  host_error: "无法读取主机记录: $1"
+  host_empty: "尚无审计记录 (查找位置: $1)"
   kind_confirm_shown: "已显示确认框"
   kind_confirm_allowed: "确认已批准"
   kind_confirm_denied: "确认已拒绝"

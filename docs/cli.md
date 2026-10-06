@@ -31,7 +31,10 @@
 | `chromium-bridge policy history [--json]` | read-only | Prints the superseded-revision ring. |
 | `chromium-bridge policy rollback --revision <n> [--json]` | policy | Re-derives a past revision's effective policy as a FRESH write, never a replay. |
 | `chromium-bridge audit [--limit <n>]` | read-only audit | Prints the on-disk audit trail, oldest first (default: the last 200 records). |
+| `chromium-bridge lang [show \| set <value>]` | display language | Reads or sets the display language the options page shows; `lang` alone is `show`. |
 | `chromium-bridge --help` | help | Usage information. |
+
+The options page offers the same actions. Terminal-only by design: `uninstall` (below), and the `--system` and `--manifest-dir` repair forms. The page's audit view is the default page alone; a longer trail is `audit --limit <n>`. The site allowlist, allow-all, and tab grouping stay on the page. They are browser-local extension storage (see the [privacy policy](./privacy-policy.md)), which no subcommand reads or writes.
 
 ## doctor / status (read-only self-check)
 
@@ -45,6 +48,8 @@ It reports:
 - **Kill switch**: engaged, clear, or unreadable. `doctor` exits non-zero while the switch is engaged or its state cannot be read.
 - **Native-host registrations**: for each known browser (chrome, chromium, brave, edge, vivaldi, opera), whether it looks present on this machine and the state of its registration for `com.vivswan.chromium_bridge.host` in each scope, `user` and `system`: `ok`, `missing`, `stale` (ours, but its launch path dangles), or not ours.
 - **The verdict follows the browser's lookup order**: the per-user entry when one exists, the system one only in its absence. The diagnosis comes from the same resolver `--fix` repairs with, so what doctor reports is exactly what `--fix` produces.
+
+The options page's Host registration section shows the same rows (lock file, server, kill switch, policy baseline, the verdict), worded by the host, and its identity section shows where the host key lives, as `enclave-status` prints it.
 
 `doctor --json` prints the same report as one JSON object on stdout, with the same exit code. Check its `v` field first and refuse a newer value before reading anything else (fail closed), as with every `--json` report of this binary.
 
@@ -101,12 +106,15 @@ Known browser keys: `chrome`, `chromium`, `brave`, `edge`, `vivaldi`, `opera`. "
 - **A non-standard install on macOS** reads as "not detected"; it can still be registered explicitly with `--browser <key>` or `--manifest-dir`.
 - **Plain `doctor` counts only detected browsers,** so a healthy explicit registration for a non-standard install keeps the summary below "OK" even though the bridge works - the per-browser lines tell the real story.
 - **Nothing detected:** `--fix` refuses and asks for an explicit selection instead of guessing, exiting 3 rather than 1 so an installer can tell "no browser yet" from a failure.
+- **The options page's Host registration section** repairs the same two ways, for this account: every detected browser, or one named browser from its row. `--manifest-dir` and `--system` stay in the terminal: a directory is typed, and root is held, where the page has neither.
 
 `chromium-bridge uninstall` reverses exactly what this project registers (via `--fix`) in one scope: the per-browser manifests, the extension pointers, and the wrapper scripts. Re-pass any `--manifest-dir` you registered, and `--system` (as root) for a machine-wide registration.
 
 Before deleting a manifest or pointer it verifies the content is ours (our host id and description marker; the Web Store update url alone). Anything else, or anything it cannot read, is reported and left in place as a warning, never a failure, so a package removal completes; the other artifacts of ours beside it still go, and only one of ours that cannot be removed fails the command.
 
 It never touches this binary or your browsers. A browser drops the extension it installed from the pointer on its next start; an unpacked extension is yours to remove.
+
+`uninstall` has no options-page twin by design. The frame asking for it would delete the manifest that launched the very host answering it.
 
 The extension pointer, beside each manifest:
 
@@ -231,6 +239,19 @@ chromium-bridge policy rollback --revision <n> [--json]
 
 Every policy transition is audited with the surface and, for grants, the presence path that authorized the signature (`auth=tty`).
 
+## Display language (lang)
+
+The extension's display language is shared state the host keeps (`lang.json` in the runtime directory) and pushes to every connected browser, so one choice reaches them all. The options page sets it with the Display language picker in its header; the terminal twin is:
+
+```text
+chromium-bridge lang              # the current value (same as `lang show`)
+chromium-bridge lang set zh_TW    # one of: auto, en, zh_CN, zh_TW
+```
+
+- **Language is not policy:** not signed, not ratcheted, and unable to affect any security decision, which is why it needs no confirmation on either surface.
+- **A value outside the list is refused** at argv and at the page's frame alike, and the previous value stands; setting the current value changes nothing and pushes nothing.
+- **A connected browser swaps on the host's next push** (within its poll interval); an offline one adopts the value when it next connects.
+
 ## Logging and audit (BB_LOG / BB_LOG_FORMAT)
 
 Diagnostics in both modes go to **stderr** (stdout carries protocol frames). Two environment variables control the output:
@@ -265,6 +286,8 @@ $ chromium-bridge audit --limit 20
 ```
 
 A record the reader cannot parse is shown as `UNRECOGNIZED RECORD` and counted, never guessed at; a `dropped=n` field marks records lost to a failed write (a full disk, for example). Recording never blocks or fails an operation: the trail observes decisions, it does not gate them.
+
+The options page reads the same trail: its Recent activity section lists the host trail (the default page above, the host's own words per line) beside this browser's ring of local decisions.
 
 Error codes and the error taxonomy are in [architecture.md section 11.1](./architecture.md#111-error-taxonomy-error_specs).
 

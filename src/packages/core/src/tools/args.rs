@@ -90,6 +90,55 @@ impl JsonSchema for JsInt {
     }
 }
 
+/// A non-negative integer both ends read as the same number: `0..=2^53 - 1`, the half of [`JsInt`]'s range a
+/// `u64` source can occupy (a timestamp in milliseconds). The schema carries both bounds, so a negative
+/// value is refused by the extension's validator exactly as the parse here refuses it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct JsUint(u64);
+
+impl JsUint {
+    pub const MAX: JsUint = JsUint(crate::policy::JS_SAFE_INT_MAX);
+
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+/// A non-negative integer past JavaScript's safe range, which the extension's parser would refuse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("integer {0} is outside the JavaScript-safe range the extension accepts")]
+pub struct OutOfJsUintRange(pub u64);
+
+impl TryFrom<u64> for JsUint {
+    type Error = OutOfJsUintRange;
+
+    fn try_from(value: u64) -> Result<Self, OutOfJsUintRange> {
+        (value <= JsUint::MAX.0)
+            .then_some(JsUint(value))
+            .ok_or(OutOfJsUintRange(value))
+    }
+}
+
+impl<'de> Deserialize<'de> for JsUint {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        JsUint::try_from(u64::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
+impl JsonSchema for JsUint {
+    fn schema_name() -> Cow<'static, str> {
+        "JsUint".into()
+    }
+
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({ "type": "integer", "minimum": 0, "maximum": JsUint::MAX.0 })
+    }
+}
+
 /// Deserializer for an optional argument that refuses an explicit `null`.
 /// `Option<T>` alone would read `null` as absent, laxer than the schema and
 /// than the extension's validator. The `default` beside it on every field is

@@ -21,6 +21,7 @@ use crate::cli::DoctorCommand;
 use crate::identity::NATIVE_HOST_ID;
 use crate::ipc::{LockFile, RuntimeDir};
 use crate::policy::{PolicyStatusReport, PolicyStoreState};
+use crate::protocol::control::{DoctorRow, HealthReport};
 use crate::registration::{self, PointerState, RegState};
 
 /// Schema version of the serialized [`Report`]. Like every `--json` report of
@@ -179,6 +180,111 @@ impl From<&ManifestStatus> for crate::protocol::control::RegistrationRow {
 }
 
 impl Report {
+    fn platform(&self) -> String {
+        format!("{}/{}", self.os, self.arch)
+    }
+
+    fn lock_row(&self) -> DoctorRow {
+        match &self.lock {
+            Err(detail) => DoctorRow::new(format!("none ({detail})")),
+            Ok(lock) => {
+                let row = DoctorRow::new(lock.path.display().to_string());
+                match &lock.state {
+                    LockState::Unreadable { detail } => {
+                        row.detail(format!("present but unreadable: {detail}"))
+                    }
+                    LockState::Present {
+                        endpoint,
+                        pid,
+                        secret_len,
+                        ..
+                    } => row
+                        .detail("present: yes")
+                        .detail(format!("endpoint: {endpoint}"))
+                        .detail(format!("pid:     {pid}"))
+                        .detail(format!("secret:  <redacted, {secret_len} chars>")),
+                    LockState::Absent => row.detail("present: no (MCP server not running?)"),
+                }
+            }
+        }
+    }
+
+    fn server_row(&self) -> DoctorRow {
+        DoctorRow::new(match &self.lock {
+            Err(_) => "not probed (no runtime dir)",
+            Ok(lock) => match &lock.state {
+                LockState::Present {
+                    reachable: true, ..
+                } => "reachable (socket connect OK)",
+                LockState::Present {
+                    reachable: false, ..
+                } => "not reachable",
+                LockState::Absent | LockState::Unreadable { .. } => "not probed (no lock file)",
+            },
+        })
+    }
+
+    fn kill_row(&self) -> DoctorRow {
+        DoctorRow::new(match &self.kill {
+            Ok(false) => "off (bridge activity permitted)".to_string(),
+            Ok(true) => "ENGAGED - all bridge activity is refused until `chromium-bridge unkill`"
+                .to_string(),
+            Err(e) => format!(
+                "state UNREADABLE ({e}) - every enforcement point is failing closed; see \
+                 docs/troubleshooting.md for recovery"
+            ),
+        })
+    }
+
+    /// No baseline yet is HEALTHY (pre-cutover: the extension keeps enforcing its deny baseline until a
+    /// first policy signs), so it must not read as broken; a present baseline is reported signed or
+    /// unsigned, never valid or invalid, since the host never self-certifies the signature.
+    fn policy_row(&self) -> DoctorRow {
+        match &self.policy {
+            PolicyStatusReport::None { .. } => DoctorRow::new(
+                "none yet (pre-cutover; the extension keeps enforcing its deny baseline until \
+                 `chromium-bridge policy set` signs a baseline)",
+            ),
+            PolicyStatusReport::Present {
+                revision,
+                signed,
+                overlay_active,
+                ..
+            } => {
+                let signed = if *signed {
+                    "signed (the extension verifies it against its pinned key, not here)"
+                } else {
+                    "unsigned"
+                };
+                let row = DoctorRow::new(format!("revision {revision}, {signed}"));
+                if *overlay_active {
+                    row.detail("restriction overlay: active")
+                } else {
+                    row
+                }
+            }
+            PolicyStatusReport::Error { detail, .. } => DoctorRow::new(format!(
+                "UNREADABLE ({detail}) - failing closed; see docs/troubleshooting.md"
+            )),
+        }
+    }
+
+    /// The rows the options page shows, with the host key's `enclave-status` line beside them. Pure over
+    /// the gathered facts, so the projection is testable without a HOME.
+    fn project(&self, key: &crate::enclave::EnclaveStatusReport) -> HealthReport {
+        HealthReport {
+            version: self.version.to_string(),
+            platform: self.platform(),
+            lock_file: self.lock_row(),
+            mcp_server: self.server_row(),
+            kill_switch: self.kill_row(),
+            policy_baseline: self.policy_row(),
+            host_key: crate::enclave::key_line(key),
+            summary: summary(self).to_string(),
+            healthy: exit_code(self) == 0,
+        }
+    }
+
     /// Whether any browser this user actually has picks up a healthy
     /// registration.
     fn manifest_ok(&self) -> bool {
@@ -248,62 +354,27 @@ pub fn gather() -> Report {
     }
 }
 
+/// The health report the native host answers `doctor_report` with: plain `doctor`'s facts and the host
+/// key's state, gathered the same way (read-only, the passive socket connect included).
+pub fn wire_report() -> HealthReport {
+    gather().project(&crate::enclave::key_report())
+}
+
 /// Pure rendering of a gathered report into the printed health text.
 fn render(r: &Report) -> String {
     let mut out = String::new();
     out.push_str(&format!("chromium-bridge doctor - v{}\n", r.version));
-    out.push_str(&format!("platform:        {}/{}\n", r.os, r.arch));
-
-    match &r.lock {
-        Err(detail) => {
-            out.push_str(&format!("lock file:       none ({detail})\n"));
-            out.push_str("mcp server:      not probed (no runtime dir)\n");
+    out.push_str(&format!("platform:        {}\n", r.platform()));
+    for (label, row) in [
+        ("lock file:", r.lock_row()),
+        ("mcp server:", r.server_row()),
+        ("kill switch:", r.kill_row()),
+        ("policy baseline:", r.policy_row()),
+    ] {
+        out.push_str(&format!("{label:<17}{}\n", row.value));
+        for detail in &row.details {
+            out.push_str(&format!("  {detail}\n"));
         }
-        Ok(lock) => render_lock(&mut out, lock),
-    }
-
-    out.push_str("kill switch:     ");
-    match &r.kill {
-        Ok(false) => out.push_str("off (bridge activity permitted)\n"),
-        Ok(true) => out
-            .push_str("ENGAGED - all bridge activity is refused until `chromium-bridge unkill`\n"),
-        Err(e) => out.push_str(&format!(
-            "state UNREADABLE ({e}) - every enforcement point is failing closed;\n  \
-             see docs/troubleshooting.md for recovery\n"
-        )),
-    }
-
-    out.push_str("policy baseline: ");
-    match &r.policy {
-        // No baseline yet is HEALTHY (pre-cutover): the extension keeps
-        // enforcing its deny baseline until a first policy signs. It must not
-        // read as broken.
-        PolicyStatusReport::None { .. } => out.push_str(
-            "none yet (pre-cutover; the extension keeps enforcing its deny baseline\n  \
-             until `chromium-bridge policy set` signs a baseline)\n",
-        ),
-        PolicyStatusReport::Present {
-            revision,
-            signed,
-            overlay_active,
-            ..
-        } => {
-            // The host never self-certifies the signature; the extension
-            // verifies it against its pinned key. So report signed-ness, never
-            // "valid"/"invalid", and say verification is not done here.
-            let signed = if *signed {
-                "signed (the extension verifies it against its pinned key, not here)"
-            } else {
-                "unsigned"
-            };
-            out.push_str(&format!("revision {revision}, {signed}\n"));
-            if *overlay_active {
-                out.push_str("  restriction overlay: active\n");
-            }
-        }
-        PolicyStatusReport::Error { detail, .. } => out.push_str(&format!(
-            "UNREADABLE ({detail}) - failing closed; see docs/troubleshooting.md\n",
-        )),
     }
 
     out.push_str(&format!("native manifests: (host id {NATIVE_HOST_ID})\n"));
@@ -370,42 +441,6 @@ fn render(r: &Report) -> String {
 
     out.push_str(&format!("\n{}\n", summary(r)));
     out
-}
-
-fn render_lock(out: &mut String, lock: &LockReport) {
-    out.push_str(&format!("lock file:       {}\n", lock.path.display()));
-    match &lock.state {
-        LockState::Unreadable { detail } => {
-            out.push_str(&format!("  present but unreadable: {detail}\n"));
-        }
-        LockState::Present {
-            endpoint,
-            pid,
-            secret_len,
-            ..
-        } => {
-            out.push_str("  present: yes\n");
-            out.push_str(&format!("  endpoint: {endpoint}\n"));
-            out.push_str(&format!("  pid:     {pid}\n"));
-            out.push_str(&format!("  secret:  <redacted, {secret_len} chars>\n"));
-        }
-        LockState::Absent => {
-            out.push_str("  present: no (MCP server not running?)\n");
-        }
-    }
-
-    out.push_str("mcp server:      ");
-    match &lock.state {
-        LockState::Present {
-            reachable: true, ..
-        } => out.push_str("reachable (socket connect OK)\n"),
-        LockState::Present {
-            reachable: false, ..
-        } => out.push_str("not reachable\n"),
-        LockState::Absent | LockState::Unreadable { .. } => {
-            out.push_str("not probed (no lock file)\n")
-        }
-    }
 }
 
 /// One-line status summary and the derived exit code hint.
@@ -677,6 +712,59 @@ mod tests {
         assert!(text.contains("do NOT confirm the Chrome extension"));
         assert!(text.trim_end().ends_with("OK"));
         assert_eq!(exit_code(&r), 0);
+    }
+
+    /// The page's rows and the printed report come from one row producer each, so the words cannot differ;
+    /// what the compiler cannot see is that render lays those rows out as `label: value` plus indented
+    /// details, which this pins on the one report where every row kind appears.
+    #[test]
+    fn the_wire_report_carries_exactly_the_rows_the_printed_report_shows() {
+        let mut r = healthy_report();
+        r.policy = policy_report(PolicyStoreState::Present);
+        let key = crate::enclave::EnclaveStatusReport::None {
+            v: 1,
+            key_label: crate::enclave::KEY_LABEL.to_string(),
+        };
+        let wire = r.project(&key);
+        assert_eq!(
+            wire,
+            HealthReport {
+                version: "1.2.3".into(),
+                platform: "macos/aarch64".into(),
+                lock_file: DoctorRow::new("/tmp/run.lock")
+                    .detail("present: yes")
+                    .detail("endpoint: /tmp/chromium-bridge/run.sock")
+                    .detail("pid:     4242")
+                    .detail("secret:  <redacted, 32 chars>"),
+                mcp_server: DoctorRow::new("reachable (socket connect OK)"),
+                kill_switch: DoctorRow::new("off (bridge activity permitted)"),
+                policy_baseline: DoctorRow::new(
+                    "revision 3, signed (the extension verifies it against its pinned key, not here)"
+                ),
+                host_key: "none (run `chromium-bridge pair`)".into(),
+                summary: "OK".into(),
+                healthy: true,
+            }
+        );
+        let text = render(&r);
+        for (label, row) in [
+            ("lock file:", &wire.lock_file),
+            ("mcp server:", &wire.mcp_server),
+            ("kill switch:", &wire.kill_switch),
+            ("policy baseline:", &wire.policy_baseline),
+        ] {
+            assert!(
+                text.contains(&format!("{label:<17}{}\n", row.value)),
+                "{label} row missing from\n{text}"
+            );
+            for detail in &row.details {
+                assert!(
+                    text.contains(&format!("\n  {detail}\n")),
+                    "{detail} missing"
+                );
+            }
+        }
+        assert!(text.contains("platform:        macos/aarch64\n"));
     }
 
     #[test]

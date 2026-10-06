@@ -312,6 +312,41 @@ fn classification_matrix() {
             Malformed(Tag::PolicyGet),
         ),
         (
+            json!({ "type": "doctor_report" }),
+            Handle(HostRequest::DoctorReport {}),
+        ),
+        (
+            json!({ "type": "doctor_report", "extra": 1 }),
+            Malformed(Tag::DoctorReport),
+        ),
+        (
+            json!({ "type": "audit_read" }),
+            Handle(HostRequest::AuditRead { limit: None }),
+        ),
+        (
+            json!({ "type": "audit_read", "limit": 50 }),
+            Handle(HostRequest::AuditRead {
+                limit: Some(serde_json::from_value(json!(50)).unwrap()),
+            }),
+        ),
+        // The limit is bounded at the parse: zero, over the cap, or not an integer is malformed.
+        (
+            json!({ "type": "audit_read", "limit": 0 }),
+            Malformed(Tag::AuditRead),
+        ),
+        (
+            json!({ "type": "audit_read", "limit": MAX_AUDIT_READ_LIMIT + 1 }),
+            Malformed(Tag::AuditRead),
+        ),
+        (
+            json!({ "type": "audit_read", "limit": "50" }),
+            Malformed(Tag::AuditRead),
+        ),
+        (
+            json!({ "type": "audit_read", "extra": 1 }),
+            Malformed(Tag::AuditRead),
+        ),
+        (
             json!({ "type": "registration_status" }),
             Handle(HostRequest::RegistrationStatus {}),
         ),
@@ -321,7 +356,26 @@ fn classification_matrix() {
         ),
         (
             json!({ "type": "registration_repair" }),
-            Handle(HostRequest::RegistrationRepair {}),
+            Handle(HostRequest::RegistrationRepair { browsers: None }),
+        ),
+        // Named browsers parse as `--browser` does: known keys, a repeat folded, never empty.
+        (
+            json!({ "type": "registration_repair", "browsers": ["brave", "chrome", "brave"] }),
+            Handle(HostRequest::RegistrationRepair {
+                browsers: Some(serde_json::from_value(json!(["brave", "chrome"])).unwrap()),
+            }),
+        ),
+        (
+            json!({ "type": "registration_repair", "browsers": [] }),
+            Malformed(Tag::RegistrationRepair),
+        ),
+        (
+            json!({ "type": "registration_repair", "browsers": ["netscape"] }),
+            Malformed(Tag::RegistrationRepair),
+        ),
+        (
+            json!({ "type": "registration_repair", "browsers": "chrome" }),
+            Malformed(Tag::RegistrationRepair),
         ),
         (
             json!({ "type": "registration_repair", "browser": "chrome" }),
@@ -458,6 +512,14 @@ fn classification_matrix() {
             Malformed(Tag::KillStatusResult),
         ),
         (
+            json!({ "type": "doctor_report_result", "ok": false, "error": "e" }),
+            Malformed(Tag::DoctorReportResult),
+        ),
+        (
+            json!({ "type": "audit_read_result", "ok": true, "entries": [], "older": 0, "path": "/x" }),
+            Malformed(Tag::AuditReadResult),
+        ),
+        (
             json!({ "type": "registration_status_result", "ok": true, "browsers": [] }),
             Malformed(Tag::RegistrationStatusResult),
         ),
@@ -568,6 +630,16 @@ fn malformed_replies_match_the_request_type() {
             ),
         ),
         (
+            Tag::DoctorReport,
+            Frame(json!({ "type": "doctor_report_result", "ok": false,
+                          "error": "malformed doctor_report frame" })),
+        ),
+        (
+            Tag::AuditRead,
+            Frame(json!({ "type": "audit_read_result", "ok": false,
+                          "error": "malformed audit_read frame" })),
+        ),
+        (
             Tag::PolicyRestrict,
             Frame(json!({ "type": "policy_restrict_result", "ok": false,
                           "error": "malformed policy_restrict frame" })),
@@ -617,6 +689,8 @@ fn malformed_replies_match_the_request_type() {
         (Tag::ClientListResult, Nothing),
         (Tag::ClientRevokeResult, Nothing),
         (Tag::KillStatusResult, Nothing),
+        (Tag::DoctorReportResult, Nothing),
+        (Tag::AuditReadResult, Nothing),
         (Tag::RegistrationStatusResult, Nothing),
         (Tag::PolicyCurrent, Nothing),
         (Tag::PolicyRestrictResult, Nothing),
@@ -710,6 +784,148 @@ fn registration_and_restrict_outcomes_map_onto_the_pinned_wire_shapes() {
         .unwrap(),
         json!({ "type": "policy_restrict_result", "ok": false,
                 "error": "relaxes the effective policy" })
+    );
+}
+
+#[test]
+fn doctor_outcome_maps_onto_the_pinned_wire_shapes() {
+    // The wire contract the extension's doctor reader consumes: the report travels exactly when `ok`, the
+    // error exactly when not, each row as its value and indented details.
+    let report = HealthReport {
+        version: "1.2.3".into(),
+        platform: "linux/x86_64".into(),
+        lock_file: DoctorRow::new("/run/user/1000/chromium-bridge/run.lock")
+            .detail("present: no (MCP server not running?)"),
+        mcp_server: DoctorRow::new("not probed (no lock file)"),
+        kill_switch: DoctorRow::new("off (bridge activity permitted)"),
+        policy_baseline: DoctorRow::new("revision 3, unsigned")
+            .detail("restriction overlay: active"),
+        host_key: "none (run `chromium-bridge pair`)".into(),
+        summary: "server not running - is your MCP client started?".into(),
+        healthy: false,
+    };
+    assert_eq!(
+        serde_json::to_value(DoctorOutcome::Report(Box::new(report)).into_frame()).unwrap(),
+        json!({
+            "type": "doctor_report_result",
+            "ok": true,
+            "report": {
+                "version": "1.2.3",
+                "platform": "linux/x86_64",
+                "lock_file": { "value": "/run/user/1000/chromium-bridge/run.lock",
+                               "details": ["present: no (MCP server not running?)"] },
+                "mcp_server": { "value": "not probed (no lock file)", "details": [] },
+                "kill_switch": { "value": "off (bridge activity permitted)", "details": [] },
+                "policy_baseline": { "value": "revision 3, unsigned",
+                                     "details": ["restriction overlay: active"] },
+                "host_key": "none (run `chromium-bridge pair`)",
+                "summary": "server not running - is your MCP client started?",
+                "healthy": false,
+            },
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(
+            DoctorOutcome::Unavailable {
+                error: "malformed doctor_report frame".into(),
+            }
+            .into_frame()
+        )
+        .unwrap(),
+        json!({ "type": "doctor_report_result", "ok": false, "error": "malformed doctor_report frame" })
+    );
+}
+
+#[test]
+fn the_wire_timestamp_keeps_the_records_non_negative_bound() {
+    // The record's ts_ms is a u64; a wire entry parsed from a negative timestamp would render as a
+    // pre-epoch event, so the entry refuses it as the schema does, with the exact bounds as the positive
+    // controls.
+    let entry = |ts_ms: i64| {
+        serde_json::from_value::<AuditTrailEntry>(json!({
+            "entry": "record", "ts_ms": ts_ms, "kind": "kill_engage", "fields": ""
+        }))
+    };
+    assert!(entry(-1).is_err(), "a negative timestamp must not parse");
+    assert!(entry(0).is_ok());
+    assert!(entry(9_007_199_254_740_991).is_ok());
+    assert!(entry(9_007_199_254_740_992).is_err());
+}
+
+#[test]
+fn a_record_past_the_js_safe_timestamp_travels_as_unrecognized_not_as_a_refused_reply() {
+    // The page's generated reader refuses an integer past 2^53 - 1 (its safe-integer rule), so a record the
+    // CLI renders fine would otherwise sink the whole audit_read_result; it travels as the stand-in entry
+    // instead. The bound itself, exactly, is the positive control.
+    use crate::audit::{AuditEntry, AuditKind, AuditRecord, Surface};
+    use crate::policy::JS_SAFE_INT_MAX;
+    let at = |ts_ms: u64| {
+        let mut rec = AuditRecord::new(AuditKind::KillEngage).surface(Surface::Cli);
+        rec.ts_ms = ts_ms;
+        AuditTrailEntry::from(&AuditEntry::Record(Box::new(rec)))
+    };
+    assert_eq!(
+        at(JS_SAFE_INT_MAX + 1),
+        AuditTrailEntry::Unrecognized {
+            text: crate::audit::UNRECOGNIZED_RECORD.into(),
+        }
+    );
+    assert_eq!(
+        at(JS_SAFE_INT_MAX),
+        AuditTrailEntry::Record {
+            ts_ms: crate::tools::args::JsUint::MAX,
+            kind: "kill_engage".into(),
+            fields: "surface=cli".into(),
+        }
+    );
+}
+
+#[test]
+fn audit_report_maps_onto_the_pinned_wire_shapes() {
+    // The wire contract the extension's audit reader consumes: the page's three fields travel exactly when
+    // `ok`, the error exactly when not, and an entry is the CLI line's parts under its `entry` tag.
+    assert_eq!(
+        serde_json::to_value(
+            AuditReport::Page {
+                entries: vec![
+                    AuditTrailEntry::Record {
+                        ts_ms: crate::tools::args::JsUint::try_from(3_000).unwrap(),
+                        kind: "pair_client".into(),
+                        fields: "surface=cli outcome=ok".into(),
+                    },
+                    AuditTrailEntry::Unrecognized {
+                        text: "UNRECOGNIZED RECORD (corrupt, tampered, or newer schema)".into(),
+                    },
+                ],
+                older: 1,
+                path: "/run/user/1000/chromium-bridge/audit.log".into(),
+            }
+            .into_frame()
+        )
+        .unwrap(),
+        json!({
+            "type": "audit_read_result",
+            "ok": true,
+            "entries": [
+                { "entry": "record", "ts_ms": 3000, "kind": "pair_client",
+                  "fields": "surface=cli outcome=ok" },
+                { "entry": "unrecognized",
+                  "text": "UNRECOGNIZED RECORD (corrupt, tampered, or newer schema)" },
+            ],
+            "older": 1,
+            "path": "/run/user/1000/chromium-bridge/audit.log",
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(
+            AuditReport::Unavailable {
+                error: "cannot read audit.log: permission denied".into(),
+            }
+            .into_frame()
+        )
+        .unwrap(),
+        json!({ "type": "audit_read_result", "ok": false,
+                "error": "cannot read audit.log: permission denied" })
     );
 }
 

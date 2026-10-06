@@ -243,6 +243,7 @@ const SUPPORTED_KEYWORDS = new Set([
   "format",
   "minimum",
   "maximum",
+  "minItems",
 ]);
 
 const SUPPORTED_TYPES = new Set([
@@ -298,6 +299,16 @@ export function prepare(node: unknown, path: string): unknown {
   for (const key of ["minimum", "maximum"] as const) {
     if (key in out && typeof out[key] !== "number") {
       throw new Error(`gen-envelope: non-numeric ${key} at ${path} (G5)`);
+    }
+  }
+  // minItems is modeled only as a z.array() length floor, so it may sit only on an array node (the Option
+  // null-arm beside it is inert, as above) and must be a non-negative integer.
+  if ("minItems" in out) {
+    if (!types.includes("array")) {
+      throw new Error(`gen-envelope: "minItems" at ${path} sits on a non-array node (G5)`);
+    }
+    if (typeof out.minItems !== "number" || !Number.isInteger(out.minItems) || out.minItems < 0) {
+      throw new Error(`gen-envelope: minItems at ${path} is not a non-negative integer (G5)`);
     }
   }
 
@@ -660,8 +671,10 @@ function emitZod(node: unknown, override?: (node: unknown) => string | undefined
       const object = fields.length === 0 ? "z.object({})" : `z.object({ ${fields.join(", ")} })`;
       return node[LOOSE] === true ? `${object}.catchall(z.unknown())` : `${object}.strict()`;
     }
-    case "array":
-      return `z.array(${emitZod(node.items, override)})`;
+    case "array": {
+      const array = `z.array(${emitZod(node.items, override)})`;
+      return typeof node.minItems === "number" ? `${array}.min(${node.minItems})` : array;
+    }
     case "integer":
     case "number": {
       // schemars' integer-width formats: `integer` is already .int(); the int64 format on a plain number carries
@@ -749,6 +762,11 @@ export const READER_FRAMES: Record<
       wire: "RegistrationStatusResultWireSchema",
       enforced: "RegistrationStatusResultSchema",
     },
+    audit_read_result: { wire: "AuditReadResultWireSchema", enforced: "AuditReadResultSchema" },
+    doctor_report_result: {
+      wire: "DoctorReportResultWireSchema",
+      enforced: "DoctorReportResultSchema",
+    },
   },
   policy: {
     policy_current: { wire: "PolicyCurrentWireSchema", enforced: "PolicyCurrentFrameSchema" },
@@ -794,6 +812,8 @@ export const WRITER_FRAMES: Record<Group, Readonly<Record<string, string>>> = {
     kill_engage: "KillEngageWireSchema",
     kill_release: "KillReleaseWireSchema",
     audit_event: "AuditEventWireSchema",
+    audit_read: "AuditReadWireSchema",
+    doctor_report: "DoctorReportWireSchema",
     registration_status: "RegistrationStatusWireSchema",
     registration_repair: "RegistrationRepairWireSchema",
   },
@@ -1028,11 +1048,12 @@ async function main(): Promise<void> {
     );
   }
 
-  // Item types embedded in a reader's array field, emitted as their own exports (base and enforced) so a
-  // consumer can name the element type; the embedding readers reference them by name (the override
-  // substitutes the identical node). An ok-split reader carries the field on one arm only, so the search
-  // walks the arms.
-  const EMBEDDED_ITEMS = [
+  // Types embedded in a reader's field (an array's items, or an object field itself), emitted as their own
+  // exports (base and enforced) so a consumer can name the type; the embedding readers reference them by
+  // name (the override substitutes the identical node). An ok-split reader carries the field on one arm
+  // only, so the search walks the arms; on the base an Option field is a union with null, so the object
+  // arm is picked out of it.
+  const EMBEDDED_TYPES = [
     {
       group: "admin",
       tag: "client_list_result",
@@ -1049,6 +1070,22 @@ async function main(): Promise<void> {
       enforced: "RegistrationRowSchema",
       doc: "One browser's registration row (protocol::control::RegistrationRow), embedded in registration_status_result's `browsers` array.",
     },
+    {
+      group: "admin",
+      tag: "audit_read_result",
+      field: "entries",
+      wire: "AuditTrailEntryWireSchema",
+      enforced: "AuditTrailEntrySchema",
+      doc: "One line of the host's audit trail (protocol::control::AuditTrailEntry), embedded in audit_read_result's `entries` array.",
+    },
+    {
+      group: "admin",
+      tag: "doctor_report_result",
+      field: "report",
+      wire: "HealthReportWireSchema",
+      enforced: "HealthReportSchema",
+      doc: "The health report (protocol::control::HealthReport), embedded as doctor_report_result's `report`.",
+    },
   ] as const satisfies readonly {
     group: Group;
     tag: string;
@@ -1057,25 +1094,30 @@ async function main(): Promise<void> {
     enforced: string;
     doc: string;
   }[];
-  const itemsOf = (schema: unknown, field: string, tag: string): unknown => {
+  const isObjectSchema = (node: unknown): boolean => isObject(node) && node.type === "object";
+  const embeddedNode = (schema: unknown, field: string, tag: string): unknown => {
     const nodes = isObject(schema) && Array.isArray(schema.anyOf) ? schema.anyOf : [schema];
     for (const node of nodes) {
       if (!isObject(node) || !isObject(node.properties)) continue;
       const prop = node.properties[field];
-      if (isObject(prop) && prop.items !== undefined) return prop.items;
+      if (!isObject(prop)) continue;
+      if (prop.items !== undefined) return prop.items;
+      if (isObjectSchema(prop)) return prop;
+      const arm = Array.isArray(prop.anyOf) ? prop.anyOf.find(isObjectSchema) : undefined;
+      if (arm !== undefined) return arm;
     }
-    throw new Error(`gen-envelope: ${tag} no longer embeds a ${field} items schema`);
+    throw new Error(`gen-envelope: ${tag} no longer embeds a ${field} items or object schema`);
   };
   const preparedBases = new Map<string, unknown>();
   const enforcedReaders = new Map<string, unknown>();
   const namedNodes = new Map<unknown, string>();
-  for (const item of EMBEDDED_ITEMS) {
+  for (const item of EMBEDDED_TYPES) {
     const base = preparedFrame(item.group, item.tag);
     const reader = enforced(item.tag, base, true);
     preparedBases.set(item.tag, base);
     enforcedReaders.set(item.tag, reader);
-    const wireNode = itemsOf(base, item.field, item.tag);
-    const enforcedNode = itemsOf(reader, item.field, item.tag);
+    const wireNode = embeddedNode(base, item.field, item.tag);
+    const enforcedNode = embeddedNode(reader, item.field, item.tag);
     namedNodes.set(wireNode, item.wire);
     namedNodes.set(enforcedNode, item.enforced);
     pieces.push(

@@ -285,6 +285,57 @@ fn policy_get_answers_ok_false_without_a_usable_store() {
 }
 
 #[test]
+fn audit_read_answers_the_lines_the_cli_prints() {
+    // The page reads the host trail through the same reader as `chromium-bridge audit`: the newest `limit`
+    // lines, an unparsable line kept in its position, the older count, and the live path for the CLI's
+    // empty state. Pinned at the frame, where the words leave the host.
+    use crate::protocol::control::{AuditReadLimit, AuditTrailEntry};
+    let _dir = scratch_runtime_dir();
+    let live = crate::audit::audit_path().unwrap();
+    let record = |ts_ms: u64, kind: &str| {
+        format!("{{\"v\":1,\"ts_ms\":{ts_ms},\"event_kind\":\"{kind}\",\"surface\":\"cli\",\"outcome\":\"ok\"}}\n")
+    };
+    std::fs::write(
+        &live,
+        record(1_000, "kill_engage") + "{not json\n" + &record(3_000, "pair_client"),
+    )
+    .unwrap();
+    let limit: AuditReadLimit = serde_json::from_value(serde_json::json!(2)).unwrap();
+    assert_eq!(
+        serde_json::to_value(audit_read_reply(Some(limit))).unwrap(),
+        serde_json::to_value(
+            AuditReport::Page {
+                entries: vec![
+                    AuditTrailEntry::Record {
+                        ts_ms: crate::tools::args::JsUint::try_from(3_000).unwrap(),
+                        kind: "pair_client".into(),
+                        fields: "surface=cli outcome=ok".into(),
+                    },
+                    AuditTrailEntry::Unrecognized {
+                        text: crate::audit::UNRECOGNIZED_RECORD.into(),
+                    },
+                ],
+                older: 1,
+                path: live.to_string_lossy().into_owned(),
+            }
+            .into_frame()
+        )
+        .unwrap()
+    );
+    // No limit named: the CLI's default page, which here is the whole trail.
+    let AdminControl::AuditReadResult {
+        ok: true,
+        entries: Some(entries),
+        older: Some(0),
+        ..
+    } = audit_read_reply(None)
+    else {
+        panic!("the default page did not answer ok with every line");
+    };
+    assert_eq!(entries.len(), 3);
+}
+
+#[test]
 fn registration_report_carries_rows_exactly_when_the_resolver_ran() {
     // The row mapping doctor's `ManifestStatus` takes onto the wire, without a HOME: the browser key,
     // detection, state, and location all cross, and an unresolvable environment answers ok:false with the
@@ -470,7 +521,7 @@ fn an_applied_restrict_pushes_policy_current_even_when_the_epoch_bump_fails() {
 #[test]
 fn lang_get_answers_the_current_language() {
     let _dir = scratch_runtime_dir();
-    crate::lang::set("zh_TW").unwrap();
+    crate::lang::set(crate::lang::UiLang::parse("zh_TW").unwrap()).unwrap();
     let reply = lang_current_frame().unwrap();
     let PolicyControl::LangCurrent { value, seq } = reply else {
         panic!("lang_get must answer lang_current: {reply:?}");
@@ -500,7 +551,7 @@ fn an_out_of_enum_lang_set_replies_the_unchanged_current() {
     // previous value stands - the reply is lang_current with the
     // UNCHANGED value+seq, and the store is untouched.
     let _dir = scratch_runtime_dir();
-    crate::lang::set("zh_CN").unwrap();
+    crate::lang::set(crate::lang::UiLang::parse("zh_CN").unwrap()).unwrap();
     let reply = handle_lang_set("fr".into()).unwrap();
     let PolicyControl::LangCurrent { value, seq } = reply else {
         panic!("a refused lang_set must reply the unchanged current: {reply:?}");

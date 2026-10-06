@@ -1,9 +1,15 @@
-// The options page's two host-admin exchanges that clients.ts and kill.ts do not own: the browser-registration
-// rows (status, and the repair that `doctor --fix` runs) and the policy restriction lane. port.ts drives
-// `collaborator`; messages.ts routes the options-page actions here. A repair writes manifests and wrapper
-// scripts for every detected browser, still a local operation; nothing here can raise a presence prompt.
+// The options page's host-admin exchanges that clients.ts and kill.ts do not own: the browser-registration
+// rows (status, and the repair that `doctor --fix` runs), the policy restriction lane, the host's audit
+// trail (what `chromium-bridge audit` reads), and the doctor report (what plain `doctor` prints). port.ts
+// drives `collaborator`; messages.ts routes the options-page actions here. A repair writes manifests and
+// wrapper scripts for the detected browsers, or for the browsers the page names, still a local operation
+// in this account's scope; nothing here can raise a presence prompt.
 
 import {
+  AuditReadResultSchema,
+  type AuditReadWire,
+  DoctorReportResultSchema,
+  type DoctorReportWire,
   PolicyRestrictResultSchema,
   type PolicyRestrictWire,
   type RegistrationRepairWire,
@@ -16,13 +22,16 @@ import {
 } from "@chromium-bridge/shared/host-admin";
 import type { PolicyOverlay } from "@chromium-bridge/shared/policy.gen";
 import type { Refusal, RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
+import { inLife } from "../shared/in-life";
 import type { PortCollaborator } from "./connection";
 import { exchange } from "./exchange";
 
 type RegistrationView = RuntimeResponse<"get_registration">;
 type RestrictView = RuntimeResponse<"restrict_policy">;
+type HostAuditView = RuntimeResponse<"get_host_audit">;
+type DoctorView = RuntimeResponse<"get_doctor">;
 
-/** True for the two host-admin result frame tags. */
+/** True for the host-admin result frame tags. */
 export function isHostAdminFrame(msg: unknown): msg is HostAdminInboundFrame {
   return HostAdminInboundFrameSchema.safeParse(msg).success;
 }
@@ -30,15 +39,23 @@ export function isHostAdminFrame(msg: unknown): msg is HostAdminInboundFrame {
 // Status and repair share one exchange: the host answers both with registration_status_result.
 const registration = exchange<HostAdminInboundFrame>("a registration request is already in flight");
 const restriction = exchange<HostAdminInboundFrame>("a policy restriction is already in flight");
+const auditTrail = exchange<HostAdminInboundFrame>("an audit read is already in flight");
+const doctor = exchange<HostAdminInboundFrame>("a doctor report is already in flight");
+// Two panels read the report at mount; the second joins the first's round trip instead of being refused.
+const doctorInFlight = inLife<Promise<DoctorView> | null>(() => null);
 
 export const collaborator: PortCollaborator = {
   onAttach(c) {
     registration.attach(c);
     restriction.attach(c);
+    auditTrail.attach(c);
+    doctor.attach(c);
   },
   onDetach() {
     registration.detach();
     restriction.detach();
+    auditTrail.detach();
+    doctor.detach();
   },
   onFrame(msg) {
     if (!isHostAdminFrame(msg)) return false;
@@ -68,13 +85,16 @@ export function requestRegistrationStatus(): Promise<RegistrationView> {
   ).view;
 }
 
-/** Re-register the detected browsers (what `doctor --fix` does) and get the fresh rows back. A repair that
- * failed on any target answers a refusal naming the target, and the panel asks for the rows again. */
-export function repairRegistration(): Promise<RegistrationView> {
-  return registration.request(
-    { type: "registration_repair" } satisfies RegistrationRepairWire,
-    readRegistration,
-  ).view;
+/** Re-register the detected browsers (what `doctor --fix` does), or exactly the named ones (`--browser`), and
+ * get the fresh rows back. A repair that failed on any target answers a refusal naming the target, and the
+ * panel asks for the rows again. */
+export function repairRegistration(
+  browsers?: NonNullable<RegistrationRepairWire["browsers"]>,
+): Promise<RegistrationView> {
+  const frame: RegistrationRepairWire = browsers
+    ? { type: "registration_repair", browsers: [...browsers] }
+    : { type: "registration_repair" };
+  return registration.request(frame, readRegistration).view;
 }
 
 /** Tighten the effective policy by `overlay` through the host's unsigned restriction lane. The overlay was
@@ -89,10 +109,50 @@ export function restrictPolicy(overlay: PolicyOverlay): Promise<RestrictView> {
   }).view;
 }
 
+/** Read the newest records of the host's audit trail, the page `chromium-bridge audit` prints by default (the
+ * host applies the CLI's default page size when no limit travels). An unreadable trail is the host's error. */
+export function requestHostAudit(): Promise<HostAuditView> {
+  return auditTrail.request({ type: "audit_read" } satisfies AuditReadWire, {
+    read(frame): HostAuditView {
+      const parsed = AuditReadResultSchema.safeParse(frame);
+      if (!parsed.success) return refusal("malformed audit_read_result from host");
+      if (!parsed.data.ok) return refusal(parsed.data.error);
+      const { entries, older, path } = parsed.data;
+      return { ok: true, entries, older, path };
+    },
+  }).view;
+}
+
+/** Read the health report plain `chromium-bridge doctor` prints, worded by the host, with the host key's
+ * `enclave-status` line. Concurrent readers share one round trip. */
+export function requestDoctorReport(): Promise<DoctorView> {
+  const shared = doctorInFlight.value;
+  if (shared) return shared;
+  const view = doctor
+    .request({ type: "doctor_report" } satisfies DoctorReportWire, {
+      read(frame): DoctorView {
+        const parsed = DoctorReportResultSchema.safeParse(frame);
+        if (!parsed.success) return refusal("malformed doctor_report_result from host");
+        return parsed.data.ok
+          ? { ok: true, report: parsed.data.report }
+          : refusal(parsed.data.error);
+      },
+    })
+    .view.finally(() => {
+      doctorInFlight.value = null;
+    });
+  doctorInFlight.value = view;
+  return view;
+}
+
 /** Route one inbound result frame to its waiting request. Unsolicited frames (nothing outstanding: a replay,
  * or an injected frame the host-side filter somehow missed) are dropped without touching any state. */
 export function handleHostAdminFrame(msg: HostAdminInboundFrame): void {
-  const answered =
-    msg.type === "registration_status_result" ? registration.answer(msg) : restriction.answer(msg);
-  if (!answered) console.warn(`[bb] dropping unsolicited ${msg.type}`);
+  const slot = {
+    registration_status_result: registration,
+    policy_restrict_result: restriction,
+    audit_read_result: auditTrail,
+    doctor_report_result: doctor,
+  }[msg.type];
+  if (!slot.answer(msg)) console.warn(`[bb] dropping unsolicited ${msg.type}`);
 }
