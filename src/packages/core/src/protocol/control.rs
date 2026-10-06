@@ -273,13 +273,14 @@ impl DoctorOutcome {
 /// `chromium-bridge audit` prints, spelled by `audit.rs` alone (the kind's wire name and the `key=value`
 /// fields), with the timestamp left raw for the page to localize. An unparsable line keeps its position and
 /// carries the CLI's stand-in text; so does a record whose timestamp lies past the JS-safe bound the page's
-/// parser enforces, so one such line cannot sink the whole reply.
+/// parser enforces, so one such line cannot sink the whole reply. The timestamp keeps both of the record's
+/// bounds: non-negative, as its `u64` source is, and JS-safe.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(tag = "entry", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AuditTrailEntry {
     Record {
-        ts_ms: crate::tools::args::JsInt,
+        ts_ms: crate::tools::args::JsUint,
         kind: String,
         fields: String,
     },
@@ -295,10 +296,7 @@ impl From<&crate::audit::AuditEntry> for AuditTrailEntry {
         };
         match entry {
             crate::audit::AuditEntry::Record(rec) => {
-                let ts_ms = i64::try_from(rec.ts_ms)
-                    .ok()
-                    .and_then(|ms| crate::tools::args::JsInt::try_from(ms).ok());
-                match ts_ms {
+                match crate::tools::args::JsUint::try_from(rec.ts_ms).ok() {
                     Some(ts_ms) => AuditTrailEntry::Record {
                         ts_ms,
                         kind: rec.kind_name(),

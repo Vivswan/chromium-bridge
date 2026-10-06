@@ -816,6 +816,22 @@ fn doctor_outcome_maps_onto_the_pinned_wire_shapes() {
 }
 
 #[test]
+fn the_wire_timestamp_keeps_the_records_non_negative_bound() {
+    // The record's ts_ms is a u64; a wire entry parsed from a negative timestamp would render as a
+    // pre-epoch event, so the entry refuses it as the schema does, with the exact bounds as the positive
+    // controls.
+    let entry = |ts_ms: i64| {
+        serde_json::from_value::<AuditTrailEntry>(json!({
+            "entry": "record", "ts_ms": ts_ms, "kind": "kill_engage", "fields": ""
+        }))
+    };
+    assert!(entry(-1).is_err(), "a negative timestamp must not parse");
+    assert!(entry(0).is_ok());
+    assert!(entry(9_007_199_254_740_991).is_ok());
+    assert!(entry(9_007_199_254_740_992).is_err());
+}
+
+#[test]
 fn a_record_past_the_js_safe_timestamp_travels_as_unrecognized_not_as_a_refused_reply() {
     // The page's generated reader refuses an integer past 2^53 - 1 (its safe-integer rule), so a record the
     // CLI renders fine would otherwise sink the whole audit_read_result; it travels as the stand-in entry
@@ -836,7 +852,7 @@ fn a_record_past_the_js_safe_timestamp_travels_as_unrecognized_not_as_a_refused_
     assert_eq!(
         at(JS_SAFE_INT_MAX),
         AuditTrailEntry::Record {
-            ts_ms: crate::tools::args::JsInt::MAX,
+            ts_ms: crate::tools::args::JsUint::MAX,
             kind: "kill_engage".into(),
             fields: "surface=cli".into(),
         }
@@ -852,7 +868,7 @@ fn audit_report_maps_onto_the_pinned_wire_shapes() {
             AuditReport::Page {
                 entries: vec![
                     AuditTrailEntry::Record {
-                        ts_ms: crate::tools::args::JsInt::from(3_000),
+                        ts_ms: crate::tools::args::JsUint::try_from(3_000).unwrap(),
                         kind: "pair_client".into(),
                         fields: "surface=cli outcome=ok".into(),
                     },

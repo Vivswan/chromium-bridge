@@ -138,7 +138,7 @@ export const AuditTrailEntryWireSchema = z.union([
       "entry": z.literal("record"),
       "fields": z.string(),
       "kind": z.string(),
-      "ts_ms": z.number().int().gte(-9007199254740991).lte(9007199254740991),
+      "ts_ms": z.number().int().gte(0).lte(9007199254740991),
     })
     .strict(),
   z.object({ "entry": z.literal("unrecognized"), "text": z.string() }).strict(),
@@ -150,7 +150,7 @@ export const AuditTrailEntrySchema = z.union([
       "entry": z.literal("record"),
       "fields": z.string(),
       "kind": z.string(),
-      "ts_ms": z.number().int().gte(-9007199254740991).lte(9007199254740991),
+      "ts_ms": z.number().int().gte(0).lte(9007199254740991),
     })
     .catchall(z.unknown()),
   z.object({ "entry": z.literal("unrecognized"), "text": z.string() }).catchall(z.unknown()),
