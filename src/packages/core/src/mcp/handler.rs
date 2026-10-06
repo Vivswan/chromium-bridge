@@ -70,11 +70,7 @@ fn tools_list_result(tools: &[McpTool], cacheable: bool) -> ListToolsResult {
 /// failures stay `isError: true` results carrying the stable taxonomy codes
 /// of [`crate::error::ERROR_SPECS`] - never JSON-RPC protocol errors.
 fn call_tool_result(out: &tools::Outcome) -> CallToolResult {
-    // The outcome's content is already MCP content blocks (built by
-    // tools::dispatch); re-typing through rmcp's model validates the shape.
-    // The fallback cannot fire for blocks we build ourselves and exists only
-    // because this layer never panics: it degrades to the raw JSON as one
-    // text block, losing formatting but no information.
+    // The fallback cannot fire for blocks we build ourselves; it exists because this layer never panics.
     let blocks: Vec<ContentBlock> = serde_json::from_value(out.content().clone())
         .unwrap_or_else(|_| vec![ContentBlock::text(out.content().to_string())]);
     if out.is_error() {
@@ -211,8 +207,6 @@ impl ServerHandler for BridgeHandler {
 /// Serves every harness (the broker's own stdio harness and all relays route
 /// here through their per-connection rmcp services).
 fn execute_tool_call(session: &Session, name: &str, args: JsonObject) -> tools::Outcome {
-    // Correlate every invocation with a per-call request id and record a
-    // structured audit event (tool, outcome, taxonomy code, duration).
     let req_id = next_request_id();
     let started = std::time::Instant::now();
     // The global kill switch gates EVERY tool call before any routing or bridge traffic, failing
@@ -234,8 +228,6 @@ fn execute_tool_call(session: &Session, name: &str, args: JsonObject) -> tools::
     rec.tool = Some(name.to_string());
     rec.outcome = Some(if out.is_error() { "error" } else { "ok" }.to_string());
     rec.code = out.error_code().map(str::to_string);
-    // Saturating: a duration too long for u64 milliseconds (~584M years)
-    // clamps rather than fails the audit record.
     rec.dur_ms = Some(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
     crate::audit::record(rec);
     out

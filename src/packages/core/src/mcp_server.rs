@@ -22,13 +22,8 @@ pub fn run() -> i32 {
     install_stderr_panic_hook();
     crate::protocol::ignore_sigpipe();
 
-    // Handle termination signals gracefully so we always remove the lock file
-    // on the way out (a stale lock is harmless but confuses diagnostics, and a
-    // broker that exits should clean up after itself). Ownership-guarded: if a
-    // successor has already taken over, the lock and socket on disk are the
-    // NEW broker's, and removing them would take the working bridge down.
-    // Installed first, before anything is bound or published: a signal that
-    // lands earlier takes the default disposition and leaves nothing behind.
+    // Installed before anything is bound or published: a signal that lands earlier takes the default
+    // disposition and leaves nothing behind. The remove is ownership-guarded, so a successor's files survive.
     if let Err(e) = install_signal_cleanup(|| {
         ipc::LockFile::remove_if_owned();
     }) {
@@ -36,10 +31,6 @@ pub fn run() -> i32 {
         return 1;
     }
 
-    // Capture our own executable identity up front, before binding or dialing,
-    // so peer attestation compares against the genuine binary rather than one
-    // an attacker might swap onto disk later. Refuse to run if we cannot hash
-    // our own image.
     match ipc::ensure_own_identity() {
         Ok(hash) => log_info!(
             "mcp",
@@ -52,21 +43,15 @@ pub fn run() -> i32 {
         }
     }
 
-    // Attest our own harness (the process that spawned us over stdio) and
-    // decide admission against the trusted-client allowlist BEFORE serving any
-    // tool call. A refusal here is fail-closed: we do not become a broker or a
-    // relay. Returns the harness identity to report if we end up a relay.
     let harness = match admit_own_harness() {
         Some(h) => h,
-        None => return 1, // fail closed, already logged
+        None => return 1,
     };
 
     let session = Session::new();
 
-    // Become the broker, or attach to an existing one as a relay. A live,
-    // attested broker is coexisted with, never SIGTERMed: other harnesses may
-    // be relaying through it. Bounded retries cover the races -- a broker exiting as we
-    // dial, or several instances starting at once.
+    // A live, attested broker is never SIGTERMed: other harnesses may be relaying through it. The retries
+    // cover a broker exiting as we dial, or several instances starting at once.
     for _ in 0..6 {
         match ipc::listen_and_publish() {
             Ok(ipc::PublishOutcome::Published(listener, lock)) => {
@@ -90,9 +75,6 @@ pub fn run() -> i32 {
                     cur.pid
                 );
                 match broker::run_relay(harness.identity()) {
-                    // A relay that attached and served ends by exiting the
-                    // process directly (see run_relay), so it never returns
-                    // here; only the pre-serve outcomes come back.
                     RelayOutcome::Denied => return 1,
                     RelayOutcome::Retry => {
                         std::thread::sleep(std::time::Duration::from_millis(150));

@@ -90,15 +90,9 @@ impl<T> Lock<T> {
     }
 }
 
-/// The broker's harness ref-count and its shutdown gate. Counts live harness
-/// clients (the broker's own stdio harness plus attached relays); browser
-/// connections are deliberately NOT counted, so the broker outlives any one
-/// browser but not the harnesses it serves.
-///
-/// Correctness is model-checked with `loom` (see the `loom_model` tests): the
-/// broker shuts down exactly once the count reaches zero and never while a
-/// client is still attached, and a relay that races the shutdown either
-/// attaches before the terminal decision or is cleanly refused afterwards.
+/// The broker's harness ref-count and its shutdown gate. Browser connections are deliberately NOT counted, so
+/// the broker outlives any one browser but not the harnesses it serves. `loom_model` model-checks the two
+/// invariants the broker's lifetime depends on.
 struct RefCount {
     /// Guarded count + shutdown latch. `terminal` latches once [`wait_zero`]
     /// has observed zero under the lock, after which [`try_acquire`] refuses
@@ -111,8 +105,6 @@ struct RefCount {
     max: usize,
 }
 
-/// The ref-count's guarded state, named so the two halves cannot be swapped
-/// or misread the way an anonymous `(usize, bool)` tuple could.
 struct CountState {
     /// Live harness clients (own stdio harness + relays), each represented by
     /// exactly one outstanding [`HarnessSlot`].
@@ -402,9 +394,7 @@ impl ClientRegistry {
     /// Shut down every registered relay `refuse` matches. Returns how many connections were dropped.
     fn sweep(&self, refuse: impl Fn(Option<&ClientIdentity>, &Posture) -> bool) -> usize {
         let inner = self.slots.lock();
-        // Explicit loop: the shutdown is enforcement and must not hide as an
-        // iterator-adapter side effect. The count only feeds a log line, so
-        // clamping on (unreachable) overflow is fine.
+        // The count only feeds a log line, so saturating is fine.
         let mut dropped: usize = 0;
         for client in inner.clients.values() {
             if refuse(client.identity.as_ref(), &client.posture) {
@@ -601,7 +591,6 @@ pub(crate) fn run_broker(
         });
     }
 
-    // Accept browser and relay connections off the main thread.
     {
         let broker = Arc::clone(&broker);
         thread::spawn(move || accept_loop(&broker, listener));
@@ -651,11 +640,6 @@ fn accept_loop(broker: &Arc<Broker>, listener: ipc::BridgeListener) {
                             reader,
                             writer,
                         } => {
-                            // attach_browser enforces the distinct-browser cap
-                            // atomically and spawns its own reader thread on
-                            // success; this worker then ends. A `false` return
-                            // means the cap was reached and the connection was
-                            // dropped (the native host reconnects).
                             if !broker.session.attach_browser(label, reader, writer) {
                                 log_warn!(
                                     "broker",
@@ -671,11 +655,8 @@ fn accept_loop(broker: &Arc<Broker>, listener: ipc::BridgeListener) {
                         } => {
                             let _ =
                                 serve_jsonrpc(&broker.session, &mut reader, &mut writer, &mut peer);
-                            // Explicit, not left to scope end: the admission
-                            // guard deregisters BEFORE it decrements (its
-                            // field order), and dropping it here keeps that
-                            // release tied to the serve loop's end rather
-                            // than to whatever else this scope grows later.
+                            // Dropped here, not at scope end, so the release stays tied to the serve loop's
+                            // end as this scope grows.
                             drop(admission);
                         }
                         Admitted::Rejected => {}
@@ -696,8 +677,7 @@ fn accept_loop(broker: &Arc<Broker>, listener: ipc::BridgeListener) {
 /// path is fail-closed: the connection is dropped and [`Admitted::Rejected`]
 /// returned.
 fn admit(broker: &Broker, stream: BridgeStream) -> Admitted<'_> {
-    // Single chokepoint: reject any peer that is not this same user, before
-    // authentication (as the accept loop did previously). Unix only.
+    // The same-user check runs before any authentication. Unix only.
     #[cfg(unix)]
     {
         let want = crate::sys::effective_uid();
@@ -731,9 +711,6 @@ fn admit(broker: &Broker, stream: BridgeStream) -> Admitted<'_> {
             }
         }
     }
-    // Kernel-attest the peer's executable identity: only another instance of
-    // THIS binary may attach at all (a native host or a sibling relay). A
-    // different same-user program is rejected here, before the HMAC handshake.
     if let Err(e) = ipc::attest_peer(&stream) {
         log_warn!("broker", "rejected bridge connection: {e}");
         audit::record(
@@ -760,7 +737,6 @@ fn admit(broker: &Broker, stream: BridgeStream) -> Admitted<'_> {
     let mut reader = BufReader::new(reader_stream);
     let mut writer = BufWriter::new(stream);
 
-    // HMAC challenge-response over the buffered halves the session then reuses.
     let label = match ipc::server_handshake(&mut reader, &mut writer) {
         Ok(label) => label,
         Err(e) => {
@@ -778,7 +754,6 @@ fn admit(broker: &Broker, stream: BridgeStream) -> Admitted<'_> {
         }
     };
 
-    // Mandatory role declaration. EOF or a malformed frame fails closed.
     let attach: AttachRequest = match bridge_read(&mut reader) {
         Ok(Some(a)) => a,
         Ok(None) => {
@@ -828,12 +803,8 @@ fn admit_browser(
         );
         return Admitted::Rejected;
     }
-    // The distinct-browser cap ([`Session::attach_browser`], MAX_BROWSERS) is
-    // the sole, atomic authority: it is checked under the same lock that
-    // inserts, so no pre-check here can race it. We accept optimistically; if a
-    // browser loses the cap race at insert time it is dropped and reconnects
-    // (a benign, self-healing degradation only reachable at a pathological
-    // browser count). See the note on `attach_browser`.
+    // Accepted before the cap check: `Session::attach_browser` owns the cap under its own lock, and a loser
+    // is dropped and reconnects.
     if bridge_write(&mut writer, &AttachReply::Accepted {}).is_err() {
         return Admitted::Rejected;
     }
@@ -843,7 +814,6 @@ fn admit_browser(
             .name(label.as_str())
             .outcome("ok"),
     );
-    // Steady state: an idle browser connection is normal, so clear the timeout.
     clear_read_timeout(&writer);
     Admitted::Browser {
         label,
@@ -860,7 +830,6 @@ fn admit_client<'a>(
 ) -> Admitted<'a> {
     let identity = harness.as_ref().map(ClientIdentity::from);
 
-    // Reply-and-log refusal helper; resource release is the guards' Drop.
     fn reject_relay(
         writer: &mut BufWriter<BridgeStream>,
         reason: &str,
@@ -885,11 +854,8 @@ fn admit_client<'a>(
             );
         }
     };
-    // The relay-reported harness name is a self-asserted label, never used for
-    // authorization. Re-validate it at this trust boundary before it reaches a
-    // log line: no log-injection path is reachable today (bridge_read frames
-    // are single NDJSON lines and log_* escape), but validate at every boundary
-    // rather than trust the peer's string. A malformed name is dropped to "-".
+    // The reported name is a self-asserted log label, never authorization; validated before it reaches a
+    // log line, a malformed one reads as "-".
     let reported_name = harness
         .as_ref()
         .and_then(|h| h.name.as_deref())
@@ -935,9 +901,8 @@ fn admit_client<'a>(
         return Admitted::Rejected;
     };
 
-    // Capacity + terminal check. Refuse-as-unavailable (retryable) rather than
-    // deny, so a relay that lost the race to a shutting-down or full broker
-    // retries instead of failing the user's session.
+    // Unavailable, not Refused: a relay that lost the race to a full or closing broker retries instead of
+    // failing the user's session.
     let Some(harness_slot) = broker.refcount.try_acquire() else {
         return reject_relay(
             &mut writer,
@@ -947,9 +912,7 @@ fn admit_client<'a>(
             }),
         );
     };
-    // Bundle the two slots BEFORE the accept write, so from here on every
-    // path -- including the write failure below -- releases them together
-    // and in the load-bearing deregister-before-decr order.
+    // Bundled before the accept write, so the write failure below releases both in the load-bearing order.
     let admission = RelayAdmission {
         _slot: slot,
         _harness: harness_slot,
@@ -1036,10 +999,8 @@ fn serve_jsonrpc<R: BufRead, W: Write>(
 
 // ---- Relay client ----------------------------------------------------------
 
-/// What running as a relay produced, so the caller can decide whether to retry
-/// becoming the broker or fail closed. (There is no "served" variant: once the
-/// relay is attached and pumping, it ends by exiting the process directly -- see
-/// the end of [`run_relay`] -- so it never returns in that case.)
+/// What running as a relay produced, so the caller can decide whether to retry becoming the broker or fail
+/// closed. No "served" variant: an attached relay ends by exiting the process ([`run_relay`]).
 pub(crate) enum RelayOutcome {
     /// The broker was unreachable or transiently unavailable (capacity /
     /// shutting down): the caller should retry (it may become the broker now).
@@ -1061,8 +1022,6 @@ pub(crate) fn run_relay(harness: Option<HarnessId>) -> RelayOutcome {
             return RelayOutcome::Retry;
         }
     };
-    // Attest the broker: it must be another instance of THIS binary before we
-    // speak the handshake or forward a frame. Fail closed.
     if let Err(e) = ipc::attest_peer(&stream) {
         log_error!("relay", "broker attestation failed: {e}");
         return RelayOutcome::Denied;
@@ -1120,15 +1079,10 @@ pub(crate) fn run_relay(harness: Option<HarnessId>) -> RelayOutcome {
 
     let mut stdout = BufWriter::new(io::stdout());
     let _ = pump_lines(&mut reader, &mut stdout, MCP_MAX_LINE);
-    // The broker closed our connection (it exited, or dropped us). End the
-    // process immediately rather than joining the still-blocked stdin pump:
-    // that pump is parked in a blocking read of the harness's stdin, which may
-    // stay open indefinitely, so joining it would wedge the relay. Exiting
-    // closes the harness's view of its server, and the harness respawns a fresh
-    // instance that becomes the new broker (the old socket/lock are gone) or a
-    // relay. Mirrors the native host's "whichever leg ends first ends the
-    // process" shutdown. process::exit runs no destructors, but every writer
-    // flushes per line, so nothing buffered is lost.
+    // The broker closed our connection. Exit rather than join the stdin pump: it is parked in a blocking read
+    // of the harness's stdin, which can stay open indefinitely. Every writer flushes per line, so skipping
+    // destructors loses nothing.
+    //   harness sees its server end -> respawns an instance that becomes the new broker, or a relay
     std::process::exit(0);
 }
 
@@ -1168,14 +1122,7 @@ fn pump_lines<R: BufRead, W: Write>(reader: &mut R, writer: &mut W, cap: usize) 
 #[cfg(not(feature = "loom"))]
 mod tests;
 
-/// Loom model-check of the broker's ref-count shutdown protocol. Run with
-/// `moon run core:test-loom` (`cargo test -p chromium-bridge-core --lib
-/// --features loom loom_model`). In that test build the [`RefCount`]
-/// `Mutex`/`Condvar` are loom's instrumented versions, and loom exhaustively
-/// explores the thread interleavings that could break the two invariants the
-/// broker's lifetime depends on: the shutdown decision happens exactly when the
-/// client count reaches zero, and no client can attach after that decision has
-/// latched (which would strand a relay on a broker that is about to unlink its
-/// socket).
+/// Loom model-check of the broker's ref-count shutdown protocol, run by `moon run core:test-loom`; in that
+/// build the [`RefCount`] `Mutex`/`Condvar` are loom's instrumented versions.
 #[cfg(all(test, feature = "loom"))]
 mod loom_model;

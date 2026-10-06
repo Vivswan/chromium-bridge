@@ -123,8 +123,7 @@ pub struct ClientEntry {
 /// mutation can skip the trail and no path can enroll without a [`PresenceAttestation`], which only
 /// [`crate::presence`] mints (pairing GRANTS capability).
 fn pair(name: &ClientName, anchor: Anchor, auth: PresenceAttestation) -> io::Result<()> {
-    // The attestation is structural evidence, consumed here; the audit record that names its path is written
-    // by the caller, log-after-decide.
+    // Consumed as evidence; the caller writes the audit record that names its path.
     let _ = auth;
     ipc::with_runtime_lock(|lock| {
         Trust::mutate_locked(lock, Scope::Clients, |trust| {
@@ -216,8 +215,7 @@ pub fn pair_client_with_presence(
     let auth = match terminal.and_then(|terminal| presence::tty_confirm(&reason, terminal)) {
         Ok(auth) => auth,
         Err(e) => {
-            // Log-after-decide: the refusal has already happened; make the
-            // attempted silent enrollment visible in the trail.
+            // A refused pairing is audited too, so a silent enrollment attempt shows in the trail.
             audit::record(
                 AuditRecord::new(AuditKind::PairClient)
                     .surface(surface)
@@ -275,9 +273,6 @@ pub fn run_pair_client(client: PairClientArgs) -> i32 {
         &client.name,
         anchor,
         crate::audit::Surface::Cli,
-        // The terminal witness comes first, by construction: a piped stdin
-        // arrives at the gate as the precondition failure, refused (and
-        // audited) after the name check, promptless.
         presence::TerminalStdin::require(),
     ) {
         Ok(path) => {
