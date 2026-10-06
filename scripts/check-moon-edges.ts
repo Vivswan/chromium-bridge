@@ -4,7 +4,8 @@
 // have no mechanical census: what a script spawns and which files a tool opens are not in the task graph.
 
 import { posix } from "node:path";
-import { type ParseEntry, parse } from "shell-quote";
+import type * as Sh from "mvdan-sh";
+import sh from "mvdan-sh";
 import { die, repoRoot } from "./lib.ts";
 
 /** moon's resolved task graph (`moon query tasks`), project -> task id -> task; only the fields read here. */
@@ -57,42 +58,199 @@ export const TOOLCHAIN_CARGO_VERBS = new Set([
   "tree",
 ]);
 
-// bun's global options may or may not take a value (`--config` accepts an omitted one), so no table of them is
-// trusted: like the installer rule, the alias rule reads every word, and `x` anywhere in a bun command is bunx.
-const unalias = (words: string[]): string[] => {
-  const x = words[0] === "bun" ? words.indexOf("x") : -1;
-  return x === -1 ? words : ["bunx", ...words.slice(x + 1)];
+// A script word as the shell reads it. A glob keeps the text before its first live pattern character, which
+// is all the build/ rule may judge: a quoted `*` earlier in the word is text, not where the pattern starts. A
+// word with an expansion in it is not literal: its text is a marker, and the gate's rule refuses what it
+// cannot read.
+interface Word {
+  text: string;
+  globPrefix: string | null;
+  literal: boolean;
+}
+
+// What the gate's rule judges: a simple command's words after the assignments before its name, with those
+// assignments' names, or a compound command as the one word of its keyword.
+interface Command {
+  words: Word[];
+  assigns: string[];
+}
+
+// A path is named outside a command too (`[[ -f build/x ]]`, `for f in build/*`, `X=build/y`), so the path
+// rules read every word of the script, while the command rules read the commands. The words the shell reads
+// as data (a heredoc's body and delimiter, a here-string, a descriptor) name no path, but an expansion in
+// one still runs, so the gate's literal rule reads them too.
+interface Commands {
+  commands: Command[];
+  words: Word[];
+  data: Word[];
+}
+
+const GLOB_CHAR = /[*?[{]/;
+
+/** A word moon passes as one argument, or one of its own globs: no shell reads it, so a backslash is itself. */
+const asWord = (text: string): Word => {
+  const at = text.search(GLOB_CHAR);
+  return { text, globPrefix: at === -1 ? null : text.slice(0, at), literal: true };
 };
 
-/** Operators that end a simple command; `<(` and `(` open a nested one, whose words are its own command. */
-const SEPARATORS = new Set([";", ";;", "&", "&&", "|", "|&", "||", "(", ")", "<("]);
+// A backslash quotes the next character, so `in\stall` is `install` and `\*` is no glob, while `\\*` is a
+// backslash and a glob. Inside double quotes only `\`, `"`, `$`, and a backquote can be quoted that way.
+function literal(raw: string, quoted: boolean): Word {
+  let text = "";
+  let globPrefix: string | null = null;
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i] as string;
+    const next = raw[i + 1];
+    if (c === "\\" && next !== undefined && (!quoted || '\\"$`'.includes(next))) {
+      text += next;
+      i++;
+      continue;
+    }
+    if (!quoted && globPrefix === null && GLOB_CHAR.test(c)) globPrefix = text;
+    text += c;
+  }
+  return { text, globPrefix, literal: true };
+}
 
-// shell-quote parses one command line: a newline separates nothing and a `#` runs to the end of the text, so the
-// script is split into lines first, after joining `\`-continued ones. A variable is kept by name in braces, since
-// moon has already substituted its own tokens and a shell variable's value is not the auditor's to guess. A
-// redirection's file stays a word: the command reads or writes it, which is what the build/ rule asks.
-function simpleCommands(task: Task): string[][] {
-  if (task.script == null) return [unalias([task.command, ...(task.args ?? [])])];
-  const commands: string[][] = [];
-  for (const line of task.script.replace(/\\\n/g, "").split("\n")) {
-    let words: string[] = [];
-    const entries: ParseEntry[] = parse(line, (name) => `\${${name}}`);
-    for (const entry of entries) {
-      if (typeof entry === "string") {
-        words.push(entry);
-      } else if ("comment" in entry) {
+// bun's global options may or may not take a value (`--config` accepts an omitted one), so no table of them is
+// trusted: like the installer rule, the alias rule reads every word, and `x` anywhere in a bun command is bunx.
+const unalias = (words: Word[]): Word[] => {
+  const x = words[0]?.text === "bun" ? words.findIndex((w) => w.text === "x") : -1;
+  return x === -1 ? words : [asWord("bunx"), ...words.slice(x + 1)];
+};
+
+const { syntax } = sh;
+const parser = syntax.NewParser();
+
+// Redirect.Op is syntax.RedirOperator's number in the JS build, Go's iota order from token.go: `<&` and `>&`
+// duplicate a descriptor when their word is a number or `-` (`>&file` is bash for `&>file`), `<<` and `<<-`
+// take a delimiter, and `<<<` takes a string. Every other operator's word is a file.
+const DESCRIPTOR_DUPS = new Set([58, 59]);
+const NOT_A_FILE = new Set([61, 62, 63]);
+const DESCRIPTOR = /^(\d+|-)$/;
+const namesFile = (redirect: Sh.Redirect): boolean =>
+  !NOT_A_FILE.has(redirect.Op) &&
+  !(DESCRIPTOR_DUPS.has(redirect.Op) && DESCRIPTOR.test(wordOf(redirect.Word).text));
+
+// A variable is kept by name in braces: moon has already substituted its own tokens, and a shell variable's
+// value is not the auditor's to guess. A substitution's commands are walked as their own, so the word that
+// holds one is a marker.
+function render(part: Sh.Node, quoted: boolean): Word {
+  switch (syntax.NodeType(part)) {
+    case "Lit":
+      return literal((part as Sh.Lit).Value, quoted);
+    case "SglQuoted":
+      return { text: (part as Sh.SglQuoted).Value, globPrefix: null, literal: true };
+    case "DblQuoted": {
+      const parts = (part as Sh.DblQuoted).Parts.map((p) => render(p, true));
+      return {
+        text: parts.map((p) => p.text).join(""),
+        globPrefix: null,
+        literal: parts.every((p) => p.literal),
+      };
+    }
+    case "ParamExp":
+      return { text: `\${${(part as Sh.ParamExp).Param.Value}}`, globPrefix: null, literal: false };
+    // The parser keeps an extglob's pattern as text, so a substitution inside it is unread.
+    case "ExtGlob":
+      return {
+        text: `(${(part as Sh.ExtGlob).Pattern.Value})`,
+        globPrefix: quoted ? null : "",
+        literal: false,
+      };
+    case "CmdSubst":
+      return { text: "$(...)", globPrefix: null, literal: false };
+    case "ProcSubst":
+      return { text: "<(...)", globPrefix: null, literal: false };
+    case "ArithmExp":
+      return { text: "$((...))", globPrefix: null, literal: false };
+    default:
+      return { text: `<${syntax.NodeType(part)}>`, globPrefix: null, literal: false };
+  }
+}
+
+const wordOf = (w: Sh.Word): Word =>
+  w.Parts.map((part) => render(part, false)).reduce(
+    (acc, part) => ({
+      text: acc.text + part.text,
+      globPrefix: acc.globPrefix ?? (part.globPrefix === null ? null : acc.text + part.globPrefix),
+      literal: acc.literal && part.literal,
+    }),
+    { text: "", globPrefix: null, literal: true },
+  );
+
+// The parser reads the script as bash, so a comment and a line continuation are not words, and a command
+// inside `$(...)`, `<(...)`, a function, or a compound command is a simple command of its own. The data words
+// are reached by the walk after their statement, so the statement marks them by offset (the walk hands out a
+// fresh object per visit) and the word visit sorts them out.
+function parseCommands(task: Task): Commands {
+  if (task.script == null) {
+    const words = [task.command, ...(task.args ?? [])].map(asWord);
+    return { commands: [{ words: unalias(words), assigns: [] }], words, data: [] };
+  }
+  const commands: Command[] = [];
+  const words: Word[] = [];
+  const data: Word[] = [];
+  const isData = new Set<number>();
+  syntax.Walk(parser.Parse(task.script, ""), (node) => {
+    if (node === null) return true;
+    switch (syntax.NodeType(node)) {
+      case "Stmt":
+        if ((node as Sh.Stmt).Negated) commands.push({ words: [asWord("!")], assigns: [] });
+        for (const redirect of (node as Sh.Stmt).Redirs) {
+          if (redirect.Hdoc !== null) isData.add(redirect.Hdoc.Pos().Offset());
+          if (!namesFile(redirect)) isData.add(redirect.Word.Pos().Offset());
+        }
         break;
-      } else if (entry.op === "glob") {
-        words.push(entry.pattern);
-      } else if (SEPARATORS.has(entry.op)) {
-        if (words.length > 0) commands.push(unalias(words));
-        words = [];
+      case "CallExpr": {
+        const { Args, Assigns } = node as Sh.CallExpr;
+        commands.push({
+          words: unalias(Args.map(wordOf)),
+          assigns: Assigns.flatMap((a) => (a.Name === null ? [] : [a.Name.Value])),
+        });
+        break;
+      }
+      case "DeclClause":
+        commands.push({ words: [asWord((node as Sh.DeclClause).Variant.Value)], assigns: [] });
+        break;
+      case "Word":
+        (isData.has(node.Pos().Offset()) ? data : words).push(wordOf(node as Sh.Word));
+        break;
+      default: {
+        const keyword = keywordOf(node);
+        if (keyword !== undefined) commands.push({ words: [asWord(keyword)], assigns: [] });
       }
     }
-    if (words.length > 0) commands.push(unalias(words));
-  }
-  return commands;
+    return true;
+  });
+  return { commands, words, data };
 }
+
+// A compound command is a command named by its keyword, so the gate's rule, which allows only simple commands
+// of bun, cargo, set, and noop, refuses a loop or a test there by name; the commands inside it are audited too.
+const KEYWORDS: Record<string, string> = {
+  ArithmCmd: "((",
+  CaseClause: "case",
+  CoprocClause: "coproc",
+  ForClause: "for",
+  FuncDecl: "function",
+  IfClause: "if",
+  LetClause: "let",
+  TestClause: "[[",
+  TimeClause: "time",
+};
+const keywordOf = (node: Sh.Node): string | undefined =>
+  syntax.NodeType(node) === "WhileClause"
+    ? (node as Sh.WhileClause).Until
+      ? "until"
+      : "while"
+    : KEYWORDS[syntax.NodeType(node)];
+
+const isParseError = (error: unknown): error is Sh.ParseError =>
+  typeof error === "object" &&
+  error !== null &&
+  "Text" in error &&
+  typeof (error as Sh.ParseError).Error === "function";
 
 function closure(graph: TaskGraph, start: string): { reached: string[]; unknown: string[] } {
   const reached = new Set<string>();
@@ -120,20 +278,25 @@ const normalized = (path: string): string => posix.normalize(path).replace(/\/$/
 
 // Only plain paths are judged, and a glob under build/ on either side is a finding: the repository's artifacts
 // are directories, and matching a reader's glob against a writer's is a semantics this rule does not take on.
+const underBuild = (globPrefix: string): boolean => under(BUILD_DIR, posix.normalize(globPrefix));
+// Every key of a moon glob list is a glob, a key with no pattern character included.
 const buildGlobs = (globs: Record<string, unknown> | null | undefined): string[] =>
-  Object.keys(globs ?? {}).filter((glob) => under(BUILD_DIR, glob.split(/[*?[{]/)[0] ?? ""));
+  Object.keys(globs ?? {}).filter((glob) => underBuild(asWord(glob).globPrefix ?? glob));
 
 // A declared input is workspace-relative in the resolved graph, so it counts for every task. A command word is
 // relative to the task's cwd, so it counts only when that is the workspace root, and only as a relative path:
 // `/build/x` is a filesystem path, `build` alone is a task or script name. What a script opens is not in the
 // graph, so a read the task does not declare stays invisible here.
-const namedBuildPaths = (project: string, task: Task, commands: string[][]): string[] => {
+const namedBuildPaths = (project: string, task: Task, { words }: Commands): string[] => {
   const atRoot = project === ROOT_PROJECT || task.options?.runFromWorkspaceRoot === true;
-  const words = atRoot
-    ? commands.flat().filter((word) => posix.normalize(word).startsWith(`${BUILD_DIR}/`))
+  const named = atRoot
+    ? words
+        .filter((w) => w.globPrefix === null)
+        .map((w) => w.text)
+        .filter((text) => posix.normalize(text).startsWith(`${BUILD_DIR}/`))
     : [];
   const inputs = Object.keys(task.inputFiles ?? {});
-  return [...new Set([...words, ...inputs].map(normalized))].filter((path) =>
+  return [...new Set([...named, ...inputs].map(normalized))].filter((path) =>
     under(BUILD_DIR, path),
   );
 };
@@ -153,25 +316,35 @@ function buildWriters(graph: TaskGraph): { target: string; dir: string }[] {
 export function auditGraph(graph: TaskGraph): string[] {
   const findings: string[] = [];
   const writers = buildWriters(graph);
-  // A script shell-quote refuses is a finding against its task, and that task has no commands to judge.
-  const commandsOf = new Map<string, string[][]>();
+  // A script the parser refuses is a finding against its task, and that task has no commands to judge.
+  const commandsOf = new Map<string, Commands>();
   for (const [project, tasks] of Object.entries(graph)) {
     for (const [id, task] of Object.entries(tasks)) {
       const target = `${project}:${id}`;
       try {
-        commandsOf.set(target, simpleCommands(task));
+        commandsOf.set(target, parseCommands(task));
       } catch (error) {
-        findings.push(`${target}: unparsable script (${(error as Error).message})`);
-        commandsOf.set(target, []);
+        if (!isParseError(error)) throw error;
+        findings.push(`${target}: unparsable script (${error.Error()})`);
+        commandsOf.set(target, { commands: [], words: [], data: [] });
       }
     }
   }
   for (const [project, tasks] of Object.entries(graph)) {
     for (const [id, task] of Object.entries(tasks)) {
       const target = `${project}:${id}`;
-      const commands = commandsOf.get(target) ?? [];
-      if (commands.some(([word]) => word === "bunx")) {
+      const parsed = commandsOf.get(target) ?? { commands: [], words: [], data: [] };
+      const { commands, words } = parsed;
+      if (commands.some(({ words: [w] }) => w?.text === "bunx")) {
         findings.push(`${target}: runs bunx (bun's global cache stands in for a missing package)`);
+      }
+      const atRoot = project === ROOT_PROJECT || task.options?.runFromWorkspaceRoot === true;
+      for (const w of atRoot ? words : []) {
+        if (w.globPrefix !== null && underBuild(w.globPrefix)) {
+          findings.push(
+            `${target}: names the glob ${w.text}; a reader under build/ declares the file or directory it reads`,
+          );
+        }
       }
       for (const glob of buildGlobs(task.inputGlobs)) {
         findings.push(
@@ -183,7 +356,7 @@ export function auditGraph(graph: TaskGraph): string[] {
           `${target}: declares the glob output ${glob}; a writer under build/ declares the directory it writes`,
         );
       }
-      for (const path of namedBuildPaths(project, task, commands)) {
+      for (const path of namedBuildPaths(project, task, parsed)) {
         // A writer of the path or a directory above it, and every writer inside a directory the task names.
         const covering = writers.filter(
           (writer) => under(writer.dir, path) || under(path, writer.dir),
@@ -210,8 +383,20 @@ export function auditGraph(graph: TaskGraph): string[] {
     const [project, id] = target.split(":") as [string, string];
     const task = graph[project]?.[id];
     if (task === undefined) continue;
-    for (const words of commandsOf.get(target) ?? []) {
-      const [word, ...rest] = words;
+    const parsed = commandsOf.get(target) ?? { commands: [], words: [], data: [] };
+    for (const w of [...parsed.words, ...parsed.data].filter((w) => !w.literal)) {
+      findings.push(
+        `${target}: the word ${w.text} inside ${GATE} is not literal (the rules judge only what they can read)`,
+      );
+    }
+    for (const { words, assigns } of parsed.commands) {
+      for (const name of assigns) {
+        findings.push(
+          `${target}: ${name} is assigned inside ${GATE} (the rules read the task's env, not its script's)`,
+        );
+      }
+      const [word, ...rest] = words.map((w) => w.text);
+      if (word === undefined) continue;
       const installer = word === "bun" ? rest.find((w) => BUN_INSTALLERS.has(w)) : undefined;
       if (installer !== undefined) {
         findings.push(`${target}: bun ${installer} inside ${GATE} (installs)`);

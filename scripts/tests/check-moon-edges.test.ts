@@ -26,6 +26,13 @@ const graph: TaskGraph = {
         { target: "root:sneaky-config" },
         { target: "root:frozen-after-dashes" },
         { target: "root:auto-install" },
+        { target: "root:logs-to-file" },
+        { target: "root:glob-first-word" },
+        { target: "root:spaced-background-redirect" },
+        { target: "root:escapes-words" },
+        { target: "root:overrides-env" },
+        { target: "root:negates-a-command" },
+        { target: "root:expands-a-word" },
       ],
     },
     ci: { command: "noop", deps: [{ target: "root:gate" }, { target: "root:check-yaml" }] },
@@ -166,6 +173,70 @@ const graph: TaskGraph = {
       deps: [],
     },
     "unparsable-script": { command: "bun", script: "bun scripts/x.ts ${X", deps: [] },
+    "logs-to-file": {
+      command: "set",
+      script: "set -e\nbun test &> /tmp/test.log\nbun run tsc -p scripts &>> /tmp/test.log",
+      deps: [],
+    },
+    "glob-first-word": { command: "./scripts/*.sh", script: "./scripts/*.sh", deps: [] },
+    "spaced-background-redirect": {
+      command: "bun",
+      script: "bun scripts/a.ts & >out bunx fixture-tool",
+      deps: [],
+    },
+    "reads-glob-word": {
+      command: "bun",
+      script: "bun scripts/read.ts build/report-glob/*",
+      deps: [{ target: "root:writes-report-glob" }],
+    },
+    "writes-report-glob": { command: "bun", deps: [], outputFiles: { "build/report-glob": {} } },
+    "reads-dotted-glob": {
+      command: "bun",
+      args: ["scripts/x.ts"],
+      deps: [],
+      inputGlobs: { "./build/web/**/*": { cache: true } },
+    },
+    "escapes-words": {
+      command: "bun",
+      script: "bun in\\stall\nb\\unx fixture-tool\nbun scripts/read.ts \\build/escaped/index.json",
+      deps: [],
+    },
+    "escapes-a-backslash-before-a-glob": {
+      command: "bun",
+      script: "bun scripts/read.ts build/report-glob/\\\\*",
+      deps: [{ target: "root:writes-report-glob" }],
+    },
+    "names-paths-outside-commands": {
+      command: "set",
+      script:
+        '[[ -f build/report-glob/index.json ]] && for f in build/report-glob/*; do bun scripts/read.ts "$f"; done',
+      deps: [],
+    },
+    "overrides-env": {
+      command: "cargo",
+      script:
+        "RUSTUP_AUTO_INSTALL=1 cargo check --frozen\nRUSTUP_AUTO_INSTALL=1\nexport RUSTUP_AUTO_INSTALL=1\nfor RUSTUP_AUTO_INSTALL in 1; do cargo check --frozen; done\n(( RUSTUP_AUTO_INSTALL = 1 ))\ncargo check --frozen",
+      deps: [],
+      env: { RUSTUP_AUTO_INSTALL: "0" },
+    },
+    // Two astral characters before the dots: a code-point index would cut the prefix short of `build`.
+    "names-an-astral-glob": {
+      command: "bun",
+      args: ["scripts/x.ts", "\u{1F4C1}\u{1F4C1}/../build/*"],
+      deps: [],
+    },
+    "negates-a-command": { command: "bun", script: "! bun test", deps: [] },
+    "expands-a-word": {
+      command: "bun",
+      script: `bun test $((RUSTUP_AUTO_INSTALL = 1)) "\${X:=1}"\nset -e <&$((RUSTUP_AUTO_INSTALL = 1, 0))\nbun test @($(bunx fixture-tool))\ncargo check --frozen`,
+      deps: [],
+      env: { RUSTUP_AUTO_INSTALL: "0" },
+    },
+    "quotes-a-star-before-a-glob": {
+      command: "bun",
+      script: 'bun scripts/read.ts "foo*"/../build/x*',
+      deps: [],
+    },
     "process-substitutes-bunx": {
       command: "bun",
       script: "bun scripts/a.ts <(bunx fixture-tool)",
@@ -210,7 +281,31 @@ describe("auditGraph", () => {
         "root:substitutes-bunx: runs bunx (bun's global cache stands in for a missing package)",
         "root:process-substitutes-bunx: runs bunx (bun's global cache stands in for a missing package)",
         "root:continues-a-word: runs bunx (bun's global cache stands in for a missing package)",
-        "root:unparsable-script: unparsable script (Bad substitution: X)",
+        `root:unparsable-script: unparsable script (1:18: reached EOF without matching \${ with })`,
+        "root:reads-glob-word: names the glob build/report-glob/*; a reader under build/ declares the file or directory it reads",
+        "root:glob-first-word: runs ./scripts/*.sh inside root:gate (not bun or a cargo toolchain verb)",
+        "root:spaced-background-redirect: runs bunx (bun's global cache stands in for a missing package)",
+        "root:spaced-background-redirect: runs bunx inside root:gate (not bun or a cargo toolchain verb)",
+        "root:escapes-words: bun install inside root:gate (installs)",
+        "root:escapes-words: runs bunx (bun's global cache stands in for a missing package)",
+        "root:escapes-words: runs bunx inside root:gate (not bun or a cargo toolchain verb)",
+        "root:escapes-words: names build/escaped/index.json, which no task's outputs write",
+        "root:escapes-a-backslash-before-a-glob: names the glob build/report-glob/\\*; a reader under build/ declares the file or directory it reads",
+        "root:names-paths-outside-commands: names build/report-glob/index.json without depending on root:writes-report-glob, which writes build/report-glob",
+        "root:names-paths-outside-commands: names the glob build/report-glob/*; a reader under build/ declares the file or directory it reads",
+        "root:overrides-env: RUSTUP_AUTO_INSTALL is assigned inside root:gate (the rules read the task's env, not its script's)",
+        "root:overrides-env: RUSTUP_AUTO_INSTALL is assigned inside root:gate (the rules read the task's env, not its script's)",
+        "root:overrides-env: runs export inside root:gate (not bun or a cargo toolchain verb)",
+        "root:overrides-env: runs for inside root:gate (not bun or a cargo toolchain verb)",
+        "root:negates-a-command: runs ! inside root:gate (not bun or a cargo toolchain verb)",
+        "root:expands-a-word: the word $((...)) inside root:gate is not literal (the rules judge only what they can read)",
+        "root:expands-a-word: the word $((...)) inside root:gate is not literal (the rules judge only what they can read)",
+        `root:expands-a-word: the word \${X} inside root:gate is not literal (the rules judge only what they can read)`,
+        "root:expands-a-word: the word ($(bunx fixture-tool)) inside root:gate is not literal (the rules judge only what they can read)",
+        "root:overrides-env: runs (( inside root:gate (not bun or a cargo toolchain verb)",
+        "root:names-an-astral-glob: names the glob \u{1F4C1}\u{1F4C1}/../build/*; a reader under build/ declares the file or directory it reads",
+        "root:quotes-a-star-before-a-glob: names the glob foo*/../build/x*; a reader under build/ declares the file or directory it reads",
+        "root:reads-dotted-glob: declares the glob input ./build/web/**/*; a reader under build/ declares the file or directory it reads",
         "root:reads-glob-build: declares the glob input build/web-pdf/**/*; a reader under build/ declares the file or directory it reads",
         "root:writes-glob: declares the glob output build/report-*/**/*; a writer under build/ declares the directory it writes",
         "root:reads-under-glob-writer: names build/report-html/index.html, which no task's outputs write",
@@ -257,6 +352,34 @@ describe("auditGraph", () => {
       "root:lists-build: names build without depending on root:writes-build, which writes build",
       "root:lists-build: names build without depending on root:writes-part, which writes build/part",
     ]);
+  });
+
+  // mvdan-sh exposes a redirect's operator only as Go's enum number, so a release that renumbered them would
+  // silently read a descriptor or a here-string as a file, or a file as neither.
+  test("every redirect form that opens a file names it, and a descriptor dup, a here-string, and a heredoc's body and delimiter do not", () => {
+    const redirects: TaskGraph = {
+      root: {
+        gate: { command: "noop", deps: [] },
+        redirects: {
+          command: "bun",
+          script: [
+            "bun scripts/r.ts >build/o1 >>build/o2 <build/i1 <>build/io >|build/o3 &>build/o4 &>>build/o5 2>build/o6 >&build/o7 \\",
+            "  2>&1 <&0 >&- <<<build/string <<E <<-D <<build/empty",
+            "build/heredoc-body",
+            "E",
+            "build/dashed-body",
+            "D",
+            "build/empty",
+          ].join("\n"),
+          deps: [],
+        },
+      },
+    };
+    expect(auditGraph(redirects)).toEqual(
+      ["i1", "io", "o1", "o2", "o3", "o4", "o5", "o6", "o7"].map(
+        (name) => `root:redirects: names build/${name}, which no task's outputs write`,
+      ),
+    );
   });
 
   test("a graph without the gate reports the gate itself, not a clean census", () => {
