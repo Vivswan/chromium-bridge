@@ -822,6 +822,50 @@ fn a_failure_after_the_overwrite_still_reports_what_was_displaced() {
     assert_eq!(assess(&target.registration), RegState::Ok);
 }
 
+/// Every directory a system-scope registration needs is judged before any is made: on macOS the Edge
+/// manifest tree and the shared External Extensions directory sit under different roots, and a refusal
+/// of the second (0700, not traversable) must not leave the first, nor the wrapper dir, behind. The
+/// ancestors are set traversable by hand, so the refusal is the pointer directory's whatever the umask.
+#[cfg(unix)]
+#[test]
+fn a_system_scope_refusal_on_any_directory_leaves_none_of_them_made() {
+    use std::os::unix::fs::PermissionsExt;
+    let tree = TempTree::new("preflight");
+    let dirs = tree_dirs(&tree);
+    let pointer_dir =
+        tree.path("sys/Library/Application Support/Google/Chrome/External Extensions");
+    fs::create_dir_all(&pointer_dir).unwrap();
+    for ancestor in pointer_dir.ancestors().skip(1).take(4) {
+        fs::set_permissions(ancestor, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    fs::set_permissions(&pointer_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    let install_dir = browsers::install_dir(Os::MacOs, &dirs, Scope::System);
+    let reg = Registrar {
+        scope: RegistrarScope::System {
+            root: tree.path("sys"),
+        },
+        install_dir: install_dir.clone(),
+        ..registrar(&tree)
+    };
+    let target = Target::for_browser(
+        &browsers::entry(Os::MacOs, &dirs, Browser::Edge),
+        Scope::System,
+    );
+    let err = reg.register(&target).unwrap_err();
+    fs::set_permissions(&pointer_dir, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(
+        err.contains("External Extensions is not traversable by other accounts"),
+        "{err}"
+    );
+    for left in [tree.path("sys/Library/Microsoft"), install_dir] {
+        assert!(
+            !left.exists(),
+            "a refused registration created {}",
+            left.display()
+        );
+    }
+}
+
 /// A machine-wide registration launches as other accounts, so the binary must be readable and executable
 /// by them along its whole path: one under a 0700 home reads healthy to `doctor` and fails at launch.
 #[cfg(unix)]
@@ -979,17 +1023,42 @@ fn registry_lookup_is_the_keys_default_value() {
 }
 
 /// The CLI (and the installer logs that capture it) gets the same reason with the flags a terminal
-/// can act on appended, and nothing else changes.
+/// can act on appended, and every flag offered parses beside the scope's own: `--manifest-dir` conflicts
+/// with `--system` at the argv boundary, and a hint that is a usage error is no hint. The renderer and
+/// the clap table are two files, so this is the one place their agreement is checked.
 #[test]
-fn cli_guidance_appends_the_flags_to_the_reason_alone() {
+fn cli_guidance_offers_the_reason_and_only_flags_the_scope_accepts() {
+    let tree = TempTree::new("guidance");
+    let dir = tree.path("nm").to_string_lossy().into_owned();
     let reason = "no browser (looked for chrome): install Chrome, then repair again".to_string();
-    let cli = cli_guidance(&FixError::NoTargets(reason.clone()));
-    assert!(cli.starts_with(&reason), "{cli}");
-    for flag in ["--browser", "--all", "--manifest-dir"] {
-        assert!(cli.contains(flag), "{cli}");
+    for scope in [Scope::User, Scope::System] {
+        let cli = cli_guidance(&FixError::NoTargets(reason.clone()), scope);
+        let hint = cli
+            .strip_prefix(reason.as_str())
+            .unwrap_or_else(|| panic!("{scope:?}: {cli}"));
+        let offered: Vec<&str> = hint
+            .split_whitespace()
+            .map(|w| w.trim_end_matches(','))
+            .filter(|w| w.starts_with("--"))
+            .collect();
+        assert!(offered.contains(&"--browser"), "{scope:?}: {cli}");
+        for flag in offered {
+            let mut argv = vec!["chromium-bridge", "doctor", "--fix", flag];
+            match flag {
+                "--browser" => argv.push("chrome"),
+                "--manifest-dir" => argv.push(&dir),
+                _ => {}
+            }
+            if scope == Scope::System {
+                argv.push("--system");
+            }
+            let argv: Vec<String> = argv.into_iter().map(String::from).collect();
+            crate::cli::parse(&argv)
+                .unwrap_or_else(|e| panic!("{scope:?} offers {flag}, which clap refuses: {e}"));
+        }
+        let other = FixError::Environment("HOME is not set".into());
+        assert_eq!(cli_guidance(&other, scope), other.to_string());
     }
-    let other = FixError::Environment("HOME is not set".into());
-    assert_eq!(cli_guidance(&other), other.to_string());
 }
 
 #[cfg(unix)]

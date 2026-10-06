@@ -588,21 +588,19 @@ impl Registrar {
             pointer_slot(pointer).writable(&format!("extension pointer {}", pointer.location()))?;
         }
 
-        // Every directory before any file, so a refusal (a system directory other accounts cannot
-        // traverse) leaves nothing written; our own install dir first, so its refusal (a symlink leaf)
-        // leaves no browser directory behind that would make an absent browser read as detected.
-        self.ensure_install_dir()?;
+        // Every directory before any file: a machine-wide refusal (a system directory other accounts
+        // cannot traverse) leaves nothing written.
+        let mut browser_dirs: Vec<&Path> = Vec::new();
         if let Registration::ManifestDir(dir) = &target.registration {
-            self.create_dir(dir)
-                .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+            browser_dirs.push(dir);
         }
         if let Some(ExtensionPointer::File(path)) = &target.pointer {
-            let dir = path
-                .parent()
-                .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
-            self.create_dir(dir)
-                .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+            browser_dirs.push(
+                path.parent()
+                    .ok_or_else(|| format!("{} has no parent directory", path.display()))?,
+            );
         }
+        self.create_dirs(&browser_dirs)?;
 
         let mut lines = Vec::new();
         // What was done before a later step failed still reaches the report: the displaced launch path of
@@ -676,16 +674,42 @@ impl Registrar {
         }
     }
 
+    /// Machine-wide, every directory is judged before any is made, so a system directory other accounts
+    /// cannot traverse, under whichever of them, refuses with nothing created; an account's own tree
+    /// takes its umask. The wrapper dir is made first either way: a refused repair that left an empty
+    /// browser directory would make an absent browser read as detected.
+    fn create_dirs(&self, browser_dirs: &[&Path]) -> Result<(), String> {
+        let could_not =
+            |dir: &Path, e: std::io::Error| format!("could not create {}: {e}", dir.display());
+        let RegistrarScope::System { root } = &self.scope else {
+            self.ensure_install_dir()?;
+            return browser_dirs
+                .iter()
+                .try_for_each(|dir| fs::create_dir_all(dir).map_err(|e| could_not(dir, e)));
+        };
+        let plan = |dir: &Path| plan_traversable_dirs(dir, root).map_err(|e| could_not(dir, e));
+        let above_wrapper = match self.install_dir.parent() {
+            Some(parent) => plan(parent)?,
+            None => Vec::new(),
+        };
+        let mut under_browsers: Vec<PathBuf> = Vec::new();
+        for dir in browser_dirs {
+            for path in plan(dir)? {
+                if !above_wrapper.contains(&path) && !under_browsers.contains(&path) {
+                    under_browsers.push(path);
+                }
+            }
+        }
+        create_traversable_dirs(&above_wrapper)?;
+        self.ensure_install_dir()?;
+        create_traversable_dirs(&under_browsers)
+    }
+
     /// The wrapper dir, with the scope's mode: private (0700) for an account's own, since only its browser
     /// reads it; 0755 machine-wide, since every account's browser must traverse a root-owned one. The
     /// symlink refusal is `fsguard`'s either way.
     fn ensure_install_dir(&self) -> Result<(), String> {
         let create = || -> std::io::Result<()> {
-            if let (RegistrarScope::System { root }, Some(parent)) =
-                (&self.scope, self.install_dir.parent())
-            {
-                create_traversable_dirs(parent, root)?;
-            }
             crate::fsguard::ensure_private_dir(&self.install_dir)?;
             #[cfg(unix)]
             if matches!(self.scope, RegistrarScope::System { .. }) {
@@ -695,16 +719,6 @@ impl Registrar {
             Ok(())
         };
         create().map_err(|e| format!("could not create {}: {e}", self.install_dir.display()))
-    }
-
-    /// A manifest or pointer directory for this scope. An account's own tree takes its umask; a
-    /// machine-wide one is read by other accounts' browsers, so every directory made on the way is
-    /// traversable whatever root's umask (a maintainer script may run under 077).
-    fn create_dir(&self, dir: &Path) -> std::io::Result<()> {
-        match &self.scope {
-            RegistrarScope::User => fs::create_dir_all(dir),
-            RegistrarScope::System { root } => create_traversable_dirs(dir, root),
-        }
     }
 
     /// Reverse one registration. Each slot (the Windows key, the manifest
@@ -793,28 +807,38 @@ fn uninstall_exit_code(removals: &[Removal]) -> i32 {
     }
 }
 
-/// `create_dir_all` whose every created directory is 0755 regardless of the umask. Directories that
-/// already exist are not ours to loosen: one that other accounts cannot traverse (a root-made 0700
-/// `/etc/opt/chrome`) is refused before anything is created, since a manifest under it would read
-/// healthy and be unreachable for every other account.
-fn create_traversable_dirs(dir: &Path, root: &Path) -> std::io::Result<()> {
+/// The directories missing for `dir` to exist, outermost first, once its existing ancestor passed the
+/// reachability rule. Directories that already exist are not ours to loosen: one that other accounts
+/// cannot traverse (a root-made 0700 `/etc/opt/chrome`) is refused here, before anything is created,
+/// since a manifest under it would read healthy and be unreachable for every other account.
+fn plan_traversable_dirs(dir: &Path, root: &Path) -> std::io::Result<Vec<PathBuf>> {
     let mut missing = Vec::new();
     let mut cursor = dir;
     while !cursor.as_os_str().is_empty() && fs::symlink_metadata(cursor).is_err() {
-        missing.push(cursor);
+        missing.push(cursor.to_path_buf());
         match cursor.parent() {
             Some(parent) => cursor = parent,
             None => break,
         }
     }
     traversable_by_every_account(cursor, root).map_err(std::io::Error::other)?;
-    for path in missing.into_iter().rev() {
-        fs::create_dir(path)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
-        }
+    missing.reverse();
+    Ok(missing)
+}
+
+/// Make the planned directories, each 0755 whatever the umask (a maintainer script may run under 077),
+/// since other accounts' browsers read what sits under them.
+fn create_traversable_dirs(planned: &[PathBuf]) -> Result<(), String> {
+    for path in planned {
+        let made = fs::create_dir(path).and_then(|()| {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
+            }
+            Ok(())
+        });
+        made.map_err(|e| format!("could not create {}: {e}", path.display()))?;
     }
     Ok(())
 }
@@ -959,9 +983,9 @@ pub fn run_fix(targets: &FixTargets, scope: Scope) -> i32 {
         Err(e) => {
             let code = fix_exit_code(&e);
             if code == NOTHING_TO_REGISTER {
-                log_warn!("doctor", "{}", cli_guidance(&e));
+                log_warn!("doctor", "{}", cli_guidance(&e, scope));
             } else {
-                log_error!("doctor", "{}", cli_guidance(&e));
+                log_error!("doctor", "{}", cli_guidance(&e, scope));
             }
             return code;
         }
@@ -1017,11 +1041,17 @@ fn fix_exit_code(error: &FixError) -> i32 {
 }
 
 /// The CLI's rendering of a refusal: the host's reason, which the options page
-/// shows as is, plus the flags a terminal can act on.
-pub fn cli_guidance(error: &FixError) -> String {
+/// shows as is, plus the flags a terminal can act on in this scope.
+pub fn cli_guidance(error: &FixError, scope: Scope) -> String {
     match error {
         FixError::NoTargets(reason) => {
-            format!("{reason}; or pass --browser <keys>, --all, or --manifest-dir <dir>")
+            // `--manifest-dir` names a per-user directory, so `--system` conflicts with it at the argv
+            // boundary; offering it here would send the user into a usage error.
+            let flags = match scope {
+                Scope::User => "--browser <keys>, --all, or --manifest-dir <dir>",
+                Scope::System => "--browser <keys> or --all",
+            };
+            format!("{reason}; or pass {flags}")
         }
         FixError::Environment(_)
         | FixError::Privilege(_)
