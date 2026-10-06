@@ -538,14 +538,6 @@ pub fn install_stderr_panic_hook() {
     }));
 }
 
-/// SIGPIPE protection. On Unix, writing to a closed stdout/socket raises
-/// SIGPIPE by default and kills the process. Rust disables SIGPIPE for its
-/// own I/O but not for the inherited disposition everywhere; ignore it so we
-/// get EPIPE errors instead of dying. Safe to call once at startup.
-pub fn ignore_sigpipe() {
-    crate::sys::ignore_sigpipe();
-}
-
 #[cfg(test)]
 mod tests;
 

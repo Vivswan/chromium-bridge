@@ -26,21 +26,6 @@ fn own_identity() -> io::Result<&'static HashDigest> {
         .ok_or_else(|| io::Error::other(os::OWN_IDENTITY_ERROR))
 }
 
-/// The peer's running-image identity, measured the same way as [`own_identity`].
-fn peer_identity(stream: &BridgeStream) -> io::Result<HashDigest> {
-    os::peer_identity(stream)
-}
-
-/// The running-image identity of an arbitrary process named by pid, measured
-/// the same way as [`own_identity`]. Unlike [`peer_identity`] there is no
-/// connected socket to bind the measurement to, so this inherently carries
-/// the pid-reuse race noted on `peercred::peer_pid`: callers must
-/// treat a positive match as the only signal that grants trust, and every
-/// failure as "not our process".
-fn pid_identity(pid: u32) -> io::Result<HashDigest> {
-    os::pid_identity(pid)
-}
-
 /// Prime and validate our own executable identity. Call once at startup, before
 /// accepting or dialing the bridge: it fixes the self identity at a known-good
 /// time and fails loudly (rather than silently degrading later) if we cannot
@@ -79,7 +64,7 @@ pub fn attest_parent() -> io::Result<ClientIdentity> {
 /// host right after accept, the native host on the server right after connect). The digests are not secrets, so a
 /// plain comparison is fine.
 pub fn attest_peer(stream: &BridgeStream) -> io::Result<()> {
-    if peer_identity(stream)? == *own_identity()? {
+    if os::peer_identity(stream)? == *own_identity()? {
         Ok(())
     } else {
         Err(io::Error::new(
@@ -90,13 +75,14 @@ pub fn attest_peer(stream: &BridgeStream) -> io::Result<()> {
 }
 
 /// Verify the process named by `pid` is running the same executable image as
-/// us - [`attest_peer`], but keyed by pid instead of by a connected socket.
-/// [`super::lockfile::listen_and_publish`] uses this to decide whether a lock
+/// us - [`attest_peer`], but keyed by pid instead of by a connected socket, so it carries the pid-reuse race
+/// noted on `peercred::peer_pid`: a positive match is the only signal that grants trust, every failure reads
+/// as "not our process". [`super::lockfile::listen_and_publish`] uses this to decide whether a lock
 /// naming a live pid belongs to a genuine peer broker (defer to it) or to a
 /// reused/foreign pid (supersede the stale lock). A mismatch returns
 /// `PermissionDenied`; an unmeasurable target propagates its own error.
 pub fn attest_pid(pid: u32) -> io::Result<()> {
-    if pid_identity(pid)? == *own_identity()? {
+    if os::pid_identity(pid)? == *own_identity()? {
         Ok(())
     } else {
         Err(io::Error::new(
@@ -117,7 +103,7 @@ mod tests {
         // Hashing our own pid by the peer mechanism must equal the cached self
         // identity: self and peer are measured the identical way, so an identical
         // binary produces an identical digest.
-        let by_pid = pid_identity(std::process::id()).unwrap();
+        let by_pid = os::pid_identity(std::process::id()).unwrap();
         assert_eq!(&by_pid, own_identity().unwrap());
     }
 

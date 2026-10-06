@@ -20,7 +20,7 @@ pub const CLIENT_NAME_ENV: &str = "CHROMIUM_BRIDGE_CLIENT_NAME";
 
 pub fn run() -> i32 {
     install_stderr_panic_hook();
-    crate::protocol::ignore_sigpipe();
+    crate::sys::ignore_sigpipe();
 
     // Installed before anything is bound or published: a signal that lands earlier takes the default
     // disposition and leaves nothing behind. The remove is ownership-guarded, so a successor's files survive.

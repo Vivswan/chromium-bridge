@@ -5,7 +5,7 @@
 //! by the caller's deadline) for one to attach; the extension re-calls `connectNative` on its own.
 //!
 //! Connections are keyed by browser label (from the handshake `Response`, trusted only after the HMAC verifies;
-//! a missing label maps to [`DEFAULT_LABEL`]). A new dial-in under the SAME label supersedes that connection:
+//! a missing label maps to [`crate::ipc::DEFAULT_LABEL`]). A new dial-in under the SAME label supersedes that connection:
 //! the registry severs the older socket, its host exits on the EOF, and that extension life redials on its own.
 //! Different labels coexist. [`resolve_target`] picks the connection for a request.
 //!
@@ -37,11 +37,6 @@ use crate::error::CallError;
 use crate::ipc::{self, BrowserLabel};
 use crate::protocol::{bridge_read, bridge_write, BridgeReq, BridgeSignal, ParsedResp};
 use crate::tools::BridgeCommand;
-
-/// The label assigned to a connection whose handshake carried no label.
-/// Re-exported from the handshake module, where [`BrowserLabel`] owns the
-/// label domain.
-pub use crate::ipc::DEFAULT_LABEL;
 
 /// Maximum number of concurrent *distinct* browser labels the session holds, a
 /// DoS bound on the browser leg. A reconnect under an existing label replaces
