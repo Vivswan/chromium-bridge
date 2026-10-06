@@ -37,6 +37,7 @@ fn registrar(tree: &TempTree) -> Registrar {
         host_exe: exe,
         install_dir: tree.path("install"),
         scope: RegistrarScope::User,
+        foreign: ForeignManifest::Replace,
         extension_id: PINNED_EXTENSION_ID.to_string(),
     }
 }
@@ -292,10 +293,10 @@ fn explicit_dir_gets_the_unlabeled_wrapper() {
 }
 
 /// The owner's rule for a manifest another tool wrote at our host id, on `Slot`: status reports it
-/// foreign, uninstall leaves it (a warning, exit 0), an explicit --fix overwrites it and names what it
-/// launched.
+/// foreign, uninstall leaves it (a warning, exit 0), a repair the extension asked for refuses it and
+/// leaves it byte-identical, and the CLI's explicit --fix alone overwrites it and names what it launched.
 #[test]
-fn a_foreign_manifest_reads_foreign_survives_uninstall_and_is_overwritten_by_fix() {
+fn a_foreign_manifest_reads_foreign_survives_uninstall_and_is_overwritten_only_by_the_cli() {
     let tree = TempTree::new("foreign");
     let reg = registrar(&tree);
     let target = browser_target(&tree);
@@ -315,6 +316,15 @@ fn a_foreign_manifest_reads_foreign_survives_uninstall_and_is_overwritten_by_fix
     assert!(removal.failed.is_empty(), "{removal:?}");
     assert_eq!(uninstall_exit_code(&[removal]), 0);
     assert_eq!(fs::read_to_string(&manifest_path).unwrap(), foreign);
+
+    let refusing = Registrar {
+        foreign: ForeignManifest::Refuse,
+        ..registrar(&tree)
+    };
+    let err = refusing.register(&target).unwrap_err();
+    assert!(err.contains("refusing to overwrite"), "{err}");
+    assert_eq!(fs::read_to_string(&manifest_path).unwrap(), foreign);
+    assert!(matches!(assess(&target.registration), RegState::Foreign(_)));
 
     let lines = reg.register(&target).unwrap();
     assert!(
@@ -1073,6 +1083,7 @@ fn symlinked_install_dir_is_refused() {
         host_exe: tree.path("bin/chromium-bridge"),
         install_dir: link,
         scope: RegistrarScope::User,
+        foreign: ForeignManifest::Replace,
         extension_id: PINNED_EXTENSION_ID.to_string(),
     };
     let target = macos_target(&tree);

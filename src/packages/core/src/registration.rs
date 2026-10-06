@@ -75,8 +75,19 @@ pub struct Registrar {
     /// used, so re-registering over a legacy `install.sh` install converges.
     pub install_dir: PathBuf,
     pub scope: RegistrarScope,
+    pub foreign: ForeignManifest,
     /// The extension ID trusted in `allowed_origins`.
     pub extension_id: String,
+}
+
+/// What `register` does with a manifest another tool wrote at our host id. Only the CLI's explicit
+/// `--fix` replaces it: the extension's `registration_repair` frame is not presence-gated
+/// (docs/security/trust-boundaries.md), so a repair it asks for keeps the refusal, or a compromised
+/// extension could displace another host's registration with nobody at the keyboard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForeignManifest {
+    Replace,
+    Refuse,
 }
 
 /// Whose registrations a [`Registrar`] writes: an account's own (the install dir private, 0700) or every
@@ -228,7 +239,8 @@ pub fn pointer_json() -> String {
 
 /// What a location this engine may own holds, and the rule for each, in both directions. A manifest at
 /// our host id that another tool wrote (`Foreign`): `doctor` reports it foreign, an explicit `--fix`
-/// overwrites it and reports what it launched, `uninstall` never removes it. An entry nobody can verify
+/// overwrites it and reports what it launched ([`ForeignManifest`]: the extension's repair does not),
+/// `uninstall` never removes it. An entry nobody can verify
 /// (`Unreadable`: a directory, a dangling link) is refused both ways. The extension pointer is refused
 /// both ways when foreign: it is another installer's claim on the extension, not a manifest of ours to
 /// repair.
@@ -272,10 +284,14 @@ impl Slot {
     }
 
     /// `register`'s answer for a manifest slot: `Ok(None)` writes, `Ok(Some(line))` overwrites a foreign
-    /// one and reports what it displaced, `Err` refuses what nobody can verify.
-    fn replaceable(&self, what: &str) -> Result<Option<String>, String> {
+    /// one and reports what it displaced, `Err` refuses what nobody can verify, or a foreign one when the
+    /// caller may not replace it.
+    fn replaceable(&self, what: &str, foreign: ForeignManifest) -> Result<Option<String>, String> {
         match self {
             Slot::Absent | Slot::Ours(_) => Ok(None),
+            Slot::Foreign { .. } if foreign == ForeignManifest::Refuse => {
+                self.writable(what).map(|()| None)
+            }
             Slot::Foreign {
                 why,
                 launched,
@@ -559,7 +575,7 @@ impl Registrar {
     /// slot the target occupies (manifest file, its Windows key, the pointer)
     /// is judged before the first write ([`Slot`]): an unreadable one or a
     /// foreign pointer fails the target with nothing changed, a foreign
-    /// manifest is replaced and reported.
+    /// manifest is replaced and reported, or refused, per [`ForeignManifest`].
     pub fn register(&self, target: &Target) -> Result<Vec<String>, String> {
         // A registry registration is impossible from a non-Windows build;
         // refuse before writing anything at all.
@@ -570,18 +586,17 @@ impl Registrar {
         let slots = manifest_slots(&target.registration);
         // Every slot is judged before anything changes, so a refusal leaves the target as it was.
         let mut replaced = Vec::new();
-        replaced.extend(
-            slots
-                .file
-                .replaceable(&format!("manifest {}", manifest_path.display()))?,
-        );
+        replaced.extend(slots.file.replaceable(
+            &format!("manifest {}", manifest_path.display()),
+            self.foreign,
+        )?);
         let foreign_key = match (&slots.key, &target.registration) {
             (
                 Some(key),
                 Registration::Registry {
                     hive, key: name, ..
                 },
-            ) => key.replaceable(&format!("registry key {hive}\\{name}"))?,
+            ) => key.replaceable(&format!("registry key {hive}\\{name}"), self.foreign)?,
             _ => None,
         };
         if let Some(pointer) = &target.pointer {
@@ -976,7 +991,7 @@ pub fn remove_wrappers(install_dir: &Path) -> Removal {
 /// code: [`NOTHING_TO_REGISTER`] when detection found no browser, 1 when the
 /// repair could not start for any other reason or any target failed.
 pub fn run_fix(targets: &FixTargets, scope: Scope) -> i32 {
-    let outcomes = match fix(targets, scope) {
+    let outcomes = match fix(targets, scope, ForeignManifest::Replace) {
         Ok(outcomes) => outcomes,
         Err(e) => {
             let code = fix_exit_code(&e);
@@ -1105,7 +1120,11 @@ pub struct TargetOutcome {
 /// through this one path. `run_fix` prints the outcomes for the CLI; the
 /// native host logs them when the extension asks for a repair, since stdout
 /// is its protocol. Diagnostics (the ephemeral-path warning) still go to the log.
-pub fn fix(targets: &FixTargets, scope: Scope) -> Result<Vec<TargetOutcome>, FixError> {
+pub fn fix(
+    targets: &FixTargets,
+    scope: Scope,
+    foreign: ForeignManifest,
+) -> Result<Vec<TargetOutcome>, FixError> {
     Privilege::current()
         .admit(scope)
         .map_err(FixError::Privilege)?;
@@ -1127,6 +1146,7 @@ pub fn fix(targets: &FixTargets, scope: Scope) -> Result<Vec<TargetOutcome>, Fix
                 root: dirs.system_root.clone(),
             },
         },
+        foreign,
         extension_id: PINNED_EXTENSION_ID.to_string(),
     };
     Ok(targets

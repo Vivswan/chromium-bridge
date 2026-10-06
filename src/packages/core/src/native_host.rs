@@ -169,6 +169,7 @@ fn registration_repair_reply() -> AdminControl {
     let outcomes = match crate::registration::fix(
         &crate::cli::FixTargets::Detected,
         crate::browsers::Scope::User,
+        crate::registration::ForeignManifest::Refuse,
     ) {
         Ok(outcomes) => outcomes,
         Err(e) => {
