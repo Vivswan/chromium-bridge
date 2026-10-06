@@ -111,6 +111,7 @@ pub fn run_pair(reset: bool, file_store: bool) -> i32 {
         }
     };
 
+    audit_host_key_pair(store, reset, presence);
     println!("enrolled (user presence: {presence}).");
     let public_key_b64 = key.public_key().to_base64();
     let fingerprint = key.public_key().fingerprint_display();
@@ -136,6 +137,21 @@ fn store_name(store: KeyStore) -> &'static str {
         KeyStore::CredentialStore => "the OS credential store",
         KeyStore::File => "file (host_key.json)",
     }
+}
+
+/// Record the mint in the audit trail, log-after-decide: the key exists by the time this runs. The one
+/// record `pair` leaves, beside the revoke record a `--reset` writes first.
+fn audit_host_key_pair(store: KeyStore, reset: bool, presence: &str) {
+    let store = match store {
+        KeyStore::CredentialStore => "credential_store",
+        KeyStore::File => "file",
+    };
+    crate::audit::record(
+        crate::audit::AuditRecord::new(crate::audit::AuditKind::HostKeyPair)
+            .surface(crate::audit::Surface::Cli)
+            .outcome("ok")
+            .detail(&format!("store={store}; reset={reset}; auth={presence}")),
+    );
 }
 
 /// `chromium-bridge revoke --all`: start over. The host key, the signed policy baseline, every browser's

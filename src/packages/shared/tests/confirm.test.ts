@@ -5,7 +5,7 @@
 // compile, not just to parse.
 
 import { describe, expect, test } from "bun:test";
-import { type ConfirmPayload, ConfirmPayloadSchema, isHardwareGated } from "../src/confirm";
+import { type ConfirmPayload, ConfirmPayloadSchema, isPresenceGated } from "../src/confirm";
 
 const base = {
   id: "confirm_1",
@@ -26,7 +26,7 @@ describe("ConfirmPayloadSchema", () => {
     for (const kind of ["eval", "upload"] as const) {
       expect(ConfirmPayloadSchema.safeParse({ ...base, ...page, kind }).success).toBe(true);
       expect(
-        ConfirmPayloadSchema.safeParse({ ...base, ...page, kind, hardware: true }).success,
+        ConfirmPayloadSchema.safeParse({ ...base, ...page, kind, presence: true }).success,
       ).toBe(true);
     }
     expect(
@@ -40,13 +40,13 @@ describe("ConfirmPayloadSchema", () => {
     ).toBe(true);
   });
 
-  test("hardware exists only on the two presence-gated kinds", () => {
-    // A payload claiming hardware attestation for a kind the presence
-    // provider never serves is a schema error - the display-only rendering
+  test("presence exists only on the two presence-gated kinds", () => {
+    // A payload claiming the presence route for a kind the presence
+    // provider never serves is a schema error - the host-answered rendering
     // can never be smuggled onto a window-approved kind.
     for (const kind of ["click", "press", "select", "tab_close"] as const) {
       expect(
-        ConfirmPayloadSchema.safeParse({ ...base, ...page, kind, hardware: true }).success,
+        ConfirmPayloadSchema.safeParse({ ...base, ...page, kind, presence: true }).success,
       ).toBe(false);
     }
     expect(
@@ -56,14 +56,14 @@ describe("ConfirmPayloadSchema", () => {
         origin: "",
         tabTitle: "",
         detail: "x",
-        hardware: true,
+        presence: true,
       }).success,
     ).toBe(false);
-    // And only as the literal true: the service never emits hardware:false
+    // And only as the literal true: the service never emits presence:false
     // (absence IS the not-gated state), so the dead arm is a parse error too.
     for (const kind of ["eval", "upload"] as const) {
       expect(
-        ConfirmPayloadSchema.safeParse({ ...base, ...page, kind, hardware: false }).success,
+        ConfirmPayloadSchema.safeParse({ ...base, ...page, kind, presence: false }).success,
       ).toBe(false);
     }
   });
@@ -95,18 +95,18 @@ describe("ConfirmPayloadSchema", () => {
     ).toBe(false);
   });
 
-  test("isHardwareGated reads the flag only where the union carries it", () => {
+  test("isPresenceGated reads the flag only where the union carries it", () => {
     const parse = (v: unknown) => ConfirmPayloadSchema.parse(v);
-    expect(isHardwareGated(parse({ ...base, ...page, kind: "eval", hardware: true }))).toBe(true);
-    expect(isHardwareGated(parse({ ...base, ...page, kind: "eval" }))).toBe(false);
-    expect(isHardwareGated(parse({ ...base, ...page, kind: "click" }))).toBe(false);
+    expect(isPresenceGated(parse({ ...base, ...page, kind: "eval", presence: true }))).toBe(true);
+    expect(isPresenceGated(parse({ ...base, ...page, kind: "eval" }))).toBe(false);
+    expect(isPresenceGated(parse({ ...base, ...page, kind: "click" }))).toBe(false);
   });
 
   test("the TYPE rejects the same invalid combinations the schema does", () => {
     // Compile-time twins of the parse rejections above; each directive is a
     // type-level proof the invalid state is unrepresentable.
-    // @ts-expect-error hardware cannot ride a click payload
-    const clickHardware: ConfirmPayload = { ...base, ...page, kind: "click", hardware: true };
+    // @ts-expect-error presence cannot ride a click payload
+    const clickPresence: ConfirmPayload = { ...base, ...page, kind: "click", presence: true };
     // @ts-expect-error policy_relax pins origin to ""
     const policyWithPage: ConfirmPayload = {
       ...base,
@@ -115,15 +115,15 @@ describe("ConfirmPayloadSchema", () => {
       tabTitle: "",
       detail: "x",
     };
-    const policyHardware: ConfirmPayload = {
+    const policyPresence: ConfirmPayload = {
       ...base,
       kind: "policy_relax",
       origin: "",
       tabTitle: "",
       detail: "x",
-      // @ts-expect-error policy_relax cannot claim hardware attestation
-      hardware: true,
+      // @ts-expect-error policy_relax cannot claim the presence route
+      presence: true,
     };
-    void [clickHardware, policyWithPage, policyHardware];
+    void [clickPresence, policyWithPage, policyPresence];
   });
 });

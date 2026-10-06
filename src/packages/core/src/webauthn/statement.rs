@@ -7,6 +7,7 @@ use std::io;
 use sha2::{Digest, Sha256};
 
 use crate::ipc::BrowserLabel;
+use crate::tools::ToolId;
 
 use super::base64url;
 
@@ -74,6 +75,66 @@ impl Action {
 
     pub fn parse(s: &str) -> Option<Self> {
         nul_free_bounded(s, MAX_ACTION_LEN).then(|| Action(s.to_string()))
+    }
+
+    /// The action of a page operation's request: `<op> on <origin>`, so the signature covers the page the
+    /// act lands on, and a tap minted for one origin cannot vouch for another. Always within bounds: the op
+    /// is a fixed word and the origin is bounded by [`MAX_ORIGIN_LEN`].
+    pub fn page_op(op: PageOp, origin: &Origin) -> Self {
+        Action(format!("{} on {}", op.as_str(), origin.as_str()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// The page operations whose confirmation the policy may route to the authenticator. The wire spelling is the
+/// tool catalogue's, so a catalogue rename cannot drift from the frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageOp {
+    PageEval,
+    PageUpload,
+}
+
+impl PageOp {
+    pub fn parse(s: &str) -> Option<Self> {
+        [PageOp::PageEval, PageOp::PageUpload]
+            .into_iter()
+            .find(|op| op.as_str() == s)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PageOp::PageEval => ToolId::PageEval.tool().name,
+            PageOp::PageUpload => ToolId::PageUpload.tool().name,
+        }
+    }
+}
+
+/// Bound on an origin the extension names: a serialized origin is a scheme, a host of at most 253 bytes, and
+/// a port, so 300 admits every real one.
+pub const MAX_ORIGIN_LEN: usize = 300;
+
+/// The web origin a page operation lands on, as the extension's URL parser serializes it. [`parse`](Self::parse)
+/// is the wire boundary: the text is admitted only when the WHATWG parser's own origin serialization reproduces
+/// it byte for byte, so an opaque origin (`null`), a path, a query, userinfo, a default port, or any host the
+/// parser would rewrite is refused, and no statement is ever minted for a page the user cannot be shown. One
+/// rule of this crate's own on top: the audit trail delimits its fields with `;`, `=`, and space, and a host
+/// carrying any of them (the parser admits `;` and `=`) could forge a field in a record, so it is refused too.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Origin(String);
+
+impl Origin {
+    pub fn parse(s: &str) -> Option<Self> {
+        if s.is_empty()
+            || s.len() > MAX_ORIGIN_LEN
+            || s.bytes().any(|b| matches!(b, b';' | b'=' | b' '))
+        {
+            return None;
+        }
+        let url = url::Url::parse(s).ok()?;
+        (url.origin().ascii_serialization() == s).then(|| Origin(s.to_string()))
     }
 
     pub fn as_str(&self) -> &str {

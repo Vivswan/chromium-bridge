@@ -3,7 +3,7 @@
 // `moon run gen`.
 //
 // Every reason code a refused presence_result or enroll_result can carry; the "<code>: <detail>" form keeps
-// the code first. The options page keys its sentences on this union (entrypoints/options/refusals.ts), so a
+// the code first. The extension's pages key their sentences on this union (lib/refusals.ts), so a
 // code the host adds has no sentence until a row is added there, and that is a type error until it is.
 
 export const REFUSAL_CODES = [
@@ -47,6 +47,8 @@ export const REFUSAL_CODES = [
   "no_enrollment_outstanding",
   "machine_already_enrolled",
   "not_enrolled",
+  "invalid_action",
+  "invalid_origin",
 ] as const;
 
 export type RefusalCode = (typeof REFUSAL_CODES)[number];

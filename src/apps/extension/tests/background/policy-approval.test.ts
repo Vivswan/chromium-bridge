@@ -118,9 +118,9 @@ describe("the unpinned relaxation approval surface", () => {
     expect(first.detail).toContain("hostReverifyMs = 0");
     expect(first.detail).toContain("disabledTools = []");
     expect(first.origin).toBe("");
-    // The union confines `hardware` to the eval/upload arms: a policy_relax
+    // The union confines `presence` to the eval/upload arms: a policy_relax
     // payload cannot even carry the field.
-    expect("hardware" in first).toBe(false);
+    expect("presence" in first).toBe(false);
     expect(await getPolicySnapshotForTests()).toMatchObject({ kind: "active" });
 
     // The relaxed rev-2 vector: the detail names EXACTLY the fields that

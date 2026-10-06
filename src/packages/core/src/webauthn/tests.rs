@@ -923,6 +923,75 @@ fn statement_fields_refuse_what_would_break_injectivity() {
 }
 
 #[test]
+fn a_page_op_action_names_the_op_and_an_origin_shaped_like_one() {
+    // The action a page operation's tap signs: the op's tool name (the catalogue's spelling) and the page's
+    // origin, so the signature covers where the act lands. The origin is admitted only when the WHATWG
+    // parser's own serialization of it is the exact text (a default port, a path, a query, userinfo, an
+    // uppercase scheme, a non-ASCII host, an opaque origin all serialize differently or to `null`), within
+    // the bound, and free of the audit trail's field delimiters, which the parser alone would admit.
+    let origin = Origin::parse("https://example.com").unwrap();
+    assert_eq!(
+        Action::page_op(PageOp::PageEval, &origin).as_str(),
+        "page_eval on https://example.com"
+    );
+    assert_eq!(
+        Action::page_op(
+            PageOp::PageUpload,
+            &Origin::parse("http://[::1]:8080").unwrap()
+        )
+        .as_str(),
+        "page_upload on http://[::1]:8080"
+    );
+    assert_eq!(PageOp::parse("page_eval"), Some(PageOp::PageEval));
+    assert_eq!(PageOp::parse("page_upload"), Some(PageOp::PageUpload));
+    assert_eq!(PageOp::parse("page_click"), None);
+    let longest_real = format!(
+        "https://{}.{}.{}.{}.example:65535",
+        "a".repeat(63),
+        "b".repeat(63),
+        "c".repeat(63),
+        "d".repeat(53)
+    );
+    assert_eq!(longest_real.len(), 8 + 253 + 6);
+    let at_bound = format!("https://{}.com", "a".repeat(MAX_ORIGIN_LEN - 12));
+    let past_bound = format!("https://{}.com", "a".repeat(MAX_ORIGIN_LEN - 11));
+    assert_eq!(at_bound.len(), MAX_ORIGIN_LEN);
+    for accepted in [
+        "https://example.com",
+        "http://localhost:3000",
+        "https://sub.example-site.co.uk:8443",
+        "https://under_score.example.com",
+        "http://a!b~c.localhost:3000",
+        "http://127.0.0.1",
+        "http://[2001:db8::1]",
+        longest_real.as_str(),
+        at_bound.as_str(),
+    ] {
+        assert!(Origin::parse(accepted).is_some(), "{accepted}");
+    }
+    for refused in [
+        // not what the parser serializes
+        "",
+        "null",
+        "https://example.com/",
+        "https://example.com:443",
+        "https://user@example.com",
+        "HTTPS://example.com",
+        "https://ex\u{e4}mple.com",
+        "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+        // the bound
+        past_bound.as_str(),
+        // the audit trail's delimiters, each alone
+        "https://a;b.example.com",
+        "https://a=b.example.com",
+        "https://a b.com",
+        "https://a;auth=fake",
+    ] {
+        assert!(Origin::parse(refused).is_none(), "{refused:?}");
+    }
+}
+
+#[test]
 fn credential_storage_spelling_round_trips_and_validates_on_read() {
     // The stored form is what trust.json will carry; a read parses, so a damaged record is refused rather
     // than loaded as a key the verifier would trust.

@@ -9,6 +9,8 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
+import { requestOptions } from "@/lib/shared/webauthn-ceremony";
+import { assertedCredential, installFakeWebAuthn } from "./fake-webauthn";
 
 const PAYLOAD: ConfirmPayload = {
   id: "confirm_1",
@@ -53,6 +55,10 @@ beforeEach(() => {
     confirm_gate_host: { message: "host" },
     confirm_gate_host_held: { message: "host gate" },
     confirm_gate_browser_held: { message: "browser gate" },
+    confirm_approve_authenticator: { message: "Approve with this device's authenticator" },
+    confirm_approve_software: { message: "Allow (software confirmation)" },
+    confirm_answer_refused: { message: "The answer was not accepted: $1" },
+    webauthn_reason_software_confirmation_not_allowed: { message: "<no downgrade sentence>" },
   };
   vi.stubGlobal(
     "fetch",
@@ -144,21 +150,138 @@ describe("ConfirmApp", () => {
     expect(kill).not.toHaveFocus();
   });
 
-  test("the kill control stays available on a hardware-gated payload", async () => {
+  test("the kill control stays available on a presence-gated payload", async () => {
+    stubPresence(REQUEST);
+    const user = userEvent.setup();
+    await mount();
+    // No plain Allow: the answer is the host's request; deny-and-kill (both
+    // capability reduction) remains one click away.
+    expect(await screen.findByText("return document.cookie;")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^allow$/i })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /kill/i }));
+    expect(sent).toContainEqual({ type: "confirm_deny_kill" });
+  });
+});
+
+// The presence route: the window answers the host's request instead of offering Allow. The host's
+// verdict closes the window through the service; the window closes itself only on the host's ok.
+const REQUEST = {
+  type: "presence_request",
+  challenge: "cHJlc2VuY2U",
+  nonce: "nonce-0002",
+  action: "page_eval on https://example.com",
+  allowed_credential_ids: ["Y3JlZC1h"],
+};
+
+function stubPresence(
+  request: typeof REQUEST | null,
+  replies: Record<string, () => unknown> = {},
+): void {
+  vi.spyOn(fakeBrowser.runtime, "sendMessage").mockImplementation(async (msg: unknown) => {
+    const m = msg as { type: string; approved?: boolean };
+    sent.push(m);
+    if (m.type === "confirm_ready") return { ok: true, payload: { ...PAYLOAD, presence: true } };
+    if (m.type === "webauthn_presence_pending") return { ok: true, request };
+    return replies[m.type]?.() ?? { ok: true };
+  });
+}
+
+describe("ConfirmApp presence route", () => {
+  test("with a credential enrolled, the armed button runs the tap over the host's request and posts the assertion with its nonce", async () => {
+    stubPresence(REQUEST);
+    (fakeBrowser.runtime as unknown as Record<string, unknown>).id = "test-ext-id";
+    const webauthn = installFakeWebAuthn();
+    webauthn.getResponse = () => assertedCredential("Y3JlZC1h");
+    const user = userEvent.setup();
+    await mount();
+    const approve = await screen.findByRole("button", {
+      name: "Approve with this device's authenticator",
+    });
+    expect(approve).toBeDisabled(); // stray input cannot approve
+    expect(screen.queryByRole("button", { name: /^allow/i })).not.toBeInTheDocument();
+    expect(screen.getByText("host gate")).toBeInTheDocument();
+    await waitFor(() => expect(approve).toBeEnabled(), { timeout: 2000 });
+    await user.click(approve);
+    await waitFor(() =>
+      expect(sent).toContainEqual({
+        type: "webauthn_presence_assert",
+        nonce: "nonce-0002",
+        credential_id: "Y3JlZC1h",
+        authenticator_data: "YXV0aC1kYXRh",
+        client_data_json: "Y2xpZW50LWRhdGEtZ2V0",
+        signature: "c2lnbmF0dXJl",
+      }),
+    );
+    expect(webauthn.calls.get).toEqual([requestOptions(REQUEST as never, "test-ext-id")]);
+    // Never a window-side approval.
+    expect(sent).not.toContainEqual(
+      expect.objectContaining({ type: "confirm_resolve", approved: true }),
+    );
+    expect(window.close).toHaveBeenCalled();
+  });
+
+  test("with no credential enrolled, the button is the software confirmation, posted with the nonce", async () => {
+    stubPresence({ ...REQUEST, allowed_credential_ids: [] });
+    const user = userEvent.setup();
+    await mount();
+    const allow = await screen.findByRole("button", { name: "Allow (software confirmation)" });
+    expect(screen.queryByText("host gate")).not.toBeInTheDocument();
+    await waitFor(() => expect(allow).toBeEnabled(), { timeout: 2000 });
+    await user.click(allow);
+    await waitFor(() =>
+      expect(sent).toContainEqual({ type: "webauthn_presence_confirm", nonce: "nonce-0002" }),
+    );
+    expect(window.close).toHaveBeenCalled();
+  });
+
+  test("an answer that is not accepted is shown, and the component itself neither closes nor approves", async () => {
+    stubPresence(
+      { ...REQUEST, allowed_credential_ids: [] },
+      {
+        webauthn_presence_confirm: () => ({
+          ok: false,
+          error: "software_confirmation_not_allowed",
+        }),
+      },
+    );
+    const user = userEvent.setup();
+    await mount();
+    const allow = await screen.findByRole("button", { name: "Allow (software confirmation)" });
+    await waitFor(() => expect(allow).toBeEnabled(), { timeout: 2000 });
+    await user.click(allow);
+    expect(
+      await screen.findByText("The answer was not accepted: <no downgrade sentence>"),
+    ).toBeInTheDocument();
+    // The service's dismiss closes the window on a host refusal; this document never does on its own.
+    expect(window.close).not.toHaveBeenCalled();
+    expect(sent).not.toContainEqual(expect.objectContaining({ approved: true }));
+    await user.click(screen.getByRole("button", { name: /deny/i }));
+    expect(sent).toContainEqual({ type: "confirm_resolve", id: "confirm_1", approved: false });
+  });
+
+  test("with no request pending only Deny remains", async () => {
+    stubPresence(null);
+    await mount();
+    expect(await screen.findByText("return document.cookie;")).toBeInTheDocument();
+    expect(await screen.findByText(/no longer pending/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /allow|approve/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /deny/i })).toBeInTheDocument();
+  });
+
+  test("a pending-request read that fails is shown as the failure, never as no request", async () => {
     vi.spyOn(fakeBrowser.runtime, "sendMessage").mockImplementation(async (msg: unknown) => {
       const m = msg as { type: string };
       sent.push(m);
-      if (m.type === "confirm_ready") return { ok: true, payload: { ...PAYLOAD, hardware: true } };
+      if (m.type === "confirm_ready") return { ok: true, payload: { ...PAYLOAD, presence: true } };
+      if (m.type === "webauthn_presence_pending") return { ok: false, error: "worker restarting" };
       return { ok: true };
     });
-    const user = userEvent.setup();
     await mount();
-    // Display-only mode: no Allow button, but deny-and-kill (both capability
-    // reduction) remains one click away.
-    expect(await screen.findByText("return document.cookie;")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /allow/i })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /kill/i }));
-    expect(sent).toContainEqual({ type: "confirm_deny_kill" });
+    expect(
+      await screen.findByText("The answer was not accepted: worker restarting"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/no longer pending/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /allow|approve/i })).not.toBeInTheDocument();
   });
 });
 
@@ -205,7 +328,7 @@ describe("ConfirmApp policy_relax", () => {
     expect(await screen.findByText("someFutureField")).toBeInTheDocument();
   });
 
-  test("the HOST segment renders IDLE: an unsigned app-confirm approval never claims host or hardware attestation", async () => {
+  test("the HOST segment renders IDLE: an unsigned app-confirm approval never claims host or authenticator attestation", async () => {
     stubPolicyPayload("pageEvalEnabled");
     await mount();
     await screen.findByText(/Loosen this browser's bridge policy\?/);
@@ -218,9 +341,9 @@ describe("ConfirmApp policy_relax", () => {
     expect(dot).not.toBeNull();
     expect(dot?.className).not.toContain("live");
     expect(dot?.className).not.toContain("pending");
-    // And it is the browser-side strip, never the hardware (Touch ID) one:
-    // the held "host gate" rendering would read as hardware attestation, and
-    // display-only hardware mode would drop the Allow button.
+    // And it is the browser-side strip, never the authenticator one: the held
+    // "host gate" rendering would read as authenticator attestation, and the
+    // presence route would replace the Allow button.
     expect(screen.queryByText("host gate")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /allow/i })).toBeInTheDocument();
   });

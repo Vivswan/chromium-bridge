@@ -614,7 +614,7 @@ graph TD
   extension_confirm["src/apps/extension/src/entrypoints/confirm/"]
   extension_options["src/apps/extension/src/entrypoints/options/"]
   extension_popup["src/apps/extension/src/entrypoints/popup/"]
-  extension_ui["src/apps/extension/src/components/<br>src/apps/extension/src/hooks/<br>src/apps/extension/src/lib/cn.ts<br>src/apps/extension/src/lib/theme.ts<br>src/apps/extension/src/lib/i18n.ts<br>src/apps/extension/src/lib/native-language-names.ts"]
+  extension_ui["src/apps/extension/src/components/<br>src/apps/extension/src/hooks/<br>src/apps/extension/src/lib/cn.ts<br>src/apps/extension/src/lib/theme.ts<br>src/apps/extension/src/lib/i18n.ts<br>src/apps/extension/src/lib/native-language-names.ts<br>src/apps/extension/src/lib/refusals.ts"]
   extension_lib["src/apps/extension/src/lib/shared/<br>src/apps/extension/src/lib/dom/<br>src/apps/extension/src/lib/messages.ts"]
   scripts["scripts/"]
   extension_background --> shared

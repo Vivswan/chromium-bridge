@@ -403,6 +403,10 @@ impl RestrictOutcome {
 ///                      enroll_result { ok: false, reason }; the host binds the connection's browser label
 ///                      into the statement, so the frame carries none
 /// enroll_finish     -> enroll_result { ok, credential_id?, reason? }: attestation "none" only, ES256 only
+/// presence_begin    -> presence_request for a page operation the policy routes to the authenticator: the
+///                      extension names the op and the page's origin, and the host binds both into the
+///                      statement; a refused one answers presence_result { ok: false }, minting no request and
+///                      leaving an outstanding one as it was
 /// presence_request  -> PUSHED by the host when a capability-granting act needs a tap: challenge =
 ///                      base64url(sha256(statement)), the action the user is approving, the nonce, and the
 ///                      credential ids enrolled from this browser (the allowCredentials list)
@@ -439,6 +443,11 @@ pub enum WebAuthnControl {
         #[serde(skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
+    /// Extension -> host: a page operation whose confirmation the policy routes to the authenticator asks
+    /// for its request. `action` is the tool name (`page_eval`, `page_upload`); `origin` is the page's web
+    /// origin. The host answers with a `presence_request`, or `presence_result { ok: false }` when either
+    /// field is not one it mints statements for.
+    PresenceBegin { action: String, origin: String },
     /// Host -> extension: one capability-granting act awaits a tap.
     PresenceRequest {
         challenge: String,
@@ -581,6 +590,7 @@ pub enum HostControlTag {
     EnrollOptions,
     EnrollFinish,
     EnrollResult,
+    PresenceBegin,
     PresenceRequest,
     PresenceAssert,
     PresenceConfirm,
@@ -618,6 +628,7 @@ impl HostControlTag {
             | HostControlTag::LangSet
             | HostControlTag::EnrollBegin
             | HostControlTag::EnrollFinish
+            | HostControlTag::PresenceBegin
             | HostControlTag::PresenceAssert
             | HostControlTag::PresenceConfirm
             | HostControlTag::BrowserRevoke => Direction::BrowserToHost,
@@ -709,6 +720,13 @@ impl HostControlTag {
                     .into(),
                 ))
             }
+            HostControlTag::PresenceBegin => MalformedReply::Send(Box::new(
+                PresenceOutcome::Refused {
+                    reason: "malformed presence_begin frame".into(),
+                }
+                .into_frame()
+                .into(),
+            )),
             HostControlTag::PresenceAssert => MalformedReply::Send(Box::new(
                 PresenceOutcome::Refused {
                     reason: "malformed presence_assert frame".into(),
@@ -891,6 +909,10 @@ pub enum HostRequest {
     EnrollFinish {
         attestation_object: String,
         client_data_json: String,
+    },
+    PresenceBegin {
+        action: String,
+        origin: String,
     },
     PresenceAssert {
         credential_id: String,

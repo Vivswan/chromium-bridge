@@ -8,11 +8,14 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 import { HOST_REPLY_TIMEOUT_MS } from "@/lib/background/exchange";
 import {
+  abandonPresence,
   assertPresence,
   beginEnrollment,
   beginKillRelease,
+  beginPresence,
   claimKillRelease,
   collaborator,
+  confirmPresence,
   finishEnrollment,
   forgetBrowser,
   handleWebAuthnFrame,
@@ -347,6 +350,157 @@ describe("presence exchange", () => {
     handleWebAuthnFrame(presenceRequest as never);
     collaborator.onDetach();
     expect(pendingPresenceRequest()).toBeNull();
+  });
+});
+
+describe("a page operation's presence request", () => {
+  const pageOp = { ...presenceRequest, action: "page_eval on https://example.com" };
+
+  test("presence_begin posts the op and origin; the pushed request answers it, stays pending, opens no page, and the tap's verdict reaches the asker", async () => {
+    const open = vi.spyOn(fakeBrowser.runtime, "openOptionsPage").mockResolvedValue(undefined);
+    const verdicts: boolean[] = [];
+    const p = beginPresence("page_eval", "https://example.com", (ok) => verdicts.push(ok)).view;
+    expect(posted).toEqual([
+      { type: "presence_begin", action: "page_eval", origin: "https://example.com" },
+    ]);
+    handleWebAuthnFrame(pageOp as never);
+    await expect(p).resolves.toEqual({ ok: true, request: pageOp });
+    expect(pendingPresenceRequest()).toEqual(pageOp);
+    expect(open).not.toHaveBeenCalled();
+    const answered = assertPresence(answer);
+    handleWebAuthnFrame({ type: "presence_result", ok: true });
+    await expect(answered).resolves.toEqual({ ok: true });
+    expect(verdicts).toEqual([true]);
+  });
+
+  test("the host's refusal of the answer is the asker's false verdict, exactly once", async () => {
+    const verdicts: boolean[] = [];
+    const p = beginPresence("page_upload", "https://example.com", (ok) => verdicts.push(ok)).view;
+    handleWebAuthnFrame({ ...pageOp, action: "page_upload on https://example.com" } as never);
+    await p;
+    const answered = confirmPresence(pageOp.nonce);
+    expect(posted[1]).toEqual({ type: "presence_confirm", nonce: pageOp.nonce });
+    handleWebAuthnFrame({
+      type: "presence_result",
+      ok: false,
+      reason: "software_confirmation_not_allowed",
+    });
+    await expect(answered).resolves.toEqual({
+      ok: false,
+      error: "software_confirmation_not_allowed",
+    });
+    expect(verdicts).toEqual([false]);
+  });
+
+  test("a presence_begin the host refuses resolves with its reason and calls no verdict", async () => {
+    const verdicts: boolean[] = [];
+    const p = beginPresence("page_eval", "null", (ok) => verdicts.push(ok)).view;
+    handleWebAuthnFrame({ type: "presence_result", ok: false, reason: "invalid_origin" });
+    await expect(p).resolves.toEqual({ ok: false, error: "invalid_origin" });
+    expect(pendingPresenceRequest()).toBeNull();
+    expect(verdicts).toEqual([]);
+  });
+
+  test("a request superseded, detached, or abandoned before its answer ends with false (or silently, when abandoned)", async () => {
+    vi.spyOn(fakeBrowser.runtime, "openOptionsPage").mockResolvedValue(undefined);
+    const verdicts: boolean[] = [];
+    let p = beginPresence("page_eval", "https://example.com", (ok) => verdicts.push(ok)).view;
+    handleWebAuthnFrame(pageOp as never);
+    await p;
+    handleWebAuthnFrame({ ...pageOp, nonce: "nonce-0003", challenge: "bmV3ZXI" } as never);
+    expect(verdicts).toEqual([false]);
+
+    p = beginPresence("page_eval", "https://example.com", (ok) => verdicts.push(ok)).view;
+    handleWebAuthnFrame(pageOp as never);
+    await p;
+    collaborator.onDetach();
+    expect(verdicts).toEqual([false, false]);
+    expect(pendingPresenceRequest()).toBeNull();
+
+    attach(collaborator, (frame) => {
+      posted.push(frame as Record<string, unknown>);
+      return true;
+    });
+    p = beginPresence("page_eval", "https://example.com", (ok) => verdicts.push(ok)).view;
+    handleWebAuthnFrame(pageOp as never);
+    await p;
+    abandonPresence("some-other-nonce");
+    expect(pendingPresenceRequest()).toEqual(pageOp);
+    abandonPresence(pageOp.nonce);
+    expect(pendingPresenceRequest()).toBeNull();
+    expect(verdicts).toEqual([false, false]);
+  });
+
+  test("a request naming another act than the one asked is refused and not held", async () => {
+    const open = vi.spyOn(fakeBrowser.runtime, "openOptionsPage").mockResolvedValue(undefined);
+    const verdicts: boolean[] = [];
+    const p = beginPresence("page_eval", "https://example.com", (ok) => verdicts.push(ok)).view;
+    handleWebAuthnFrame({ ...pageOp, action: "page_upload on https://evil.example" } as never);
+    await expect(p).resolves.toEqual({ ok: false, error: "the host's request names another act" });
+    expect(pendingPresenceRequest()).toBeNull();
+    expect(open).not.toHaveBeenCalled();
+    expect(verdicts).toEqual([]);
+  });
+
+  test("a begin cancelled before the host answers frees the exchange at once, and its late reply is dropped", async () => {
+    const open = vi.spyOn(fakeBrowser.runtime, "openOptionsPage").mockResolvedValue(undefined);
+    const begin = beginPresence("page_eval", "https://example.com", () => {});
+    begin.cancel();
+    await expect(begin.view).resolves.toEqual({
+      ok: false,
+      error: "the confirmation ended before the host answered",
+    });
+    // The next act is not refused as busy, and the host answers in order: the cancelled begin's reply comes
+    // first and is dropped, then the enrollment's options answer the enrollment.
+    const enrolling = beginEnrollment();
+    expect(posted).toEqual([
+      { type: "presence_begin", action: "page_eval", origin: "https://example.com" },
+      { type: "enroll_begin" },
+    ]);
+    handleWebAuthnFrame(pageOp as never);
+    expect(pendingPresenceRequest()).toBeNull();
+    expect(open).not.toHaveBeenCalled();
+    handleWebAuthnFrame(enrollOptions as never);
+    await expect(enrolling).resolves.toEqual({ ok: true, options: enrollOptions });
+    // Cancelling once the host has answered changes nothing: a push after it is a push.
+    begin.cancel();
+    handleWebAuthnFrame(pageOp as never);
+    expect(pendingPresenceRequest()).toEqual(pageOp);
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  test("a begin whose exchange times out owes the host's late reply the same drop as a cancelled one", async () => {
+    vi.useFakeTimers();
+    const open = vi.spyOn(fakeBrowser.runtime, "openOptionsPage").mockResolvedValue(undefined);
+    const begin = beginPresence("page_eval", "https://example.com", () => {});
+    await vi.advanceTimersByTimeAsync(HOST_REPLY_TIMEOUT_MS + 1);
+    await expect(begin.view).resolves.toEqual({
+      ok: false,
+      error: "no reply from the native host (timed out)",
+    });
+    // The host's reply, late, is the timed-out begin's: dropped, held for nobody, no page opened.
+    handleWebAuthnFrame(pageOp as never);
+    expect(pendingPresenceRequest()).toBeNull();
+    expect(open).not.toHaveBeenCalled();
+    // The debt is one reply deep: the next push is a push.
+    handleWebAuthnFrame(pageOp as never);
+    expect(pendingPresenceRequest()).toEqual(pageOp);
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  test("a posted answer whose exchange times out ends the asker's request with false", async () => {
+    vi.useFakeTimers();
+    const verdicts: boolean[] = [];
+    const p = beginPresence("page_eval", "https://example.com", (ok) => verdicts.push(ok)).view;
+    handleWebAuthnFrame(pageOp as never);
+    await p;
+    const answered = assertPresence(answer);
+    await vi.advanceTimersByTimeAsync(HOST_REPLY_TIMEOUT_MS + 1);
+    await expect(answered).resolves.toEqual({
+      ok: false,
+      error: "no reply from the native host (timed out)",
+    });
+    expect(verdicts).toEqual([false]);
   });
 });
 

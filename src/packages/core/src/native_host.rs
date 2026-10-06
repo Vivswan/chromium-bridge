@@ -600,6 +600,9 @@ fn handle_request<W: Write>(
             let registration = Registration::from_base64url(&attestation_object, &client_data_json);
             write_replies(out, exchange.enroll_finish(registration))
         }
+        HostRequest::PresenceBegin { action, origin } => {
+            write_replies(out, exchange.presence_begin(&action, &origin))
+        }
         HostRequest::PresenceAssert {
             credential_id,
             authenticator_data,

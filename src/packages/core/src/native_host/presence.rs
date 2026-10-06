@@ -8,6 +8,8 @@
 //!                      held approval: enroll_options
 //! enroll_finish     -> enroll_result
 //! kill_release      -> presence_request (this browser's credentials); on approval presence_result, kill_status_result
+//! presence_begin    -> presence_request for a page operation (this browser's credentials); on approval presence_result,
+//!                      and the extension runs the op it asked about
 //! presence_assert   -> presence_result, then the pending act
 //! presence_confirm  -> presence_result (the window's answer; only where the request admits no credential)
 //! browser_revoke    -> browser_revoke_result: this browser's enrollments forgotten (no proof: it removes capability)
@@ -25,7 +27,7 @@ use crate::protocol::control::{
 use crate::trust::TrustState;
 use crate::webauthn::{
     self, parse_registration, Action, Assertion, CredentialId, Enrollment, EnrollmentAuthority,
-    Nonce, Reason, RefusalCode, Registration, RpId, Statement, StatementDomain,
+    Nonce, Origin, PageOp, Reason, RefusalCode, Registration, RpId, Statement, StatementDomain,
 };
 
 /// The per-connection exchange state. The label is the browser this host fronts; every statement binds it.
@@ -61,18 +63,31 @@ enum Pending {
 const APPROVAL_TTL: Duration = Duration::from_secs(60);
 
 /// What runs once presence is attested.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum PendingAct {
     KillRelease,
     /// A machine with enrollments asked to enroll another credential.
     EnrollBegin,
+    /// The extension asked about a page operation on a page; the attestation is its answer, and the
+    /// extension runs the op. The origin is kept for the trail: the statement that bound it is consumed by
+    /// the answer.
+    PageOp {
+        op: PageOp,
+        origin: Origin,
+    },
 }
 
 impl PendingAct {
-    fn audit_name(self) -> &'static str {
+    /// The fields that open this act's audit records: the act, and for a page op the origin it was asked
+    /// about. The origin's bound keeps the fixed-length auth path of an `ok` record inside the audit cap; a
+    /// refusal's reason is unbounded and comes last, where the cap can shorten only it.
+    fn audit_detail(&self) -> String {
         match self {
-            PendingAct::KillRelease => "kill_release",
-            PendingAct::EnrollBegin => "enroll_begin",
+            PendingAct::KillRelease => "act=kill_release".to_string(),
+            PendingAct::EnrollBegin => "act=enroll_begin".to_string(),
+            PendingAct::PageOp { op, origin } => {
+                format!("act={}; origin={}", op.as_str(), origin.as_str())
+            }
         }
     }
 }
@@ -142,6 +157,36 @@ impl Exchange {
         }
     }
 
+    /// `presence_begin`: a page operation the policy routes to the authenticator. The extension names the op
+    /// and the page's origin; the statement binds both, so the tap approves exactly that act on that page,
+    /// and only this browser's credentials may answer (the window where it has none). A refusal here answers
+    /// before anything is pending, leaves an outstanding request as it was, and names its reason in the trail.
+    pub(super) fn presence_begin(&mut self, action: &str, origin: &str) -> Vec<HostReply> {
+        let refused = |reason: Reason| {
+            audit::record(
+                AuditRecord::new(AuditKind::PresenceAssert)
+                    .surface(Surface::Extension)
+                    .outcome("refused")
+                    .detail(&format!("act=presence_begin; {reason}")),
+            );
+            vec![presence_refused(reason)]
+        };
+        let Some(op) = PageOp::parse(action) else {
+            return refused(RefusalCode::InvalidAction.into());
+        };
+        let Some(origin) = Origin::parse(origin) else {
+            return refused(RefusalCode::InvalidOrigin.into());
+        };
+        let enrolled = match enrollments() {
+            Ok(enrolled) => enrolled,
+            Err(e) => return refused(RefusalCode::StoreError.detailed(e)),
+        };
+        match PresenceRequest::for_browser(&self.label, Action::page_op(op, &origin), &enrolled) {
+            Ok(request) => self.await_presence(request, PendingAct::PageOp { op, origin }),
+            Err(e) => refused(RefusalCode::Nonce.detailed(e)),
+        }
+    }
+
     /// `presence_assert`: close the outstanding request with an assertion, then run its act.
     pub(super) fn presence_assert(
         &mut self,
@@ -195,7 +240,7 @@ impl Exchange {
                     AuditRecord::new(AuditKind::PresenceAssert)
                         .surface(Surface::Extension)
                         .outcome("refused")
-                        .detail(&format!("act={}; {e}", act.audit_name())),
+                        .detail(&format!("{}; {e}", act.audit_detail())),
                 );
                 if act == PendingAct::KillRelease {
                     crate::kill::audit_refused_release(Surface::Extension, &e);
@@ -208,8 +253,8 @@ impl Exchange {
                 .surface(Surface::Extension)
                 .outcome("ok")
                 .detail(&format!(
-                    "act={}; auth={}",
-                    act.audit_name(),
+                    "{}; auth={}",
+                    act.audit_detail(),
                     auth.path().audit_label()
                 )),
         );
@@ -236,6 +281,8 @@ impl Exchange {
                     since: Instant::now(),
                 });
             }
+            // The approval is the whole answer: the extension holds the op and runs it on the verdict.
+            PendingAct::PageOp { .. } => {}
         }
         replies
     }

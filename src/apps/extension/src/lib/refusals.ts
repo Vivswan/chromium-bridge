@@ -1,7 +1,7 @@
 import type { RefusalCode } from "@chromium-bridge/shared/refusals.gen";
 import type { MessageKey } from "@/lib/i18n";
 
-// The sentences the options page shows for a refused WebAuthn step. The host's presence_result and
+// The sentences the options page and the confirmation window show for a refused WebAuthn step. The host's presence_result and
 // enroll_result carry a code from the generated RefusalCode roster, sometimes followed by ": <detail>"; the
 // browser's own ceremony failures are the CeremonyCode names ceremonyFailure mints. Both end here as one
 // lowercase phrase that fits after "Enrollment refused:" or "Release refused:". The table is a Record over both
@@ -33,6 +33,8 @@ const REASON_KEYS: Readonly<Record<RefusalCode | CeremonyCode, MessageKey>> = {
   not_enrolled: "webauthn.reason_not_enrolled",
   store_error: "webauthn.reason_store_error",
   nonce: "webauthn.reason_nonce",
+  invalid_action: "webauthn.reason_invalid_action",
+  invalid_origin: "webauthn.reason_invalid_origin",
   not_interactive: "webauthn.reason_terminal",
   declined: "webauthn.reason_terminal",
   io_error: "webauthn.reason_terminal",

@@ -2,7 +2,11 @@ import { browser } from "wxt/browser";
 import { defineBackground } from "wxt/utils/define-background";
 import { syncPendingMirror } from "@/lib/background/allowlist-store";
 import { installCdpLifecycleListeners } from "@/lib/background/cdp/registry";
-import { installConfirmationProvider } from "@/lib/background/confirm/service";
+import { PresenceExchangeProvider } from "@/lib/background/confirm/presence";
+import {
+  installConfirmationProvider,
+  installPresenceProvider,
+} from "@/lib/background/confirm/service";
 import { ExtensionWindowProvider } from "@/lib/background/confirm/surface";
 import { verifyExtensionId } from "@/lib/background/id-check";
 import { registerRuntimeMessageRouter } from "@/lib/background/messages";
@@ -51,8 +55,11 @@ export default defineBackground(() => {
 
   // The off-DOM confirmation surface. Without a provider the confirmation
   // service denies everything, so install it before any bridge traffic can
-  // arrive. No presence provider is installed, so every kind confirms here.
-  installConfirmationProvider(new ExtensionWindowProvider());
+  // arrive. The presence route for page_eval and page_upload shows the same
+  // window, with the host's presence request as what the user answers there.
+  const window = new ExtensionWindowProvider();
+  installConfirmationProvider(window);
+  installPresenceProvider(new PresenceExchangeProvider(window));
 
   // On an UNPINNED extension nothing can verify a signature, so an unsigned
   // policy push that would relax the enforced effective policy is applied

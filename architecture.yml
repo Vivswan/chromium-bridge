@@ -25,6 +25,7 @@ layers:
     - src/apps/extension/src/lib/theme.ts
     - src/apps/extension/src/lib/i18n.ts
     - src/apps/extension/src/lib/native-language-names.ts
+    - src/apps/extension/src/lib/refusals.ts
   extension/lib:
     - src/apps/extension/src/lib/shared/
     - src/apps/extension/src/lib/dom/

@@ -806,6 +806,7 @@ export const WRITER_FRAMES: Record<Group, Readonly<Record<string, string>>> = {
   webauthn: {
     enroll_begin: "EnrollBeginWireSchema",
     enroll_finish: "EnrollFinishWireSchema",
+    presence_begin: "PresenceBeginWireSchema",
     presence_assert: "PresenceAssertWireSchema",
     presence_confirm: "PresenceConfirmWireSchema",
     browser_revoke: "BrowserRevokeWireSchema",

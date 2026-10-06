@@ -8,8 +8,8 @@ import { browser } from "wxt/browser";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/hooks/useI18n";
 import { send } from "@/lib/messages";
+import { ceremonyFailure, refusalSentence } from "@/lib/refusals";
 import { assert, register } from "@/lib/shared/webauthn-ceremony";
-import { ceremonyFailure, refusalSentence } from "./refusals";
 
 // This browser's WebAuthn enrollment: the worker's note of the last credential enrolled here, and the ceremony
 // that enrolls one. The host decides everything (src/packages/core/src/native_host/presence.rs); this page
