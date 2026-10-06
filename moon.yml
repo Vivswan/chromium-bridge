@@ -505,8 +505,8 @@ tasks:
       runDepsInParallel: false
 
   check-ci-scripts:
-    description: "Unit tests for the TypeScript behind CI's workflow steps (image digest and tag, Linux registration scenarios, installer smoke, mutants shard, auto-format commit, release packaging, uv check)"
-    command: 'bun test scripts/tests/ci-image.test.ts scripts/tests/linux-registration.test.ts scripts/tests/installer-smoke.test.ts scripts/tests/mutants-shard.test.ts scripts/tests/auto-format-commit.test.ts scripts/tests/release-package.test.ts scripts/tests/check-uv.test.ts'
+    description: "Unit tests for the TypeScript behind CI's workflow steps (image digest and tag, Linux registration scenarios, installer smoke, mutants shard, auto-format commit, release packaging, uv check, toolchain pin cross-check)"
+    command: 'bun test scripts/tests/ci-image.test.ts scripts/tests/linux-registration.test.ts scripts/tests/installer-smoke.test.ts scripts/tests/mutants-shard.test.ts scripts/tests/auto-format-commit.test.ts scripts/tests/release-package.test.ts scripts/tests/check-uv.test.ts scripts/tests/check-toolchain.test.ts'
     options:
       mutex: 'generated-contract'
 
