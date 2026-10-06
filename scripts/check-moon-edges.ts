@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
-// The root moon.yml header's first three rules, read back from moon's resolved task graph so a task added without
-// them fails here instead of on its first cold run or inside a commit. The other two have no mechanical census:
-// what a script spawns and which files a tool opens are not in the task graph.
+// The root moon.yml header's first four rules, read back from moon's resolved task graph so a task added without
+// them fails here instead of on its first cold run, inside a commit, or against a stale artifact. The other two
+// have no mechanical census: what a script spawns and which files a tool opens are not in the task graph.
 
+import { posix } from "node:path";
 import { die, repoRoot } from "./lib.ts";
 
 /** moon's resolved task graph (`moon query tasks`), project -> task id -> task; only the fields read here. */
@@ -16,9 +17,15 @@ export type TaskGraph = Record<
       script?: string | null;
       deps?: { target: string }[];
       env?: Record<string, string> | null;
+      options?: { runFromWorkspaceRoot?: boolean } | null;
+      inputFiles?: Record<string, unknown> | null;
+      inputGlobs?: Record<string, unknown> | null;
+      outputFiles?: Record<string, unknown> | null;
+      outputGlobs?: Record<string, unknown> | null;
     }
   >
 >;
+type Task = TaskGraph[string][string];
 
 export const GATE = "root:gate";
 
@@ -56,7 +63,7 @@ const unalias = (words: string[]): string[] => {
   return x === -1 ? words : ["bunx", ...words.slice(x + 1)];
 };
 
-function simpleCommands(task: TaskGraph[string][string]): string[][] {
+function simpleCommands(task: Task): string[][] {
   if (task.script == null) return [unalias([task.command, ...(task.args ?? [])])];
   return task.script
     .replace(/\\\n\s*/g, " ")
@@ -90,13 +97,82 @@ function closure(graph: TaskGraph, start: string): { reached: string[]; unknown:
   return { reached: [...reached], unknown: [...unknown] };
 }
 
+const BUILD_DIR = "build";
+const ROOT_PROJECT = GATE.split(":")[0];
+
+const under = (dir: string, path: string): boolean => path === dir || path.startsWith(`${dir}/`);
+const normalized = (path: string): string => posix.normalize(path).replace(/\/$/, "");
+
+// Only plain paths are judged, and a glob under build/ on either side is a finding: the repository's artifacts
+// are directories, and matching a reader's glob against a writer's is a semantics this rule does not take on.
+const buildGlobs = (globs: Record<string, unknown> | null | undefined): string[] =>
+  Object.keys(globs ?? {}).filter((glob) => under(BUILD_DIR, glob.split(/[*?[{]/)[0] ?? ""));
+
+// A declared input is workspace-relative in the resolved graph, so it counts for every task. A command word is
+// relative to the task's cwd, so it counts only when that is the workspace root, and only as a relative path:
+// `/build/x` is a filesystem path, `build` alone is a task or script name. What a script opens is not in the
+// graph, so a read the task does not declare stays invisible here.
+const namedBuildPaths = (project: string, task: Task): string[] => {
+  const atRoot = project === ROOT_PROJECT || task.options?.runFromWorkspaceRoot === true;
+  const words = atRoot
+    ? simpleCommands(task)
+        .flat()
+        .filter((word) => posix.normalize(word).startsWith(`${BUILD_DIR}/`))
+    : [];
+  const inputs = Object.keys(task.inputFiles ?? {});
+  return [...new Set([...words, ...inputs].map(normalized))].filter((path) =>
+    under(BUILD_DIR, path),
+  );
+};
+
+function buildWriters(graph: TaskGraph): { target: string; dir: string }[] {
+  const writers: { target: string; dir: string }[] = [];
+  for (const [project, tasks] of Object.entries(graph)) {
+    for (const [id, task] of Object.entries(tasks)) {
+      for (const output of Object.keys(task.outputFiles ?? {}).map(normalized)) {
+        if (under(BUILD_DIR, output)) writers.push({ target: `${project}:${id}`, dir: output });
+      }
+    }
+  }
+  return writers;
+}
+
 export function auditGraph(graph: TaskGraph): string[] {
   const findings: string[] = [];
+  const writers = buildWriters(graph);
   for (const [project, tasks] of Object.entries(graph)) {
     for (const [id, task] of Object.entries(tasks)) {
       const target = `${project}:${id}`;
       if (simpleCommands(task).some(([word]) => word === "bunx")) {
         findings.push(`${target}: runs bunx (bun's global cache stands in for a missing package)`);
+      }
+      for (const glob of buildGlobs(task.inputGlobs)) {
+        findings.push(
+          `${target}: declares the glob input ${glob}; a reader under build/ declares the file or directory it reads`,
+        );
+      }
+      for (const glob of buildGlobs(task.outputGlobs)) {
+        findings.push(
+          `${target}: declares the glob output ${glob}; a writer under build/ declares the directory it writes`,
+        );
+      }
+      for (const path of namedBuildPaths(project, task)) {
+        // A writer of the path or a directory above it, and every writer inside a directory the task names.
+        const covering = writers.filter(
+          (writer) => under(writer.dir, path) || under(path, writer.dir),
+        );
+        if (covering.length === 0) {
+          findings.push(`${target}: names ${path}, which no task's outputs write`);
+          continue;
+        }
+        const ordered = new Set(closure(graph, target).reached);
+        for (const writer of covering) {
+          if (writer.target !== target && !ordered.has(writer.target)) {
+            findings.push(
+              `${target}: names ${path} without depending on ${writer.target}, which writes ${writer.dir}`,
+            );
+          }
+        }
       }
     }
   }
@@ -159,6 +235,6 @@ if (import.meta.main) {
   }
   const total = Object.values(tasks).reduce((n, project) => n + Object.keys(project).length, 0);
   console.log(
-    `check-moon-edges: no bunx, and ${GATE} runs only the repository's own toolchain (${total} tasks)`,
+    `check-moon-edges: no bunx, ${GATE} runs only the repository's own toolchain, and every named build/ path follows its writer (${total} tasks)`,
   );
 }

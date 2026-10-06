@@ -145,9 +145,8 @@ jobs:
       - uses: ./.github/actions/setup-moon
       - run: bun install --frozen-lockfile
       - run: moon run typecheck check-ts shared:test extension:test
-      - run: moon run extension:build
-      # With build/extension/ present, check-extension-id also asserts the built manifest's security surface
-      # (key, permissions, host access); the hygiene job runs it build-free, so only its source checks apply there.
+      # Builds the extension through its dependency, then asserts the built manifest's security surface (key,
+      # permissions, host access, the Chrome floor); the hygiene job runs the same task.
       - run: moon run check-extension-id
 
   # The two checks that need BOTH toolchains: the generated TS must be exactly what the Rust emitters produce
@@ -175,9 +174,9 @@ jobs:
       - run: moon run check-gen
       - run: moon run check-envelope check-gen-isolation check-refresh-lockfiles
 
-  # Every bun-side check that needs no build. moon.yml's `hygiene` task owns the list (the `ci` gate depends
-  # on the same task), so a check added there runs here without a change to this file. check-docs-policy
-  # imports the settings schema, hence the install.
+  # Every bun-side check. moon.yml's `hygiene` task owns the list (the `ci` gate depends on the same task), so a
+  # check added there runs here without a change to this file. check-docs-policy imports the settings schema and
+  # check-extension-id builds the extension, hence the install.
   hygiene:
     name: Repository hygiene (versions, pins, CJK, typography, docs parity, compose)
     needs: image
