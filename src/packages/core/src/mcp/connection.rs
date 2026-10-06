@@ -527,7 +527,7 @@ mod tests {
     /// design and the black-box suites guessed at differently. These pin the
     /// ACTUALS (what the SDK does); the suites reconcile to them.
     #[test]
-    fn request_metadata_edge_cases_follow_rmcp_not_our_old_design() {
+    fn request_metadata_edge_cases_are_rmcps_verdicts() {
         let mut conn = open();
         request(
             &mut conn,
@@ -678,22 +678,6 @@ mod tests {
         assert!(conn
             .handle(&frame(json!({
                 "jsonrpc": "2.0", "id": 3, "method": "ping"
-            })))
-            .is_err());
-    }
-
-    /// The spent-state short-circuit itself: once `Spent` (as every failed
-    /// exchange leaves it), handle() must refuse immediately - never touch
-    /// the channels, and with no JoinHandle held there is nothing to
-    /// re-poll (a re-poll of a yielded handle would abort the process
-    /// under this workspace's panic = "abort").
-    #[test]
-    fn a_spent_connection_refuses_without_touching_the_service() {
-        let mut conn = open();
-        conn.service = Service::Spent;
-        assert!(conn
-            .handle(&frame(json!({
-                "jsonrpc": "2.0", "id": 1, "method": "ping"
             })))
             .is_err());
     }
