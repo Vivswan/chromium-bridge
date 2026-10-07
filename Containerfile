@@ -3,7 +3,7 @@
 # OCI instructions only, so buildah builds it too.
 FROM docker.io/library/debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
 
-ARG DEBIAN_SNAPSHOT=20261001T000000Z
+ARG DEBIAN_SNAPSHOT=20261006T000000Z
 ARG RUSTUP_VERSION=1.29.1
 ARG CARGO_BINSTALL_VERSION=1.25.1
 ARG CARGO_NEXTEST_VERSION=0.9.146
@@ -23,14 +23,19 @@ ARG PROTO_VERSION
 # accepts it inside a container. build-essential: cargo needs a C linker. xvfb + xauth: the
 # non-headless browser suites. iproute2: the adversarial suite enumerates listeners with `ss`. The
 # snapshot is reached over http because the slim image has no CA bundle yet (apt verifies the archive
-# signatures regardless), and its Release files are past their Valid-Until by design.
+# signatures regardless).
+#
+# The snapshot's updates and security Release files lapse a week after the pin. Check-Valid-Until is
+# off in apt.conf.d rather than per command because whatever runs apt-get in the finished image
+# (checks.yml's taiki-e/install-action) reads the same lapsed files.
 RUN sed -i \
         -e "s|http://deb.debian.org/debian-security|http://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}|" \
         -e "s|http://deb.debian.org/debian|http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}|" \
         /etc/apt/sources.list.d/debian.sources \
     && test "$(grep -c "^URIs: http://snapshot.debian.org/archive/debian[-a-z]*/${DEBIAN_SNAPSHOT}$" /etc/apt/sources.list.d/debian.sources)" = "$(grep -c '^URIs:' /etc/apt/sources.list.d/debian.sources)" \
-    && apt-get -o Acquire::Check-Valid-Until=false update \
-    && apt-get -o Acquire::Check-Valid-Until=false install -y --no-install-recommends \
+    && echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/snapshot-valid-until \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
         bash ca-certificates curl git unzip xz-utils \
         build-essential pkg-config iproute2 \
         chromium xvfb xauth fonts-liberation \
