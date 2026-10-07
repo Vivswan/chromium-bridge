@@ -59,12 +59,6 @@ chromium-bridge doctor    # or: chromium-bridge status
 | 舊擴充功能, 新主機 | 舊擴充功能會丟棄不熟悉的 `policy_current` 推送 (有測試固定此行為), 並保留它的本機設定; 新主機仍在分派時套用自己的策略, 所以合併後的強制執行永遠不會比單獨的舊擴充功能更寬鬆。 |
 | 新擴充功能, 缺少選項頁面訊框的主機 | 選項頁面會按需送出 `registration_status`、`registration_repair`、`policy_restrict`、`audit_read` 與 `doctor_report`, 所以「永不先開口」規則不涵蓋它們: 中介的嚴格解析會把瀏覽器這一側的連線拆除。在首次發行前已接受此情況, 因為沒有任何已出貨的主機缺少它們; 之後要涵蓋它, 需要延後的交握宣告主機的控制訊框, 並讓擴充功能依此決定是否送出。 |
 
-## 沒有 Secure Enclave 的 Mac 無法登記
-
-- **你看到:** `chromium-bridge pair` 在 T2 之前的 Intel Mac 上拒絕執行。
-- **這表示:** 每項授予與策略簽章都繫於 Secure Enclave 金鑰, 而那種硬體無法持有它, 且 `requireEnrollment` 的退出選項已經移除。橋接在那裡保持封鎖, 這是刻意的設計, 且沒有復原路徑。
-- **怎麼做:** 使用 Apple Silicon 或 T2 Mac, 或者使用不需要登記的 Linux 或 Windows。
-
 ## 在 WSL 下執行
 
 Chrome、它啟動的原生訊息主機, 以及 MCP 伺服器必須全部屬於同一個作業系統。依 Chrome 執行的位置選擇模式。

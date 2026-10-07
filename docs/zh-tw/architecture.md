@@ -409,6 +409,8 @@ flowchart LR
 
 來自確認視窗的 `presence_confirm` 只在沒有任何已登記憑證能夠作答時才被接受, 所以已登記的瀏覽器永遠不會被降級為一次點擊。
 
+交換對每一次拒絕的回答, 無論在 `presence_result` 還是 `enroll_result` 上, 都帶有一個來自 `src/packages/core/src/webauthn/refusal.rs` 中 `RefusalCode` 名冊的代碼, 它是在場拒絕原因的唯一清單。`moon run gen` 把它輸出為 `refusals.ts`, 而 `src/apps/extension/src/lib/refusals.ts` 以它為鍵為每個代碼配一句話, 所以主機新增的代碼在那裡是型別錯誤, 直到它的句子落地。
+
 驗證測試: [webauthn/tests.rs](../../src/packages/core/src/webauthn/tests.rs), [exchange.test.ts](../../src/apps/extension/tests/webauthn/exchange.test.ts), [ceremony.test.ts](../../src/apps/extension/tests/webauthn/ceremony.test.ts), [webauthn_test.ts](../../tests/browser/webauthn_test.ts)。
 
 ### 6.3 緊急開關
@@ -507,6 +509,8 @@ panic 訊息預設輸出到 stdout, 會損毀 NM 訊框與 MCP NDJSON。緩解: 
 - **稽核轉送允許清單** (`src/packages/core/src/audit.rs` 中的 `EXTENSION_AUDIT_KINDS`): 主機透過 `audit_event` 控制訊框接受的、由擴充功能擁有的稽核種類 (`extension_kind` 由同一份清單推導), 輸出到 `audit.ts`。擴充功能的轉送集合及其稽核環詞彙中被轉送的前綴都建立在產生的常數上, 所以轉送邊界的兩側不可能分歧。
 - **身分** (`src/packages/core/src/identity.rs`): 原生訊息主機 id 與固定的擴充功能資訊清單金鑰, 輸出到 `identity.ts`。擴充功能匯入 `NATIVE_HOST_ID` 用於 `connectNative`, `EXTENSION_MANIFEST_KEY` 用於建置出的資訊清單, 以及由金鑰推導的 `PINNED_EXTENSION_ID` 用於啟動時的自我檢查。註冊引擎直接使用這些常數, 所以不存在會漂移的安裝程式副本。
 - **身分閘門**: 產生 TS 時會從金鑰重新推導 id (`scripts/gen-ops.ts` 在不相符時失敗), 而 `scripts/check-extension-id.ts` (`moon run check-extension-id`, 屬於 `moon run ci`) 驗證建置出的資訊清單與唯一定義處規則。
+- **拒絕名冊** (`src/packages/core/src/webauthn/refusal.rs` 中的 `RefusalCode`): 輸出到 `refusals.ts`; [第 6.2 節](#62-基於-webauthn-的使用者在場) 擁有它列舉了什麼以及誰使用它這一事實。
+- **主機常數** (金鑰標籤、鎖檔名、用戶端名稱與記錄環境變數、稽核預設筆數, 以及瀏覽器鍵, 每一個都是擁有它的 Rust 模組中的常數): 輸出到 `host.ts`, `scripts/check-docs-literals.ts` 以它約束文件, 所以常數重新命名會讓文件閘門失敗, 而不是讓某一頁悄悄出錯。
 - **主機金鑰簽章契約** (`src/packages/core/src/enclave/`: `challenge.rs` 定義網域字串與欄位邊界, `pubkey.rs` 與 `mod.rs` 定義金鑰與簽章的位元組長度以及 `enclave_error` 原因碼): 由核心的 `emit_enclave_contract` 範例輸出到 `enclave.ts` (常數加上 `EnclaveReasonCode` 聯集, 擴充功能的登記狀態機對它做窮盡分類) 與 `enclave-fixture.ts`。
 - 夾具檔保存黃金向量: Rust 建構的訊息位元組加上確定性的軟體 P256 證明, 由 `src/apps/extension/tests/background/enclave-golden.test.ts` 透過擴充功能的 WebCrypto 驗證器重放, 所以簽章訊息的編碼本身在兩種語言間被固定下來。夾具檔的簽署金鑰是公開的測試資料, 在兩側都被列入主機身分的拒絕清單 (核心中的 `ensure_not_fixture_key`, 擴充功能配對驗證器與已儲存固定值驗證器中的 `ENCLAVE_FIXTURE_KEY_ID`)。
 - **策略文件與方向** (`src/packages/core/src/policy/`): 主機持有的 `PolicyDoc`、十五個策略欄位 (四個能力授予、確認策略、`disabledTools`、確認逾時)、它們的預設拒絕值、每個欄位的寬鬆方向表, 以及 `relaxes`/`restricts` 比較, 加上簽章儲存與 `set_signed`/`restrict` 寫入接縫。
@@ -549,7 +553,7 @@ MCP 伺服器 (`src/packages/core/src/error.rs` 中的 `CallError::code()`) 是�
 
 主機擁有安全策略: 四個能力授予、確認策略、`disabledTools` 與確認逾時。
 
-主機在 `runtime_dir()/policy.json` 中最多保存一份簽章的基準加上一份未簽章的限制覆蓋層。狀態透過七個增量加入、由主機處理的控制訊框 (`protocol/control.rs` 中的 `PolicyControl`) 傳遞, 其分類與終結方式與主機金鑰及管理訊框完全相同: 由主機回答, 從不轉送給 MCP 伺服器, 伺服器那一段若試圖注入則被丟棄。
+主機在執行階段目錄下的 `policy.json` 中最多保存一份簽章的基準加上一份未簽章的限制覆蓋層; 該目錄由 `src/packages/core/src/ipc/runtime_dir.rs` 中的 `RuntimeDir` 解析。狀態透過七個增量加入、由主機處理的控制訊框 (`protocol/control.rs` 中的 `PolicyControl`) 傳遞, 其分類與終結方式與主機金鑰及管理訊框完全相同: 由主機回答, 從不轉送給 MCP 伺服器, 伺服器那一段若試圖注入則被丟棄。
 
 ```mermaid
 flowchart LR
@@ -583,7 +587,7 @@ flowchart LR
   - `ok: true` 帶精確的簽章基準位元組 (base64, 讓簽章產物逐位元組地撐過 JSON 這一跳)、選用的簽章與選用的覆蓋層。
   - `ok: false` 帶 `error` (指出儲存缺失、損壞或無法讀取, 或 `policy_get` 格式錯誤), 且絕不帶基準, 所以擴充功能會失敗即關閉, 而不是信任沒人背書的位元組。
 - `policy_restrict { overlay }` (擴充功能 -> 主機) 與 `policy_restrict_result { ok, error? }` (主機 -> 擴充功能): 選項頁面的策略編輯器透過未簽章的限制接縫收緊有效策略, 該接縫拒絕任何放寬; 套用的限制之後會跟著一個攜帶已寫入狀態的 `policy_current`, 所以結果只帶裁決。放寬仍然是簽章寫入 (`chromium-bridge policy set`)。
-- `lang_get {}` / `lang_set { value }` (擴充功能 -> 主機) 與 `lang_current { value, seq }` (主機 -> 擴充功能): 共用的 `uiLanguage` 偏好 (`runtime_dir()/lang.json`), 刻意放在簽章策略文件之外 - 不簽章、不棘輪、無法影響任何安全決策 - 以序號做回音抑制。
+- `lang_get {}` / `lang_set { value }` (擴充功能 -> 主機) 與 `lang_current { value, seq }` (主機 -> 擴充功能): 共用的 `uiLanguage` 偏好 (同一執行階段目錄中的 `lang.json`), 刻意放在簽章策略文件之外 - 不簽章、不棘輪、無法影響任何安全決策 - 以序號做回音抑制。
 
 強制執行契約刻意不對稱: 授予能力的策略帶有主機金鑰對精確位元組的簽章, 且寫入時消耗了一次在場證明; 只移除能力的策略則以未簽章覆蓋層的形式自由傳遞。同一使用者的程序能對主機金鑰做什麼, 是[信任邊界帳冊](./security/trust-boundaries.md#邊界-3-chrome---原生訊息主機-native-messaging-訊框格式)點名的殘餘風險。
 

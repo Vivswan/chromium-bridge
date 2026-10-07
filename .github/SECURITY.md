@@ -95,7 +95,7 @@ These are host-owned policy defaults: the table shows the signed policy contract
 |---------|---------|-------------------|--------------------------|
 | `confirmPageEval` | `true` | `false` = `page_eval` runs with no prompt | Arbitrary JS executes silently on approved origins |
 | `pageEvalEnabled` | `false` | `true` = `page_eval` can run at all (each call still confirms per the rows above) | The arbitrary-JS surface opens on approved origins |
-| `presenceConfirm` | `true` | `false` = `page_eval` and `page_upload` approvals are never routed to a presence provider; no provider is installed today, so both values confirm on the window | When a WebAuthn route for those two lands, `false` keeps their approval a window click rather than an authenticator tap |
+| `presenceConfirm` | `true` | `false` = `page_eval` and `page_upload` approvals confirm on the window instead of asking the browser's enrolled credential for a tap; who answers each act is the [security page's](../docs/security.md#what-you-confirm-and-what-counts-as-presence) | Approving arbitrary JS or a file upload takes a window click, not a tap on the enrolled authenticator |
 | `confirmHighRiskClick` | `true` | `false` = high-risk clicks (submit/link) run with no prompt; `page_press` and `page_select` still confirm on every call regardless | A prompt-injected model can click submit/links on approved origins silently |
 | `confirmTabClose` | `true` | `false` = `tab_close` runs with no prompt | Silent data loss in a closed tab |
 | `confirmGraceMs` | `60000` | Larger = longer click/submit silence window; `0` = every click reconfirms | A same-origin click/submit within the window is silent (never eval) |
