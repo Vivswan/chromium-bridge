@@ -193,13 +193,13 @@ uv is pinned only in `.prototools`, and python is owned by uv: the protocol suit
 
 ## CI layout
 
-`checks.yml` defines each concern once, called by the managed ci.yml inside the all-green gate. The Linux jobs run inside the published CI image (`ghcr.io/<owner>/<repo>-ci:latest`, built by `container-image.yml` from main).
+`checks.yml` defines each concern once, called by the managed ci.yml inside the all-green gate. The Linux jobs run inside the CI image `container-image.yml` builds (`ghcr.io/<owner>/<repo>-ci`). A push to main publishes `:latest` and the content tag (a hash of the build inputs); a pull request that changes a build input publishes the content tag from its own merge commit, so its checks run in the image it changes.
 
-The workflow-level `CI_IMAGE_TAG` is the one switch: an empty value runs every job on the bare runner with the same composite action.
+`scripts/ci-image.ts digest` picks the tag once per run: the content tag when the registry holds it or this pull request is building it (the `image` job waits for that build), else `CI_IMAGE_TAG` (`latest`), with a notice saying why. A fork's pull request cannot publish, so with no image for its inputs it falls back to `latest`. An empty `CI_IMAGE_TAG` runs every job on the bare runner.
 
 | Job | Runs | Where |
 |-----|------|-------|
-| `image` | resolves the image tag to its digest once, so every job pins the same content | bare runner |
+| `image` | picks the image tag and resolves it to its digest once, so every job pins the same content; waits for a pull request's own build | bare runner |
 | `rust` | clippy and tests on ubuntu, macOS, and Windows; fmt, the loom model, rustdoc, and the fuzz workspace's fmt, clippy, and tests on Linux alone | image on Linux, bare elsewhere |
 | `build-release` | `moon run build-release`, uploaded for the suites below | bare runner, so the binary links against the runner's older glibc and runs in both environments |
 | `coverage` | `cargo llvm-cov`, informational (`continue-on-error`, no threshold) | image |

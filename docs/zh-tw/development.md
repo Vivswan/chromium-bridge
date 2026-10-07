@@ -193,13 +193,13 @@ uv 只固定於 `.prototools`, 而 python 由 uv 擁有: 協定測試套件透�
 
 ## CI 配置
 
-`checks.yml` 把每個關注點定義一次, 由受管理的 ci.yml 在 all-green 閘門內呼叫。Linux 工作在已發布的 CI 映像檔 (`ghcr.io/<owner>/<repo>-ci:latest`, 由 `container-image.yml` 從 main 建置) 內執行。
+`checks.yml` 把每個關注點定義一次, 由受管理的 ci.yml 在 all-green 閘門內呼叫。Linux 工作在 `container-image.yml` 建置的 CI 映像檔 (`ghcr.io/<owner>/<repo>-ci`) 內執行。推送到 main 會發布 `:latest` 與內容標籤 (建置輸入的雜湊); 更動了建置輸入的 pull request 會從它自己的合併提交發布內容標籤, 因此它的檢查就在它所更動的映像檔內執行。
 
-工作流程層級的 `CI_IMAGE_TAG` 是唯一的開關: 空值會讓每個工作改以同一個複合 action 在裸機執行器上執行。
+`scripts/ci-image.ts digest` 每次執行選一次標籤: 若登錄所已有內容標籤, 或這個 pull request 正在建置它 (`image` 工作會等待那次建置), 就用內容標籤; 否則用 `CI_IMAGE_TAG` (`latest`), 並以通知說明原因。來自 fork 的 pull request 無法發布, 因此當它的輸入沒有對應映像檔時會回退到 `latest`。`CI_IMAGE_TAG` 為空時, 每個工作都在裸機執行器上執行。
 
 | 工作 | 執行內容 | 位置 |
 |-----|------|-------|
-| `image` | 把映像檔標籤解析成摘要一次, 讓每個工作固定到同一份內容 | 裸機執行器 |
+| `image` | 選定映像檔標籤並解析成摘要一次, 讓每個工作固定到同一份內容; 等待 pull request 自己的建置 | 裸機執行器 |
 | `rust` | 在 ubuntu、macOS 與 Windows 上執行 clippy 與測試; fmt、loom 模型、rustdoc, 以及模糊測試工作區的 fmt、clippy 與測試只在 Linux 上執行 | Linux 用映像檔, 其他平台用裸機 |
 | `build-release` | `moon run build-release`, 上傳供下方的測試套件使用 | 裸機執行器, 讓執行檔連結執行器較舊的 glibc, 在兩種環境中都能執行 |
 | `coverage` | `cargo llvm-cov`, 僅供參考 (`continue-on-error`, 無門檻) | 映像檔 |

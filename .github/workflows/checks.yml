@@ -19,32 +19,37 @@ permissions:
   contents: read
 
 env:
-  # The CI image tag the Linux jobs run in (container-image.yml publishes :latest and :<input hash> from
-  # main; the package must be public, since these jobs hold no packages:read). `latest` rather than the
-  # hash: a PR that moves a pin would otherwise wait for an image that only its own merge can publish, and
-  # inside the image `proto install` and rustup pick the moved pin up anyway. The image job resolves the tag
-  # to its digest once, so every job pins the same content. Empty runs every Linux job on the bare runner,
+  # The tag the Linux jobs fall back to when no image is published for this checkout's build inputs;
+  # scripts/ci-image.ts (digest) owns the choice and resolves it to one digest every job pins. The package
+  # must be public, since these jobs hold no packages:read. Empty runs every Linux job on the bare runner,
   # where setup-moon provisions the same toolchain.
   CI_IMAGE_TAG: latest
 
 jobs:
   # The image's own user cannot write the runner-owned workspace, hence root. Every consumer carries a
   # zizmor unpinned-images ignore: the audit is static and cannot follow the expression to the digest
-  # resolved here, which is the pin.
+  # resolved here, which is the pin. The timeout is the build's (container-image.yml): a PR that changes a
+  # build input waits here for the image it is building; a failed build, or a registry that keeps failing to
+  # answer, spends it.
   image:
     name: CI image
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 65
     outputs:
       container: ${{ steps.container.outputs.container }}
     steps:
+      # Full history: the digest step diffs the PR against its base to learn whether it changes a build input.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: .bun-version
       - id: container
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
         run: bun scripts/ci-image.ts digest
 
   # macOS compiles the cfg(target_os = "macos") enclave code and Windows the cfg(windows) named-pipe

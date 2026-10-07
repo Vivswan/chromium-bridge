@@ -193,13 +193,13 @@ uv 只固定在 `.prototools` 中, python 由 uv 管理: 协议测试套件通�
 
 ## CI 布局
 
-`checks.yml` 把每个关注点定义一次, 由受管 ci.yml 在 all-green 门禁内调用。Linux 作业在已发布的 CI 镜像内运行 (`ghcr.io/<owner>/<repo>-ci:latest`, 由 `container-image.yml` 从 main 构建)。
+`checks.yml` 把每个关注点定义一次, 由受管 ci.yml 在 all-green 门禁内调用。Linux 作业在 `container-image.yml` 构建的 CI 镜像 (`ghcr.io/<owner>/<repo>-ci`) 内运行。推送到 main 会发布 `:latest` 和内容标签 (构建输入的哈希); 改动了构建输入的拉取请求会从它自己的合并提交发布内容标签, 因此它的检查就在它所改动的镜像内运行。
 
-工作流级别的 `CI_IMAGE_TAG` 是唯一的开关: 空值会让每个作业都在裸运行器上用同一个复合 action 运行。
+`scripts/ci-image.ts digest` 每次运行选一次标签: 若注册表已有内容标签, 或这个拉取请求正在构建它 (`image` 作业会等待那次构建), 就用内容标签; 否则用 `CI_IMAGE_TAG` (`latest`), 并以通知说明原因。来自 fork 的拉取请求无法发布, 因此当它的输入没有对应镜像时会回退到 `latest`。`CI_IMAGE_TAG` 为空时, 每个作业都在裸运行器上运行。
 
 | 作业 | 运行内容 | 位置 |
 |-----|------|-------|
-| `image` | 把镜像标签解析为摘要一次, 这样每个作业固定的都是同一份内容 | 裸运行器 |
+| `image` | 选定镜像标签并解析为摘要一次, 这样每个作业固定的都是同一份内容; 等待拉取请求自己的构建 | 裸运行器 |
 | `rust` | 在 ubuntu、macOS 和 Windows 上运行 clippy 和测试; fmt、loom 模型、rustdoc 以及模糊测试工作区的 fmt、clippy 和测试只在 Linux 上运行 | Linux 上用镜像, 其他平台用裸运行器 |
 | `build-release` | `moon run build-release`, 上传供下面的测试套件使用 | 裸运行器, 这样二进制链接到运行器上较旧的 glibc, 在两种环境中都能运行 |
 | `coverage` | `cargo llvm-cov`, 仅供参考 (`continue-on-error`, 无阈值) | 镜像 |

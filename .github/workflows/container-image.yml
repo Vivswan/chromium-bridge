@@ -1,6 +1,10 @@
 # Pushing needs packages: write, which checks.yml's jobs cannot hold (the caller runs them with
 # contents: read), so publishing the image compose.yaml builds is its own workflow. GHCR creates the
 # package private on first push; make it public once in the package settings.
+#
+# A pull request that changes a build input builds the image from its merge commit and pushes the content
+# tag alone, so checks.yml's image job on the same event runs that pull request's Linux jobs in it
+# (scripts/ci-image.ts digest waits for the tag). A fork's pull request is skipped: its token is read-only.
 
 name: Container image
 
@@ -13,21 +17,30 @@ on:
       - .prototools
       - rust-toolchain.toml
       - .github/workflows/container-image.yml
+  pull_request:
+    paths:
+      - Containerfile
+      - .dockerignore
+      - .prototools
+      - rust-toolchain.toml
+      - .github/workflows/container-image.yml
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# Runs serialize, so no other run of this workflow pushes between a run's head check and its own push.
-# GitHub keeps one pending run per group: a push superseded before its run starts is cancelled, and its
-# content tag is published by a manual dispatch if ever needed.
+# Main's runs serialize, so no other run of this workflow pushes between a run's head check and its own
+# push. GitHub keeps one pending run per group: a push superseded before its run starts is cancelled, and
+# its content tag is published by a manual dispatch if ever needed. A pull request's runs take their own
+# lane, where a newer push cancels the stale build.
 concurrency:
-  group: container-image
-  cancel-in-progress: false
+  group: container-image-${{ github.event_name == 'pull_request' && github.ref || 'main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   publish:
     name: Build and push the CI image
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
