@@ -2,9 +2,10 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "ignoreExportsUsedInFile": true,
   // Binaries that moon tasks and CI provide outside package.json: the task
-  // runner itself, the Rust toolchain, and the Windows registry tool the
-  // browser e2e drives on that platform.
-  "ignoreBinaries": ["moon", "rustup", "rustc", "reg.exe"],
+  // runner itself, the Rust toolchain, uv (the proto-managed Python runner the
+  // presence suite spawns to mint its host key), and the Windows registry tool
+  // the browser e2e drives on that platform.
+  "ignoreBinaries": ["moon", "rustup", "rustc", "uv", "reg.exe"],
   "workspaces": {
     ".": {
       // fake-llm.ts is launched by name from a moon task as well as imported by run.ts; the

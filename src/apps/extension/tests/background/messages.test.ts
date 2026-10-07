@@ -88,7 +88,11 @@ const REQUESTS: { [K in RuntimeMsgType]: RuntimeRequest<K> } = {
   get_policy: { type: "get_policy" },
   restrict_policy: { type: "restrict_policy", overlay: { pageEvalEnabled: false } },
   grant_policy: { type: "grant_policy", overlay: { pageEvalEnabled: true } },
-  rollback_policy: { type: "rollback_policy", revision: 1 },
+  rollback_policy: {
+    type: "rollback_policy",
+    revision: 1,
+    entry: { id: "a1" },
+  },
   get_policy_history: { type: "get_policy_history" },
   confirm_ready: { type: "confirm_ready", id: "x" },
   confirm_resolve: { type: "confirm_resolve", id: "x", approved: true },

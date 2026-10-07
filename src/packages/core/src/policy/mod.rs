@@ -27,8 +27,8 @@ pub use cli::{
     PolicyHistoryEntryReport, PolicyHistoryReport, PolicyStatusReport, PolicyStoreState,
 };
 pub use plan::{
-    audit_grant_refused, plan_grant, refused_grant, rollback_inputs, wire_names, Grant,
-    RollbackInputs, RollbackPlan,
+    audit_grant_refused, plan_grant, refused_grant, rollback_inputs, touched_fields, wire_names,
+    Grant, HistoryEntryRef, RollbackInputs, RollbackPlan,
 };
 pub use store::{
     clear_baseline_locked, prepare_grant, restrict, set_signed, PolicyHistory, PolicyHistoryEntry,

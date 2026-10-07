@@ -1052,7 +1052,7 @@ fn a_presence_begin_over_an_unreadable_trust_record_is_refused_as_a_store_error(
 
 use crate::allowlist::{Anchor, ClientName};
 use crate::ipc::SignerId;
-use crate::policy::{PolicyField, PolicyOverlay, PolicyStore, PolicyValues};
+use crate::policy::{HistoryEntryRef, PolicyField, PolicyOverlay, PolicyStore, PolicyValues};
 use crate::protocol::control::PolicyControl;
 use crate::trust::Clients;
 
@@ -1406,7 +1406,7 @@ fn a_rollback_from_the_page_takes_the_lane_the_plan_decides() {
     assert_eq!(revision(), 2);
 
     // Revision 1 is tighter than the current state: free, no request, the written state pushed.
-    let replies = brave.policy_rollback(1);
+    let replies = brave.policy_rollback(1, None);
     assert_eq!(replies.len(), 2, "{replies:?}");
     assert_eq!(write_verdict(&replies[0]), (true, None));
     assert!(is_policy_current(&replies[1]), "{replies:?}");
@@ -1414,12 +1414,12 @@ fn a_rollback_from_the_page_takes_the_lane_the_plan_decides() {
     assert_eq!(revision(), 2, "a tightening leaves the baseline alone");
 
     // Already there: nothing to do, nothing pushed.
-    let replies = brave.policy_rollback(1);
+    let replies = brave.policy_rollback(1, None);
     assert_eq!(replies.len(), 1, "{replies:?}");
     assert_eq!(write_verdict(&replies[0]), (true, None));
 
     // Revision 2 relaxes the current state: a request, then a fresh signed revision.
-    let replies = brave.policy_rollback(2);
+    let replies = brave.policy_rollback(2, None);
     assert_eq!(replies.len(), 1, "{replies:?}");
     assert_eq!(
         presence_action(&replies[0]),
@@ -1439,7 +1439,7 @@ fn a_rollback_from_the_page_takes_the_lane_the_plan_decides() {
 
     // Revision 2 now names two superseded states (before and after its restriction); revision 9 none.
     for (revision, needle) in [(2, "ambiguous"), (9, "no history entry at revision 9")] {
-        let replies = brave.policy_rollback(revision);
+        let replies = brave.policy_rollback(revision, None);
         assert_eq!(replies.len(), 1, "{replies:?}");
         let (ok, error) = write_verdict(&replies[0]);
         assert!(!ok);
@@ -1457,6 +1457,83 @@ fn a_rollback_from_the_page_takes_the_lane_the_plan_decides() {
             .any(|d| d.starts_with("act=policy_rollback; auth=")),
         "{acts:?}"
     );
+    // A surface names the row it listed, so a revision the ring holds twice is no obstacle to it: the later
+    // row (revision 2 under its restriction) tightens for free, the earlier (unrestricted) relaxes behind a
+    // request, and a record the ring no longer holds is refused rather than guessed.
+    let report = crate::policy::gather_history_report().unwrap();
+    let rows: Vec<HistoryEntryRef> = report
+        .entries
+        .iter()
+        .filter(|e| e.revision == Some(2))
+        .map(|e| HistoryEntryRef { id: e.id.clone() })
+        .collect();
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    let replies = brave.policy_rollback(2, Some(rows[1].clone()));
+    assert_eq!(write_verdict(&replies[0]), (true, None));
+    assert!(!effective().page_eval_enabled);
+    let replies = brave.policy_rollback(2, Some(rows[0].clone()));
+    assert_eq!(
+        presence_action(&replies[0]),
+        "roll policy back to revision 2: pageEvalEnabled=on"
+    );
+    let gone = HistoryEntryRef { id: "0".repeat(64) };
+    let replies = brave.policy_rollback(2, Some(gone));
+    assert_eq!(
+        write_verdict(&replies[0]),
+        (
+            false,
+            Some(
+                "the policy history no longer holds that record; refresh it and choose again"
+                    .into()
+            )
+        )
+    );
+}
+
+/// The request's own validity and the prompt's bound are decided before the first store read: with the store
+/// unreadable, a tool name the grammar refuses and a change past the bound get their own sentences, and only a
+/// request that passes both reaches the store's refusal.
+#[test]
+fn validity_and_the_bound_are_decided_before_the_first_store_read() {
+    let _dir = scratch_runtime_dir();
+    let path = PolicyStore::path().unwrap();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, b"{").unwrap();
+    let mut brave = Exchange::new(label("brave"));
+    enroll_tofu(&mut brave, &Authenticator::new(0x11));
+    let tools = |tools: Vec<String>| PolicyOverlay {
+        disabled_tools: Some(tools),
+        ..PolicyOverlay::default()
+    };
+    let cases = [
+        (
+            tools(vec!["bad,tool".into()]),
+            "invalid policy write: a disabledTools entry contains a comma, which the comma-joined CLI \
+             transport cannot round-trip"
+                .to_string(),
+        ),
+        (
+            tools((0..40).map(|i| format!("tool_{i:0>60}")).collect()),
+            format!(
+                "invalid policy write: the change summary exceeds the {MAX_ACTION_LEN}-byte bound a \
+                 presence prompt can show"
+            ),
+        ),
+    ];
+    for (overlay, want) in cases {
+        let replies = brave.policy_set(overlay);
+        assert_eq!(write_verdict(&replies[0]), (false, Some(want)));
+    }
+    let replies = brave.policy_set(page_eval_grant());
+    let (ok, error) = write_verdict(&replies[0]);
+    assert!(!ok);
+    assert!(
+        error
+            .as_deref()
+            .is_some_and(|e| e.starts_with("the policy store is unreadable (")),
+        "the control: a valid request reaches the store and is refused there: {error:?}"
+    );
+    assert!(audit_records(AuditKind::PolicyWrite).is_empty());
 }
 
 /// Pairing a trusted client from the page runs the CLI's own seam behind this browser's tap: the request names

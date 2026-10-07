@@ -246,8 +246,14 @@ describe("PolicyEditor lanes", () => {
     replies.get_policy_history = () => ({
       ok: true,
       entries: [
-        { revision: 2, signed: true, overlay_active: true, superseded_unix: 1_700_000_000 },
-        { signed: false, overlay_active: false, superseded_unix: 1_700_000_100 },
+        {
+          id: "a1",
+          revision: 2,
+          signed: true,
+          overlay_active: true,
+          superseded_unix: 1_700_000_000,
+        },
+        { id: "b2", signed: false, overlay_active: false, superseded_unix: 1_700_000_100 },
       ],
     });
     await mount();
@@ -258,7 +264,15 @@ describe("PolicyEditor lanes", () => {
     expect(rollbacks).toHaveLength(1);
     // Applied free: no request, and the ring is re-read.
     await userEvent.click(rollbacks[0] as HTMLElement);
-    await waitFor(() => expect(writes()).toEqual([{ type: "rollback_policy", revision: 2 }]));
+    await waitFor(() =>
+      expect(writes()).toEqual([
+        {
+          type: "rollback_policy",
+          revision: 2,
+          entry: { id: "a1" },
+        },
+      ]),
+    );
     await waitFor(() =>
       expect(sent.filter((m) => m.type === "get_policy_history")).toHaveLength(2),
     );
@@ -275,6 +289,43 @@ describe("PolicyEditor lanes", () => {
     });
     await userEvent.click(screen.getByRole("button", { name: "Roll back" }));
     await waitFor(() => expect(asserts()).toEqual([ASSERT]));
+  });
+
+  test("two rows at one revision roll back by the row, not the revision", async () => {
+    // Every restriction while revision 4 was current pushed a ring entry at revision 4; the host refuses
+    // "revision 4" as ambiguous, so the page names the row it listed.
+    replies.get_policy_history = () => ({
+      ok: true,
+      entries: [
+        {
+          id: "c3",
+          revision: 4,
+          signed: true,
+          overlay_active: false,
+          superseded_unix: 1_700_000_000,
+        },
+        {
+          id: "d4",
+          revision: 4,
+          signed: true,
+          overlay_active: true,
+          superseded_unix: 1_700_000_000,
+        },
+      ],
+    });
+    await mount();
+    const rollbacks = await screen.findAllByRole("button", { name: "Roll back" });
+    expect(rollbacks).toHaveLength(2);
+    await userEvent.click(rollbacks[1] as HTMLElement);
+    await waitFor(() =>
+      expect(writes()).toEqual([
+        {
+          type: "rollback_policy",
+          revision: 4,
+          entry: { id: "d4" },
+        },
+      ]),
+    );
   });
 
   test("a pin revocation (enclavePin cleared, policy record kept) re-reads the posture and drops the controls", async () => {

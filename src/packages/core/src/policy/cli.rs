@@ -17,8 +17,8 @@ use super::plan::{
     decode_entry_doc, plan_grant, refused_grant, rollback_inputs, touched_fields, wire_names,
 };
 use super::{
-    restrict, set_signed, FieldKind, Grant, PolicyField, PolicyHistory, PolicyOverlay, PolicyStore,
-    PolicyValues, RollbackPlan,
+    restrict, set_signed, FieldKind, Grant, HistoryEntryRef, PolicyField, PolicyHistory,
+    PolicyOverlay, PolicyStore, PolicyValues, RollbackPlan,
 };
 use crate::audit::Surface;
 use crate::cli::PolicyCommand;
@@ -129,6 +129,8 @@ pub struct PolicyHistoryEntryReport {
     /// The record's baseline revision, or `null` if that historical baseline
     /// is unreadable (a damaged ring entry never blocks the report).
     pub revision: Option<u64>,
+    /// The record's content identity ([`crate::policy::PolicyHistoryEntry::id`]), what `rollback --entry` names.
+    pub id: String,
     /// Whether the superseded baseline carried a signature.
     pub signed: bool,
     /// Whether it carried a restriction overlay.
@@ -202,6 +204,7 @@ fn history_report(history: &PolicyHistory) -> PolicyHistoryReport {
             .entries
             .iter()
             .map(|e| PolicyHistoryEntryReport {
+                id: e.id(),
                 revision: decode_entry_doc(&e.baseline_b64).ok().map(|d| d.revision),
                 signed: e.sig_b64.is_some(),
                 overlay_active: e.overlay.is_some(),
@@ -296,7 +299,7 @@ fn render_history(r: &PolicyHistoryReport) -> String {
             .map(|n| n.to_string())
             .unwrap_or_else(|| "?".to_string());
         out.push_str(&format!(
-            "  revision {revision:<6} {} {} superseded_unix={}\n",
+            "  revision {revision:<6} {} {} superseded_unix={} entry={}\n",
             if e.signed { "signed  " } else { "unsigned" },
             if e.overlay_active {
                 "overlay"
@@ -304,6 +307,7 @@ fn render_history(r: &PolicyHistoryReport) -> String {
                 "no-overlay"
             },
             e.superseded_unix,
+            e.id,
         ));
     }
     out
@@ -332,9 +336,11 @@ pub fn run_policy(command: PolicyCommand) -> i32 {
         PolicyCommand::History { json } => run_history(json),
         PolicyCommand::Set { overlay, json } => run_set(overlay, json, TerminalStdin::require()),
         PolicyCommand::Restrict { overlay } => run_restrict(overlay),
-        PolicyCommand::Rollback { revision, json } => {
-            run_rollback(revision, json, TerminalStdin::require())
-        }
+        PolicyCommand::Rollback {
+            revision,
+            entry,
+            json,
+        } => run_rollback(revision, entry, json, TerminalStdin::require()),
     }
 }
 
@@ -487,10 +493,11 @@ fn run_restrict(overlay: PolicyOverlay) -> i32 {
 /// relaxing plan.
 fn run_rollback(
     revision: u64,
+    entry: Option<String>,
     json: bool,
     terminal: Result<TerminalStdin, presence::PresenceError>,
 ) -> i32 {
-    let inputs = match rollback_inputs(revision) {
+    let inputs = match rollback_inputs(revision, entry.map(|id| HistoryEntryRef { id })) {
         Ok(inputs) => inputs,
         Err(error) => return refuse_write("policy rollback", json, error),
     };

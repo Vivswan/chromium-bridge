@@ -254,7 +254,21 @@ fn classification_matrix() {
         ),
         (
             json!({ "type": "policy_rollback", "revision": 3 }),
-            Handle(HostRequest::PolicyRollback { revision: 3 }),
+            Handle(HostRequest::PolicyRollback {
+                revision: 3,
+                entry: None,
+            }),
+        ),
+        (
+            json!({ "type": "policy_rollback", "revision": 3, "entry": { "id": "ab12" } }),
+            Handle(HostRequest::PolicyRollback {
+                revision: 3,
+                entry: Some(crate::policy::HistoryEntryRef { id: "ab12".into() }),
+            }),
+        ),
+        (
+            json!({ "type": "policy_rollback", "revision": 3, "entry": { "index": 1 } }),
+            Malformed(Tag::PolicyRollback),
         ),
         (
             json!({ "type": "policy_rollback", "revision": "3" }),
@@ -846,12 +860,14 @@ fn registration_and_restrict_outcomes_map_onto_the_pinned_wire_shapes() {
         serde_json::to_value(
             HistoryReport::Entries(vec![
                 PolicyHistoryRow {
+                    id: "a1".into(),
                     revision: Some(3),
                     signed: true,
                     overlay_active: false,
                     superseded_unix: 10,
                 },
                 PolicyHistoryRow {
+                    id: "b2".into(),
                     revision: None,
                     signed: false,
                     overlay_active: true,
@@ -865,8 +881,8 @@ fn registration_and_restrict_outcomes_map_onto_the_pinned_wire_shapes() {
             "type": "policy_history_result",
             "ok": true,
             "entries": [
-                { "revision": 3, "signed": true, "overlay_active": false, "superseded_unix": 10 },
-                { "signed": false, "overlay_active": true, "superseded_unix": 11 },
+                { "id": "a1", "revision": 3, "signed": true, "overlay_active": false, "superseded_unix": 10 },
+                { "id": "b2", "signed": false, "overlay_active": true, "superseded_unix": 11 },
             ],
         })
     );

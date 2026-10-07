@@ -153,9 +153,15 @@ export function PolicyEditor() {
         history={history}
         busy={rowBusy}
         onRefresh={() => void refreshHistory()}
-        onRollback={(revision) => {
+        onRollback={(entry) => {
           setActionError(null);
-          void presence.run(() => send({ type: "rollback_policy", revision }));
+          void presence.run(() =>
+            send({
+              type: "rollback_policy",
+              revision: entry.revision,
+              entry: { id: entry.id },
+            }),
+          );
         }}
       />
     </div>
@@ -329,7 +335,7 @@ function HistoryBlock({
   history: RuntimeResponse<"get_policy_history"> | null;
   busy: boolean;
   onRefresh: () => void;
-  onRollback: (revision: number) => void;
+  onRollback: (entry: RollbackEntry) => void;
 }) {
   const { t } = useI18n();
   return (
@@ -354,7 +360,7 @@ function HistoryBlock({
       )}
       {history?.ok && history.entries.length > 0 && (
         <ul className="m-0 mt-1 list-none p-0">
-          {keyedRows(history.entries).map((entry) => (
+          {historyEntries(history.entries).map((entry) => (
             <HistoryRowItem key={entry.key} entry={entry} busy={busy} onRollback={onRollback} />
           ))}
         </ul>
@@ -364,21 +370,26 @@ function HistoryBlock({
 }
 
 /** One ring entry as the page renders it, decided once where the wire row enters: a readable revision with its
- * roll-back, or a damaged entry that offers none. The ring may hold one revision several times (each
- * restriction while it was current), so the key is the revision and time plus how many identical rows precede. */
-type HistoryEntry = { key: string; supersededAt: string } & (
+ * roll-back, or a damaged entry that offers none. The record's content identity is what the roll-back names:
+ * one revision appears once per restriction made while it was current, so the revision alone would not do.
+ * Two identical records (one restriction repeated within a second) share an id and a state, so the row key adds
+ * the occurrence. */
+type HistoryEntry = { id: string; key: string; supersededAt: string } & (
   | { kind: "revision"; revision: number; signed: boolean; overlayActive: boolean }
   | { kind: "damaged" }
 );
 
-function keyedRows(rows: PolicyHistoryRow[]): HistoryEntry[] {
+/** The row a roll-back names: the revision for the plan, the record's identity for the row. */
+type RollbackEntry = Extract<HistoryEntry, { kind: "revision" }>;
+
+function historyEntries(rows: PolicyHistoryRow[]): HistoryEntry[] {
   const seen = new Map<string, number>();
   return rows.map((row) => {
-    const base = `${row.revision ?? "damaged"}-${row.superseded_unix}`;
-    const nth = seen.get(base) ?? 0;
-    seen.set(base, nth + 1);
+    const nth = seen.get(row.id) ?? 0;
+    seen.set(row.id, nth + 1);
     const shared = {
-      key: `${base}-${nth}`,
+      id: row.id,
+      key: `${row.id}-${nth}`,
       supersededAt: new Date(row.superseded_unix * 1000).toLocaleString(),
     };
     return row.revision === undefined
@@ -400,7 +411,7 @@ function HistoryRowItem({
 }: {
   entry: HistoryEntry;
   busy: boolean;
-  onRollback: (revision: number) => void;
+  onRollback: (entry: RollbackEntry) => void;
 }) {
   const { t } = useI18n();
   if (entry.kind === "damaged") {
@@ -423,7 +434,7 @@ function HistoryRowItem({
           {entry.overlayActive && `, ${t("policy.history_overlay")}`}
         </div>
       </div>
-      <Button variant="ghost" onClick={() => onRollback(entry.revision)} disabled={busy}>
+      <Button variant="ghost" onClick={() => onRollback(entry)} disabled={busy}>
         {t("policy.rollback")}
       </Button>
     </li>

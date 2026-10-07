@@ -164,7 +164,7 @@ const FRAMES: Readonly<Record<string, FrameArms>> = {
     {
       type: "policy_history_result",
       ok: true,
-      entries: [{ revision: 3, signed: true, overlay_active: false, superseded_unix: 1 }],
+      entries: [{ id: "a1", revision: 3, signed: true, overlay_active: false, superseded_unix: 1 }],
     },
     { type: "policy_history_result", ok: false, error: "the policy history is unreadable" },
   ],

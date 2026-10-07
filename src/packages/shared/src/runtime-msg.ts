@@ -420,11 +420,14 @@ export const RUNTIME_CONTRACT = contract({
     req: z.strictObject({ type: z.literal("grant_policy"), overlay: PolicyOverlaySchema }),
     res: TapRequired,
   },
+  // The page names the row it listed by the record's content identity, since one revision appears once per
+  // restriction made while it was current; the host refuses a record the ring no longer holds.
   rollback_policy: {
     gate: "extension-page",
     req: z.strictObject({
       type: z.literal("rollback_policy"),
       revision: PolicyRollbackWireSchema.shape.revision,
+      entry: z.strictObject({ id: PolicyHistoryRowSchema.shape.id }),
     }),
     res: z.object({ ok: z.literal(true), request: PresenceRequestFrameSchema.nullable() }),
   },

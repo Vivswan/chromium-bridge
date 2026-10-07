@@ -122,6 +122,22 @@ pub struct PolicyHistoryEntry {
     pub superseded_unix: u64,
 }
 
+impl PolicyHistoryEntry {
+    /// The record's identity for a rollback that names a row: a digest of its content, so it names the same
+    /// record after the ring evicts or appends (a position would not) and two records that share a revision
+    /// and a second differ by their overlay. Two records with one digest hold one state, so either is it.
+    pub fn id(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(self.baseline_b64.as_bytes());
+        hasher.update(b"\n");
+        hasher.update(serde_json::to_vec(&self.overlay).unwrap_or_default());
+        hasher.update(b"\n");
+        hasher.update(self.superseded_unix.to_le_bytes());
+        hex::encode(hasher.finalize())
+    }
+}
+
 /// Push the superseded store record onto the ring, inside the caller's runtime-lock hold. A history failure
 /// never fails the policy write it trails: an unreadable ring is replaced and a failed write dropped, both
 /// logged, because a corrupt convenience file must not deny service to enforcement.

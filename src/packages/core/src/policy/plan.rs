@@ -14,6 +14,8 @@ use super::{
     field_differs, fold, restricts_or_equal, FieldKind, PolicyDoc, PolicyField, PolicyHistory,
     PolicyOverlay, PolicyStore, PolicyValues, PolicyWriteError,
 };
+use serde::{Deserialize, Serialize};
+
 use crate::audit::{AuditKind, AuditRecord, Surface};
 use crate::enclave::base64_decode;
 use crate::presence::PresenceError;
@@ -192,14 +194,32 @@ impl RollbackInputs {
     }
 }
 
+/// One ring entry as a rollback names it: the record's content identity ([`super::PolicyHistoryEntry::id`]), the `id`
+/// the history report lists beside each row. A revision can appear several times (every restriction while it
+/// was current pushed an entry at the unchanged revision), so a surface names the row the user saw, on the page
+/// by its button and on the CLI by `--entry`; a revision alone is refused where it is ambiguous.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEntryRef {
+    pub id: String,
+}
+
 /// The disk reads behind a rollback, output-free so every surface shares one path and one set of refusals.
-pub fn rollback_inputs(revision: u64) -> Result<RollbackInputs, String> {
+/// `entry` names the listed row (the page); without it, `revision` alone must name one state (the CLI).
+pub fn rollback_inputs(
+    revision: u64,
+    entry: Option<HistoryEntryRef>,
+) -> Result<RollbackInputs, String> {
     let history = match PolicyHistory::load() {
         Ok(Some(h)) => h,
         Ok(None) => return Err("there is no policy history on this machine.".to_string()),
         Err(e) => return Err(format!("the policy history is unreadable ({e}).")),
     };
-    let target = find_history_effective(&history, revision)?;
+    let target = match &entry {
+        Some(entry) => find_history_entry(&history, revision, entry)?,
+        None => find_history_effective(&history, revision)?,
+    };
     let (current, baseline) = match PolicyStore::load() {
         Ok(Some(store)) => match (store.effective(), store.baseline_doc()) {
             (Ok(effective), Ok(doc)) => (effective, doc.values()),
@@ -265,6 +285,31 @@ fn find_history_effective(history: &PolicyHistory, revision: u64) -> Result<Poli
             matches.len()
         )),
     }
+}
+
+/// The effective policy of the ring entry whose content identity is `entry.id`, which must sit at `revision`.
+/// A record the ring no longer holds (evicted since the read) is refused rather than guessed.
+fn find_history_entry(
+    history: &PolicyHistory,
+    revision: u64,
+    entry: &HistoryEntryRef,
+) -> Result<PolicyValues, String> {
+    const GONE: &str =
+        "the policy history no longer holds that record; refresh it and choose again";
+    let record = history
+        .entries
+        .iter()
+        .find(|e| e.id() == entry.id)
+        .ok_or_else(|| GONE.to_string())?;
+    let doc = decode_entry_doc(&record.baseline_b64)
+        .map_err(|e| format!("the history entry is unreadable ({e})"))?;
+    if doc.revision != revision {
+        return Err(GONE.to_string());
+    }
+    Ok(fold(
+        &doc.values(),
+        &record.overlay.clone().unwrap_or_default(),
+    ))
 }
 
 /// Strict-parse a stored/history baseline (base64, `deny_unknown_fields`

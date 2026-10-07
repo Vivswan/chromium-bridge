@@ -31,7 +31,10 @@ use std::time::{Duration, Instant};
 use crate::allowlist::{self, Anchor, ClientName, PairClientError};
 use crate::audit::{self, AuditKind, AuditRecord, Surface};
 use crate::ipc::BrowserLabel;
-use crate::policy::{self, Grant, PolicyOverlay, PolicyWriteError, PreparedGrant, RollbackPlan};
+use crate::policy::{
+    self, Grant, HistoryEntryRef, PolicyOverlay, PolicyValues, PolicyWriteError, PreparedGrant,
+    RollbackPlan,
+};
 use crate::presence::request::PresenceRequest;
 use crate::presence::{PresenceAttestation, PresenceError, PresencePath};
 use crate::protocol::control::{
@@ -272,51 +275,60 @@ impl Exchange {
         }
     }
 
-    /// `policy_set`: the signed grant lane. The request is planned over the current baseline first, so an
-    /// unreadable store refuses here with the CLI's words and nothing pending.
+    /// `policy_set`: the signed grant lane. The request's own validity and the prompt's bound are decided on
+    /// the request alone, before the first store read, so a malformed field is refused by its grammar's words
+    /// and an oversized change by the bound's whatever the store's state; the plan over the current baseline
+    /// comes after, and an unreadable store refuses with the CLI's words and nothing pending.
     pub(super) fn policy_set(&mut self, overlay: PolicyOverlay) -> Vec<HostReply> {
         self.pending = None;
+        let lane = GrantLane::Set;
+        // The touched fields' values are the overlay's whatever the baseline, so the summary is known now.
+        let preview = Grant {
+            values: policy::fold(&PolicyValues::default(), &overlay),
+            touched: policy::touched_fields(&overlay),
+        };
+        let action = match grant_action(lane, &preview) {
+            Ok(action) => action,
+            Err(error) => return vec![refused_write(lane.result(), error)],
+        };
         match policy::plan_grant(&overlay) {
-            Ok(grant) => self.begin_grant(grant, GrantLane::Set),
-            Err(error) => vec![refused_write(WriteLane::PolicySet, error)],
+            Ok(grant) => self.begin_grant(grant, lane, action),
+            Err(error) => vec![refused_write(lane.result(), error)],
         }
     }
 
     /// `policy_rollback`: the plan decides the lane exactly as `policy rollback` does. A no-op answers at once,
-    /// a tightening rides the free lane, a relaxation is a grant behind a tap.
-    pub(super) fn policy_rollback(&mut self, revision: u64) -> Vec<HostReply> {
+    /// a tightening rides the free lane, a relaxation is a grant behind a tap. `entry` is the row the page
+    /// listed, so a revision the ring holds more than once is no obstacle to it.
+    pub(super) fn policy_rollback(
+        &mut self,
+        revision: u64,
+        entry: Option<HistoryEntryRef>,
+    ) -> Vec<HostReply> {
         self.pending = None;
         let lane = WriteLane::PolicyRollback;
-        let inputs = match policy::rollback_inputs(revision) {
+        let inputs = match policy::rollback_inputs(revision, entry) {
             Ok(inputs) => inputs,
             Err(error) => return vec![refused_write(lane, error)],
         };
         match inputs.plan() {
             RollbackPlan::NoChange => vec![WriteVerdict::Applied.into_frame(lane)],
             RollbackPlan::Tighten { overlay, .. } => super::restrict_replies(overlay, lane),
-            RollbackPlan::Relax(grant) => self.begin_grant(grant, GrantLane::Rollback { revision }),
+            RollbackPlan::Relax(grant) => {
+                let lane = GrantLane::Rollback { revision };
+                match grant_action(lane, &grant) {
+                    Ok(action) => self.begin_grant(grant, lane, action),
+                    Err(error) => vec![refused_write(lane.result(), error)],
+                }
+            }
         }
     }
 
-    /// Open the presence request for a grant. Refused before any request exists, with the words `policy set`
-    /// prints: an invalid request, a change summary past the action bound, a host with no usable key (the
-    /// up-front refusal), an unreadable enrollment store. The tool list is the summary's only free-form text,
-    /// so its grammar decides first: a NUL byte is its refusal, never the bound's, and the bound is decided
-    /// before the key lookup, so an oversized request on a keyless host stays the promptless refusal it is.
-    fn begin_grant(&mut self, grant: Grant, lane: GrantLane) -> Vec<HostReply> {
+    /// Open the presence request for a grant whose statement already parsed: the write is prepared (the store
+    /// observation, then the host key, the up-front keyless refusal) and the request minted. Refused before
+    /// any request exists, with the words `policy set` prints.
+    fn begin_grant(&mut self, grant: Grant, lane: GrantLane, action: Action) -> Vec<HostReply> {
         let result = lane.result();
-        if let Err(m) = policy::validate_disabled_tools(&grant.values.disabled_tools) {
-            return vec![refused_write(
-                result,
-                PolicyWriteError::Invalid(m.into()).to_string(),
-            )];
-        }
-        let Some(action) = Action::parse(&lane.action_text(&grant)) else {
-            return vec![refused_write(
-                result,
-                PolicyWriteError::Invalid(summary_too_long("change")).to_string(),
-            )];
-        };
         let prepared = match policy::prepare_grant(grant.values, grant.touched, Surface::Extension)
         {
             Ok(prepared) => Box::new(prepared),
@@ -700,6 +712,15 @@ fn revoke_refused(reason: impl Into<Reason>) -> RevokeOutcome {
 
 fn kill_unreadable(error: String) -> HostReply {
     KillStatus::Unreadable { error }.into_frame().into()
+}
+
+/// The statement a grant's tap approves, or the refusal in the lane's own words: the tool list is the
+/// summary's only free-form text, so its grammar decides first, then the bound a presence prompt can show.
+fn grant_action(lane: GrantLane, grant: &Grant) -> Result<Action, String> {
+    policy::validate_disabled_tools(&grant.values.disabled_tools)
+        .map_err(|m| PolicyWriteError::Invalid(m.into()).to_string())?;
+    Action::parse(&lane.action_text(grant))
+        .ok_or_else(|| PolicyWriteError::Invalid(summary_too_long("change")).to_string())
 }
 
 fn refused_write(lane: WriteLane, error: String) -> HostReply {

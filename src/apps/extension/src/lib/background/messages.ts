@@ -152,7 +152,8 @@ const HANDLERS: { [K in RuntimeMsgType]: Handler<K> } = {
   // The grant lanes `policy set` and `policy rollback` run: the host's presence request, or its refusal in
   // the CLI's words before any request; a rollback that only tightens is applied with no request.
   grant_policy: (msg) => beginAct({ type: "policy_set", overlay: msg.overlay }),
-  rollback_policy: (msg) => beginAct({ type: "policy_rollback", revision: msg.revision }),
+  rollback_policy: (msg) =>
+    beginAct({ type: "policy_rollback", revision: msg.revision, entry: msg.entry }),
   get_policy_history: requestPolicyHistory,
   confirm_ready: (msg) => ({ ok: true, payload: getPendingConfirm(msg.id) }),
   confirm_resolve: (msg) => resolveConfirm(msg.id, msg.approved),

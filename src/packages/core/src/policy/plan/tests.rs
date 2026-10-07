@@ -160,3 +160,51 @@ fn find_history_effective_refuses_an_ambiguous_revision() {
             .page_eval_enabled
     );
 }
+
+/// A rollback names a record by its content identity, not its position: two records that share a revision and
+/// a second but differ by their overlay have distinct ids, and the id still names its record after the ring
+/// evicted the one before it, where a position would have named a neighbour.
+#[test]
+fn a_history_entry_is_named_by_its_content_and_survives_an_eviction() {
+    use super::super::PolicyHistoryEntry;
+    let doc = PolicyDoc {
+        revision: 4,
+        page_eval_enabled: true,
+        ..PolicyDoc::default()
+    };
+    let baseline_b64 = base64_encode(&serde_json::to_vec(&doc).unwrap());
+    let entry = |overlay| PolicyHistoryEntry {
+        baseline_b64: baseline_b64.clone(),
+        sig_b64: None,
+        key_id: None,
+        overlay,
+        superseded_unix: 7,
+    };
+    let unrestricted = entry(None);
+    let restricted = entry(Some(PolicyOverlay {
+        page_eval_enabled: Some(false),
+        ..PolicyOverlay::default()
+    }));
+    assert_ne!(unrestricted.id(), restricted.id());
+    let mut history = PolicyHistory {
+        entries: vec![unrestricted, restricted],
+    };
+    let named = HistoryEntryRef {
+        id: history.entries[1].id(),
+    };
+    assert!(
+        !find_history_entry(&history, 4, &named)
+            .unwrap()
+            .page_eval_enabled
+    );
+    history.entries.remove(0);
+    assert!(
+        !find_history_entry(&history, 4, &named)
+            .unwrap()
+            .page_eval_enabled
+    );
+    let gone = HistoryEntryRef { id: "0".repeat(64) };
+    assert!(find_history_entry(&history, 4, &gone)
+        .unwrap_err()
+        .contains("no longer holds that record"));
+}

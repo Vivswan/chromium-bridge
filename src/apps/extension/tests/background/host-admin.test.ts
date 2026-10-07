@@ -282,8 +282,8 @@ describe("the grant lanes behind the presence exchange", () => {
 describe("policy history", () => {
   test("round-trips the ring as the host reports it, and a refusal as its error", async () => {
     const entries = [
-      { revision: 2, signed: true, overlay_active: false, superseded_unix: 20 },
-      { signed: false, overlay_active: true, superseded_unix: 21 },
+      { id: "a1", revision: 2, signed: true, overlay_active: false, superseded_unix: 20 },
+      { id: "b2", signed: false, overlay_active: true, superseded_unix: 21 },
     ];
     const p = requestPolicyHistory();
     expect(posted).toEqual([{ type: "policy_history" }]);

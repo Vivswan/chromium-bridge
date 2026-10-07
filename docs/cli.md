@@ -29,7 +29,7 @@
 | `chromium-bridge policy set <field flags> [--json]` | policy (grant lane) | Mints a fresh SIGNED policy baseline behind the typed terminal confirmation. Signature-only; refuses up front where no host key exists. |
 | `chromium-bridge policy restrict <field flags>` | policy (free lane) | Applies an unsigned restriction overlay; no prompt, because it can only remove capability. |
 | `chromium-bridge policy history [--json]` | read-only | Prints the superseded-revision ring. |
-| `chromium-bridge policy rollback --revision <n> [--json]` | policy | Re-derives a past revision's effective policy as a FRESH write, never a replay. |
+| `chromium-bridge policy rollback --revision <n> [--entry <id>] [--json]` | policy | Re-derives a past revision's effective policy as a FRESH write, never a replay; `--entry` names one record where the revision appears more than once. |
 | `chromium-bridge audit [--limit <n>]` | read-only audit | Prints the on-disk audit trail, oldest first (default: the last 200 records). |
 | `chromium-bridge lang [show \| set <value>]` | display language | Reads or sets the display language the options page shows; `lang` alone is `show`. |
 | `chromium-bridge --help` | help | Usage information. |
@@ -209,7 +209,7 @@ chromium-bridge policy show [--json]              # read-only: store state + eff
 chromium-bridge policy set <field flags> [--json] # GRANT lane: sign a fresh baseline (terminal confirmation)
 chromium-bridge policy restrict <field flags>     # FREE lane: unsigned restriction overlay
 chromium-bridge policy history [--json]           # read-only: superseded revisions
-chromium-bridge policy rollback --revision <n> [--json]
+chromium-bridge policy rollback --revision <n> [--entry <id>] [--json]
 ```
 
 **Field flags.** `set` and `restrict` share one flag per policy field, spelled as the kebab-case of its camelCase wire name: `--cdp-mode`, `--file-upload`, `--handle-dialog`, `--page-eval`, `--confirm-high-risk-click`, `--confirm-page-eval`, `--presence-confirm`, `--confirm-tab-close`, `--warn-precise-snapshot`, `--eval-mask`, `--host-reverify-ms`, `--confirm-grace-ms`, `--click-toast-timeout-ms`, `--eval-toast-timeout-ms`, and `--disabled-tools`.
@@ -236,6 +236,7 @@ chromium-bridge policy rollback --revision <n> [--json]
 - **A rollback that only tightens** rides the free restrict lane with no prompt.
 - **One that relaxes anything** is one fresh terminal confirmation and signature, exactly like any other grant.
 - **The old signed artifact is never written back:** a lower revision must keep failing the extension's ratchet, which is the anti-replay property, not a limitation.
+- **One revision, several records:** every restriction made while a revision was current pushed a record at that revision, so `policy history` lists each record's `entry` id and `--entry <id>` names the one to restore; a bare `--revision` is refused where it is ambiguous. The page's roll-back buttons name the record the same way.
 - **The options page's Previous revisions list** shows the same ring as `policy history` and rolls back the same way, taking the lane the direction decides.
 
 **`--json` contracts.** `show`, `history`, `set`, and `rollback` accept `--json`, which swaps the prose for a versioned report on stdout (and, for the write lanes, a versioned error object on refusal). Check the `v` field first and refuse a newer value before reading anything else (fail closed).

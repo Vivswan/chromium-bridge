@@ -94,7 +94,15 @@ describe("RuntimeMsgSchema", () => {
       },
     ],
     rollback_policy: [
-      { name: "with a negative revision", msg: { type: "rollback_policy", revision: -1 } },
+      {
+        name: "with a negative revision",
+        msg: { type: "rollback_policy", revision: -1, entry: { id: "a1" } },
+      },
+      { name: "without the listed row", msg: { type: "rollback_policy", revision: 1 } },
+      {
+        name: "with a row named by something other than its id",
+        msg: { type: "rollback_policy", revision: 1, entry: { index: 1 } },
+      },
     ],
     set_kill: [
       {

@@ -726,8 +726,13 @@ pub enum PolicyControl {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
-    /// Extension -> host: re-derive `revision`'s effective policy as a fresh write.
-    PolicyRollback { revision: u64 },
+    /// Extension -> host: re-derive `revision`'s effective policy as a fresh write; `entry` names the listed
+    /// row where the revision appears more than once.
+    PolicyRollback {
+        revision: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        entry: Option<crate::policy::HistoryEntryRef>,
+    },
     /// Host -> extension: the rollback verdict ([`WriteVerdict::into_frame`]).
     PolicyRollbackResult {
         ok: bool,
@@ -784,6 +789,8 @@ impl WriteVerdict {
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct PolicyHistoryRow {
+    /// The record's content identity, what a rollback names so the record restored is the one listed.
+    pub id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revision: Option<u64>,
     pub signed: bool,
@@ -791,9 +798,10 @@ pub struct PolicyHistoryRow {
     pub superseded_unix: u64,
 }
 
-impl From<&crate::policy::PolicyHistoryEntryReport> for PolicyHistoryRow {
-    fn from(entry: &crate::policy::PolicyHistoryEntryReport) -> Self {
+impl PolicyHistoryRow {
+    pub fn from_report(entry: &crate::policy::PolicyHistoryEntryReport) -> Self {
         PolicyHistoryRow {
+            id: entry.id.clone(),
             revision: entry.revision,
             signed: entry.signed,
             overlay_active: entry.overlay_active,
@@ -1419,6 +1427,7 @@ pub enum HostRequest {
     /// Free when the target only tightens, the presence exchange when it relaxes anything.
     PolicyRollback {
         revision: u64,
+        entry: Option<crate::policy::HistoryEntryRef>,
     },
     LangGet {},
     LangSet {
