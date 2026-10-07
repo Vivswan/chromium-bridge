@@ -85,6 +85,15 @@ impl PolicyStore {
         }
         Ok(effective)
     }
+
+    /// This store as a plan reads it, carried into the write so the locked re-check can tell whether the store
+    /// it lands over is the one the plan was made over.
+    pub fn observation(&self) -> StoreObservation {
+        StoreObservation {
+            baseline_b64: self.baseline_b64.clone(),
+            overlay: self.overlay.clone(),
+        }
+    }
 }
 
 // ---- History: the rollback ring (data, never authority) ---------------------
@@ -214,8 +223,8 @@ pub enum PolicyWriteError {
     /// The next revision would exceed [`JS_SAFE_INT_MAX`]; refused
     /// promptless.
     RevisionOverflow,
-    /// The store's baseline revision or restriction overlay moved between
-    /// the pre-prompt read and the locked write: a concurrent writer
+    /// The store's baseline or restriction overlay moved between the read
+    /// the write was planned over and the locked write: a concurrent writer
     /// superseded the state the user approved against, so this write
     /// refuses rather than overwriting it.
     Conflict,
@@ -252,8 +261,8 @@ impl std::fmt::Display for PolicyWriteError {
             ),
             PolicyWriteError::Conflict => write!(
                 f,
-                "the policy store changed while this write awaited its \
-                 signature; refusing to overwrite the concurrent write"
+                "the policy store changed while this write was pending; \
+                 refusing to overwrite the concurrent write"
             ),
             PolicyWriteError::Io(e) => write!(f, "policy store: {e}"),
         }
@@ -280,13 +289,7 @@ pub fn set_signed(
     surface: crate::audit::Surface,
     attest: impl FnOnce() -> Result<PresenceAttestation, PresenceError>,
 ) -> Result<PresencePath, PolicyWriteError> {
-    let prepared = prepare_grant(values, touched, surface)?;
-    let auth = attest().map_err(|e| {
-        // The refusal has already happened; the no-downgrade rule makes it terminal, never a floor.
-        prepared.audit_refused(&format!("presence: {e}"));
-        PolicyWriteError::Refused(e.to_string())
-    })?;
-    prepared.commit(auth)
+    prepare_grant(values, touched, surface)?.attest_and_commit(attest)
 }
 
 /// A grant validated, observed, and keyed, awaiting only its presence proof: the half of [`set_signed`] that
@@ -307,6 +310,32 @@ impl PreparedGrant {
     /// same trail entry a refusal inside the seam does.
     pub fn audit_refused(&self, detail: &str) {
         super::audit_grant_refused(self.surface, &self.touched, detail);
+    }
+
+    /// Hold this grant to the store its plan was read over: a rollback's values and touched set are a diff
+    /// against that store, so one that moved since (a restriction another surface landed between the plan and
+    /// this preparation) would land a state the plan never described. Refused as the conflict the locked write
+    /// reports, promptless and unaudited like the other validity preconditions; a `policy set` names its own
+    /// values and needs no such hold.
+    pub fn planned_over(self, over: &StoreObservation) -> Result<Self, PolicyWriteError> {
+        if self.observed.store.as_ref() != Some(over) {
+            return Err(PolicyWriteError::Conflict);
+        }
+        Ok(self)
+    }
+
+    /// Run the surface's presence prompt, then sign and land under its attestation: the tail of
+    /// [`set_signed`] for a caller that prepared the grant itself.
+    pub fn attest_and_commit(
+        self,
+        attest: impl FnOnce() -> Result<PresenceAttestation, PresenceError>,
+    ) -> Result<PresencePath, PolicyWriteError> {
+        let auth = attest().map_err(|e| {
+            // The refusal has already happened; the no-downgrade rule makes it terminal, never a floor.
+            self.audit_refused(&format!("presence: {e}"));
+            PolicyWriteError::Refused(e.to_string())
+        })?;
+        self.commit(auth)
     }
 
     /// Sign and land the prepared document under `auth`. Consumes the attestation: one tap, one write.
@@ -346,7 +375,7 @@ pub fn prepare_grant(
     let host_key_epoch = crate::trust::TrustState::current()
         .map_err(PolicyWriteError::Io)?
         .host_key_epoch();
-    let (store_observation, baseline_anchor, effective_anchor) =
+    let (store_observation, baseline_anchor, effective_anchor, observed_revision) =
         match PolicyStore::load().map_err(PolicyWriteError::Io)? {
             Some(store) => {
                 let doc = store.baseline_doc().map_err(PolicyWriteError::Io)?;
@@ -354,23 +383,21 @@ pub fn prepare_grant(
                 // the relaxation checks on values nobody vouched for.
                 let anchor = store.effective().map_err(PolicyWriteError::Io)?;
                 (
-                    Some(StoreObservation {
-                        revision: doc.revision,
-                        overlay: store.overlay,
-                    }),
+                    Some(store.observation()),
                     doc.values(),
                     anchor,
+                    Some(doc.revision),
                 )
             }
             // No store: the anchor is the deny baseline the extension enforces, so a first write's grants
             // are relaxations against it and must be named in `touched`.
-            None => (None, PolicyValues::default(), PolicyValues::default()),
+            None => (None, PolicyValues::default(), PolicyValues::default(), None),
         };
     let observed = PrePromptObservation {
         store: store_observation,
         host_key_epoch,
     };
-    let revision = next_revision(observed.store.as_ref().map(|o| o.revision))?;
+    let revision = next_revision(observed_revision)?;
     // Untouched fields carry BASELINE values: every retained overlay entry was written at-or-under the old
     // baseline value and stays there only if those values carry, so a departure in either direction is an
     // unnamed edit, refused promptless.
@@ -443,10 +470,13 @@ fn lookup_signing_key(
     }
 }
 
-/// The store half of a [`PrePromptObservation`].
+/// The store as one read saw it, by content: the baseline bytes and the overlay. A write planned over it
+/// ([`restrict_planned`], [`PreparedGrant::planned_over`], [`confirm_unmoved`]) refuses with
+/// [`PolicyWriteError::Conflict`] when the store it finds under the lock differs. Content, not the revision: a
+/// fresh baseline after a disposal and re-pair is revision 1 again.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct StoreObservation {
-    revision: u64,
+pub struct StoreObservation {
+    baseline_b64: String,
     overlay: Option<PolicyOverlay>,
 }
 
@@ -454,7 +484,7 @@ struct StoreObservation {
 /// when any of it moved, since landing the signed bytes over another store would silently discard that write.
 ///
 /// ```text
-/// baseline revision  -> a concurrent signed write
+/// baseline bytes     -> a concurrent signed write
 /// overlay            -> a restrict landing mid-prompt
 /// host-key epoch     -> a disposal completing mid-prompt; it clears the baseline, so a first write sees no store
 ///                       before AND after and the store half alone would land a baseline signed by a dead key
@@ -542,14 +572,7 @@ fn write_baseline_locked(
         return Err(PolicyWriteError::Conflict);
     }
     let prev = PolicyStore::load().map_err(PolicyWriteError::Io)?;
-    let current = match &prev {
-        Some(store) => Some(StoreObservation {
-            revision: store.baseline_doc().map_err(PolicyWriteError::Io)?.revision,
-            overlay: store.overlay.clone(),
-        }),
-        None => None,
-    };
-    if current != observed.store {
+    if prev.as_ref().map(PolicyStore::observation) != observed.store {
         return Err(PolicyWriteError::Conflict);
     }
     let overlay = retained_overlay(
@@ -584,11 +607,43 @@ pub fn restrict(
     overlay: PolicyOverlay,
     surface: crate::audit::Surface,
 ) -> Result<(), PolicyWriteError> {
+    restrict_with(overlay, None, surface)
+}
+
+/// [`restrict`] for an overlay derived from a store read (a tightening rollback's diff): it lands only over
+/// the store it was planned over, since over any other it would land a state the plan never described. A store
+/// that moved since refuses with [`PolicyWriteError::Conflict`], the store untouched.
+pub fn restrict_planned(
+    overlay: PolicyOverlay,
+    over: &StoreObservation,
+    surface: crate::audit::Surface,
+) -> Result<(), PolicyWriteError> {
+    restrict_with(overlay, Some(over), surface)
+}
+
+/// The no-write arm of a planned rollback: under the write lock, the store still is the one the plan found
+/// nothing to change about. A store that moved since refuses with [`PolicyWriteError::Conflict`], so "already
+/// there" is never reported over a state the plan never saw.
+pub fn confirm_unmoved(over: &StoreObservation) -> Result<(), PolicyWriteError> {
+    let current =
+        ipc::with_runtime_lock(|_lock| PolicyStore::load()).map_err(PolicyWriteError::Io)?;
+    if current.as_ref().map(PolicyStore::observation).as_ref() != Some(over) {
+        return Err(PolicyWriteError::Conflict);
+    }
+    Ok(())
+}
+
+fn restrict_with(
+    overlay: PolicyOverlay,
+    planned_over: Option<&StoreObservation>,
+    surface: crate::audit::Surface,
+) -> Result<(), PolicyWriteError> {
     let restricted = super::wire_names(&overlay_present_fields(&overlay));
-    let result = match ipc::with_runtime_lock(|lock| Ok(restrict_locked(lock, overlay))) {
-        Ok(inner) => inner,
-        Err(e) => Err(PolicyWriteError::Io(e)),
-    };
+    let result =
+        match ipc::with_runtime_lock(|lock| Ok(restrict_locked(lock, overlay, planned_over))) {
+            Ok(inner) => inner,
+            Err(e) => Err(PolicyWriteError::Io(e)),
+        };
     // auth=none: the trail must never suggest a presence rung vouched for a free write. The promptless
     // preconditions (NoBaseline, Invalid) stay unaudited.
     let record =
@@ -604,6 +659,9 @@ pub fn restrict(
                 "auth=none; restricted={restricted}; refused: relaxes the effective policy"
             )))
         }
+        Err(PolicyWriteError::Conflict) => crate::audit::record(record.outcome("refused").detail(
+            &format!("auth=none; restricted={restricted}; refused: the store moved since the plan"),
+        )),
         Err(PolicyWriteError::Io(e)) => crate::audit::record(
             record
                 .outcome("error")
@@ -618,10 +676,14 @@ pub fn restrict(
 fn restrict_locked(
     lock: &ipc::RuntimeLockToken,
     overlay: PolicyOverlay,
+    planned_over: Option<&StoreObservation>,
 ) -> Result<(), PolicyWriteError> {
     let Some(prev) = PolicyStore::load().map_err(PolicyWriteError::Io)? else {
         return Err(PolicyWriteError::NoBaseline);
     };
+    if planned_over.is_some_and(|over| *over != prev.observation()) {
+        return Err(PolicyWriteError::Conflict);
+    }
     let baseline = prev.baseline_doc().map_err(PolicyWriteError::Io)?.values();
     let stored = prev.overlay.clone().unwrap_or_default();
     // The validating read, not a raw fold: a restriction over a tampered store would write a fresh record

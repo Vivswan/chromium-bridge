@@ -17,8 +17,9 @@ use super::plan::{
     decode_entry_doc, plan_grant, refused_grant, rollback_inputs, touched_fields, wire_names,
 };
 use super::{
-    restrict, set_signed, FieldKind, Grant, HistoryEntryRef, PolicyField, PolicyHistory,
-    PolicyOverlay, PolicyStore, PolicyValues, RollbackPlan,
+    confirm_unmoved, prepare_grant, restrict, restrict_planned, set_signed, FieldKind, Grant,
+    HistoryEntryRef, PolicyField, PolicyHistory, PolicyOverlay, PolicyStore, PolicyValues,
+    RollbackPlan,
 };
 use crate::audit::Surface;
 use crate::cli::PolicyCommand;
@@ -487,7 +488,8 @@ fn run_restrict(overlay: PolicyOverlay) -> i32 {
     }
 }
 
-/// `policy rollback --revision <n> [--json]`: the plan is [`RollbackPlan`]'s (`policy/plan.rs`). Under `--json`
+/// `policy rollback --revision <n> [--json]`: the plan is [`RollbackPlan`]'s (`policy/plan.rs`), and every arm
+/// holds to the store the plan was read over, refusing one that moved since as a conflict. Under `--json`
 /// stdout is the report alone: success, a no-op included, prints the post-write status report, a refusal the
 /// error object. `terminal` is the witness, or the precondition failure that stands for it, consumed only by a
 /// relaxing plan.
@@ -502,16 +504,16 @@ fn run_rollback(
         Err(error) => return refuse_write("policy rollback", json, error),
     };
     match inputs.plan() {
-        RollbackPlan::NoChange => {
-            if json {
-                emit_status_json("policy rollback")
-            } else {
+        RollbackPlan::NoChange => match confirm_unmoved(&inputs.over) {
+            Ok(()) if json => emit_status_json("policy rollback"),
+            Ok(()) => {
                 println!(
                     "policy already matches revision {revision}'s effective policy; nothing to do."
                 );
                 0
             }
-        }
+            Err(e) => refuse_write("policy rollback", json, e.to_string()),
+        },
         RollbackPlan::Tighten { overlay, fields } => {
             if !json {
                 println!(
@@ -519,7 +521,7 @@ fn run_rollback(
                     wire_names(&fields)
                 );
             }
-            match restrict(overlay, Surface::Cli) {
+            match restrict_planned(overlay, &inputs.over, Surface::Cli) {
                 Ok(()) => {
                     if json {
                         emit_status_json("policy rollback")
@@ -552,12 +554,14 @@ fn run_rollback(
                     wire_names(&touched)
                 );
             }
-            match set_signed(
-                values,
-                touched,
-                Surface::Cli,
-                cli_attest("This rollback relaxes the effective policy.", terminal),
-            ) {
+            match prepare_grant(values, touched, Surface::Cli)
+                .and_then(|prepared| prepared.planned_over(&inputs.over))
+                .and_then(|prepared| {
+                    prepared.attest_and_commit(cli_attest(
+                        "This rollback relaxes the effective policy.",
+                        terminal,
+                    ))
+                }) {
                 Ok(rung) => {
                     if json {
                         emit_status_json("policy rollback")

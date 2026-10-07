@@ -228,13 +228,16 @@ fn registration_repair_reply(browsers: Option<RepairBrowsers>) -> AdminControl {
     }
 }
 
-/// Run the free restriction lane for `overlay` and answer on `lane`: the verdict, then the freshly loaded
-/// `policy_current` when the restriction applied. The seam's epoch bump is best-effort after the store write and
+/// Answer a free-lane restriction's `result` on `lane`: the verdict, then the freshly loaded `policy_current`
+/// when the restriction applied. The seam's epoch bump is best-effort after the store write and
 /// `confirmPageEval` is enforced in the extension's mirror alone, so the written state is pushed here; the watch's
 /// push on a successful bump duplicates it. `policy_restrict` answers on its own lane, a tightening rollback on
 /// the rollback lane.
-fn restrict_replies(overlay: crate::policy::PolicyOverlay, lane: WriteLane) -> Vec<HostReply> {
-    match crate::policy::restrict(overlay, crate::audit::Surface::Extension) {
+fn restrict_replies(
+    result: Result<(), crate::policy::PolicyWriteError>,
+    lane: WriteLane,
+) -> Vec<HostReply> {
+    match result {
         Ok(()) => {
             log_info!("native-host", "extension applied a policy restriction");
             vec![
@@ -671,9 +674,13 @@ fn handle_request<W: Write>(
             write_control_reply(out, &registration_repair_reply(browsers))
         }
         HostRequest::PolicyGet {} => write_control_reply(out, &policy_current_reply()),
-        HostRequest::PolicyRestrict { overlay } => {
-            write_replies(out, restrict_replies(overlay, WriteLane::PolicyRestrict))
-        }
+        HostRequest::PolicyRestrict { overlay } => write_replies(
+            out,
+            restrict_replies(
+                crate::policy::restrict(overlay, crate::audit::Surface::Extension),
+                WriteLane::PolicyRestrict,
+            ),
+        ),
         HostRequest::PolicySet { overlay } => write_replies(out, exchange.policy_set(overlay)),
         HostRequest::PolicyHistory {} => write_control_reply(out, &policy_history_reply()),
         HostRequest::PolicyRollback { revision, entry } => {

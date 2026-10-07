@@ -12,7 +12,7 @@
 
 use super::{
     field_differs, fold, restricts_or_equal, FieldKind, PolicyDoc, PolicyField, PolicyHistory,
-    PolicyOverlay, PolicyStore, PolicyValues, PolicyWriteError,
+    PolicyOverlay, PolicyStore, PolicyValues, PolicyWriteError, StoreObservation,
 };
 use serde::{Deserialize, Serialize};
 
@@ -178,7 +178,9 @@ pub fn wire_names(fields: &[PolicyField]) -> String {
         .join(",")
 }
 
-/// The three effective/baseline states a rollback is planned over.
+/// The three effective/baseline states a rollback is planned over, and the store read they came from. Every
+/// arm of the plan is a diff against that read, so each arm's write holds to it ([`super::restrict_planned`],
+/// [`super::PreparedGrant::planned_over`], [`super::confirm_unmoved`]) and refuses a store that moved since.
 pub struct RollbackInputs {
     /// The target revision's effective policy, re-derived from the history.
     pub target: PolicyValues,
@@ -186,6 +188,8 @@ pub struct RollbackInputs {
     pub current: PolicyValues,
     /// The current baseline's values (what a relaxing plan folds over).
     pub baseline: PolicyValues,
+    /// The store `current` and `baseline` were read from.
+    pub over: StoreObservation,
 }
 
 impl RollbackInputs {
@@ -219,9 +223,9 @@ pub fn rollback_inputs(
         Some(entry) => find_history_entry(&history, revision, entry)?,
         None => find_history_effective(&history, revision)?,
     };
-    let (current, baseline) = match PolicyStore::load() {
+    let (current, baseline, over) = match PolicyStore::load() {
         Ok(Some(store)) => match (store.effective(), store.baseline_doc()) {
-            (Ok(effective), Ok(doc)) => (effective, doc.values()),
+            (Ok(effective), Ok(doc)) => (effective, doc.values(), store.observation()),
             (Err(e), _) | (_, Err(e)) => {
                 return Err(format!(
                     "the current baseline is unreadable ({e}); refusing"
@@ -239,6 +243,7 @@ pub fn rollback_inputs(
         target,
         current,
         baseline,
+        over,
     })
 }
 

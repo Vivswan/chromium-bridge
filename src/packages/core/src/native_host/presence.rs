@@ -33,7 +33,7 @@ use crate::audit::{self, AuditKind, AuditRecord, Surface};
 use crate::ipc::BrowserLabel;
 use crate::policy::{
     self, Grant, HistoryEntryRef, PolicyOverlay, PolicyValues, PolicyWriteError, PreparedGrant,
-    RollbackPlan,
+    RollbackPlan, StoreObservation,
 };
 use crate::presence::request::PresenceRequest;
 use crate::presence::{PresenceAttestation, PresenceError, PresencePath};
@@ -292,14 +292,15 @@ impl Exchange {
             Err(error) => return vec![refused_write(lane.result(), error)],
         };
         match policy::plan_grant(&overlay) {
-            Ok(grant) => self.begin_grant(grant, lane, action),
+            Ok(grant) => self.begin_grant(grant, lane, action, None),
             Err(error) => vec![refused_write(lane.result(), error)],
         }
     }
 
     /// `policy_rollback`: the plan decides the lane exactly as `policy rollback` does. A no-op answers at once,
-    /// a tightening rides the free lane, a relaxation is a grant behind a tap. `entry` is the row the page
-    /// listed, so a revision the ring holds more than once is no obstacle to it.
+    /// a tightening rides the free lane, a relaxation is a grant behind a tap; each holds to the store the plan
+    /// was read over and refuses one that moved since as a conflict. `entry` is the row the page listed, so a
+    /// revision the ring holds more than once is no obstacle to it.
     pub(super) fn policy_rollback(
         &mut self,
         revision: u64,
@@ -312,12 +313,18 @@ impl Exchange {
             Err(error) => return vec![refused_write(lane, error)],
         };
         match inputs.plan() {
-            RollbackPlan::NoChange => vec![WriteVerdict::Applied.into_frame(lane)],
-            RollbackPlan::Tighten { overlay, .. } => super::restrict_replies(overlay, lane),
+            RollbackPlan::NoChange => match policy::confirm_unmoved(&inputs.over) {
+                Ok(()) => vec![WriteVerdict::Applied.into_frame(lane)],
+                Err(e) => vec![refused_write(lane, e.to_string())],
+            },
+            RollbackPlan::Tighten { overlay, .. } => super::restrict_replies(
+                policy::restrict_planned(overlay, &inputs.over, Surface::Extension),
+                lane,
+            ),
             RollbackPlan::Relax(grant) => {
                 let lane = GrantLane::Rollback { revision };
                 match grant_action(lane, &grant) {
-                    Ok(action) => self.begin_grant(grant, lane, action),
+                    Ok(action) => self.begin_grant(grant, lane, action, Some(&inputs.over)),
                     Err(error) => vec![refused_write(lane.result(), error)],
                 }
             }
@@ -325,12 +332,22 @@ impl Exchange {
     }
 
     /// Open the presence request for a grant whose statement already parsed: the write is prepared (the store
-    /// observation, then the host key, the up-front keyless refusal) and the request minted. Refused before
-    /// any request exists, with the words `policy set` prints.
-    fn begin_grant(&mut self, grant: Grant, lane: GrantLane, action: Action) -> Vec<HostReply> {
+    /// observation, then the host key, the up-front keyless refusal), held to the store a rollback's plan was
+    /// read over, and the request minted. Refused before any request exists, with the words `policy set` prints.
+    fn begin_grant(
+        &mut self,
+        grant: Grant,
+        lane: GrantLane,
+        action: Action,
+        planned_over: Option<&StoreObservation>,
+    ) -> Vec<HostReply> {
         let result = lane.result();
-        let prepared = match policy::prepare_grant(grant.values, grant.touched, Surface::Extension)
-        {
+        let prepared = policy::prepare_grant(grant.values, grant.touched, Surface::Extension)
+            .and_then(|prepared| match planned_over {
+                Some(over) => prepared.planned_over(over),
+                None => Ok(prepared),
+            });
+        let prepared = match prepared {
             Ok(prepared) => Box::new(prepared),
             Err(e) => return vec![refused_write(result, e.to_string())],
         };

@@ -285,11 +285,11 @@ describe("presence-gated acts beyond the release", () => {
     expect(settled).toBe(false);
     claimAct("policy_set_result", { ok: false })?.({
       ok: false,
-      error: "the policy store changed while this write awaited its signature",
+      error: "the policy store changed while this write was pending",
     });
     await expect(answered).resolves.toEqual({
       ok: false,
-      error: "the policy store changed while this write awaited its signature",
+      error: "the policy store changed while this write was pending",
     });
   });
 

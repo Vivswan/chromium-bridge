@@ -1195,7 +1195,7 @@ fn a_store_that_moves_while_the_tap_is_awaited_refuses_the_grant_as_a_conflict()
     assert!(
         error
             .as_deref()
-            .is_some_and(|e| e.contains("changed while this write awaited its signature")),
+            .is_some_and(|e| e.contains("changed while this write was pending")),
         "{error:?}"
     );
     let written = effective();

@@ -10,7 +10,8 @@
 //! The on-disk store and the two write seams live in [`store`]:
 //! [`PolicyStore`] / [`PolicyHistory`] (fail-closed loads, atomic
 //! runtime-locked writes), and [`set_signed`] / [`restrict`], the only
-//! mutation paths every editing surface shares. The host-side dispatch gate
+//! mutation paths every editing surface shares; a rollback's writes are the
+//! same seams held to the store the plan was read over. The host-side dispatch gate
 //! lives in [`gating`]. Owned elsewhere: the signing domain and the host key
 //! ([`crate::enclave`]), the presence attestation a grant consumes
 //! ([`crate::presence`]), and the control frames that carry the document
@@ -31,8 +32,9 @@ pub use plan::{
     Grant, HistoryEntryRef, RollbackInputs, RollbackPlan,
 };
 pub use store::{
-    clear_baseline_locked, prepare_grant, restrict, set_signed, PolicyHistory, PolicyHistoryEntry,
-    PolicyStore, PolicyWriteError, PreparedGrant,
+    clear_baseline_locked, confirm_unmoved, prepare_grant, restrict, restrict_planned, set_signed,
+    PolicyHistory, PolicyHistoryEntry, PolicyStore, PolicyWriteError, PreparedGrant,
+    StoreObservation,
 };
 
 use serde::{Deserialize, Serialize};

@@ -436,10 +436,13 @@ fn policy_restrict_tightens_the_store_and_refuses_a_relaxation() {
     signed_baseline_granting_page_eval();
 
     let tightened = restrict_replies(
-        crate::policy::PolicyOverlay {
-            page_eval_enabled: Some(false),
-            ..Default::default()
-        },
+        crate::policy::restrict(
+            crate::policy::PolicyOverlay {
+                page_eval_enabled: Some(false),
+                ..Default::default()
+            },
+            crate::audit::Surface::Extension,
+        ),
         WriteLane::PolicyRestrict,
     );
     assert_eq!(
@@ -456,10 +459,13 @@ fn policy_restrict_tightens_the_store_and_refuses_a_relaxation() {
     assert_eq!(overlay.page_eval_enabled, Some(false));
 
     let relaxed = restrict_replies(
-        crate::policy::PolicyOverlay {
-            page_eval_enabled: Some(true),
-            ..Default::default()
-        },
+        crate::policy::restrict(
+            crate::policy::PolicyOverlay {
+                page_eval_enabled: Some(true),
+                ..Default::default()
+            },
+            crate::audit::Surface::Extension,
+        ),
         WriteLane::PolicyRestrict,
     );
     let [HostReply::Policy(PolicyControl::PolicyRestrictResult {
@@ -502,10 +508,13 @@ fn policy_history_answers_the_superseded_ring_as_the_cli_reports_it() {
     );
     signed_baseline_granting_page_eval();
     restrict_replies(
-        crate::policy::PolicyOverlay {
-            page_eval_enabled: Some(false),
-            ..Default::default()
-        },
+        crate::policy::restrict(
+            crate::policy::PolicyOverlay {
+                page_eval_enabled: Some(false),
+                ..Default::default()
+            },
+            crate::audit::Surface::Extension,
+        ),
         WriteLane::PolicyRestrict,
     );
     let PolicyControl::PolicyHistoryResult {
@@ -541,10 +550,13 @@ fn an_applied_restrict_pushes_policy_current_even_when_the_epoch_bump_fails() {
     .unwrap();
 
     let replies = restrict_replies(
-        crate::policy::PolicyOverlay {
-            page_eval_enabled: Some(false),
-            ..Default::default()
-        },
+        crate::policy::restrict(
+            crate::policy::PolicyOverlay {
+                page_eval_enabled: Some(false),
+                ..Default::default()
+            },
+            crate::audit::Surface::Extension,
+        ),
         WriteLane::PolicyRestrict,
     );
     let [HostReply::Policy(PolicyControl::PolicyRestrictResult { ok: true, .. }), HostReply::Policy(PolicyControl::PolicyCurrent {

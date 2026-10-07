@@ -267,9 +267,9 @@ describe("the grant lanes behind the presence exchange", () => {
     handleHostAdminFrame({
       type: "policy_rollback_result",
       ok: false,
-      error: "the policy store changed while this write awaited its signature",
+      error: "the policy store changed while this write was pending",
     });
-    expect(failed(await answered).error).toContain("changed while this write awaited");
+    expect(failed(await answered).error).toContain("changed while this write was pending");
   });
 
   test("a verdict the typed producer cannot emit is a refusal naming the frame, never a success", async () => {
