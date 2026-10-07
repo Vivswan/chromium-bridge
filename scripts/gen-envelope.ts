@@ -24,9 +24,7 @@
 //   G3  oneOf only as a discriminated union (the same required const tag in every branch, values distinct), then
 //       rewritten to anyOf: the mutual exclusivity needs no exclusive-union check at runtime
 //   G4  every internal $ref dereferenced (json-schema-ref-parser) before emission, an external one left in
-//       place for prepare to refuse; nothing downstream resolves one. The library merges a $ref's siblings
-//       over the target, the sibling winning, so a $ref may carry nothing beside it but the description
-//       schemars puts there: a constraint sibling would rewrite the referenced schema and is refused first
+//       place for prepare to refuse; nothing downstream resolves one
 //   G5  every keyword and type on the supported list below, in a position the library enforces (the keyword
 //       census in scripts/tests/gen-schema.test.ts says which it reads); an unlisted keyword aborts until
 //       support lands in that census AND in the adversarial tests. The empty schema {} is the contract's own
@@ -88,13 +86,11 @@ export const ANNOTATION_KEYS = new Set([
   "examples",
 ]);
 
-// The one key schemars emits beside a $ref (a field's doc comment). Any other key, annotation or constraint,
-// fails generation until this set admits it.
 const REF_SIBLING_KEYS = new Set(["description"]);
 
-/** G4: no $ref carries a key beside it, other than the ones REF_SIBLING_KEYS admits, that the dereference
- * would merge over the target. The dereference resolves a $ref in any object of the document, keyword or not,
- * so the walk is over every object, not over the schema keywords. */
+/** G4: the dereference merges a $ref's siblings over the target, the sibling winning (description is the one
+ * key schemars puts beside a $ref). The library resolves a $ref in any object of the document, keyword or
+ * not, so the walk is over every object, not over the schema keywords. */
 export function assertRefSiblings(schema: JsonObject): void {
   walk(schema, (context, node: unknown) => {
     if (!isObject(node) || typeof node.$ref !== "string") return;
