@@ -404,10 +404,16 @@ describe("generated wire schemas and their enforced validators fail closed", () 
       }
 
       for (const key of required) {
-        test(`rejects the frame without required ${key}`, () => {
+        test(`rejects the frame without required ${key}, and with it null`, () => {
           const { [key]: _dropped, ...rest } = valid;
           expect(schema.safeParse(rest).success).toBe(false);
           expect(enforced.safeParse(rest).success).toBe(false);
+          // A required field is never an Option, so null is refused like any other wrong type (a free-form
+          // field admits any JSON on the base, null included).
+          if (!freeForm?.includes(key)) {
+            expect(schema.safeParse({ ...valid, [key]: null }).success).toBe(false);
+          }
+          expect(enforced.safeParse({ ...valid, [key]: null }).success).toBe(false);
         });
       }
 
