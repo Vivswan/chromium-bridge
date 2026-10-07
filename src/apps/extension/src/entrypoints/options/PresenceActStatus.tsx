@@ -5,7 +5,10 @@ import type { PresenceActControls } from "./usePresenceAct";
 
 /** A presence act's progress as every panel shows it: the host's action while the tap or the click that
  * approves it is awaited, the step line, and the refusal as one sentence. `confirmLabel` is the window's
- * button, `refused` wraps the sentence in the panel's own line. */
+ * button, `refused` wraps the sentence in the panel's own line.
+ *
+ * While the tap is awaited the action sits inside the live region: the authenticator's prompt takes the focus
+ * the moment it opens, so what a screen reader announces then must name what the tap approves. */
 export function PresenceActStatus({
   presence,
   confirmLabel,
@@ -37,13 +40,15 @@ export function PresenceActStatus({
           </div>
         </div>
       )}
-      {act.kind === "tapping" && (
-        <div className="mt-2 font-mono text-xs text-text-2">{act.request.action}</div>
-      )}
       {(act.kind === "asking" || act.kind === "tapping" || act.kind === "confirming") && (
         <div role="status" className="mt-2 text-xs text-text-3">
           {act.kind === "asking" && t("presence.asking")}
-          {act.kind === "tapping" && t("presence.tapping")}
+          {act.kind === "tapping" && (
+            <>
+              <div>{t("presence.tapping")}</div>
+              <div className="mt-1 font-mono text-text-2">{act.request.action}</div>
+            </>
+          )}
           {act.kind === "confirming" && t("presence.confirming")}
         </div>
       )}
