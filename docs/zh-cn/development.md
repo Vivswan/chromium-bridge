@@ -115,7 +115,7 @@ cargo fmt --check --manifest-path src/packages/core/fuzz/Cargo.toml
 cargo clippy --locked --manifest-path src/packages/core/fuzz/Cargo.toml --all-targets -- -D warnings
 uv run --no-project --isolated tests/protocol/e2e.py
 bun run tsc -p src/apps/extension        # one TS project; `moon run typecheck` covers them all
-bun run biome ci . --error-on-warnings   # lint + format check, warnings fail (biome.jsonc)
+moon run check-ts                        # Biome lint + format check, warnings fail (biome.jsonc)
 bun run --cwd src/apps/extension build
 ```
 
