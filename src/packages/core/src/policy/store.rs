@@ -472,8 +472,7 @@ fn lookup_signing_key(
 
 /// The store as one read saw it, by content: the baseline bytes and the overlay. A write planned over it
 /// ([`restrict_planned`], [`PreparedGrant::planned_over`], [`confirm_unmoved`]) refuses with
-/// [`PolicyWriteError::Conflict`] when the store it finds under the lock differs. Content, not the revision: a
-/// fresh baseline after a disposal and re-pair is revision 1 again.
+/// [`PolicyWriteError::Conflict`] when the store it finds under the lock differs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoreObservation {
     baseline_b64: String,
