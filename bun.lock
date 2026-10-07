@@ -21,6 +21,7 @@
         "@babel/parser": "^7.29.8",
         "@resvg/resvg-js": "^2.6.2",
         "@types/bun": "^1.4.0",
+        "@types/mvdan-sh": "0.10.9",
         "mvdan-sh": "0.10.1",
         "oxc-parser": "^0.152.0",
         "remark-parse": "^11.0.0",
@@ -607,6 +608,8 @@
     "@types/mdast": ["@types/mdast@4.0.4", "", { "dependencies": { "@types/unist": "*" } }, "sha512-kGaNbPh1k7AFzgpud/gMdvIm5xuECykRR+JnWKQno9TAXVa6WIVCGTPvYGekIDL4uwCZQSYbUxNBSb1aUo79oA=="],
 
     "@types/ms": ["@types/ms@2.1.0", "", {}, "sha512-GsCCIZDE/p3i96vtEqx+7dBUGXrc7zeSK3wwPHIaRThS+9OhWIXRqzs4d6k1SVU8g91DrNRWxWUGhp5KXQb2VA=="],
+
+    "@types/mvdan-sh": ["@types/mvdan-sh@0.10.9", "", { "dependencies": { "@types/node": "*" } }, "sha512-Ij8QpItwUelmWKFwrRs/kV3/RDS41YBTz3nlLiqOlRwPNtzjqILpngxE8mJb1zr9cE2L5c2O4rIou+hRjbLxSQ=="],
 
     "@types/nlcst": ["@types/nlcst@2.0.3", "", { "dependencies": { "@types/unist": "*" } }, "sha512-vSYNSDe6Ix3q+6Z7ri9lyWqgGhJTmzRjZRqyq15N0Z/1/UnVsno9G/N40NBijoYx2seFDIl0+B2mgAb9mezUCA=="],
 

@@ -8,6 +8,17 @@ import type * as Sh from "mvdan-sh";
 import sh from "mvdan-sh";
 import { die, repoRoot } from "./lib.ts";
 
+/** The published types allow a null in every node list the parser never leaves one in. */
+const present = <T>(nodes: (T | null)[]): T[] => nodes.filter((node): node is T => node !== null);
+
+/** What Parser.Parse throws, a Go error the published types leave out. */
+interface ParseError {
+  Filename: string;
+  Text: string;
+  Incomplete: boolean;
+  Error: () => string;
+}
+
 /** moon's resolved task graph (`moon query tasks`), project -> task id -> task; only the fields read here. */
 export type TaskGraph = Record<
   string,
@@ -121,9 +132,11 @@ function literal(raw: string, quoted: boolean): Word {
 }
 
 // bun's global options may or may not take a value (`--config` accepts an omitted one), so no table of them is
-// trusted: like the installer rule, the alias rule reads every word, and `x` anywhere in a bun command is bunx.
+// trusted: like the installer rule, the alias rule reads every word, and `x` or `bunx` anywhere in a bun command
+// is bunx (`bun x`, `bun run bunx`, which runs the bunx on PATH).
 const unalias = (words: Word[]): Word[] => {
-  const x = words[0]?.text === "bun" ? words.findIndex((w) => w.text === "x") : -1;
+  const x =
+    words[0]?.text === "bun" ? words.findIndex((w) => w.text === "x" || w.text === "bunx") : -1;
   return x === -1 ? words : [asWord("bunx"), ...words.slice(x + 1)];
 };
 
@@ -147,7 +160,7 @@ const LAUNCHERS = new Set([
 const runsBunx = (words: Word[]): boolean => {
   const [first, ...rest] = words.map((w) => posix.basename(w.text));
   if (first === "bunx") return true;
-  if (first === "bun") return rest.includes("x");
+  if (first === "bun") return rest.includes("x") || rest.includes("bunx");
   if (first === undefined || !LAUNCHERS.has(first)) return false;
   const bun = rest.indexOf("bun");
   return rest.includes("bunx") || (bun !== -1 && rest.includes("x", bun + 1));
@@ -156,15 +169,12 @@ const runsBunx = (words: Word[]): boolean => {
 const { syntax } = sh;
 const parser = syntax.NewParser();
 
-// Redirect.Op is syntax.RedirOperator's number in the JS build, Go's iota order from token.go: `<&` and `>&`
-// duplicate a descriptor when their word is a number or `-` (`>&file` is bash for `&>file`), `<<` and `<<-`
-// take a delimiter, and `<<<` takes a string. Every other operator's word is a file.
-const DESCRIPTOR_DUPS = new Set([58, 59]);
+// Redirect.Op is syntax.RedirOperator's number in the JS build, Go's iota order from token.go (the published
+// types declare a RedirOperator table the bundle does not export): `<<` and `<<-` take a delimiter and `<<<` a
+// string, data the rules read for an expansion only. Every other operator's word is a file; a descriptor dup's
+// number (`2>&1`) is then a word no rule has anything to say about.
 const NOT_A_FILE = new Set([61, 62, 63]);
-const DESCRIPTOR = /^(\d+|-)$/;
-const namesFile = (redirect: Sh.Redirect): boolean =>
-  !NOT_A_FILE.has(redirect.Op) &&
-  !(DESCRIPTOR_DUPS.has(redirect.Op) && DESCRIPTOR.test(wordOf(redirect.Word).text));
+const namesFile = (redirect: Sh.Redirect): boolean => !NOT_A_FILE.has(redirect.Op);
 
 // A variable is kept by name in braces: moon has already substituted its own tokens, and a shell variable's
 // value is not the auditor's to guess. A substitution's commands are walked as their own, so the word that
@@ -173,8 +183,15 @@ function render(part: Sh.Node, quoted: boolean): Word {
   switch (syntax.NodeType(part)) {
     case "Lit":
       return literal((part as Sh.Lit).Value, quoted);
-    case "SglQuoted":
-      return { text: (part as Sh.SglQuoted).Value, globPrefix: null, reading: "literal" };
+    // ANSI-C quoting (`$'...'`) decodes escapes the rules do not read, so `$'in\x73tall'` is not `install` here.
+    case "SglQuoted": {
+      const { Dollar, Value } = part as Sh.SglQuoted;
+      return {
+        text: Dollar ? `$'${Value}'` : Value,
+        globPrefix: null,
+        reading: Dollar ? "expansion" : "literal",
+      };
+    }
     case "DblQuoted": {
       const parts = (part as Sh.DblQuoted).Parts.map((p) => render(p, true));
       return {
@@ -185,14 +202,14 @@ function render(part: Sh.Node, quoted: boolean): Word {
     }
     case "ParamExp":
       return {
-        text: `\${${(part as Sh.ParamExp).Param.Value}}`,
+        text: `\${${(part as Sh.ParamExp).Param?.Value ?? ""}}`,
         globPrefix: null,
         reading: "expansion",
       };
     // The parser keeps an extglob's pattern as text, so a substitution inside it is unread.
     case "ExtGlob":
       return {
-        text: `(${(part as Sh.ExtGlob).Pattern.Value})`,
+        text: `(${(part as Sh.ExtGlob).Pattern?.Value ?? ""})`,
         globPrefix: quoted ? null : "",
         reading: "opaque",
       };
@@ -207,8 +224,8 @@ function render(part: Sh.Node, quoted: boolean): Word {
   }
 }
 
-// A data word (a heredoc's body or delimiter, a here-string, a descriptor) reads as quoted text: bash expands
-// no brace and matches no glob there. Its backslashes follow double quotes' rule, which a heredoc body and a
+// A data word (a heredoc's body or delimiter, a here-string) reads as quoted text: bash expands no brace and
+// matches no glob there. Its backslashes follow double quotes' rule, which a heredoc body and a
 // here-string each bend a little; the text reaches only a finding's message.
 const wordOf = (w: Sh.Word, quoted = false): Word =>
   w.Parts.map((part) => render(part, quoted)).reduce(
@@ -238,21 +255,25 @@ function parseCommands(task: Task): Commands {
     switch (syntax.NodeType(node)) {
       case "Stmt":
         if ((node as Sh.Stmt).Negated) commands.push({ words: [asWord("!")], assigns: [] });
-        for (const redirect of (node as Sh.Stmt).Redirs) {
-          if (redirect.Hdoc !== null) isData.add(redirect.Hdoc.Pos().Offset());
-          if (!namesFile(redirect)) isData.add(redirect.Word.Pos().Offset());
+        for (const redirect of present((node as Sh.Stmt).Redirs)) {
+          for (const data of [redirect.Hdoc, namesFile(redirect) ? null : redirect.Word]) {
+            if (data !== null) isData.add(data.Pos().Offset());
+          }
         }
         break;
       case "CallExpr": {
         const { Args, Assigns } = node as Sh.CallExpr;
         commands.push({
-          words: unalias(Args.map((arg) => wordOf(arg))),
-          assigns: Assigns.flatMap((a) => (a.Name === null ? [] : [a.Name.Value])),
+          words: unalias(present(Args).map((arg) => wordOf(arg))),
+          assigns: present(Assigns).flatMap((a) => (a.Name === null ? [] : [a.Name.Value])),
         });
         break;
       }
       case "DeclClause":
-        commands.push({ words: [asWord((node as Sh.DeclClause).Variant.Value)], assigns: [] });
+        commands.push({
+          words: [asWord((node as Sh.DeclClause).Variant?.Value ?? "")],
+          assigns: [],
+        });
         break;
       case "Word": {
         const quoted = isData.has(node.Pos().Offset());
@@ -289,11 +310,11 @@ const keywordOf = (node: Sh.Node): string | undefined =>
       : "while"
     : KEYWORDS[syntax.NodeType(node)];
 
-const isParseError = (error: unknown): error is Sh.ParseError =>
+const isParseError = (error: unknown): error is ParseError =>
   typeof error === "object" &&
   error !== null &&
   "Text" in error &&
-  typeof (error as Sh.ParseError).Error === "function";
+  typeof (error as ParseError).Error === "function";
 
 function closure(graph: TaskGraph, start: string): { reached: string[]; unknown: string[] } {
   const reached = new Set<string>();

@@ -36,6 +36,7 @@ const graph: TaskGraph = {
         { target: "root:expands-braces" },
         { target: "root:quotes-braces" },
         { target: "root:launches-inside-the-gate" },
+        { target: "root:quotes-ansi-c" },
       ],
     },
     ci: { command: "noop", deps: [{ target: "root:gate" }, { target: "root:check-yaml" }] },
@@ -295,6 +296,13 @@ const graph: TaskGraph = {
       deps: [],
     },
     "launches-inside-the-gate": { command: "env", script: "env bun test", deps: [] },
+    // ANSI-C quoting decodes escapes the rules do not read.
+    "quotes-ansi-c": { command: "bun", script: "bun $'in\\x73tall' fixture-package", deps: [] },
+    "runs-bunx-through-bun-run": {
+      command: "bun",
+      args: ["run", "bunx", "fixture-tool"],
+      deps: [],
+    },
   },
   extension: {
     build: {
@@ -366,6 +374,8 @@ describe("auditGraph", () => {
         "root:times-bunx-by-path: runs bunx (bun's global cache stands in for a missing package)",
         "root:aliases-bunx-at-a-path: runs bunx (bun's global cache stands in for a missing package)",
         "root:launches-inside-the-gate: runs env inside root:gate (not bun or a cargo toolchain verb)",
+        "root:quotes-ansi-c: the word $'in\\x73tall' inside root:gate is not literal (the rules judge only what they can read)",
+        "root:runs-bunx-through-bun-run: runs bunx (bun's global cache stands in for a missing package)",
         "root:expands-braces: the word in{stall,it} inside root:gate is not literal (the rules judge only what they can read)",
         "root:expands-braces: the word build/x{1..2}/index.json inside root:gate is not literal (the rules judge only what they can read)",
         "root:expands-braces: names the glob build/x{1..2}/index.json; a reader under build/ declares the file or directory it reads",
@@ -434,8 +444,9 @@ describe("auditGraph", () => {
     ]);
   });
 
-  // mvdan-sh exposes a redirect's operator only as Go's enum number, so a release that renumbered them would
-  // silently read a descriptor or a here-string as a file, or a file as neither.
+  // mvdan-sh exposes a redirect's operator only as Go's enum number (the published types declare a table the
+  // bundle lacks), so a release that renumbered them would silently read a here-string as a file, or a file as a
+  // delimiter.
   test("every redirect form that opens a file names it, and a descriptor dup, a here-string, and a heredoc's body and delimiter do not", () => {
     const redirects: TaskGraph = {
       root: {
