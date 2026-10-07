@@ -150,6 +150,11 @@ fn find_history_effective_refuses_an_ambiguous_revision() {
     };
     let err = find_history_effective(&history, 4).unwrap_err();
     assert!(err.contains("ambiguous"), "got: {err}");
+    // The recovery points at the flag that resolves the ambiguity, not at rebuilding the state by hand.
+    assert!(
+        err.contains("policy history") && err.contains("--entry <id>"),
+        "got: {err}"
+    );
     // Identical duplicates are NOT ambiguous: same effective state.
     let history = PolicyHistory {
         entries: vec![entry(None), entry(None)],
