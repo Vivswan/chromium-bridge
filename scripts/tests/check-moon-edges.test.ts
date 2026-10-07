@@ -250,6 +250,21 @@ const graph: TaskGraph = {
         "bun scripts/read.ts in\\{stall,it\\}\nbun scripts/read.ts <<E{O,O}F\nin{stall,it}\nE{O,O}F",
       deps: [],
     },
+    // A `..`, a dot-led pattern a bash without globskipdots may expand to `..`, or a brace alternative spelling
+    // it, behind the first pattern segment climbs out of whatever that segment matched; one before it
+    // normalizes, and `..x` is a name.
+    "climbs-out-of-a-glob": {
+      command: "bun",
+      script: [
+        "bun scripts/read.ts tmp*/../build/extension/manifest.json",
+        "bun scripts/read.ts scripts*/.[.]/build/extension/manifest.json",
+        "bun scripts/read.ts scripts*/.[[:punct:]]/build/extension/manifest.json",
+        "bun scripts/read.ts {a,..}/build/extension/manifest.json",
+        "bun scripts/read.ts {scripts/..,other}/build/extension/manifest.json",
+        "bun scripts/read.ts tmp*/..x/y",
+      ].join("\n"),
+      deps: [],
+    },
     "quotes-a-star-before-a-glob": {
       command: "bun",
       script: 'bun scripts/read.ts "foo*"/../build/x*',
@@ -394,6 +409,11 @@ describe("auditGraph", () => {
         "root:overrides-env: runs (( inside root:gate (not bun or a cargo toolchain verb)",
         "root:names-an-astral-glob: names the glob \u{1F4C1}\u{1F4C1}/../build/*; a reader under build/ declares the file or directory it reads",
         "root:quotes-a-star-before-a-glob: names the glob foo*/../build/x*; a reader under build/ declares the file or directory it reads",
+        "root:climbs-out-of-a-glob: the path tmp*/../build/extension/manifest.json climbs out of a globbed segment, so the auditor cannot tell what it names",
+        "root:climbs-out-of-a-glob: the path scripts*/.[.]/build/extension/manifest.json climbs out of a globbed segment, so the auditor cannot tell what it names",
+        "root:climbs-out-of-a-glob: the path scripts*/.[[:punct:]]/build/extension/manifest.json climbs out of a globbed segment, so the auditor cannot tell what it names",
+        "root:climbs-out-of-a-glob: the path {a,..}/build/extension/manifest.json climbs out of a globbed segment, so the auditor cannot tell what it names",
+        "root:climbs-out-of-a-glob: the path {scripts/..,other}/build/extension/manifest.json climbs out of a globbed segment, so the auditor cannot tell what it names",
         "root:reads-dotted-glob: declares the glob input ./build/web/**/*; a reader under build/ declares the file or directory it reads",
         "root:reads-glob-build: declares the glob input build/web-pdf/**/*; a reader under build/ declares the file or directory it reads",
         "root:writes-glob: declares the glob output build/report-*/**/*; a writer under build/ declares the directory it writes",

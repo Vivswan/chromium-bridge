@@ -352,6 +352,21 @@ const normalized = (path: string): string => posix.normalize(path).replace(/\/$/
 // Only plain paths are judged, and a glob under build/ on either side is a finding: the repository's artifacts
 // are directories, and matching a reader's glob against a writer's is a semantics this rule does not take on.
 const underBuild = (globPrefix: string): boolean => under(BUILD_DIR, posix.normalize(globPrefix));
+// A `..` behind the first pattern segment climbs out of whatever that segment matched (`tmp*/../build/x` reads
+// build/x), so the prefix says nothing about what the path names; a `..` before the pattern normalizes with it.
+// A pattern segment may expand to `..` as well, and which ones is bash's to know (`.[.]`, `.[[:punct:]]`), so
+// every dot-led pattern segment is refused, a `tmp*/.cache*/x` behind a pattern included. A brace may spell
+// `..` as a component of an alternative (`{a,..}`, `{scripts/..,other}`), which the component regex reads over
+// the whole tail since an alternative may span slashes; a range (`{1..3}`) spells no component.
+const PARENT_COMPONENT = /(^|[/{,])\.\.($|[/,}])/;
+const climbsOutOfGlob = (w: Word): boolean => {
+  if (w.globPrefix === null) return false;
+  const tail = w.text.split("/").slice(w.globPrefix.split("/").length - 1);
+  return (
+    PARENT_COMPONENT.test(tail.join("/")) ||
+    tail.some((segment) => segment.startsWith(".") && GLOB_CHAR.test(segment))
+  );
+};
 // Every key of a moon glob list is a glob, a key with no pattern character included.
 const buildGlobs = (globs: Record<string, unknown> | null | undefined): string[] =>
   Object.keys(globs ?? {}).filter((glob) => underBuild(asWord(glob).globPrefix ?? glob));
@@ -423,6 +438,11 @@ export function auditGraph(graph: TaskGraph): string[] {
       }
       const atRoot = project === ROOT_PROJECT || task.options?.runFromWorkspaceRoot === true;
       for (const w of atRoot ? words : []) {
+        if (climbsOutOfGlob(w)) {
+          findings.push(
+            `${target}: the path ${w.text} climbs out of a globbed segment, so the auditor cannot tell what it names`,
+          );
+        }
         if (w.globPrefix !== null && underBuild(w.globPrefix)) {
           findings.push(
             `${target}: names the glob ${w.text}; a reader under build/ declares the file or directory it reads`,
