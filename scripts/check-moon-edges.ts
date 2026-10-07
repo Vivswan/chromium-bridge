@@ -157,6 +157,15 @@ const LAUNCHERS = new Set([
   "timeout",
   "xargs",
 ]);
+// What a command runs is read from literal words only: a command word the rules cannot read (`$'bun\x78'`,
+// `$(echo bun)`, `$X` after a launcher) is refused in every task, and after a launcher every word may be the
+// command.
+const unreadCommandWords = (words: Word[]): Word[] => {
+  const [first, ...rest] = words;
+  if (first === undefined) return [];
+  const candidates = LAUNCHERS.has(posix.basename(first.text)) ? [first, ...rest] : [first];
+  return candidates.filter((w) => w.reading !== "literal");
+};
 const runsBunx = (words: Word[]): boolean => {
   const [first, ...rest] = words.map((w) => posix.basename(w.text));
   if (first === "bunx") return true;
@@ -401,6 +410,11 @@ export function auditGraph(graph: TaskGraph): string[] {
       const { commands, words } = parsed;
       if (commands.some(({ words }) => runsBunx(words))) {
         findings.push(`${target}: runs bunx (bun's global cache stands in for a missing package)`);
+      }
+      for (const w of commands.flatMap(({ words }) => unreadCommandWords(words))) {
+        findings.push(
+          `${target}: the command word ${w.text} is not literal, so the auditor cannot tell what runs`,
+        );
       }
       for (const w of [...words, ...parsed.data].filter((w) => w.reading === "opaque")) {
         findings.push(

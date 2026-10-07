@@ -303,6 +303,12 @@ const graph: TaskGraph = {
       args: ["run", "bunx", "fixture-tool"],
       deps: [],
     },
+    // What runs is read from a literal command word only; after a launcher every word may be the command.
+    "expands-the-command": {
+      command: "$'bun\\x78'",
+      script: "$'bun\\x78' fixture-tool\n$(echo bun) x fixture-tool\nenv $X fixture-tool",
+      deps: [],
+    },
   },
   extension: {
     build: {
@@ -376,6 +382,9 @@ describe("auditGraph", () => {
         "root:launches-inside-the-gate: runs env inside root:gate (not bun or a cargo toolchain verb)",
         "root:quotes-ansi-c: the word $'in\\x73tall' inside root:gate is not literal (the rules judge only what they can read)",
         "root:runs-bunx-through-bun-run: runs bunx (bun's global cache stands in for a missing package)",
+        "root:expands-the-command: the command word $'bun\\x78' is not literal, so the auditor cannot tell what runs",
+        "root:expands-the-command: the command word $(...) is not literal, so the auditor cannot tell what runs",
+        `root:expands-the-command: the command word \${X} is not literal, so the auditor cannot tell what runs`,
         "root:expands-braces: the word in{stall,it} inside root:gate is not literal (the rules judge only what they can read)",
         "root:expands-braces: the word build/x{1..2}/index.json inside root:gate is not literal (the rules judge only what they can read)",
         "root:expands-braces: names the glob build/x{1..2}/index.json; a reader under build/ declares the file or directory it reads",
