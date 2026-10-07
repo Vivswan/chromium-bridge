@@ -16,7 +16,7 @@ import {
   type PolicyFieldName,
   type PolicyValues,
   policyFieldKind,
-} from "../src/policy.gen";
+} from "../generated/policy";
 import {
   foldPolicyOverlay,
   policyFieldRelaxes,

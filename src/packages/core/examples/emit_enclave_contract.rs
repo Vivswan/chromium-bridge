@@ -1,10 +1,11 @@
 //! Emit the host-key signing contract as one JSON document on stdout: domains, field bounds, byte lengths,
 //! `enclave_error` reason codes, and golden vectors pinning the signed-message encodings across languages.
-//! `scripts/gen-ops.ts` (`moon run gen`) turns it into `enclave.gen.ts` and `enclave-fixture.gen.ts` under
-//! `src/packages/shared/src`; the JSON itself is never checked in, the Rust sources are the contract.
+//! `scripts/gen-ops.ts` (`moon run gen`) turns it into `enclave.ts` and `enclave-fixture.ts` under
+//! `src/packages/shared/generated`; neither the JSON nor those modules are checked in, the Rust sources are the
+//! contract.
 //!
 //! The vectors are signed with the PUBLIC fixture key `FIXTURE_KEY_BYTES`, deterministic under RFC 6979 (the
-//! p256 dev-dependency) so regeneration is byte-identical and the check-gen diff gate stays quiet. A public
+//! p256 dev-dependency) so every build emits the same bytes. A public
 //! scalar is deny-listed as an enrollment identity on both sides, so this emitter fails on a fingerprint mismatch
 //! and the deny-list constant cannot drift from the scalar.
 //! ```text

@@ -6,10 +6,10 @@
 //   - docs/security/tool-risk-matrix.md: its per-tool rows (name, Risk, Chrome
 //     perm), its "off by default" claims, and every gate field it names are
 //     diffed against the generated catalogue metadata
-//     (src/packages/shared/src/ops.gen.ts <- catalogue.rs via `moon run gen`,
-//     freshness enforced by check-gen) and the canonical defaults: the
+//     (src/packages/shared/generated/ops.ts <- catalogue.rs via `moon run gen`,
+//     rebuilt before this gate runs) and the canonical defaults: the
 //     GENERATED host-owned policy contract (POLICY_DEFAULTS in
-//     src/packages/shared/src/policy.gen.ts <- policy/mod.rs) for
+//     src/packages/shared/generated/policy.ts <- policy/mod.rs) for
 //     the 15 policy fields, and the settings schema
 //     (src/packages/shared/src/settings.ts) for the browser-owned keys.
 //   - SECURITY.md: the fail-safe-defaults table's Default cells are diffed
@@ -24,12 +24,12 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { OP_NAMES, TOOL_META } from "../src/packages/shared/src/ops.gen";
-import { POLICY_DEFAULTS, POLICY_FIELDS } from "../src/packages/shared/src/policy.gen";
+import { OP_NAMES, TOOL_META } from "../src/packages/shared/generated/ops";
+import { POLICY_DEFAULTS, POLICY_FIELDS } from "../src/packages/shared/generated/policy";
 import { DEFAULTS } from "../src/packages/shared/src/settings";
 
 /** Every canonical default a doc may pin, from BOTH contracts: the generated
- * host-owned policy deny baseline (policy.gen.ts, the 15 migrated fields)
+ * host-owned policy deny baseline (generated/policy.ts, the 15 migrated fields)
  * and the browser-owned settings schema (settings.ts). The two key sets are
  * disjoint by construction (the policy fields left
  * settings.ts); the loop enforces that so a re-added duplicate key cannot
@@ -108,7 +108,7 @@ export function riskMatrixViolations(
 /** The opt-in tools' rows must claim "off by default" exactly when their gate
  * field defaults to false (and never claim it when it defaults to true). The
  * gates are HOST-OWNED policy fields, so this pin reads the
- * GENERATED policy contract (POLICY_DEFAULTS <- policy.gen.ts), not the
+ * GENERATED policy contract (POLICY_DEFAULTS <- generated/policy.ts), not the
  * settings schema. */
 export function offByDefaultViolations(
   rows: MatrixRow[],
@@ -137,7 +137,7 @@ export function offByDefaultViolations(
       // both arms below would go silent forever.
       out.push(
         `gate field \`${key}\` (for \`${tool}\`) is not a policy field in the generated ` +
-          "policy contract (policy.gen.ts)",
+          "policy contract (generated/policy.ts)",
       );
       continue;
     }
@@ -185,7 +185,7 @@ export function settingsKeyViolations(
     const key = m[1] ?? "";
     if (!(key in defaults) && !allowed.has(key)) {
       out.push(
-        `names \`${key}\`, which is neither a policy field (policy.gen.ts) nor a settings ` +
+        `names \`${key}\`, which is neither a policy field (generated/policy.ts) nor a settings ` +
           "key (settings.ts) (a legitimate non-settings token goes in MATRIX_NON_SETTINGS_TOKENS)",
       );
     }
@@ -195,7 +195,7 @@ export function settingsKeyViolations(
 
 /** The fields SECURITY.md's fail-safe-defaults table documents - all six are
  * HOST-OWNED policy fields, so their Default cells pin the
- * generated deny baseline (POLICY_DEFAULTS <- policy.gen.ts). A pinned
+ * generated deny baseline (POLICY_DEFAULTS <- generated/policy.ts). A pinned
  * list, like the repo's other pin tests: dropping (or reformatting away) a
  * row must fail here and force a conscious edit, not vanish silently. Adding
  * a row needs no code change; removing one means updating this pin. */
@@ -227,7 +227,7 @@ export function securityDefaultsViolations(
     seen.add(key);
     if (!(key in defaults)) {
       out.push(
-        `SECURITY.md documents \`${key}\`, which is neither a policy field (policy.gen.ts) ` +
+        `SECURITY.md documents \`${key}\`, which is neither a policy field (generated/policy.ts) ` +
           "nor a settings key (settings.ts)",
       );
       continue;
@@ -300,8 +300,8 @@ if (import.meta.main) {
     for (const v of violations) console.error(`check-docs-policy: ${v}`);
     console.error(
       `\ncheck-docs-policy: ${violations.length} doc/policy mismatch(es). The canonical ` +
-        "sources are the tool catalogue (catalogue.rs via ops.gen.ts), the generated policy " +
-        "contract (policy/mod.rs via policy.gen.ts), and the settings schema " +
+        "sources are the tool catalogue (catalogue.rs via generated/ops.ts), the generated policy " +
+        "contract (policy/mod.rs via generated/policy.ts), and the settings schema " +
         "(src/packages/shared/src/settings.ts); update the docs to match.",
     );
     process.exit(1);

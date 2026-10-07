@@ -4,8 +4,8 @@
 // being hand-mirrored between the content-script and CDP backends. The only
 // backend involvement is the click probe (a DOM read).
 
-import { type OpArgs, TOOL_GRANTS } from "@chromium-bridge/shared/ops.gen";
-import type { PolicyValues } from "@chromium-bridge/shared/policy.gen";
+import { type OpArgs, TOOL_GRANTS } from "@chromium-bridge/shared/generated/ops";
+import type { PolicyValues } from "@chromium-bridge/shared/generated/policy";
 import type { ClickProbe } from "../../dom/page-api";
 import { inLife } from "../../shared/in-life";
 import type { PageOp } from "../../shared/page-ops";

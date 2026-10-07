@@ -234,7 +234,7 @@ macro_rules! error_taxonomy {
             };)*
         }
 
-        /// The canonical cross-process error taxonomy, generated into `src/packages/shared/src/errors.gen.ts`:
+        /// The canonical cross-process error taxonomy, generated into `src/packages/shared/generated/errors.ts`:
         /// one table, so a side that starts assigning a code cannot invent one the other has never heard of.
         ///
         /// ```text

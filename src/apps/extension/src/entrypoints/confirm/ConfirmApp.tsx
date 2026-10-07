@@ -3,9 +3,9 @@ import {
   type ConfirmPayload,
   isPresenceGated,
 } from "@chromium-bridge/shared/confirm";
-import type { PresenceRequestFrame } from "@chromium-bridge/shared/envelope.gen";
-import type { OpName } from "@chromium-bridge/shared/ops.gen";
-import { isPolicyFieldName, type PolicyFieldName } from "@chromium-bridge/shared/policy.gen";
+import type { PresenceRequestFrame } from "@chromium-bridge/shared/generated/envelope";
+import type { OpName } from "@chromium-bridge/shared/generated/ops";
+import { isPolicyFieldName, type PolicyFieldName } from "@chromium-bridge/shared/generated/policy";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/hooks/useI18n";

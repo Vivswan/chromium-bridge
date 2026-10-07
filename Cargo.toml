@@ -130,7 +130,7 @@ windows-sys = { version = "0.61", features = [
 # Schema derivation for the wire envelopes: the emit_envelope_schema
 # example (behind the core's `envelope-schema` feature) feeds
 # scripts/gen-envelope.ts, which generates the extension's Zod validators
-# (`moon run gen`; `check-gen` fails on a stale diff). OUR gen
+# (`moon run gen`, run by every task that reads them). OUR gen
 # feature stays out of default and release builds; note that rmcp compiles
 # its own schemars dependency into the shipped binary for its runtime tool
 # schemas - check-gen-isolation pins that rmcp is the only path.

@@ -27,13 +27,23 @@ jobs:
       BB_REQUIRE_BROWSER: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: ./.github/actions/setup-moon
+        with:
+          cargo: "true"
       # setup-chrome installs Chrome into the ephemeral runner (CHROME_BIN), never a developer's own browser.
       - uses: browser-actions/setup-chrome@48ad923757ca74d66703209fe939badbdf80f2f4 # v2.2.0
         id: chrome
         with:
           chrome-version: ${{ inputs.chrome-version }}
       - run: bun install --frozen-lockfile
+      # The suites import the generated contract modules and run_all.ts builds the extension over them, so the
+      # generated TS is built from the Rust core first (the gen tasks' cargo runs take --frozen, which never fetches).
+      - run: |
+          cargo fetch --locked
+          cargo fetch --locked --manifest-path src/packages/core/fuzz/Cargo.toml
+      - run: moon run gen-shared
       - name: Isolation guard and canary unit tests (no browser needed)
         run: bun test tests/browser/*.test.ts
       # The smoke and security suites load the extension non-headless (MV3 service-worker reliability),

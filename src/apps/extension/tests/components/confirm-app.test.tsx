@@ -4,7 +4,7 @@
 // confirm_ready/confirm_resolve round trip.
 
 import type { ConfirmPayload } from "@chromium-bridge/shared/confirm";
-import type { PolicyFieldName } from "@chromium-bridge/shared/policy.gen";
+import type { PolicyFieldName } from "@chromium-bridge/shared/generated/policy";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";

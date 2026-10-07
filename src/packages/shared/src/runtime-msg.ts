@@ -5,8 +5,6 @@
 // silence and never an undeclared shape.
 
 import { z } from "zod";
-import { ConfirmPayloadSchema } from "./confirm";
-import { AuditEntrySchema, KillMirrorSchema } from "./enclave";
 import {
   AuditTrailEntrySchema,
   EnrollOptionsFrameSchema,
@@ -14,9 +12,11 @@ import {
   PresenceRequestFrameSchema,
   RegistrationRowSchema,
   TrustedClientSchema,
-} from "./envelope.gen";
-import { BROWSER_KEYS } from "./host.gen";
-import { PolicyOverlaySchema, PolicyValuesSchema } from "./policy.gen";
+} from "../generated/envelope";
+import { BROWSER_KEYS } from "../generated/host";
+import { PolicyOverlaySchema, PolicyValuesSchema } from "../generated/policy";
+import { ConfirmPayloadSchema } from "./confirm";
+import { AuditEntrySchema, KillMirrorSchema } from "./enclave";
 import { UI_LANGUAGES } from "./settings";
 import { PresenceAnswerSchema, RegistrationResponseSchema } from "./webauthn";
 

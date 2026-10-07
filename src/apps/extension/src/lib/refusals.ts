@@ -1,4 +1,4 @@
-import type { RefusalCode } from "@chromium-bridge/shared/refusals.gen";
+import type { RefusalCode } from "@chromium-bridge/shared/generated/refusals";
 import type { MessageKey } from "@/lib/i18n";
 
 // The sentences the options page and the confirmation window show for a refused WebAuthn step. The host's presence_result and

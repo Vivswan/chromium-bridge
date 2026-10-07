@@ -11,7 +11,7 @@ import {
   type ClientListWire,
   ClientRevokeResultSchema,
   type ClientRevokeWire,
-} from "@chromium-bridge/shared/envelope.gen";
+} from "@chromium-bridge/shared/generated/envelope";
 import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
 import type { PortCollaborator } from "./connection";
 import { exchange } from "./exchange";

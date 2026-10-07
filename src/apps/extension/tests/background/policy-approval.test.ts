@@ -9,8 +9,8 @@
 // its own tests).
 
 import type { ConfirmPayload } from "@chromium-bridge/shared/confirm";
-import { POLICY_GOLDEN_FIXTURE } from "@chromium-bridge/shared/enclave-fixture.gen";
-import { POLICY_FIELDS } from "@chromium-bridge/shared/policy.gen";
+import { POLICY_GOLDEN_FIXTURE } from "@chromium-bridge/shared/generated/enclave-fixture";
+import { POLICY_FIELDS } from "@chromium-bridge/shared/generated/policy";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 import type { Presentation } from "@/lib/background/confirm/service";

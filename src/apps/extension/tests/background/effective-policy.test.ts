@@ -5,7 +5,7 @@
 // fold consumable outside the dispatch barrier would relax a lost record,
 // and POLICY_DEFAULTS is not the restrictive pole on every field.
 
-import { POLICY_DEFAULTS, type PolicyValues } from "@chromium-bridge/shared/policy.gen";
+import { POLICY_DEFAULTS, type PolicyValues } from "@chromium-bridge/shared/generated/policy";
 import { beforeEach, describe, expect, test } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 import { getEffectivePolicy, withFreshPolicy } from "@/lib/background/effective-policy";

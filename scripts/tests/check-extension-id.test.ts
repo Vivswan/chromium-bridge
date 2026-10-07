@@ -6,7 +6,7 @@ import {
   MANIFEST_PERMISSIONS,
   MINIMUM_CHROME_VERSION,
 } from "../../src/apps/extension/src/lib/shared/manifest-surface";
-import { EXTENSION_MANIFEST_KEY } from "../../src/packages/shared/src/identity.gen";
+import { EXTENSION_MANIFEST_KEY } from "../../src/packages/shared/generated/identity";
 import { builtManifestProblems } from "../check-extension-id";
 
 const scratchDirs: string[] = [];

@@ -1,4 +1,4 @@
-import type { TrustedClient } from "@chromium-bridge/shared/envelope.gen";
+import type { TrustedClient } from "@chromium-bridge/shared/generated/envelope";
 import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";

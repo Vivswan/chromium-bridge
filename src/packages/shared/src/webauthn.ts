@@ -1,10 +1,10 @@
 // The WebAuthn control-frame side the generator cannot own: the inbound classifier the service worker routes
 // on, and the page<->worker shapes the runtime-message contract embeds. The frame validators themselves are
-// generated (envelope.gen.ts from WebAuthnControl in protocol/control.rs, the verdict frames as ok-split
+// generated (generated/envelope.ts from WebAuthnControl in protocol/control.rs, the verdict frames as ok-split
 // unions from the asymmetry table).
 
 import { z } from "zod";
-import type { RefusalCode } from "./refusals.gen";
+import type { RefusalCode } from "../generated/refusals";
 
 // Classification only: the five host->extension WebAuthn frames. The six extension->host frames (enroll_begin,
 // enroll_finish, presence_begin, presence_assert, presence_confirm, browser_revoke) are outbound only and never

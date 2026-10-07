@@ -21,7 +21,7 @@
 // relax, or otherwise alter, an in-flight decision. An accepted push applies
 // from the next decision on.
 
-import { POLICY_DEFAULTS, type PolicyValues } from "@chromium-bridge/shared/policy.gen";
+import { POLICY_DEFAULTS, type PolicyValues } from "@chromium-bridge/shared/generated/policy";
 import { unreachable } from "@chromium-bridge/shared/util";
 import { getPolicyPosture } from "./policy-sync";
 

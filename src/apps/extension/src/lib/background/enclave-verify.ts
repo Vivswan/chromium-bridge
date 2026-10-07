@@ -1,6 +1,6 @@
 // WebCrypto verification for the host-key ceremony. Pure
 // module: no chrome.* usage, so bun unit-tests it with self-checking offline
-// vectors, and the generated golden vectors (enclave-fixture.gen.ts) replay
+// vectors, and the generated golden vectors (generated/enclave-fixture.ts) replay
 // Rust-signed proofs through it.
 //
 // The wire contract is owned by the host
@@ -14,7 +14,7 @@
 // (0x04||X||Y) and `key_id` is the lowercase-hex SHA-256 of those bytes (also
 // the fingerprint the user compares against `chromium-bridge pair` output). The
 // domains, bounds, and lengths are the GENERATED constants from the Rust
-// enclave module (enclave.gen.ts); this module owns only the verification
+// enclave module (generated/enclave.ts); this module owns only the verification
 // logic.
 
 import {
@@ -24,8 +24,8 @@ import {
   MAX_NONCE_BYTES,
   PUBKEY_LEN,
   SIG_LEN,
-} from "@chromium-bridge/shared/enclave.gen";
-import { POLICY_DOMAIN } from "@chromium-bridge/shared/policy.gen";
+} from "@chromium-bridge/shared/generated/enclave";
+import { POLICY_DOMAIN } from "@chromium-bridge/shared/generated/policy";
 
 const utf8 = new TextEncoder();
 

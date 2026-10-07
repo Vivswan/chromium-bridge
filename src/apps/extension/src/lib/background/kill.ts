@@ -25,7 +25,7 @@ import type {
   KillEngageWire,
   KillStatusResult,
   KillStatusWire,
-} from "@chromium-bridge/shared/envelope.gen";
+} from "@chromium-bridge/shared/generated/envelope";
 import pLimit from "p-limit";
 import { browser } from "wxt/browser";
 import { inLife } from "../shared/in-life";
@@ -97,7 +97,7 @@ async function setMirror(state: KillMirror["state"]): Promise<void> {
 
 // ---- port plumbing ----------------------------------------------------------
 
-/** Closed over the GENERATED wire types (envelope.gen.ts <- protocol/control.rs), so a typo'd frame type is a compile
+/** Closed over the GENERATED wire types (generated/envelope.ts <- protocol/control.rs), so a typo'd frame type is a compile
  * error rather than a frame the host drops. kill_release is not here: its reply is a presence request, so the
  * WebAuthn exchange (../webauthn/exchange.ts) posts it. */
 export type KillControlFrame = KillStatusWire | KillEngageWire;

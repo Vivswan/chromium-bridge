@@ -404,7 +404,7 @@ describe("applyAsymmetries", () => {
   });
 
   test("the changes, each at its path, as plain JSON Schema; another module's schema stands in as an import", () => {
-    const overlay = { from: "./policy.gen", symbol: "OverlaySchema", type: "Overlay" };
+    const overlay = { from: "./policy", symbol: "OverlaySchema", type: "Overlay" };
     const { schema, replacements } = applyAsymmetries(
       reader,
       "t",
@@ -416,7 +416,7 @@ describe("applyAsymmetries", () => {
         "$.properties.anchor": entry([{ change: "tag-union-as-enum-object" }]),
         "$.properties.anchor.properties.value": entry([{ change: "string", minLength: 1 }]),
         "$.properties.overlay": entry([
-          { change: "generated-schema", symbol: "OverlaySchema", from: "./policy.gen" },
+          { change: "generated-schema", symbol: "OverlaySchema", from: "./policy" },
         ]),
       },
       true,
@@ -562,7 +562,7 @@ describe("applyAsymmetries", () => {
         "t",
         {
           $: entry([
-            { change: "generated-schema", symbol: "VerdictSchema", from: "./verdict.gen" },
+            { change: "generated-schema", symbol: "VerdictSchema", from: "./verdict" },
             {
               change: "ok-split",
               discriminant: "ok",

@@ -61,13 +61,13 @@ pub fn base64_decode(input: &str) -> Result<Vec<u8>, base64::DecodeError> {
 pub const KEY_LABEL: &str = "com.vivswan.chromium-bridge.enclave.signing.v1";
 
 /// The PUBLIC test-vector scalar behind the golden fixture
-/// (`examples/emit_enclave_contract.rs` -> enclave-fixture.gen.ts): a fixed,
+/// (`examples/emit_enclave_contract.rs` -> generated/enclave-fixture.ts): a fixed,
 /// deliberately well-known P-256 private key, so fixture regeneration is
 /// deterministic. Because the scalar is public, anyone can sign fresh
 /// challenges with it - it protects nothing and must NEVER be accepted as an
 /// enrollment identity. [`ensure_not_fixture_key`] enforces that on the host
 /// side, and the extension refuses it in its pairing verifier and stored-pin
-/// validators (`ENCLAVE_FIXTURE_KEY_ID` in enclave.gen.ts).
+/// validators (`ENCLAVE_FIXTURE_KEY_ID` in generated/enclave.ts).
 pub const FIXTURE_KEY_BYTES: [u8; 32] = [
     0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
     0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
@@ -128,7 +128,7 @@ pub fn reason_code(e: &EnclaveError) -> &'static str {
 /// The closed set of `enclave_error.reason` codes [`reason_code`] can emit,
 /// in [`EnclaveError`] variant order. This is the wire vocabulary the
 /// extension branches on (its compromise latch fires on a subset), so it is
-/// emitted to the TS side as a union (enclave.gen.ts, `moon run gen`);
+/// emitted to the TS side as a union (generated/enclave.ts, `moon run gen`);
 /// `reason_codes_are_exactly_the_emitted_set` pins it to [`reason_code`].
 pub const REASON_CODES: [&str; 5] = [
     "not_enrolled",

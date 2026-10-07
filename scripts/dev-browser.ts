@@ -23,7 +23,7 @@
 
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { PINNED_EXTENSION_ID } from "../src/packages/shared/src/identity.gen";
+import { PINNED_EXTENSION_ID } from "../src/packages/shared/generated/identity";
 import { repoRoot } from "./lib.ts";
 
 // WXT's serve (dev) mode writes to <outDir>/<target>-dev - the `-dev` suffix

@@ -1,15 +1,15 @@
 // The control-frame side the generator cannot own: the inbound classifiers the extension routes on, and the
-// records the extension persists in chrome.storage.local. The frame validators themselves are generated (envelope.gen.ts: the Rust
+// records the extension persists in chrome.storage.local. The frame validators themselves are generated (generated/envelope.ts: the Rust
 // control-frame enums plus the asymmetry table in envelope-asymmetries.ts).
 //
 // Storage records are strict: a record with unexpected fields is treated as absent, which fails closed at the
 // enrollment gate.
 
 import { z } from "zod";
-import { AUDIT_FORWARDED_KINDS } from "./audit.gen";
-import { ENCLAVE_FIXTURE_KEY_ID } from "./enclave.gen";
-import { KillStatusResultSchema } from "./envelope.gen";
-import { POLICY_REVISION_MAX, PolicyValuesSchema } from "./policy.gen";
+import { AUDIT_FORWARDED_KINDS } from "../generated/audit";
+import { ENCLAVE_FIXTURE_KEY_ID } from "../generated/enclave";
+import { KillStatusResultSchema } from "../generated/envelope";
+import { POLICY_REVISION_MAX, PolicyValuesSchema } from "../generated/policy";
 
 // ---- inbound classifiers ------------------------------------------------------
 //
@@ -103,7 +103,7 @@ export const KillMirrorSchema = z.strictObject({
 export type KillMirror = z.infer<typeof KillMirrorSchema>;
 
 // The audit kinds the extension records locally. The forwarded prefix is the GENERATED host whitelist
-// (audit.gen.ts <- audit.rs EXTENSION_AUDIT_KINDS): those kinds also reach the host's on-disk trail via the
+// (generated/audit.ts <- audit.rs EXTENSION_AUDIT_KINDS): those kinds also reach the host's on-disk trail via the
 // audit_event control frame. The rest are local-only - the host audits those events authoritatively when it
 // HANDLES them, so the ring keeps them for the panel and background/audit-log.ts never forwards them.
 export const AUDIT_EVENT_KINDS = [

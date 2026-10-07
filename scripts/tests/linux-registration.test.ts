@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { NATIVE_HOST_ID } from "../../src/packages/shared/src/identity.gen.ts";
+import { NATIVE_HOST_ID } from "../../src/packages/shared/generated/identity.ts";
 import { repoRoot, Scratch, writeTree } from "../lib.ts";
 import {
   allowedOrigin,

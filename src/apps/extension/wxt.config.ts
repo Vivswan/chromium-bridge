@@ -1,11 +1,11 @@
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "wxt";
-import { EXTENSION_MANIFEST_KEY } from "../../packages/shared/src/identity.gen";
+import { EXTENSION_MANIFEST_KEY } from "../../packages/shared/generated/identity";
 import { MANIFEST_PERMISSIONS, MINIMUM_CHROME_VERSION } from "./src/lib/shared/manifest-surface";
 
 // The pinned manifest `key` comes from the Rust core's identity constants
-// (src/packages/core/src/identity.rs, via the generated identity.gen.ts). The
+// (src/packages/core/src/identity.rs, via the generated identity.ts). The
 // extension ID Chrome derives from it is what the native-messaging host
 // manifest pins in `allowed_origins`, so the key ships in EVERY build (this
 // extension is distributed as load-unpacked, not through a store): a build

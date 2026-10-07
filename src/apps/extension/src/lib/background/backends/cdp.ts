@@ -7,7 +7,7 @@
 // dispatch.ts around this backend.
 
 import { ClickProbeSchema } from "@chromium-bridge/shared/content-msg";
-import type { OpArgs } from "@chromium-bridge/shared/ops.gen";
+import type { OpArgs } from "@chromium-bridge/shared/generated/ops";
 import { unreachable } from "@chromium-bridge/shared/util";
 import type { ClickProbe, PageApi } from "../../dom/page-api";
 import { createPageApi, REF_ATTR } from "../../dom/page-api";

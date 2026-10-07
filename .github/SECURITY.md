@@ -227,7 +227,7 @@ The moving `stable` tag is a real, accepted widening of the CI supply chain:
 
 ## Identifiers
 
-The security-relevant identifiers, each owned by the Rust core and generated into the TypeScript side (`moon run check-gen` keeps every copy pinned):
+The security-relevant identifiers, each owned by the Rust core and generated into the TypeScript side (rebuilt from the core by every task that reads them):
 
 | Identifier | Value | Note |
 |------------|-------|------|

@@ -5,7 +5,7 @@
 // config and what ships is caught in CI either way.
 
 import { createHash } from "node:crypto";
-import { PINNED_EXTENSION_ID } from "@chromium-bridge/shared/identity.gen";
+import { PINNED_EXTENSION_ID } from "@chromium-bridge/shared/generated/identity";
 import { describe, expect, test } from "vitest";
 import { MANIFEST_PERMISSIONS } from "@/lib/shared/manifest-surface";
 import wxtConfig from "../../wxt.config";

@@ -4,7 +4,7 @@
 // trail renders the CLI's empty state with the path the host looked in; Refresh re-asks the host alone.
 
 import type { AuditEntry } from "@chromium-bridge/shared/enclave";
-import type { AuditTrailEntry } from "@chromium-bridge/shared/envelope.gen";
+import type { AuditTrailEntry } from "@chromium-bridge/shared/generated/envelope";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";

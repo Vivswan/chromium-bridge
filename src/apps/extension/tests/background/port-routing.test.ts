@@ -6,7 +6,7 @@
 // whichever registered first; this pins the guards disjoint over the table
 // the Rust core generates, with the real modules behind the registry.
 
-import { GENERATED_WIRE_FRAMES } from "@chromium-bridge/shared/envelope.gen";
+import { GENERATED_WIRE_FRAMES } from "@chromium-bridge/shared/generated/envelope";
 import { beforeEach, describe, expect, test } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 import { collaborators } from "@/lib/background/port";

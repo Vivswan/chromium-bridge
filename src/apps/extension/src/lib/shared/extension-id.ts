@@ -1,13 +1,13 @@
 // The pinned extension ID - the ID Chrome derives from the manifest `key`.
 //
 // The constant itself is generated from the pinned key in
-// src/packages/core/src/identity.rs into @chromium-bridge/shared (identity.gen.ts) by
-// `moon run gen`, so it cannot drift from the wxt.config.ts-generated manifest;
-// `moon run check-gen` re-derives the ID from the key while regenerating, and
+// src/packages/core/src/identity.rs into @chromium-bridge/shared (generated/identity.ts)
+// by `moon run gen`, so it cannot drift from the wxt.config.ts-generated manifest;
+// the generator re-derives the ID from the key on every build, and
 // `scripts/check-extension-id.ts` asserts the built manifest keeps the key. If you
-// rotate the key (e.g. to adopt a Chrome Web Store-assigned id), regenerate
-// everything together - the gates fail otherwise.
-import { PINNED_EXTENSION_ID } from "@chromium-bridge/shared/identity.gen";
+// rotate the key (e.g. to adopt a Chrome Web Store-assigned id), change identity.rs
+// alone - every TS copy is rebuilt from it.
+import { PINNED_EXTENSION_ID } from "@chromium-bridge/shared/generated/identity";
 
 export interface IdDiagnosis {
   ok: boolean;

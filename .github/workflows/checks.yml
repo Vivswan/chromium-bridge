@@ -65,10 +65,21 @@ jobs:
           - os: macos-14
           - os: windows-latest
     steps:
+      # Full history on every job that runs moon: in a pull request, `moon run` diffs HEAD against GITHUB_BASE_REF
+      # even without --affected, and that `git diff main HEAD` fails when `main` is unknown, as in a depth-1 checkout.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: ./.github/actions/setup-moon
         with:
           cargo: "true"
+      # One core test holds the Rust frame roster to the generated TS wire module, a build output the gen tasks
+      # write (their cargo runs take --frozen, which never fetches, so the crates are fetched first).
+      - run: bun install --frozen-lockfile
+      - run: |
+          cargo fetch --locked
+          cargo fetch --locked --manifest-path src/packages/core/fuzz/Cargo.toml
+      - run: moon run gen-shared
       - if: runner.os == 'Linux'
         run: cargo fmt --check
       - if: runner.os == 'Linux'
@@ -123,37 +134,29 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: ./.github/actions/setup-moon
         with:
           cargo: "true"
+      # The core tests read the generated TS wire module (a build output of the gen tasks, whose cargo runs take
+      # --frozen and so need the crates fetched first).
+      - run: bun install --frozen-lockfile
+      - run: |
+          cargo fetch --locked
+          cargo fetch --locked --manifest-path src/packages/core/fuzz/Cargo.toml
+      - run: moon run gen-shared
       - run: rustup component add llvm-tools-preview
       - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
         with:
           tool: cargo-llvm-cov
       - run: cargo llvm-cov --summary-only
 
+  # The typecheck, test, and build tasks read the generated contract modules, which their moon dependency on
+  # gen-shared builds from the Rust core first, hence the cargo toolchain and the crate fetch (the gen tasks'
+  # cargo runs take --frozen, which never fetches).
   extension:
     name: Extension (typecheck, lint, format, test, build)
-    needs: image
-    runs-on: ubuntu-latest
-    container: ${{ fromJSON(needs.image.outputs.container || '""') }} # zizmor: ignore[unpinned-images]
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-      - uses: ./.github/actions/setup-moon
-      - run: bun install --frozen-lockfile
-      - run: moon run typecheck check-ts shared:test extension:test
-      # Builds the extension through its dependency, then asserts the built manifest's security surface (key,
-      # permissions, host access, the Chrome floor); the hygiene job runs the same task.
-      - run: moon run check-extension-id
-
-  # The two checks that need BOTH toolchains: the generated TS must be exactly what the Rust emitters produce
-  # today, and the hand-written layer over the generated wire validators must stay within the pinned parser
-  # asymmetries. check-gen rewrites the generated modules, so it runs alone before the readers.
-  contract:
-    name: Contract (gen idempotency, envelope asymmetry gate)
     needs: image
     runs-on: ubuntu-latest
     container: ${{ fromJSON(needs.image.outputs.container || '""') }} # zizmor: ignore[unpinned-images]
@@ -166,29 +169,59 @@ jobs:
         with:
           cargo: "true"
       - run: bun install --frozen-lockfile
-      # check-gen and check-gen-isolation spawn cargo with --frozen, which never fetches, so this job fetches the
-      # crates first; a restored rust-cache may hold no registry.
       - run: |
           cargo fetch --locked
           cargo fetch --locked --manifest-path src/packages/core/fuzz/Cargo.toml
-      - run: moon run check-gen
-      - run: moon run check-envelope check-gen-isolation check-refresh-lockfiles
+      - run: moon run typecheck check-ts shared:test extension:test
+      # Builds the extension through its dependency, then asserts the built manifest's security surface (key,
+      # permissions, host access, the Chrome floor); the hygiene job runs the same task.
+      - run: moon run check-extension-id
 
-  # Every bun-side check. moon.yml's `hygiene` task owns the list (the `ci` gate depends on the same task), so a
-  # check added there runs here without a change to this file. check-docs-policy imports the settings schema and
-  # check-extension-id builds the extension, hence the install.
-  hygiene:
-    name: Repository hygiene (versions, pins, CJK, typography, docs parity, compose)
+  # The checks that need BOTH toolchains: the hand-written layer over the generated wire validators must stay
+  # within the pinned parser asymmetries (check-envelope builds the validators from the Rust core first), and
+  # the gen-only crates must stay out of the shipped binary.
+  contract:
+    name: Contract (envelope asymmetry gate, gen isolation)
     needs: image
     runs-on: ubuntu-latest
     container: ${{ fromJSON(needs.image.outputs.container || '""') }} # zizmor: ignore[unpinned-images]
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup-moon
+        with:
+          cargo: "true"
       - run: bun install --frozen-lockfile
+      # The gen tasks and check-gen-isolation spawn cargo with --frozen, which never fetches, so this job fetches
+      # the crates first; a restored rust-cache may hold no registry.
+      - run: |
+          cargo fetch --locked
+          cargo fetch --locked --manifest-path src/packages/core/fuzz/Cargo.toml
+      - run: moon run check-envelope check-gen-isolation check-refresh-lockfiles
+
+  # Every bun-side check. moon.yml's `hygiene` task owns the list (the `ci` gate depends on the same task), so a
+  # check added there runs here without a change to this file. check-docs-policy imports the settings schema and
+  # check-extension-id builds the extension, hence the install; the docs gates and the extension build read the
+  # generated contract modules, which their gen-shared dependency builds from the Rust core, hence cargo.
+  hygiene:
+    name: Repository hygiene (versions, pins, CJK, typography, docs parity, compose)
+    needs: image
+    runs-on: ubuntu-latest
+    container: ${{ fromJSON(needs.image.outputs.container || '""') }} # zizmor: ignore[unpinned-images]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-moon
+        with:
+          cargo: "true"
+      - run: bun install --frozen-lockfile
+      - run: |
+          cargo fetch --locked
+          cargo fetch --locked --manifest-path src/packages/core/fuzz/Cargo.toml
       - run: moon run hygiene
 
   # typos is not here: the managed ci.yml's standard-checks job runs the fleet's typos action over the same
@@ -215,21 +248,29 @@ jobs:
           tool: cargo-machete@${{ steps.pin.outputs.machete }}
       - run: moon run machete
 
-  # Needs no toolchain, only the binary and a bun for the scenario driver (scripts/linux-registration.ts
-  # imports nothing installed), so it stays on the bare runner.
+  # Drives the downloaded binary on the bare runner. The scenario driver (scripts/linux-registration.ts) reads
+  # the host id and extension id from the generated identity module, so the job builds the generated TS from
+  # the Rust core first.
   linux-install:
     name: Linux registration (doctor --fix / uninstall, isolated XDG directories)
     needs: build-release
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: ./.github/actions/release-binary
         with:
           mode: download
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - uses: ./.github/actions/setup-moon
         with:
-          bun-version-file: .bun-version
+          cargo: "true"
+      - run: bun install --frozen-lockfile
+      - run: |
+          cargo fetch --locked
+          cargo fetch --locked --manifest-path src/packages/core/fuzz/Cargo.toml
+      - run: moon run gen-shared
       - name: doctor --fix registers, re-registers, and uninstall reverses it (isolated HOME/XDG)
         run: bun scripts/linux-registration.ts fresh-machine
       - name: Explicit multi-browser selection, --all, and full uninstall

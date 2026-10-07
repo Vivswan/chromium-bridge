@@ -8,7 +8,7 @@ use super::EnclaveError;
 
 /// Byte length of the public key on the wire: the X9.63 uncompressed P-256
 /// point (`0x04 || X || Y`). Part of the cross-language contract - the
-/// extension's verifier rejects any other length (enclave.gen.ts).
+/// extension's verifier rejects any other length (generated/enclave.ts).
 pub const PUBKEY_LEN: usize = 65;
 
 /// The enrollment key's public half, validated to be a 65-byte uncompressed

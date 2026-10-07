@@ -3,8 +3,8 @@
 
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
+import { EnclaveProofFrameSchema } from "../generated/envelope";
 import { CompromisedMarkSchema, EnclaveInboundFrameSchema, EnclavePinSchema } from "../src/enclave";
-import { EnclaveProofFrameSchema } from "../src/envelope.gen";
 import { RUNTIME_CONTRACT, RuntimeMsgSchema, type RuntimeMsgType } from "../src/runtime-msg";
 import { AllowlistSchema, PendingApprovalsSchema } from "../src/storage";
 

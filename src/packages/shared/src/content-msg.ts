@@ -13,7 +13,7 @@
 // page.
 
 import { z } from "zod";
-import { OpArgsSchema } from "./ops.gen";
+import { OpArgsSchema } from "../generated/ops";
 
 // What the SW probed before classifying (and confirming) a click. The page
 // re-probes immediately before clicking and refuses if the target no longer

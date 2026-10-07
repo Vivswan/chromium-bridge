@@ -2,11 +2,11 @@
 # moon is the canonical command interface; shared:test is a step
 # of the root ci gate.
 #
-# Inputs include the inherited rust-contract file group (.moon/tasks/all.yml):
-# the *.gen.ts modules in src/ are generated FROM the Rust core, so a core
-# change must invalidate these caches even before `moon run gen` refreshes the
-# checked-in output. Never narrow that edge. The project-wide mutex follows
-# the root moon.yml header's rule.
+# generated/ is written by the root gen-shared task from the Rust core, so the
+# readers depend on it, and the inherited rust-contract file group
+# (.moon/tasks/all.yml) stays among their inputs so a core change invalidates
+# their caches. Never narrow that edge. The project-wide mutex follows the
+# root moon.yml header's rule.
 $schema: 'https://moonrepo.dev/schemas/project.json'
 
 language: 'typescript'
@@ -19,6 +19,7 @@ taskOptions:
 tasks:
   typecheck:
     description: 'Type-check src/packages/shared alone (the repo-wide pass is the root typecheck task)'
+    deps: ['root:gen-shared']
     command: 'bun run typecheck'
     inputs:
       - '**/*'
@@ -32,6 +33,7 @@ tasks:
 
   test:
     description: 'Unit-test src/packages/shared: generated catalogue, boundary validators'
+    deps: ['root:gen-shared']
     command: 'bun run test'
     inputs:
       - '**/*'

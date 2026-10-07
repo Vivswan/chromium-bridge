@@ -89,7 +89,7 @@ moon run fix       # auto-fix everything: biome check --write + cargo fmt
 | TypeScript | `typecheck`、`check-ts`、`shared:test`、`extension:test`、`extension:build` |
 | 协议 | `test-e2e` |
 | 卫生检查 | `hygiene` (下文的 bun 侧检查)、`check-refresh-lockfiles`、`test-fuzz` |
-| 契约 | `check-gen`、`check-envelope`、`check-gen-isolation` |
+| 契约 | `check-envelope`、`check-gen-isolation` |
 | 工作流 | `check-yaml`、`check-actions` |
 
 CI 在此之上还会运行更多: macOS 和 Windows 的 rust 矩阵、覆盖率、linux-install、对抗与混沌测试套件、互操作测试套件、浏览器测试套件、安装程序、web 构建, 以及各项审计 (见下文的 [CI 布局](#ci-布局))。
@@ -104,6 +104,8 @@ CI 在此之上还会运行更多: macOS 和 Windows 的 rust 矩阵、覆盖率
 仓库级动词一次覆盖所有语言: `moon run lint` 是 clippy 加 biome lint, `moon run fmt` 是 cargo fmt 加 biome format, `moon run test` 是 Rust 加协议 e2e。每个任务体都是一条你也可以手动运行的普通命令:
 
 ```sh
+bun install
+moon run gen                             # the TS side of the Rust contract: a core test, the tsc run, and the extension build read it; the moon tasks build it themselves
 cargo build --release
 cargo nextest run
 cargo fmt --check && cargo clippy --all-targets -- -D warnings
@@ -111,7 +113,6 @@ cargo fmt --check && cargo clippy --all-targets -- -D warnings
 cargo fmt --check --manifest-path src/packages/core/fuzz/Cargo.toml
 cargo clippy --locked --manifest-path src/packages/core/fuzz/Cargo.toml --all-targets -- -D warnings
 uv run --no-project --isolated tests/protocol/e2e.py
-bun install
 bun run tsc -p src/apps/extension        # one TS project; `moon run typecheck` covers them all
 bun run biome ci . --error-on-warnings   # lint + format check, warnings fail (biome.jsonc)
 bun run --cwd src/apps/extension build
@@ -126,7 +127,7 @@ bun run --cwd src/apps/extension build
 | Rust | `core:fmt-check` (= `core:fmt-check-workspace` + `core:fmt-check-fuzz`)、`core:lint` (= `core:lint-workspace` + `core:lint-fuzz`)、`test-rust` (= `core:test` + `core:test-doc` + `core:test-loom`, 后者是在核心的 `loom` 特性下对中介 (broker) 引用计数做模型检查)、`doc`、`build-release`、`build-repro`、`typos`、`machete`、`audit` |
 | 模糊测试工作区 | `fuzz-seeds`、`fuzz-smoke`、`check-fuzz-smoke`、`test-fuzz` (该工作区的 clippy 与 fmt 检查分别由 `core:lint-fuzz` 与 `core:fmt-check-fuzz` 执行) |
 | TypeScript | `typecheck`、`test-ts` (= `shared:test` + `extension:test` + `check-harness-driver`)、`lint-ts`、`check-ts`、`fmt-ts`、`fmt-check-ts`、`extension:build`、`web:build` |
-| 契约代码生成 | `gen` (= `gen-shared`)、`gen-icons`、`gen-architecture-map`、`check-gen`、`check-envelope`、`check-gen-isolation` |
+| 契约代码生成 | `gen` (= `gen-shared` = `gen-ops` + `gen-envelope`)、`gen-icons`、`gen-architecture-map`、`check-envelope`、`check-gen-isolation` |
 | 协议测试套件 | `test-e2e`、`test-adversarial`、`test-chaos`、`check-uv` |
 | 互操作测试套件 | `test-interop` (官方 MCP SDK v2 客户端对发布二进制的测试)、`harness-smoke` (真实的客户端程序 (harness) CLI, 隔离的配置目录; 旧时代打开方式的金丝雀测试) |
 | 浏览器测试套件 | `test-browser`、`test-integration` (只用隔离的 Chrome; 从不进入 `ci`) |
@@ -202,11 +203,11 @@ uv 只固定在 `.prototools` 中, python 由 uv 管理: 协议测试套件通�
 | `build-release` | `moon run build-release`, 上传供下面的测试套件使用 | 裸运行器, 这样二进制链接到运行器上较旧的 glibc, 在两种环境中都能运行 |
 | `coverage` | `cargo llvm-cov`, 仅供参考 (`continue-on-error`, 无阈值) | 镜像 |
 | `extension` | `typecheck`、`check-ts`、`shared:test`、`extension:test`、`extension:build`, 然后对构建出的清单运行 `check-extension-id` | 镜像 |
-| `contract` | 先单独运行 `check-gen` (它会重写生成的模块), 然后是 `check-envelope`、`check-gen-isolation`、`check-refresh-lockfiles` | 镜像 |
+| `contract` | `check-envelope`、`check-gen-isolation`、`check-refresh-lockfiles` | 镜像 |
 | `hygiene` | `moon run hygiene` | 镜像 |
 | `tooling` | `machete`, 使用 `Containerfile` 固定版本的 cargo-machete | 镜像 |
 | `web` | `web:build` | 镜像 |
-| `linux-install` | 先下载 `build-release` 的二进制, 再运行 `scripts/linux-registration.ts`: 在隔离的 HOME 和 XDG 目录下运行 `doctor --fix`、重新注册、多浏览器、`uninstall` | 裸运行器: 它只需要那个二进制和一个运行场景驱动脚本的 bun |
+| `linux-install` | 先下载 `build-release` 的二进制, 再运行 `scripts/linux-registration.ts`: 在隔离的 HOME 和 XDG 目录下运行 `doctor --fix`、重新注册、多浏览器、`uninstall` | 裸运行器, 并带有 cargo 与 moon 以构建场景驱动脚本读取的生成身份模块 |
 | `protocol` | 对下载的二进制运行 `e2e`、`adversarial` 和 `chaos` 测试套件 | 镜像 |
 | `interop` | 官方 MCP SDK 客户端对下载的二进制的测试 | 镜像 |
 | `browser` | 可复用的 `browser.yml` (输入 `chrome-version`), `nightly.yml` 也调用它 | 裸运行器, Chrome 来自 `setup-chrome` |

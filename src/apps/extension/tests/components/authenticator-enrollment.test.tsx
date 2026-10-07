@@ -5,7 +5,7 @@
 import type {
   EnrollOptionsFrame,
   PresenceRequestFrame,
-} from "@chromium-bridge/shared/envelope.gen";
+} from "@chromium-bridge/shared/generated/envelope";
 import { PRESENCE_REQUIRED } from "@chromium-bridge/shared/webauthn";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

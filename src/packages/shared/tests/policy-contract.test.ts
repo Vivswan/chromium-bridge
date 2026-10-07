@@ -1,12 +1,12 @@
-// Semantics of the generated policy contract (policy.gen.ts): the deny
+// Semantics of the generated policy contract (generated/policy.ts): the deny
 // baseline, the direction table, the salvage posture, and the strict
 // document validator. The SOURCE is the Rust core
-// (src/packages/core/src/policy/mod.rs); faithful generation is enforced by
-// CI regenerating and diffing the checked-in file (`moon run gen`
-// idempotency), so these tests own the semantics, not the provenance.
+// (src/packages/core/src/policy/mod.rs) and the module is rebuilt from it
+// before this suite runs, so these tests own the semantics, not the
+// provenance: Rust-parity bounds and the cross-language golden vectors.
 
 import { describe, expect, test } from "bun:test";
-import { POLICY_GOLDEN_FIXTURE } from "../src/enclave-fixture.gen";
+import { POLICY_GOLDEN_FIXTURE } from "../generated/enclave-fixture";
 import {
   DISABLED_TOOL_NAME_MAX_BYTES,
   DISABLED_TOOLS_MAX_ENTRIES,
@@ -18,7 +18,7 @@ import {
   PolicyDocSchema,
   PolicyOverlaySchema,
   PolicyValuesSchema,
-} from "../src/policy.gen";
+} from "../generated/policy";
 
 // A well-formed v1 document: the deny-baseline values under default scoping.
 const wellFormedDoc = () => ({
@@ -148,7 +148,7 @@ describe("PolicyOverlaySchema", () => {
   });
 });
 
-// The POLICY_DOMAIN golden vectors (enclave-fixture.gen.ts): the byte-level
+// The POLICY_DOMAIN golden vectors (generated/enclave-fixture.ts): the byte-level
 // proof that the Rust signer and this side's verify-then-parse pipeline
 // agree. The extension's golden test replays these through its own
 // verifier; here the fixture's internal consistency and the document parse

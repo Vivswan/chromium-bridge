@@ -1,7 +1,7 @@
 import type {
   EnrollOptionsFrame,
   PresenceRequestFrame,
-} from "@chromium-bridge/shared/envelope.gen";
+} from "@chromium-bridge/shared/generated/envelope";
 import { type RuntimeResponse, WEBAUTHN_ENROLLMENT_KEY } from "@chromium-bridge/shared/runtime-msg";
 import { PRESENCE_REQUIRED } from "@chromium-bridge/shared/webauthn";
 import { useCallback, useEffect, useState } from "react";

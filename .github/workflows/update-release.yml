@@ -75,10 +75,15 @@ jobs:
         shell: bash
         run: bun scripts/build-repro.ts
 
+      # The bundle embeds the generated contract modules, a build output of the gen tasks (their cargo runs take
+      # --frozen, which never fetches, so the crates are fetched first). One step per command: the Windows leg
+      # runs a block under PowerShell, where a failed native command does not stop the next one.
+      - run: bun install --frozen-lockfile
+      - run: cargo fetch --locked
+      - run: cargo fetch --locked --manifest-path src/packages/core/fuzz/Cargo.toml
+      - run: moon run gen-shared
       - name: Build extension bundle
-        run: |
-          bun install --frozen-lockfile
-          bun run --cwd src/apps/extension build
+        run: bun run --cwd src/apps/extension build
 
       - name: Package release archive
         id: pkg

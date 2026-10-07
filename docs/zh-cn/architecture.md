@@ -497,31 +497,31 @@ panic 消息默认输出到 stdout, 会破坏 NM 帧与 MCP NDJSON。缓解: rel
 
 ## 11. 协议边界契约: 错误分类与握手
 
-跨进程契约位于 Rust 核心, 它是单一事实来源; TypeScript 侧由它生成, 运行时行为也对照它验证。规范模块及其派生产物如下:
+跨进程契约位于 Rust 核心, 它是单一事实来源; TypeScript 侧由它生成到 `src/packages/shared/generated` (构建产物, 从不跟踪), 运行时行为也对照它验证。规范模块及其派生产物如下:
 
-- **工具目录** (`src/packages/core/src/tools/catalogue.rs`): 每个工具的名称、面向模型的英文描述、JSON-Schema `inputSchema`, 以及策略元数据 (风险 / 范围 / 权限 / 确认)。`moon run gen` 运行核心的 `emit_contract` 示例与 `scripts/gen-ops.ts`, 生成 `src/packages/shared/src/ops.gen.ts`: 操作名、策略元数据, 以及每个工具一个 Zod 参数校验器。
-- `BridgeCommand` 请求联合类型由这些校验器推断得出, 因此编译期类型与运行时检查是同一份产物。CI 会重新生成并在出现任何差异时失败, 所以签入的 TS 不可能偏离 Rust 源头。UI 标签刻意不属于契约; 它们是扩展的 UI 文案 (扩展 `*.yml` 语言包中的 `tools.<op>` 键)。
-- **错误分类** (`src/packages/core/src/error.rs` 中的 `ERROR_SPECS`): 稳定的跨进程 `code`, 附带 `category`、`retryable` 以及面向用户/模型的 `message`。`CallError::code()` 把 Rust 的工具调用错误映射到该表的一个子集 (`cargo test` 强制成员关系), 而 `src/packages/shared/src/errors.gen.ts` 为 TS 消费者提供同样的代码常量 (目前尚无消费者; 见第 11.1 节)。
-- **能力** (`src/packages/core/src/tools/capabilities.rs`): 工具目录之上可协商的分组, 生成到 `src/packages/shared/src/protocol.gen.ts`。`cargo test` 强制每个经桥接路由的工具恰好被一个能力覆盖, 且每个能力的权限等于其工具权限的并集。
-- **协议版本** (`src/packages/core/src/protocol.rs`): 内部桥接协议的整数版本 (`BRIDGE_PROTOCOL_VERSION`) 与服务器所讲的 MCP JSON-RPC 修订版 (`MCP_PROTOCOL_VERSION`, 按请求把关, 由 `server/discover` 声明, 并由协议 e2e 测试套件断言), 两者都生成到 `protocol.gen.ts`。
-- **审计转发白名单** (`src/packages/core/src/audit.rs` 中的 `EXTENSION_AUDIT_KINDS`): 主机通过 `audit_event` 控制帧接受的、由扩展拥有的审计种类 (`extension_kind` 由同一列表派生), 生成到 `src/packages/shared/src/audit.gen.ts`。扩展的转发集合及其审计环词汇表中被转发的前缀都建立在生成的常量之上, 因此转发边界的两侧不可能分叉。
-- **身份** (`src/packages/core/src/identity.rs`): Native Messaging 主机 id 与固定的扩展清单密钥, 生成到 `src/packages/shared/src/identity.gen.ts`。扩展导入 `NATIVE_HOST_ID` 用于 `connectNative`, 导入 `EXTENSION_MANIFEST_KEY` 用于构建出的清单, 导入由该密钥派生的 `PINNED_EXTENSION_ID` 用于启动自检。注册引擎直接消费这些常量, 因此不存在可能漂移的安装程序副本。
-- **身份门禁**: `moon run check-gen` 证明生成的 TS 是新鲜的 (重新生成会从密钥重新推导出 id), `scripts/check-extension-id.ts` (`moon run check-extension-id`, `moon run ci` 的一部分) 验证构建出的清单以及唯一定义点规则。
-- **主机密钥签名契约** (`src/packages/core/src/enclave/`: `challenge.rs` 定义域字符串与字段边界, `pubkey.rs` 与 `mod.rs` 定义密钥与签名的字节长度以及 `enclave_error` 原因码): 由核心的 `emit_enclave_contract` 示例生成到 `src/packages/shared/src/enclave.gen.ts` (常量加上 `EnclaveReasonCode` 联合类型, 扩展的登记状态机对其做穷举分类) 与 `enclave-fixture.gen.ts`。
+- **工具目录** (`src/packages/core/src/tools/catalogue.rs`): 每个工具的名称、面向模型的英文描述、JSON-Schema `inputSchema`, 以及策略元数据 (风险 / 范围 / 权限 / 确认)。`moon run gen` 运行核心的 `emit_contract` 示例与 `scripts/gen-ops.ts`, 生成 `ops.ts`: 操作名、策略元数据, 以及每个工具一个 Zod 参数校验器。
+- `BridgeCommand` 请求联合类型由这些校验器推断得出, 因此编译期类型与运行时检查是同一份产物。每个读取生成 TS 的任务都会先从 Rust 源头重新构建它, 因此不存在可能偏离的签入副本。UI 标签刻意不属于契约; 它们是扩展的 UI 文案 (扩展 `*.yml` 语言包中的 `tools.<op>` 键)。
+- **错误分类** (`src/packages/core/src/error.rs` 中的 `ERROR_SPECS`): 稳定的跨进程 `code`, 附带 `category`、`retryable` 以及面向用户/模型的 `message`。`CallError::code()` 把 Rust 的工具调用错误映射到该表的一个子集 (`cargo test` 强制成员关系), 而 `errors.ts` 为 TS 消费者提供同样的代码常量 (目前尚无消费者; 见第 11.1 节)。
+- **能力** (`src/packages/core/src/tools/capabilities.rs`): 工具目录之上可协商的分组, 生成到 `protocol.ts`。`cargo test` 强制每个经桥接路由的工具恰好被一个能力覆盖, 且每个能力的权限等于其工具权限的并集。
+- **协议版本** (`src/packages/core/src/protocol.rs`): 内部桥接协议的整数版本 (`BRIDGE_PROTOCOL_VERSION`) 与服务器所讲的 MCP JSON-RPC 修订版 (`MCP_PROTOCOL_VERSION`, 按请求把关, 由 `server/discover` 声明, 并由协议 e2e 测试套件断言), 两者都生成到 `protocol.ts`。
+- **审计转发白名单** (`src/packages/core/src/audit.rs` 中的 `EXTENSION_AUDIT_KINDS`): 主机通过 `audit_event` 控制帧接受的、由扩展拥有的审计种类 (`extension_kind` 由同一列表派生), 生成到 `audit.ts`。扩展的转发集合及其审计环词汇表中被转发的前缀都建立在生成的常量之上, 因此转发边界的两侧不可能分叉。
+- **身份** (`src/packages/core/src/identity.rs`): Native Messaging 主机 id 与固定的扩展清单密钥, 生成到 `identity.ts`。扩展导入 `NATIVE_HOST_ID` 用于 `connectNative`, 导入 `EXTENSION_MANIFEST_KEY` 用于构建出的清单, 导入由该密钥派生的 `PINNED_EXTENSION_ID` 用于启动自检。注册引擎直接消费这些常量, 因此不存在可能漂移的安装程序副本。
+- **身份门禁**: 生成 TS 时会从密钥重新推导出 id (`scripts/gen-ops.ts` 在不匹配时失败), `scripts/check-extension-id.ts` (`moon run check-extension-id`, `moon run ci` 的一部分) 验证构建出的清单以及唯一定义点规则。
+- **主机密钥签名契约** (`src/packages/core/src/enclave/`: `challenge.rs` 定义域字符串与字段边界, `pubkey.rs` 与 `mod.rs` 定义密钥与签名的字节长度以及 `enclave_error` 原因码): 由核心的 `emit_enclave_contract` 示例生成到 `enclave.ts` (常量加上 `EnclaveReasonCode` 联合类型, 扩展的登记状态机对其做穷举分类) 与 `enclave-fixture.ts`。
 - 夹具文件保存黄金向量: 由 Rust 构建的消息字节, 配上确定性的软件 P256 证明, 由 `src/apps/extension/tests/background/enclave-golden.test.ts` 通过扩展的 WebCrypto 校验器回放, 从而把签名消息的编码本身跨语言固定下来。夹具的签名密钥是公开的测试数据, 在两侧都被列入主机身份的拒绝名单 (核心中的 `ensure_not_fixture_key`, 扩展配对校验器与已存固定值校验器中的 `ENCLAVE_FIXTURE_KEY_ID`)。
 - **策略文档与方向** (`src/packages/core/src/policy/`): 主机持有的 `PolicyDoc`、十五个策略字段 (四项能力授予、确认策略、`disabledTools`、确认超时)、它们的默认拒绝值、逐字段的宽松方向表、`relaxes`/`restricts` 比较, 以及签名存储和 `set_signed`/`restrict` 写入接缝。
-- `moon run gen` 生成 `src/packages/shared/src/policy.gen.ts`: 签名域常量、带方向的字段列表、默认值, 以及针对文档、取值与限制覆盖层的严格 Zod 校验器。扩展自己根据生成的表重新计算每一次方向比较; 它从不相信主机关于某次变更朝向哪边的说法。
+- `moon run gen` 生成 `policy.ts`: 签名域常量、带方向的字段列表、默认值, 以及针对文档、取值与限制覆盖层的严格 Zod 校验器。扩展自己根据生成的表重新计算每一次方向比较; 它从不相信主机关于某次变更朝向哪边的说法。
 - 授予由主机密钥对 `UTF8("chromium-bridge-policy-v1") || 0x00 || doc_bytes` 签名, 这是与主机密钥质询域并列的一个以 NUL 分隔的签名域, 相对于它是单射的, 因此一个仪式的产物无法重放为另一个。
 - 任何地方都没有规范化步骤: 主机签名并存储精确的文档字节, 扩展先对照其固定密钥验证收到的精确字节, 再对这些相同的字节做严格解析。第 11.3 节介绍承载这一切的帧。
-- **线路信封与控制帧** (`src/packages/core/src/protocol.rs` 中的 `BridgeReq` / `BridgeResp`; `src/packages/core/src/protocol/control.rs` 中的 `EnclaveControl`、`AdminControl` (它内嵌 `allowlist::ClientEntry`)、`PolicyControl` 与 `WebAuthnControl`): Rust 类型就是契约, `moon run gen` 据此为扩展生成校验器到 `src/packages/shared/src/envelope.gen.ts`。下表列出每一层及其归属; `moon run check-gen` 在差异过期时失败。
+- **线路信封与控制帧** (`src/packages/core/src/protocol.rs` 中的 `BridgeReq` / `BridgeResp`; `src/packages/core/src/protocol/control.rs` 中的 `EnclaveControl`、`AdminControl` (它内嵌 `allowlist::ClientEntry`)、`PolicyControl` 与 `WebAuthnControl`): Rust 类型就是契约, `moon run gen` 据此为扩展生成校验器到 `envelope.ts`。下表列出每一层及其归属。
 
 | 层 | 归属 | 内容 |
 |-------|-------|---------------|
 | 忠实基线, 每个信封与每个主机->扩展帧一份 | `scripts/gen-envelope.ts` (对 Rust 输入的规则 G1-G7、A1-A3; 生成宁可中止也不输出任何比 Rust 解析器更弱的东西) 与 `scripts/gen-schema.ts` (每个校验器都是 json-schema-to-zod 从其 schema 写出的 Zod 源码, 每个类型都是 json-schema-to-typescript 对同一 schema 的读取, 输出的校验器在写入文件前须满足规则 R1-R4) | 严格对象, 必填字段必填, 不杜撰默认值 |
-| 强制校验器, 扩展实际运行的那个 | `src/packages/shared/src/envelope-asymmetries.ts` | 基线加上恰好表中的那些条目, 每条带方向与理由; 由一个带类型的裁决构建的帧 (`policy_current`、`enroll_result`、`presence_result`) 在此声明其 ok 分裂, 并被生成为其各分支的联合类型, 因此混合其分支的帧会被读取方拒绝; 请求的 `args` 与 `policy_current` 的 `overlay` 就是从 `ops.gen.ts` 与 `policy.gen.ts` 导入的 schema |
+| 强制校验器, 扩展实际运行的那个 | `src/packages/shared/src/envelope-asymmetries.ts` | 基线加上恰好表中的那些条目, 每条带方向与理由; 由一个带类型的裁决构建的帧 (`policy_current`、`enroll_result`、`presence_result`) 在此声明其 ok 分裂, 并被生成为其各分支的联合类型, 因此混合其分支的帧会被读取方拒绝; 请求的 `args` 与 `policy_current` 的 `overlay` 就是从 `ops.ts` 与 `policy.ts` 导入的 schema |
 | 扩展->主机帧的写入方 schema | `scripts/gen-envelope.ts` | 供构造点 `satisfies` 的类型; 执行约束的读取方是 Rust serde 解析器 |
 | 门禁 (`moon run check-envelope`) | `scripts/check-envelope.ts` | 对两个校验器证明每个条目的探针, 让入站分类器遵守读取方计划, 拒绝任何读取方上手写的细化 |
-| 生成基线的行为测试 | `src/packages/shared/tests/envelope.gen.test.ts` | 未知字段、缺失必填字段、类型混淆、嵌套多余字段 |
+| 生成基线的行为测试 | `src/packages/shared/tests/wire-validators.test.ts` | 未知字段、缺失必填字段、类型混淆、嵌套多余字段 |
 
 ### 11.1 错误分类 (ERROR_SPECS)
 
@@ -535,7 +535,7 @@ panic 消息默认输出到 stdout, 会破坏 NM 帧与 MCP NDJSON。缓解: rel
 | `PROTOCOL_MISMATCH` | 尚无: 它等待版本/能力握手接线完成 (第 11.2 节) |
 | `SITE_NOT_ALLOWED`、`USER_DENIED`、`TAB_NOT_FOUND`... | 尚无: 它们需要扩展用结构化错误报告取代自由格式字符串 |
 
-MCP 服务器 (`src/packages/core/src/error.rs` 中的 `CallError::code()`) 是唯一的赋予者, 只覆盖该表的一个子集; 生成到 `errors.gen.ts` 的 TS 常量是为将来的消费者准备的。
+MCP 服务器 (`src/packages/core/src/error.rs` 中的 `CallError::code()`) 是唯一的赋予者, 只覆盖该表的一个子集; 生成到 `errors.ts` 的 TS 常量是为将来的消费者准备的。
 
 ### 11.2 能力 / 版本握手
 
@@ -608,7 +608,7 @@ flowchart LR
 <!-- BEGIN GENERATED: architecture-map (bun scripts/render-architecture-map.ts; derived from architecture.yml) -->
 ```mermaid
 graph TD
-  shared["src/packages/shared/src/"]
+  shared["src/packages/shared/src/<br>src/packages/shared/generated/"]
   extension_background["src/apps/extension/src/entrypoints/background.ts<br>src/apps/extension/src/lib/background/<br>src/apps/extension/src/lib/webauthn/"]
   extension_content["src/apps/extension/src/entrypoints/content.ts<br>src/apps/extension/src/lib/content/"]
   extension_confirm["src/apps/extension/src/entrypoints/confirm/"]

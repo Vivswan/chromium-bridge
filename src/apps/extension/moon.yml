@@ -6,7 +6,9 @@
 # the inherited rust-contract file group (.moon/tasks/all.yml): the extension
 # enforces the contract's generated validators at its trust boundaries, so a
 # Rust core change must invalidate these caches. Never narrow that edge. The
-# project-wide mutex follows the root moon.yml header's rule.
+# validators are a build output of the root gen-shared task, so every task
+# that bundles or tests them depends on it. The project-wide mutex follows
+# the root moon.yml header's rule.
 $schema: 'https://moonrepo.dev/schemas/project.json'
 
 language: 'typescript'
@@ -32,6 +34,7 @@ tasks:
     # the whole scripts/ tree is declared so a new helper import there can
     # never be an undeclared input.
     description: 'Build the extension bundle (src/ -> build/extension/; generates icons first)'
+    deps: ['root:gen-shared']
     command: 'bun run build'
     inputs:
       - '**/*'
@@ -48,11 +51,13 @@ tasks:
 
   dev:
     description: 'WXT dev mode: rebuild on change'
+    deps: ['root:gen-shared']
     command: 'bun run dev'
     preset: 'server'
 
   test:
     description: "Unit-test the extension's shared modules (vitest + fakeBrowser; no real browser)"
+    deps: ['root:gen-shared']
     command: 'bun run test'
     inputs:
       - '**/*'
@@ -64,6 +69,7 @@ tasks:
 
   typecheck:
     description: "Type-check the extension (tsc against the WXT-generated tsconfig)"
+    deps: ['root:gen-shared']
     command: 'bun run typecheck'
 
   lint:

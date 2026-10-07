@@ -26,8 +26,8 @@ import {
   LangCurrentFrameSchema,
   type LangSetWire,
   PolicyCurrentFrameSchema,
-} from "@chromium-bridge/shared/envelope.gen";
-import { PolicyDocSchema, type PolicyValues } from "@chromium-bridge/shared/policy.gen";
+} from "@chromium-bridge/shared/generated/envelope";
+import { PolicyDocSchema, type PolicyValues } from "@chromium-bridge/shared/generated/policy";
 import {
   foldPolicyOverlay,
   policyValuesEqual,

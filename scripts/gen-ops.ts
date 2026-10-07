@@ -1,14 +1,13 @@
 // Generate the contract-derived TypeScript from the Rust core, the canonical contract source, by running the
-// core's emitter examples. Run `moon run gen` after editing the catalogue, taxonomy, enclave, or policy module
-// in src/packages/core; CI regenerates and fails on a stale diff.
+// core's emitter examples. Every moon task that reads the output depends on `gen-shared`, so the modules are
+// rebuilt from the Rust source on each run and are never tracked.
 //
-//   emit_contract          -> ops.gen.ts, errors.gen.ts, protocol.gen.ts, identity.gen.ts, audit.gen.ts,
-//                             refusals.gen.ts, host.gen.ts
-//   emit_enclave_contract  -> enclave.gen.ts, enclave-fixture.gen.ts
-//   emit_policy_contract   -> policy.gen.ts
+//   emit_contract          -> ops.ts, errors.ts, protocol.ts, identity.ts, audit.ts, refusals.ts, host.ts
+//   emit_enclave_contract  -> enclave.ts, enclave-fixture.ts
+//   emit_policy_contract   -> policy.ts
 
 import { createHash } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pascalCase } from "change-case";
@@ -26,6 +25,7 @@ import {
   schemaSource,
   typeSource,
 } from "./gen-schema";
+import { generatedDir } from "./lib.ts";
 
 interface ContractTool {
   name: string;
@@ -78,14 +78,15 @@ interface Contract {
 }
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+mkdirSync(generatedDir, { recursive: true });
 
 const contract = emitFromRust(root, "emit_contract") as Contract;
 
-// Bare when a valid JS identifier, quoted otherwise: Biome's quoteProperties "as-needed" would reformat anything else.
+// Bare when a valid JS identifier, quoted otherwise.
 const emitKey = (key: string): string =>
   /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? key : JSON.stringify(key);
 
-// ---- ops.gen.ts pieces ------------------------------------------------------
+// ---- ops.ts pieces ------------------------------------------------------
 
 const opNames = contract.tools.map((t) => JSON.stringify(t.name)).join(",\n  ");
 
@@ -145,7 +146,7 @@ const opsOut = `// GENERATED from the Rust core (src/packages/core/src/tools/cat
 // BridgeCommand is built from them, so the compile-time types and the runtime checks have a single source.
 
 import { z } from "zod";
-import type { PolicyFieldName, PolicyValues } from "./policy.gen";
+import type { PolicyFieldName, PolicyValues } from "./policy";
 
 export const OP_NAMES = [
   ${opNames},
@@ -209,10 +210,10 @@ ${await typeSource("OpArgs", opArgs)}
 ${schemaSource("OpArgsSchema", "OpArgs", opArgs)}
 `;
 
-writeFileSync(join(root, "src/packages/shared/src/ops.gen.ts"), opsOut);
-console.log("generated src/packages/shared/src/ops.gen.ts from the Rust catalogue");
+writeFileSync(join(generatedDir, "ops.ts"), opsOut);
+console.log("generated src/packages/shared/generated/ops.ts from the Rust catalogue");
 
-// ---- errors.gen.ts ----------------------------------------------------------
+// ---- errors.ts ----------------------------------------------------------
 
 const errorCodes = contract.errors.map((e) => JSON.stringify(e.code)).join(",\n  ");
 const errorMeta = contract.errors
@@ -256,10 +257,10 @@ ${errorMeta}
 };
 `;
 
-writeFileSync(join(root, "src/packages/shared/src/errors.gen.ts"), errorsOut);
-console.log("generated src/packages/shared/src/errors.gen.ts from the Rust taxonomy");
+writeFileSync(join(generatedDir, "errors.ts"), errorsOut);
+console.log("generated src/packages/shared/generated/errors.ts from the Rust taxonomy");
 
-// ---- protocol.gen.ts --------------------------------------------------------
+// ---- protocol.ts --------------------------------------------------------
 
 // The MCP revision is a date string by spec; anything else means the emitter and this generator disagree.
 if (!/^\d{4}-\d{2}-\d{2}$/.test(contract.mcpProtocolVersion)) {
@@ -309,10 +310,10 @@ ${capabilityItems}
 ];
 `;
 
-writeFileSync(join(root, "src/packages/shared/src/protocol.gen.ts"), protocolOut);
-console.log("generated src/packages/shared/src/protocol.gen.ts from the Rust core");
+writeFileSync(join(generatedDir, "protocol.ts"), protocolOut);
+console.log("generated src/packages/shared/generated/protocol.ts from the Rust core");
 
-// ---- identity.gen.ts ----------------------------------------------------------
+// ---- identity.ts ----------------------------------------------------------
 
 const { extensionManifestKey, nativeMessagingHostId, pinnedExtensionId } = contract.identity;
 if (typeof extensionManifestKey !== "string" || extensionManifestKey.length === 0) {
@@ -359,10 +360,10 @@ export const EXTENSION_MANIFEST_KEY =
 export const NATIVE_HOST_ID = ${JSON.stringify(nativeMessagingHostId)};
 `;
 
-writeFileSync(join(root, "src/packages/shared/src/identity.gen.ts"), identityOut);
-console.log("generated src/packages/shared/src/identity.gen.ts from the Rust core");
+writeFileSync(join(generatedDir, "identity.ts"), identityOut);
+console.log("generated src/packages/shared/generated/identity.ts from the Rust core");
 
-// ---- audit.gen.ts -------------------------------------------------------------
+// ---- audit.ts -------------------------------------------------------------
 
 const forwardedKinds = contract.auditForwardedKinds;
 if (!Array.isArray(forwardedKinds) || forwardedKinds.length === 0) {
@@ -395,10 +396,10 @@ export const AUDIT_FORWARDED_KINDS = [
 export type AuditForwardedKind = (typeof AUDIT_FORWARDED_KINDS)[number];
 `;
 
-writeFileSync(join(root, "src/packages/shared/src/audit.gen.ts"), auditOut);
-console.log("generated src/packages/shared/src/audit.gen.ts from the Rust audit whitelist");
+writeFileSync(join(generatedDir, "audit.ts"), auditOut);
+console.log("generated src/packages/shared/generated/audit.ts from the Rust audit whitelist");
 
-// ---- refusals.gen.ts ------------------------------------------------------------
+// ---- refusals.ts ------------------------------------------------------------
 
 const RefusalCodesSchema = z
   .array(z.string().regex(/^[a-z][a-z0-9_]*$/))
@@ -426,10 +427,10 @@ export const REFUSAL_CODES = [
 export type RefusalCode = (typeof REFUSAL_CODES)[number];
 `;
 
-writeFileSync(join(root, "src/packages/shared/src/refusals.gen.ts"), refusalsOut);
-console.log("generated src/packages/shared/src/refusals.gen.ts from the Rust refusal roster");
+writeFileSync(join(generatedDir, "refusals.ts"), refusalsOut);
+console.log("generated src/packages/shared/generated/refusals.ts from the Rust refusal roster");
 
-// ---- host.gen.ts ---------------------------------------------------------------
+// ---- host.ts ---------------------------------------------------------------
 // Structural sanity only; the values are the Rust side's.
 
 const envName = z.string().regex(/^[A-Z][A-Z0-9_]*$/);
@@ -499,9 +500,9 @@ export const AUDIT_DEFAULT_LIMIT = ${auditDefaultLimit};
 export const BROWSER_KEYS = [${wordList(browserKeys)}] as const;
 `;
 
-writeFileSync(join(root, "src/packages/shared/src/host.gen.ts"), hostOut);
-console.log("generated src/packages/shared/src/host.gen.ts from the Rust core");
-// ---- enclave.gen.ts + enclave-fixture.gen.ts --------------------------------
+writeFileSync(join(generatedDir, "host.ts"), hostOut);
+console.log("generated src/packages/shared/generated/host.ts from the Rust core");
+// ---- enclave.ts + enclave-fixture.ts --------------------------------
 // Its own Rust emitter (examples/emit_enclave_contract.rs); shares no state with the emit_contract flow above.
 
 interface EnclaveVector {
@@ -606,9 +607,9 @@ const enclaveOut = `// GENERATED from the Rust core (src/packages/core/src/encla
 //
 // The host-key signing contract, TS side: the constants the WebCrypto verifier (background/enclave-verify.ts) and the
 // enrollment state machine (background/enrollment.ts) enforce. The signed-message ALGORITHM is pinned separately by
-// the golden vectors in enclave-fixture.gen.ts.
+// the golden vectors in enclave-fixture.ts.
 
-// The host-key challenge domain; the policy signature has its own (policy.gen.ts), so neither replays as the other.
+// The host-key challenge domain; the policy signature has its own (policy.ts), so neither replays as the other.
 export const CHALLENGE_DOMAIN = ${emitAsciiString(enclave.challengeDomain)};
 
 // Host-enforced bounds on challenge fields, in UTF-8 bytes; the verifier rejects anything outside them before the crypto.
@@ -641,8 +642,8 @@ export const ENCLAVE_FIXTURE_KEY_ID =
   ${JSON.stringify(enclave.fixture.keyIdHex)};
 `;
 
-writeFileSync(join(root, "src/packages/shared/src/enclave.gen.ts"), enclaveOut);
-console.log("generated src/packages/shared/src/enclave.gen.ts from the Rust enclave module");
+writeFileSync(join(generatedDir, "enclave.ts"), enclaveOut);
+console.log("generated src/packages/shared/generated/enclave.ts from the Rust enclave module");
 
 const vectorItems = enclave.fixture.vectors
   .map(
@@ -674,7 +675,7 @@ const fixtureOut = `// GENERATED from the Rust core (examples/emit_enclave_contr
 // Golden vectors pinning the cross-language enclave crypto contract: Rust-built message bytes with deterministic
 // (RFC 6979) P-256 signatures, replayed through the extension's WebCrypto verifier, so a Rust-side encoding change
 // that outruns the TS verifier fails the replay. The key protects nothing and is deny-listed as an enrollment
-// identity on both sides (ENCLAVE_FIXTURE_KEY_ID in enclave.gen.ts). Test-only: production code never imports this.
+// identity on both sides (ENCLAVE_FIXTURE_KEY_ID in enclave.ts). Test-only: production code never imports this.
 
 export interface EnclaveGoldenVector {
   nonce: string;
@@ -730,12 +731,12 @@ ${policyVectorItems}
 };
 `;
 
-writeFileSync(join(root, "src/packages/shared/src/enclave-fixture.gen.ts"), fixtureOut);
+writeFileSync(join(generatedDir, "enclave-fixture.ts"), fixtureOut);
 console.log(
-  "generated src/packages/shared/src/enclave-fixture.gen.ts from the Rust enclave module",
+  "generated src/packages/shared/generated/enclave-fixture.ts from the Rust enclave module",
 );
 
-// ---- policy.gen.ts -----------------------------------------------------------
+// ---- policy.ts -----------------------------------------------------------
 // Its own Rust emitter (examples/emit_policy_contract.rs). The one cross-reference is the domain-separation check
 // against the enclave contract above: the policy domain must differ from the host-key challenge domain, or a
 // policy signature could be replayed as a challenge proof.
@@ -1015,5 +1016,5 @@ function deepFreeze<T>(value: T): T {
 }
 `;
 
-writeFileSync(join(root, "src/packages/shared/src/policy.gen.ts"), policyOut);
-console.log("generated src/packages/shared/src/policy.gen.ts from the Rust policy module");
+writeFileSync(join(generatedDir, "policy.ts"), policyOut);
+console.log("generated src/packages/shared/generated/policy.ts from the Rust policy module");

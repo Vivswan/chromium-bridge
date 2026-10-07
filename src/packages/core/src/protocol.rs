@@ -236,7 +236,7 @@ pub fn mcp_write<W: Write>(w: &mut W, msg: &JsonRpc) -> io::Result<()> {
 /// `2026-07-28`, the stateless era. The protocol layer itself is the official
 /// `rmcp` SDK (see [`crate::mcp`]); this pin exists so the repository keeps one source
 /// of truth for the revision - the contract emitter carries it into the
-/// generated TS (protocol.gen.ts), docs literals are checked against it,
+/// generated TS (generated/protocol.ts), docs literals are checked against it,
 /// and a unit test (mcp/handler.rs) asserts it equals the newest revision
 /// rmcp serves, so the pin can never drift from the wire.
 pub const MCP_PROTOCOL_VERSION: &str = "2026-07-28";
@@ -249,7 +249,7 @@ pub const MCP_CACHE_TTL_MS: u64 = 3_600_000;
 
 /// The `params._meta` key carrying a request's claimed protocol revision
 /// (MCP 2026-07-28). rmcp owns the enforcement; these key consts
-/// exist so the TS side (protocol.gen.ts, via the contract emitter) spells
+/// exist so the TS side (generated/protocol.ts, via the contract emitter) spells
 /// each wire literal exactly once, and a unit test (mcp/handler.rs) pins
 /// every const to the key rmcp actually reads and writes.
 pub const MCP_META_PROTOCOL_VERSION: &str = "io.modelcontextprotocol/protocolVersion";

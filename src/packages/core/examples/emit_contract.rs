@@ -4,7 +4,7 @@
 //! identity constants, the protocol versions, the extension-forwarded
 //! audit kinds, the refusal-code roster, and the host's user-facing constants (the names and values
 //! the docs and the CLI state). `scripts/gen-ops.ts` (run via `moon run gen`)
-//! consumes this to generate the TypeScript side (`src/packages/shared/src/*.gen.ts`);
+//! consumes this to generate the TypeScript side (`src/packages/shared/generated/`);
 //! the emitted JSON itself is never checked in - the Rust sources are the
 //! contract.
 //!

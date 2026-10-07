@@ -1,5 +1,5 @@
 import type { AuditEntry } from "@chromium-bridge/shared/enclave";
-import type { AuditTrailEntry } from "@chromium-bridge/shared/envelope.gen";
+import type { AuditTrailEntry } from "@chromium-bridge/shared/generated/envelope";
 import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
 import { useCallback, useEffect, useState } from "react";
 import { browser } from "wxt/browser";

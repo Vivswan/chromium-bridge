@@ -6,8 +6,8 @@
 
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
+import { PolicyOverlaySchema } from "../../src/packages/shared/generated/policy";
 import { ASYMMETRIES, type Asymmetry } from "../../src/packages/shared/src/envelope-asymmetries";
-import { PolicyOverlaySchema } from "../../src/packages/shared/src/policy.gen";
 import {
   asymmetryProblems,
   CLASSIFIED_TAGS,
@@ -25,7 +25,7 @@ import { GROUPS } from "../gen-envelope";
 const pairs = readerPairs();
 
 // The cross-file consistency the source cannot express: the table in envelope-asymmetries.ts against the
-// validators envelope.gen.ts was generated from (and enclave.ts's refinement over policy_current).
+// validators generated/envelope.ts was generated from (and enclave.ts's refinement over policy_current).
 describe("today's real table proves clean against the generated validators", () => {
   test("every entry and both reader rules", () => {
     const problems: string[] = [];

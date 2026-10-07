@@ -20,6 +20,10 @@ import { fileURLToPath } from "node:url";
 // Repo root, derived from this file's location (scripts/ is a direct child).
 export const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
+// Where the contract generators write the shared package's TypeScript side. A build output: gitignored, rebuilt by
+// the moon tasks that read it, never tracked.
+export const generatedDir = join(repoRoot, "src/packages/shared/generated");
+
 // The JSON manifests that carry a copy of the crate version (Cargo.toml is the source of truth). The
 // release PR bumps each one through release-please-config.json's extra-files; scripts/check-version.ts
 // requires that coverage and verifies the copies agree. Add new version copies here, nowhere else.

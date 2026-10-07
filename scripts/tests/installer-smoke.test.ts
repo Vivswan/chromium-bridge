@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { NATIVE_HOST_ID, PINNED_EXTENSION_ID } from "../../src/packages/shared/src/identity.gen.ts";
+import {
+  NATIVE_HOST_ID,
+  PINNED_EXTENSION_ID,
+} from "../../src/packages/shared/generated/identity.ts";
 import { type Host, smoke } from "../installer-smoke.ts";
 import type { Finished } from "../lib.ts";
 import { pkgIdentifier } from "../release-package.ts";

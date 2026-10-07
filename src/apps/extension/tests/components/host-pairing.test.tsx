@@ -3,7 +3,7 @@
 // `chromium-bridge enclave-status`), and shows no key line when the host report is unreadable, so the page
 // never guesses a store the host did not name.
 
-import type { HealthReport } from "@chromium-bridge/shared/envelope.gen";
+import type { HealthReport } from "@chromium-bridge/shared/generated/envelope";
 import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
 import { render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";

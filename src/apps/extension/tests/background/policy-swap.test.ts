@@ -19,7 +19,7 @@
 
 import { type ConfirmPayload, isPresenceGated } from "@chromium-bridge/shared/confirm";
 import type { BridgeReq } from "@chromium-bridge/shared/envelope";
-import { POLICY_DEFAULTS, type PolicyValues } from "@chromium-bridge/shared/policy.gen";
+import { POLICY_DEFAULTS, type PolicyValues } from "@chromium-bridge/shared/generated/policy";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { browser } from "wxt/browser";
 import { fakeBrowser } from "wxt/testing/fake-browser";

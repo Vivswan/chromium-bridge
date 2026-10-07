@@ -4,8 +4,8 @@
 // sends. This is the proof that the runtime validation fails closed.
 
 import { describe, expect, test } from "bun:test";
+import { BridgeRespSchema } from "../generated/envelope";
 import { parseBridgeReq } from "../src/envelope";
-import { BridgeRespSchema } from "../src/envelope.gen";
 
 function refusal(msg: unknown): { id?: number | string; error: string } {
   const parsed = parseBridgeReq(msg);

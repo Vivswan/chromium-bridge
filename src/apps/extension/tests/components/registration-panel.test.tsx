@@ -5,7 +5,7 @@
 // healthy-looking table. While a status read is outstanding both actions are disabled,
 // since status and repair share one worker slot and a repair sent then is refused as already in flight.
 
-import type { HealthReport, RegistrationRow } from "@chromium-bridge/shared/envelope.gen";
+import type { HealthReport, RegistrationRow } from "@chromium-bridge/shared/generated/envelope";
 import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

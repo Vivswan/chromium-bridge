@@ -85,7 +85,7 @@ This project drives a real logged-in browser, and a past incident nearly took do
 A new tool touches both sides ([docs/architecture.md](./docs/architecture.md) section 10):
 
 1. **Add it to the Rust catalogue**: one `catalogue!` row in [`src/packages/core/src/tools/catalogue.rs`](src/packages/core/src/tools/catalogue.rs) (name, variant, args struct, risk, permission, confirmation, grants, dispatch with its capability, description) plus a typed args struct in [`src/packages/core/src/tools/args.rs`](src/packages/core/src/tools/args.rs), whose field docs become the schema descriptions. The row is the only table: the `BridgeCommand` variant, the `ToolId` index, the `Tool` record, and the capability roster derive from it.
-2. **Regenerate the TS side** with `moon run gen` (`src/packages/shared/src/*.gen.ts`); CI fails if the generated files are stale.
+2. **The TS side follows on its own**: every task that reads it (`typecheck`, the tests, the extension build) rebuilds `src/packages/shared/generated` from the Rust core first; `moon run gen` rebuilds it alone.
    - A new arg that widens the envelope's args bag is picked up automatically.
    - A new envelope FIELD is a protocol change: see `BridgeReq` in `src/packages/core/src/protocol.rs` and the envelope parity gate, `moon run check-envelope`.
 3. **Give the op a home in the extension.** The roster test and the exhaustive switches fail until the partition is complete:

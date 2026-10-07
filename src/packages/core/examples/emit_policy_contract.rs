@@ -3,7 +3,7 @@
 //! bound, the field catalogue with each field's value kind and declared
 //! permissive direction (in declaration order), and the deny-baseline
 //! defaults in wire spelling. `scripts/gen-ops.ts` (run via `moon run gen`)
-//! consumes this to generate `src/packages/shared/src/policy.gen.ts`; the
+//! consumes this to generate `src/packages/shared/generated/policy.ts`; the
 //! emitted JSON itself is never checked in - the Rust sources are the
 //! contract.
 //!
@@ -21,7 +21,7 @@ use chromium_bridge_core::policy::{
 };
 use serde_json::{json, Value};
 
-/// The stable string tags `policy.gen.ts` spells directions in. Chosen once,
+/// The stable string tags `generated/policy.ts` spells directions in. Chosen once,
 /// here; the generator refuses any tag outside this union, so a new
 /// direction variant must extend both sides deliberately.
 fn direction_tag(d: Direction) -> &'static str {
@@ -34,7 +34,7 @@ fn direction_tag(d: Direction) -> &'static str {
     }
 }
 
-/// The stable string tags `policy.gen.ts` spells value kinds in, same
+/// The stable string tags `generated/policy.ts` spells value kinds in, same
 /// posture as [`direction_tag`].
 fn kind_tag(k: FieldKind) -> &'static str {
     match k {

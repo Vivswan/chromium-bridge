@@ -89,7 +89,7 @@ moon run fix       # auto-fix everything: biome check --write + cargo fmt
 | TypeScript | `typecheck`, `check-ts`, `shared:test`, `extension:test`, `extension:build` |
 | Protocol | `test-e2e` |
 | Hygiene | `hygiene` (the bun-side checks below), `check-refresh-lockfiles`, `test-fuzz` |
-| Contract | `check-gen`, `check-envelope`, `check-gen-isolation` |
+| Contract | `check-envelope`, `check-gen-isolation` |
 | Workflows | `check-yaml`, `check-actions` |
 
 CI runs more on top: the macOS and Windows rust matrices, coverage, linux-install, the adversarial and chaos suites, the interop suite, the browser suites, the installers, the web build, and the audits (the [CI layout](#ci-layout) below).
@@ -104,6 +104,8 @@ The root `package.json` scripts are thin aliases, so both entry points share one
 The repo-wide verbs cover every language at once: `moon run lint` is clippy plus biome lint, `moon run fmt` is cargo fmt plus biome format, `moon run test` is Rust plus protocol e2e. Each task body is a plain command you can also run by hand:
 
 ```sh
+bun install
+moon run gen                             # the TS side of the Rust contract: a core test, the tsc run, and the extension build read it; the moon tasks build it themselves
 cargo build --release
 cargo nextest run
 cargo fmt --check && cargo clippy --all-targets -- -D warnings
@@ -111,7 +113,6 @@ cargo fmt --check && cargo clippy --all-targets -- -D warnings
 cargo fmt --check --manifest-path src/packages/core/fuzz/Cargo.toml
 cargo clippy --locked --manifest-path src/packages/core/fuzz/Cargo.toml --all-targets -- -D warnings
 uv run --no-project --isolated tests/protocol/e2e.py
-bun install
 bun run tsc -p src/apps/extension        # one TS project; `moon run typecheck` covers them all
 bun run biome ci . --error-on-warnings   # lint + format check, warnings fail (biome.jsonc)
 bun run --cwd src/apps/extension build
@@ -126,7 +127,7 @@ The full task menu, by area:
 | Rust | `core:fmt-check` (= `core:fmt-check-workspace` + `core:fmt-check-fuzz`), `core:lint` (= `core:lint-workspace` + `core:lint-fuzz`), `test-rust` (= `core:test` + `core:test-doc` + `core:test-loom`, the broker ref-count model check under the core's `loom` feature), `doc`, `build-release`, `build-repro`, `typos`, `machete`, `audit` |
 | Fuzz workspace | `fuzz-seeds`, `fuzz-smoke`, `check-fuzz-smoke`, `test-fuzz` (clippy and fmt over it are `core:lint-fuzz` and `core:fmt-check-fuzz`) |
 | TypeScript | `typecheck`, `test-ts` (= `shared:test` + `extension:test` + `check-harness-driver`), `lint-ts`, `check-ts`, `fmt-ts`, `fmt-check-ts`, `extension:build`, `web:build` |
-| Contract codegen | `gen` (= `gen-shared`), `gen-icons`, `gen-architecture-map`, `check-gen`, `check-envelope`, `check-gen-isolation` |
+| Contract codegen | `gen` (= `gen-shared` = `gen-ops` + `gen-envelope`), `gen-icons`, `gen-architecture-map`, `check-envelope`, `check-gen-isolation` |
 | Protocol suites | `test-e2e`, `test-adversarial`, `test-chaos`, `check-uv` |
 | Interop suites | `test-interop` (official MCP SDK v2 client against the release binary), `harness-smoke` (real harness CLIs, isolated config dirs; the legacy-era opening-method canary) |
 | Browser suites | `test-browser`, `test-integration` (isolated Chrome only; never in `ci`) |
@@ -202,11 +203,11 @@ The workflow-level `CI_IMAGE_TAG` is the one switch: an empty value runs every j
 | `build-release` | `moon run build-release`, uploaded for the suites below | bare runner, so the binary links against the runner's older glibc and runs in both environments |
 | `coverage` | `cargo llvm-cov`, informational (`continue-on-error`, no threshold) | image |
 | `extension` | `typecheck`, `check-ts`, `shared:test`, `extension:test`, `extension:build`, then `check-extension-id` against the built manifest | image |
-| `contract` | `check-gen` alone first (it rewrites the generated modules), then `check-envelope`, `check-gen-isolation`, `check-refresh-lockfiles` | image |
+| `contract` | `check-envelope`, `check-gen-isolation`, `check-refresh-lockfiles` | image |
 | `hygiene` | `moon run hygiene` | image |
 | `tooling` | `machete`, with cargo-machete at the `Containerfile` pin | image |
 | `web` | `web:build` | image |
-| `linux-install` | downloads the `build-release` binary, then `scripts/linux-registration.ts`: `doctor --fix`, re-register, multi-browser, `uninstall` under isolated HOME and XDG directories | bare runner: it needs only that binary and a bun for the scenario driver |
+| `linux-install` | downloads the `build-release` binary, then `scripts/linux-registration.ts`: `doctor --fix`, re-register, multi-browser, `uninstall` under isolated HOME and XDG directories | bare runner, with cargo and moon to build the generated identity module the scenario driver reads |
 | `protocol` | the `e2e`, `adversarial`, and `chaos` suites against the downloaded binary | image |
 | `interop` | the official MCP SDK client against the downloaded binary | image |
 | `browser` | the reusable `browser.yml` (input `chrome-version`), which `nightly.yml` calls too | bare runner, Chrome from `setup-chrome` |

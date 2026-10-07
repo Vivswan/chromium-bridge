@@ -4,7 +4,7 @@
 // set/remove: writing would allow forging httpOnly cookies (session fixation),
 // which even page XSS cannot do.
 
-import type { OpArgs } from "@chromium-bridge/shared/ops.gen";
+import type { OpArgs } from "@chromium-bridge/shared/generated/ops";
 import type { Browser } from "wxt/browser";
 import { browser } from "wxt/browser";
 import { maskCookieValue } from "../shared/masking";

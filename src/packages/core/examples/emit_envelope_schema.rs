@@ -8,12 +8,11 @@
 //! tool, and the consumer splits the command per op by structure, never by
 //! name. One consumer reads this output: `scripts/gen-envelope.ts` (`moon run
 //! gen`) generates the extension's wire validators from it
-//! (`src/packages/shared/src/envelope.gen.ts`): per envelope and control
+//! (`src/packages/shared/generated/envelope.ts`): per envelope and control
 //! frame the faithful base and, for the frames the extension reads, the
 //! enforced validator, which is that base plus the asymmetry table in
-//! `src/packages/shared/src/envelope-asymmetries.ts`; `moon run check-gen`
-//! fails on a stale diff and `moon run check-envelope` proves each
-//! asymmetry.
+//! `src/packages/shared/src/envelope-asymmetries.ts`; `moon run
+//! check-envelope` proves each asymmetry.
 //!
 //! Built only when the `envelope-schema` feature is enabled (this example's
 //! `required-features`), so schemars stays out of every binary's dependency
