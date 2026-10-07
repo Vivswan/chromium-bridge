@@ -32,6 +32,9 @@ const ANCHOR_FAULT_KEYS: Readonly<Record<AnchorFault, MessageKey>> = {
   signer_ill_formed: "clients.pair_invalid_signer_ill_formed",
 };
 
+/** ASCII letters lowered and nothing else, exactly the CLI's `to_ascii_lowercase` (cli.rs hash_digest). */
+const asciiLowercase = (value: string): string => value.replace(/[A-Z]/g, (c) => c.toLowerCase());
+
 export function TrustedClientsPanel() {
   const { t } = useI18n();
   const ids = { name: useId(), value: useId(), hash: useId(), signer: useId() };
@@ -68,16 +71,20 @@ export function TrustedClientsPanel() {
   };
 
   // The host's grammars, checked here so the refusal is shown as a sentence before anything is posted (the
-  // router would otherwise answer "malformed runtime message"). The anchor goes as entered: `pair-client`
-  // keeps a signer's padding, and an anchor the page reshaped would never match the signer it names.
+  // router would otherwise answer "malformed runtime message"). Each value goes as `pair-client` takes it: the
+  // name and a signer as entered (a signer's padding is part of the identity it names), a hash in the canonical
+  // lowercase the CLI's `--hash` parser applies before the digest grammar.
   const pair = () => {
     setFormError(null);
-    const parsedName = ClientNameSchema.safeParse(name.trim());
+    const parsedName = ClientNameSchema.safeParse(name);
     if (!parsedName.success) {
       setFormError(t("clients.pair_invalid_name"));
       return;
     }
-    const anchor = ClientAnchorSchema.safeParse({ kind, value });
+    const anchor = ClientAnchorSchema.safeParse({
+      kind,
+      value: kind === "hash" ? asciiLowercase(value) : value,
+    });
     if (!anchor.success) {
       setFormError(t(ANCHOR_FAULT_KEYS[anchorFault(anchor.error)]));
       return;

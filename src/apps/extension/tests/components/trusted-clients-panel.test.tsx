@@ -174,12 +174,6 @@ describe("TrustedClientsPanel pairing", () => {
       value: "zz",
       sentence: "<hash grammar sentence>",
     },
-    {
-      name: "an uppercase hash",
-      kind: "hash" as const,
-      value: "AB".repeat(20),
-      sentence: "<hash grammar sentence>",
-    },
     // Each signer fault gets its own sentence (the CLI's for NUL, the page's for the surrogate), not one shared
     // refusal; the empty anchor never reaches a sentence, since Trust stays disabled on it (below).
     {
@@ -217,9 +211,25 @@ describe("TrustedClientsPanel pairing", () => {
     );
   });
 
-  test("a name outside the label grammar is refused before anything is posted", async () => {
+  test("an uppercase hash posts in the canonical lowercase, as `pair-client --hash` stores it", async () => {
     await mount();
-    await fill("bad name!", "signer", "TEAMID");
+    await fill("codex", "hash", "AB".repeat(20));
+    await waitFor(() =>
+      expect(sent[1]).toEqual({
+        type: "pair_client",
+        name: "codex",
+        anchor: { kind: "hash", value: "ab".repeat(20) },
+      }),
+    );
+  });
+
+  test.each([
+    { name: "a name outside the label grammar", value: "bad name!" },
+    // The CLI refuses a padded name; a page that trimmed it would trust "codex" for " codex ".
+    { name: "a padded name", value: " codex " },
+  ])("$name is refused before anything is posted", async ({ value }) => {
+    await mount();
+    await fill(value, "signer", "TEAMID");
     await screen.findByText("<name grammar sentence>");
     expect(sent.map((m) => m.type)).toEqual(["get_clients"]);
   });
