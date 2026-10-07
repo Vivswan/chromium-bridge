@@ -310,6 +310,12 @@ const graph: TaskGraph = {
       args: ["x", "fixture-tool"],
       deps: [],
     },
+    // Only the command's name, and the bun or bunx a launcher runs, is read by basename: an argument is a path.
+    "names-a-path-ending-in-x": {
+      command: "bun",
+      args: ["scripts/read.ts", "fixtures/x", "fixtures/bunx"],
+      deps: [],
+    },
     "launches-inside-the-gate": { command: "env", script: "env bun test", deps: [] },
     // ANSI-C quoting decodes escapes the rules do not read.
     "quotes-ansi-c": { command: "bun", script: "bun $'in\\x73tall' fixture-package", deps: [] },

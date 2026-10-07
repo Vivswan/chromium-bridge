@@ -142,10 +142,11 @@ const unalias = (words: Word[]): Word[] => {
 
 // A launcher runs one of its arguments as a command, and which one depends on options this rule does not model
 // (`env -i X=1`, `nice -n 5`, `exec -a name`, `env -u bun`), so, as with bun's own options, the bunx rule reads
-// every word after the launcher: a bunx, or a bun with an x after it. Every name is its basename, so
+// every word after the launcher: a bunx, or a bun with an x after it. A command's name is its basename, so
 // `/usr/bin/env` is env and `/opt/homebrew/bin/bunx` is bunx, and a bun by path, which unalias leaves as the
-// gate's rules refuse it, has its x read here; bare `time` is a keyword the parser opens itself. The gate's
-// rules see the launcher as the command, and refuse it by name.
+// gate's rules refuse it, has its x read here; an argument keeps its path, so `fixtures/x` is no alias. Bare
+// `time` is a keyword the parser opens itself. The gate's rules see the launcher as the command, and refuse it
+// by name.
 const LAUNCHERS = new Set([
   "builtin",
   "command",
@@ -167,12 +168,14 @@ const unreadCommandWords = (words: Word[]): Word[] => {
   return candidates.filter((w) => w.reading !== "literal");
 };
 const runsBunx = (words: Word[]): boolean => {
-  const [first, ...rest] = words.map((w) => posix.basename(w.text));
-  if (first === "bunx") return true;
-  if (first === "bun") return rest.includes("x") || rest.includes("bunx");
-  if (first === undefined || !LAUNCHERS.has(first)) return false;
-  const bun = rest.indexOf("bun");
-  return rest.includes("bunx") || (bun !== -1 && rest.includes("x", bun + 1));
+  const [first, ...rest] = words.map((w) => w.text);
+  const name = first === undefined ? undefined : posix.basename(first);
+  if (name === "bunx") return true;
+  if (name === "bun") return rest.includes("x") || rest.includes("bunx");
+  if (name === undefined || !LAUNCHERS.has(name)) return false;
+  const names = rest.map((w) => posix.basename(w));
+  const bun = names.indexOf("bun");
+  return names.includes("bunx") || (bun !== -1 && rest.includes("x", bun + 1));
 };
 
 const { syntax } = sh;
