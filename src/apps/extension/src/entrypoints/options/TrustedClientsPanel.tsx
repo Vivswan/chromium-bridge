@@ -68,7 +68,8 @@ export function TrustedClientsPanel() {
   };
 
   // The host's grammars, checked here so the refusal is shown as a sentence before anything is posted (the
-  // router would otherwise answer "malformed runtime message").
+  // router would otherwise answer "malformed runtime message"). The anchor goes as entered: `pair-client`
+  // keeps a signer's padding, and an anchor the page reshaped would never match the signer it names.
   const pair = () => {
     setFormError(null);
     const parsedName = ClientNameSchema.safeParse(name.trim());
@@ -76,7 +77,7 @@ export function TrustedClientsPanel() {
       setFormError(t("clients.pair_invalid_name"));
       return;
     }
-    const anchor = ClientAnchorSchema.safeParse({ kind, value: value.trim() });
+    const anchor = ClientAnchorSchema.safeParse({ kind, value });
     if (!anchor.success) {
       setFormError(t(ANCHOR_FAULT_KEYS[anchorFault(anchor.error)]));
       return;

@@ -102,7 +102,7 @@ async function fill(name: string, kind: "hash" | "signer", value: string) {
   await userEvent.click(
     screen.getByLabelText(kind === "hash" ? "Hash of the client binary" : "Code signer"),
   );
-  await userEvent.type(screen.getByLabelText("Anchor value"), value);
+  if (value !== "") await userEvent.type(screen.getByLabelText("Anchor value"), value);
   await userEvent.click(screen.getByRole("button", { name: "Trust" }));
 }
 
@@ -130,6 +130,20 @@ describe("TrustedClientsPanel pairing", () => {
     // The form is cleared for the next client only once the host reported the pairing.
     expect(screen.getByLabelText("Name")).toHaveValue("");
     expect(screen.getByRole("button", { name: "Trust" })).toBeDisabled();
+  });
+
+  test("a signer anchor is posted exactly as entered, padding included", async () => {
+    // The CLI's SignerId keeps `" Publisher "` as typed, so a form that trimmed it would store an anchor the
+    // client attested as the original signer never matches.
+    await mount();
+    await fill("codex", "signer", " Publisher ");
+    await waitFor(() =>
+      expect(sent[1]).toEqual({
+        type: "pair_client",
+        name: "codex",
+        anchor: { kind: "signer", value: " Publisher " },
+      }),
+    );
   });
 
   test("while the pairing awaits the host and the tap, the form is disabled and keeps the submitted values", async () => {
@@ -166,14 +180,8 @@ describe("TrustedClientsPanel pairing", () => {
       value: "AB".repeat(20),
       sentence: "<hash grammar sentence>",
     },
-    // Each signer fault gets its own sentence (the CLI's for empty and NUL, the page's for the surrogate), not
-    // one shared refusal.
-    {
-      name: "a blank signer anchor",
-      kind: "signer" as const,
-      value: " ",
-      sentence: "<signer empty sentence>",
-    },
+    // Each signer fault gets its own sentence (the CLI's for NUL, the page's for the surrogate), not one shared
+    // refusal; the empty anchor never reaches a sentence, since Trust stays disabled on it (below).
     {
       name: "a NUL inside a signer anchor",
       kind: "signer" as const,
@@ -191,6 +199,22 @@ describe("TrustedClientsPanel pairing", () => {
     await fill("codex", kind, value);
     await screen.findByText(sentence);
     expect(sent.map((m) => m.type)).toEqual(["get_clients"]);
+  });
+
+  test("an empty anchor cannot be posted: Trust stays disabled, while a lone space is a signer the CLI accepts", async () => {
+    await mount();
+    await fill("codex", "signer", "");
+    expect(screen.getByRole("button", { name: "Trust" })).toBeDisabled();
+    expect(sent.map((m) => m.type)).toEqual(["get_clients"]);
+    await userEvent.type(screen.getByLabelText("Anchor value"), " ");
+    await userEvent.click(screen.getByRole("button", { name: "Trust" }));
+    await waitFor(() =>
+      expect(sent[1]).toEqual({
+        type: "pair_client",
+        name: "codex",
+        anchor: { kind: "signer", value: " " },
+      }),
+    );
   });
 
   test("a name outside the label grammar is refused before anything is posted", async () => {

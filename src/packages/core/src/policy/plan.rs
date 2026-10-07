@@ -61,15 +61,29 @@ pub fn summarize(values: &PolicyValues, fields: &[PolicyField]) -> String {
         .join(",")
 }
 
-/// A ring entry's baseline revision and the effective policy it held (its baseline under its overlay), or
-/// `None` for a damaged entry: a baseline that does not decode, or an overlay whose tool list breaks the
-/// bounds every reader of the policy enforces (an entry is published whole or not at all).
-pub fn entry_state(entry: &PolicyHistoryEntry) -> Option<(u64, PolicyValues)> {
+/// A ring entry's baseline revision and the effective policy it held (its baseline under its overlay), one
+/// value: both are read from the same record, so every report and frame carries them together or not at all,
+/// and no reader meets a revision without its policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct HeldPolicy {
+    pub revision: u64,
+    pub effective: PolicyValues,
+}
+
+/// What a ring entry held, or `None` for a damaged entry: a baseline that does not decode, or an overlay
+/// whose tool list breaks the bounds every reader of the policy enforces (an entry is published whole or not
+/// at all).
+pub fn entry_state(entry: &PolicyHistoryEntry) -> Option<HeldPolicy> {
     let doc = decode_entry_doc(&entry.baseline_b64).ok()?;
     let overlay = entry.overlay.clone().unwrap_or_default();
     let effective = fold(&doc.values(), &overlay);
     super::validate_disabled_tools(&effective.disabled_tools).ok()?;
-    Some((doc.revision, effective))
+    Some(HeldPolicy {
+        revision: doc.revision,
+        effective,
+    })
 }
 
 /// What `policy set` writes for `overlay`: the touched set is the fields the overlay names, in catalogue order,
@@ -275,12 +289,12 @@ pub fn rollback_inputs(
 fn find_history_effective(history: &PolicyHistory, revision: u64) -> Result<PolicyValues, String> {
     let mut available = Vec::new();
     let mut matches: Vec<PolicyValues> = Vec::new();
-    for (held, effective) in history.entries.iter().filter_map(entry_state) {
-        if !available.contains(&held) {
-            available.push(held);
+    for held in history.entries.iter().filter_map(entry_state) {
+        if !available.contains(&held.revision) {
+            available.push(held.revision);
         }
-        if held == revision {
-            matches.push(effective);
+        if held.revision == revision {
+            matches.push(held.effective);
         }
     }
     match matches.first() {

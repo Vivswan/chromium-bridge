@@ -4,6 +4,7 @@
 // resolver read, the fix, the restriction seam, the trail reader) is covered by the Rust unit tests.
 
 import type { AuditTrailEntry, RegistrationRow } from "@chromium-bridge/shared/generated/envelope";
+import { POLICY_DEFAULTS } from "@chromium-bridge/shared/generated/policy";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   collaborator,
@@ -282,13 +283,30 @@ describe("the grant lanes behind the presence exchange", () => {
 describe("policy history", () => {
   test("round-trips the ring as the host reports it, and a refusal as its error", async () => {
     const entries = [
-      { id: "a1", revision: 2, signed: true, overlay_active: false, superseded_unix: 20 },
+      {
+        id: "a1",
+        signed: true,
+        overlay_active: false,
+        superseded_unix: 20,
+        held: { revision: 2, effective: POLICY_DEFAULTS },
+      },
       { id: "b2", signed: false, overlay_active: true, superseded_unix: 21 },
     ];
     const p = requestPolicyHistory();
     expect(posted).toEqual([{ type: "policy_history" }]);
     handleHostAdminFrame({ type: "policy_history_result", ok: true, entries });
     await expect(p).resolves.toEqual({ ok: true, entries });
+    // A record's revision and the policy it held are one value: a row carrying one without the other is not
+    // the host's frame, so no reader downstream has to decide what half a record means.
+    for (const held of [{ revision: 2 }, { effective: POLICY_DEFAULTS }]) {
+      const half = requestPolicyHistory();
+      handleHostAdminFrame({
+        type: "policy_history_result",
+        ok: true,
+        entries: [{ ...entries[1], held }],
+      } as never);
+      expect(failed(await half).error).toBe("malformed policy_history_result from host");
+    }
     const refused = requestPolicyHistory();
     handleHostAdminFrame({
       type: "policy_history_result",

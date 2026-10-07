@@ -168,11 +168,10 @@ const FRAMES: Readonly<Record<string, FrameArms>> = {
       entries: [
         {
           id: "a1",
-          revision: 3,
           signed: true,
           overlay_active: false,
           superseded_unix: 1,
-          effective: POLICY_DEFAULTS,
+          held: { revision: 3, effective: POLICY_DEFAULTS },
         },
       ],
     },

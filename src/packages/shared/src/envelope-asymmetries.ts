@@ -416,7 +416,7 @@ export const ASYMMETRIES: Readonly<Record<string, Readonly<Record<string, Asymme
         ],
       },
     ),
-    "$.properties.entries.items.properties.effective": {
+    "$.properties.entries.items.properties.held.properties.effective": {
       direction: "narrow",
       reason:
         "A row's effective policy is the generated PolicyValuesSchema: strict like the host's, with the " +

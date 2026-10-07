@@ -783,7 +783,7 @@ impl WriteVerdict {
 }
 
 /// One superseded policy record as the options page lists it: the wire projection of
-/// [`crate::policy::PolicyHistoryEntryReport`], whose `revision` is `null` for a damaged ring entry; the frame
+/// [`crate::policy::PolicyHistoryEntryReport`], whose `held` is `null` for a damaged ring entry; the frame
 /// omits the field instead, since the readers refuse `null` at every optional field.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
@@ -791,25 +791,22 @@ impl WriteVerdict {
 pub struct PolicyHistoryRow {
     /// The record's content identity, what a rollback names so the record restored is the one listed.
     pub id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub revision: Option<u64>,
     pub signed: bool,
     pub overlay_active: bool,
     pub superseded_unix: u64,
-    /// The policy the record held, what a rollback to it re-derives; travels exactly when `revision` does.
+    /// The record's revision with the policy it held, what a rollback to it re-derives.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub effective: Option<crate::policy::PolicyValues>,
+    pub held: Option<crate::policy::HeldPolicy>,
 }
 
 impl From<&crate::policy::PolicyHistoryEntryReport> for PolicyHistoryRow {
     fn from(entry: &crate::policy::PolicyHistoryEntryReport) -> Self {
         PolicyHistoryRow {
             id: entry.id.clone(),
-            revision: entry.revision,
             signed: entry.signed,
             overlay_active: entry.overlay_active,
             superseded_unix: entry.superseded_unix,
-            effective: entry.effective.clone(),
+            held: entry.held.clone(),
         }
     }
 }

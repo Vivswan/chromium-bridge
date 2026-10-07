@@ -30,6 +30,11 @@ const REQUEST: PresenceRequestFrame = {
 
 type Reply = Record<string, unknown>;
 
+/** The fields a history row marks as changing on roll-back, in the order shown. */
+function marked(row: HTMLElement): string[] {
+  return Array.from(row.querySelectorAll("mark"), (m) => m.textContent ?? "");
+}
+
 let sent: Reply[];
 let replies: Record<string, () => Reply | Promise<Reply>>;
 let posture: PolicyPosture;
@@ -90,7 +95,7 @@ beforeEach(() => {
     policy_history_signed: { message: "signed" },
     policy_history_unsigned: { message: "unsigned" },
     policy_history_overlay: { message: "with restrictions" },
-    policy_history_restores: { message: "Restores: $1" },
+    policy_history_differs: { message: "would change on roll-back" },
     policy_history_same: { message: "Same as now" },
     policy_history_damaged: { message: "Unreadable entry, superseded $1" },
     policy_rollback: { message: "Roll back" },
@@ -203,11 +208,10 @@ describe("PolicyEditor lanes", () => {
       entries: [
         {
           id: "a1",
-          revision: 2,
           signed: true,
           overlay_active: false,
           superseded_unix: 1_700_000_000,
-          effective: EFFECTIVE,
+          held: { revision: 2, effective: EFFECTIVE },
         },
       ],
     });
@@ -305,11 +309,10 @@ describe("PolicyEditor lanes", () => {
       entries: [
         {
           id: "a1",
-          revision: 2,
           signed: true,
           overlay_active: true,
           superseded_unix: 1_700_000_000,
-          effective: EFFECTIVE,
+          held: { revision: 2, effective: EFFECTIVE },
         },
         { id: "b2", signed: false, overlay_active: false, superseded_unix: 1_700_000_100 },
       ],
@@ -319,6 +322,7 @@ describe("PolicyEditor lanes", () => {
     await screen.findByText(/^Unreadable entry, superseded /);
     expect(screen.getByText("signed, with restrictions")).toBeInTheDocument();
     expect(screen.getByText("Same as now")).toBeInTheDocument();
+    expect(marked(screen.getAllByRole("listitem")[0] as HTMLElement)).toEqual([]);
     const rollbacks = screen.getAllByRole("button", { name: "Roll back" });
     expect(rollbacks).toHaveLength(1);
     // Applied free: no request, and the ring is re-read.
@@ -350,29 +354,30 @@ describe("PolicyEditor lanes", () => {
     await waitFor(() => expect(asserts()).toEqual([ASSERT]));
   });
 
-  test("two rows at one revision read apart by what each restores, and roll back by the row, not the revision", async () => {
+  test("two rows at one revision read apart by the policy each held, and roll back by the row, not the revision", async () => {
     // Every restriction while revision 4 was current pushed a ring entry at revision 4; the host refuses
     // "revision 4" as ambiguous, so the page names the row it listed. The two rows once rendered identically
-    // ("signed", the same second) while their buttons posted different ids; each now shows the fields a
-    // roll-back to it would change against the policy enforced now, in the CLI's spelling.
+    // ("signed", the same second) while their buttons posted different ids; each now shows the whole policy it
+    // held, the line `policy history` prints, with the fields a roll-back would change marked.
     replies.get_policy_history = () => ({
       ok: true,
       entries: [
         {
           id: "c3",
-          revision: 4,
           signed: true,
           overlay_active: true,
           superseded_unix: 1_700_000_000,
-          effective: { ...EFFECTIVE, pageEvalEnabled: false },
+          held: { revision: 4, effective: { ...EFFECTIVE, pageEvalEnabled: false } },
         },
         {
           id: "d4",
-          revision: 4,
           signed: true,
           overlay_active: true,
           superseded_unix: 1_700_000_000,
-          effective: { ...EFFECTIVE, cdpMode: true, pageEvalEnabled: false, disabledTools: [] },
+          held: {
+            revision: 4,
+            effective: { ...EFFECTIVE, cdpMode: true, pageEvalEnabled: false, disabledTools: [] },
+          },
         },
       ],
     });
@@ -380,10 +385,21 @@ describe("PolicyEditor lanes", () => {
     const rollbacks = await screen.findAllByRole("button", { name: "Roll back" });
     expect(rollbacks).toHaveLength(2);
     expect(screen.getAllByText("signed, with restrictions")).toHaveLength(2);
-    expect(screen.getByText("Restores: pageEvalEnabled=off")).toBeInTheDocument();
-    expect(
-      screen.getByText("Restores: cdpMode=on,pageEvalEnabled=off,disabledTools=[]"),
-    ).toBeInTheDocument();
+    const rows = screen.getAllByRole("listitem") as HTMLElement[];
+    expect(rows[0]).toHaveTextContent(
+      "effective=cdpMode=off,fileUploadEnabled=on,handleDialogEnabled=off,pageEvalEnabled=off," +
+        "confirmHighRiskClick=on,confirmPageEval=on,presenceConfirm=on,confirmTabClose=on," +
+        "warnPreciseSnapshot=on,evalMask=on,hostReverifyMs=0,confirmGraceMs=60000," +
+        "clickToastTimeoutMs=30000,evalToastTimeoutMs=45000,disabledTools=[page_upload]",
+    );
+    expect(marked(rows[0] as HTMLElement)).toEqual(["pageEvalEnabled=off"]);
+    expect(rows[1]).toHaveTextContent("effective=cdpMode=on,fileUploadEnabled=on,");
+    expect(marked(rows[1] as HTMLElement)).toEqual([
+      "cdpMode=on",
+      "pageEvalEnabled=off",
+      "disabledTools=[]",
+    ]);
+    expect(screen.queryByText("Same as now")).toBeNull();
     await userEvent.click(rollbacks[1] as HTMLElement);
     await waitFor(() =>
       expect(writes()).toEqual([

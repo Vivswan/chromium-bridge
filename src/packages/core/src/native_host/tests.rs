@@ -528,7 +528,7 @@ fn policy_history_answers_the_superseded_ring_as_the_cli_reports_it() {
     assert_eq!(entries.len(), 1, "{entries:?}");
     assert_eq!(
         (
-            entries[0].revision,
+            entries[0].held.as_ref().map(|held| held.revision),
             entries[0].signed,
             entries[0].overlay_active
         ),

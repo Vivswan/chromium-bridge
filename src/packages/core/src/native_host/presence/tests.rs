@@ -1464,7 +1464,7 @@ fn a_rollback_from_the_page_takes_the_lane_the_plan_decides() {
     let rows: Vec<HistoryEntryRef> = report
         .entries
         .iter()
-        .filter(|e| e.revision == Some(2))
+        .filter(|e| e.held.as_ref().is_some_and(|held| held.revision == 2))
         .map(|e| HistoryEntryRef { id: e.id.clone() })
         .collect();
     assert_eq!(rows.len(), 2, "{rows:?}");

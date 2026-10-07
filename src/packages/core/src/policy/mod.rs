@@ -29,7 +29,7 @@ pub use cli::{
 };
 pub use plan::{
     audit_grant_refused, plan_grant, refused_grant, rollback_inputs, touched_fields, wire_names,
-    Grant, HistoryEntryRef, RollbackInputs, RollbackPlan,
+    Grant, HeldPolicy, HistoryEntryRef, RollbackInputs, RollbackPlan,
 };
 pub use store::{
     clear_baseline_locked, confirm_unmoved, prepare_grant, restrict, restrict_planned, set_signed,

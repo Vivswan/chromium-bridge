@@ -855,28 +855,32 @@ fn registration_and_restrict_outcomes_map_onto_the_pinned_wire_shapes() {
             json!({ "type": tag, "ok": false, "error": "relaxes the effective policy" })
         );
     }
-    // The history rows travel exactly when the ring read; a damaged entry's revision and effective policy are
-    // omitted, never null, and a readable entry carries the policy it held so a surface can show what a
-    // rollback to it re-derives.
-    let held = crate::policy::PolicyValues::default();
+    // The history rows travel exactly when the ring read; a readable entry carries its revision and the policy
+    // it held as one value, so a surface can show what a rollback to it re-derives, and a damaged entry omits
+    // that value, never null.
+    let effective = crate::policy::PolicyValues::default();
+    let held = crate::policy::HeldPolicy {
+        revision: 3,
+        effective: effective.clone(),
+    };
+    let held_json =
+        json!({ "revision": 3, "effective": serde_json::to_value(&effective).unwrap() });
     assert_eq!(
         serde_json::to_value(
             HistoryReport::Entries(vec![
                 PolicyHistoryRow {
                     id: "a1".into(),
-                    revision: Some(3),
                     signed: true,
                     overlay_active: false,
                     superseded_unix: 10,
-                    effective: Some(held.clone()),
+                    held: Some(held),
                 },
                 PolicyHistoryRow {
                     id: "b2".into(),
-                    revision: None,
                     signed: false,
                     overlay_active: true,
                     superseded_unix: 11,
-                    effective: None,
+                    held: None,
                 },
             ])
             .into_frame()
@@ -888,16 +892,28 @@ fn registration_and_restrict_outcomes_map_onto_the_pinned_wire_shapes() {
             "entries": [
                 {
                     "id": "a1",
-                    "revision": 3,
                     "signed": true,
                     "overlay_active": false,
                     "superseded_unix": 10,
-                    "effective": serde_json::to_value(&held).unwrap(),
+                    "held": held_json,
                 },
                 { "id": "b2", "signed": false, "overlay_active": true, "superseded_unix": 11 },
             ],
         })
     );
+    // A revision without its policy, or a policy without its revision, is no record the host ever held.
+    for half in [
+        json!({ "revision": 3 }),
+        json!({ "effective": serde_json::to_value(&effective).unwrap() }),
+    ] {
+        let row = json!({
+            "id": "a1", "signed": true, "overlay_active": false, "superseded_unix": 10, "held": half,
+        });
+        assert!(
+            serde_json::from_value::<PolicyHistoryRow>(row).is_err(),
+            "a half-held row must not parse"
+        );
+    }
     assert_eq!(
         serde_json::to_value(
             HistoryReport::Unavailable {

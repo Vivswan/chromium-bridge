@@ -321,7 +321,7 @@ policy:
   history_signed: "已簽署"
   history_unsigned: "未簽署"
   history_overlay: "含限制"
-  history_restores: "回復為: $1"
+  history_differs: "回復後會改變"
   history_same: "與目前生效的原則相同"
   history_damaged: "無法讀取的項目, 於 $1 被取代"
   rollback: "回復"

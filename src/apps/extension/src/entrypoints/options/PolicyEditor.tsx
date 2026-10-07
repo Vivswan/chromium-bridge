@@ -7,6 +7,8 @@ import {
   type MsPolicyField,
   POLICY_DEFAULTS,
   POLICY_DIRECTIONS,
+  POLICY_FIELDS,
+  type PolicyFieldName,
   type PolicyOverlay,
   type PolicyValues,
 } from "@chromium-bridge/shared/generated/policy";
@@ -17,7 +19,7 @@ import {
   summarizePolicyFields,
 } from "@chromium-bridge/shared/policy-compare";
 import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
-import { useCallback, useEffect, useId, useState } from "react";
+import { Fragment, useCallback, useEffect, useId, useState } from "react";
 import { browser } from "wxt/browser";
 import { Button } from "@/components/ui/button";
 import {
@@ -377,8 +379,8 @@ function HistoryBlock({
 }
 
 /** One ring entry as the page renders it, decided once where the wire row enters: a readable revision with the
- * policy it held and its roll-back, or a damaged entry (the host omits both fields together) that offers none.
- * The roll-back names the record's content identity, since a revision alone can be ambiguous
+ * policy it held and its roll-back, or a damaged entry (the host omits what it held) that offers none. The
+ * roll-back names the record's content identity, since a revision alone can be ambiguous
  * (policy/plan.rs find_history_effective says when). Two identical records (one restriction repeated within a
  * second) share an id and a state, so the row key adds the occurrence. */
 type HistoryEntry = { id: string; key: string; supersededAt: string } & (
@@ -405,29 +407,53 @@ function historyEntries(rows: PolicyHistoryRow[]): HistoryEntry[] {
       key: `${row.id}-${nth}`,
       supersededAt: new Date(row.superseded_unix * 1000).toLocaleString(),
     };
-    return row.revision === undefined || row.effective === undefined
+    return row.held === undefined
       ? { ...shared, kind: "damaged" }
       : {
           ...shared,
           kind: "revision",
-          revision: row.revision,
-          effective: row.effective,
+          revision: row.held.revision,
+          effective: row.held.effective,
           signed: row.signed,
           overlayActive: row.overlay_active,
         };
   });
 }
 
-/** What rolling back to a row would change, in the CLI's spelling, or that it would change nothing. */
-function restores(
-  t: ReturnType<typeof useI18n>["t"],
-  held: PolicyValues,
-  effective: PolicyValues,
-): string {
-  const changed = differingPolicyFields(held, effective);
-  return changed.length === 0
-    ? t("policy.history_same")
-    : t("policy.history_restores", [summarizePolicyFields(held, changed)]);
+/** A field a roll-back would change, set apart on the line without leaving the CLI's spelling. */
+const CHANGED =
+  "rounded-sm bg-transparent font-semibold text-text-1 underline decoration-dotted underline-offset-2";
+
+/** The policy a row held as `policy history` prints it (`effective=` and every field in the CLI's spelling), the
+ * fields a roll-back would change against the enforced policy marked, or a note that none would. */
+function HeldPolicyLine({ held, effective }: { held: PolicyValues; effective: PolicyValues }) {
+  const { t } = useI18n();
+  const changed = new Set<PolicyFieldName>(differingPolicyFields(held, effective));
+  return (
+    <>
+      <div className="break-all font-mono text-[11px] text-text-2">
+        effective=
+        {POLICY_FIELDS.map((field, i) => {
+          const spelled = summarizePolicyFields(held, [field]);
+          return (
+            <Fragment key={field}>
+              {i > 0 && ","}
+              {changed.has(field) ? (
+                <mark title={t("policy.history_differs")} className={CHANGED}>
+                  {spelled}
+                </mark>
+              ) : (
+                spelled
+              )}
+            </Fragment>
+          );
+        })}
+      </div>
+      {changed.size === 0 && (
+        <div className="font-mono text-[11px] text-text-3">{t("policy.history_same")}</div>
+      )}
+    </>
+  );
 }
 
 function HistoryRowItem({
@@ -459,9 +485,7 @@ function HistoryRowItem({
           {entry.signed ? t("policy.history_signed") : t("policy.history_unsigned")}
           {entry.overlayActive && `, ${t("policy.history_overlay")}`}
         </div>
-        <div className="font-mono text-[11px] text-text-2">
-          {restores(t, entry.effective, effective)}
-        </div>
+        <HeldPolicyLine held={entry.effective} effective={effective} />
       </div>
       <Button variant="ghost" onClick={() => onRollback(entry)}>
         {t("policy.rollback")}

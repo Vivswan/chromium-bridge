@@ -165,24 +165,22 @@ fn history_report_maps_entries_and_tolerates_a_damaged_one() {
     };
     let r = history_report(&history);
     assert_eq!(r.entries.len(), 3);
-    assert_eq!(
-        (r.entries[2].revision, r.entries[2].effective.as_ref()),
-        (None, None)
-    );
-    assert_eq!(r.entries[0].revision, Some(5));
+    assert_eq!(r.entries[2].held, None);
     assert!(r.entries[0].signed);
     assert!(r.entries[0].overlay_active);
     // The effective policy is the baseline under its overlay: pageEval restricted back off.
     assert_eq!(
-        r.entries[0].effective,
-        Some(PolicyValues {
-            page_eval_enabled: false,
-            ..good.values()
+        r.entries[0].held,
+        Some(HeldPolicy {
+            revision: 5,
+            effective: PolicyValues {
+                page_eval_enabled: false,
+                ..good.values()
+            },
         })
     );
-    // A damaged entry keeps its slot with a null revision and no effective policy.
-    assert_eq!(r.entries[1].revision, None);
-    assert_eq!(r.entries[1].effective, None);
+    // A damaged entry keeps its slot holding nothing.
+    assert_eq!(r.entries[1].held, None);
     assert!(!r.entries[1].signed);
     assert_eq!(r.entries[1].superseded_unix, 222);
     // The prose names each row's record and the policy it held, so two records at one revision read apart.

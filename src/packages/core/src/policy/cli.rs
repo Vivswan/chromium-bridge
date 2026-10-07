@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use super::plan::{
     entry_state, plan_grant, refused_grant, rollback_inputs, summarize, touched_fields, wire_names,
+    HeldPolicy,
 };
 use super::{
     confirm_unmoved, prepare_grant, restrict, restrict_planned, set_signed, FieldKind, Grant,
@@ -127,9 +128,6 @@ pub struct PolicyHistoryReport {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyHistoryEntryReport {
-    /// The record's baseline revision, or `null` if that historical baseline
-    /// is unreadable (a damaged ring entry never blocks the report).
-    pub revision: Option<u64>,
     /// The record's content identity ([`crate::policy::PolicyHistoryEntry::id`]), what `rollback --entry` names.
     pub id: String,
     /// Whether the superseded baseline carried a signature.
@@ -138,9 +136,10 @@ pub struct PolicyHistoryEntryReport {
     pub overlay_active: bool,
     /// Unix seconds when the record stopped being the current store.
     pub superseded_unix: u64,
-    /// The policy the record held (its baseline under its overlay), what a rollback to it re-derives; `null`
-    /// exactly when `revision` is.
-    pub effective: Option<PolicyValues>,
+    /// The record's baseline revision with the policy it held (its baseline under its overlay), what a rollback
+    /// to it re-derives; `null` when that historical baseline is unreadable (a damaged ring entry never blocks
+    /// the report).
+    pub held: Option<HeldPolicy>,
 }
 
 /// The failure object the WRITE subcommands print on stdout under `--json`, with the same frozen-wire posture as
@@ -200,23 +199,19 @@ pub fn gather_history_report() -> Result<PolicyHistoryReport, String> {
 }
 
 /// Build a history report from a loaded ring (pure: no disk). A ring entry
-/// whose baseline is unreadable keeps its slot with a `null` revision.
+/// whose baseline is unreadable keeps its slot with nothing held.
 fn history_report(history: &PolicyHistory) -> PolicyHistoryReport {
     PolicyHistoryReport {
         v: 1,
         entries: history
             .entries
             .iter()
-            .map(|e| {
-                let state = entry_state(e);
-                PolicyHistoryEntryReport {
-                    id: e.id(),
-                    revision: state.as_ref().map(|(revision, _)| *revision),
-                    signed: e.sig_b64.is_some(),
-                    overlay_active: e.overlay.is_some(),
-                    superseded_unix: e.superseded_unix,
-                    effective: state.map(|(_, effective)| effective),
-                }
+            .map(|e| PolicyHistoryEntryReport {
+                id: e.id(),
+                signed: e.sig_b64.is_some(),
+                overlay_active: e.overlay.is_some(),
+                superseded_unix: e.superseded_unix,
+                held: entry_state(e),
             })
             .collect(),
     }
@@ -302,15 +297,13 @@ fn render_history(r: &PolicyHistoryReport) -> String {
     }
     let mut out = String::from("chromium-bridge policy history (oldest first)\n");
     for e in &r.entries {
-        let revision = e
-            .revision
-            .map(|n| n.to_string())
-            .unwrap_or_else(|| "?".to_string());
-        let effective = e
-            .effective
-            .as_ref()
-            .map(|values| summarize(values, PolicyField::ALL))
-            .unwrap_or_else(|| "?".to_string());
+        let (revision, effective) = match &e.held {
+            Some(held) => (
+                held.revision.to_string(),
+                summarize(&held.effective, PolicyField::ALL),
+            ),
+            None => ("?".to_string(), "?".to_string()),
+        };
         out.push_str(&format!(
             "  revision {revision:<6} {} {} superseded_unix={} entry={} effective={effective}\n",
             if e.signed { "signed  " } else { "unsigned" },
