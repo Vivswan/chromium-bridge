@@ -17,7 +17,7 @@ import {
   splitFlattenedCommand,
   splitTaggedUnionSchema,
 } from "../gen-envelope";
-import { emittedValidator } from "../gen-schema";
+import { emittedValidator, importedNode } from "../gen-schema";
 
 const strictObject = (properties: Record<string, unknown>, required: string[]) => ({
   type: "object",
@@ -403,8 +403,8 @@ describe("applyAsymmetries", () => {
     expect(JSON.stringify(envelope)).not.toContain('"additionalProperties":true');
   });
 
-  test("the changes, each at its path, as plain JSON Schema; the owner's schema is inlined whole", () => {
-    const overlaySchema = strictObject({ cdpMode: { type: "boolean" } }, []);
+  test("the changes, each at its path, as plain JSON Schema; another module's schema stands in as an import", () => {
+    const overlay = { from: "./policy.gen", symbol: "OverlaySchema", type: "Overlay" };
     const { schema, replacements } = applyAsymmetries(
       reader,
       "t",
@@ -420,7 +420,6 @@ describe("applyAsymmetries", () => {
         ]),
       },
       true,
-      new Map([["OverlaySchema", overlaySchema]]),
     );
     expect(schema).toEqual(
       loose(
@@ -435,20 +434,18 @@ describe("applyAsymmetries", () => {
             },
             ["kind", "value"],
           ),
-          // Inlined as the owner wrote it: strict, and outside the loose-frames rule.
-          overlay: overlaySchema,
+          // An import: the loose-frames rule has nothing to reach, the owner's strictness is its own.
+          overlay: importedNode(overlay),
         },
         ["id", "anchor"],
       ),
     );
-    // The replacement keeps the Rust node (post null-arm drop) and the inlined schema for the A2 cross-checks.
+    // The replacement keeps the Rust node (post null-arm drop) for the A2 cross-check.
     expect(replacements).toEqual([
       {
         path: "$.properties.overlay",
-        symbol: "OverlaySchema",
-        from: "./policy.gen",
+        imported: overlay,
         rust: strictObject({ cdpMode: { type: ["boolean", "null"] } }, []),
-        inlined: overlaySchema,
       },
     ]);
   });
@@ -476,15 +473,6 @@ describe("applyAsymmetries", () => {
       "A1",
     ],
     [
-      "a generated-schema entry naming a schema nothing builds",
-      {
-        "$.properties.overlay": entry([
-          { change: "generated-schema", symbol: "Ghost", from: "./x" },
-        ]),
-      },
-      "no schema named Ghost",
-    ],
-    [
       "a second change on a generated-schema replacement",
       {
         "$.properties.overlay": entry([
@@ -492,18 +480,12 @@ describe("applyAsymmetries", () => {
           { change: "string" },
         ]),
       },
-      "already a generated-schema replacement",
+      "already stands for an imported schema",
     ],
   ];
   test.each(refused)("%s is refused", (_, entries, message) => {
     expect(() =>
-      applyAsymmetries(
-        reader,
-        "t",
-        entries as Parameters<typeof applyAsymmetries>[2],
-        true,
-        new Map([["S", strictObject({}, [])]]),
-      ),
+      applyAsymmetries(reader, "t", entries as Parameters<typeof applyAsymmetries>[2], true),
     ).toThrow(message);
   });
 
@@ -572,8 +554,8 @@ describe("applyAsymmetries", () => {
     ] as const) {
       expect(() => applyAsymmetries(verdict, "t", { $: split(arms) }, true), why).toThrow("(A3)");
     }
-    // Paired with a generated-schema replacement the frame has no arms to split, and the replacement's early
-    // return would otherwise skip the split and every refusal above.
+    // Paired with a generated-schema replacement the frame has no arms to split, and the import's early return
+    // would otherwise skip the split and every refusal above.
     expect(() =>
       applyAsymmetries(
         verdict,
@@ -589,7 +571,6 @@ describe("applyAsymmetries", () => {
           ]),
         },
         true,
-        new Map([["VerdictSchema", verdict]]),
       ),
     ).toThrow("(A3)");
     // The discriminant must be a required boolean: a string `ok`, or an optional one, is refused.
@@ -694,10 +675,8 @@ describe("assertFramePlan (G7)", () => {
 describe("assertGeneratedMatches (A2)", () => {
   const replacement = (rust: unknown) => ({
     path: "$.properties.overlay",
-    symbol: "S",
-    from: "./x",
+    imported: { from: "./x", symbol: "S", type: "S" },
     rust,
-    inlined: {},
   });
   const rustOverlay = {
     type: "object",

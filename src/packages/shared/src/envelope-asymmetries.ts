@@ -24,8 +24,8 @@ export type Change =
   /** serde's adjacently tagged enum (one object variant per `kind` const, all with the same `value` shape)
    * spelled as one object whose `kind` is an enum of the tags. */
   | { change: "tag-union-as-enum-object" }
-  /** The node is replaced by the schema another generated module owns, inlined; the generator cross-checks the
-   * Rust node's field inventory and field types against it and holds the owning module's export equal to it. */
+  /** The node is the schema another generated module exports, imported by name (`symbol` from `from`; its type
+   * is the symbol minus `Schema`); the generator holds the Rust node's field inventory and field types to it. */
   | { change: "generated-schema"; symbol: string; from: string }
   /** A whole frame (the `$` path) whose boolean `discriminant` selects which Option fields a host-emitted frame
    * carries: the generator emits one arm per value, each arm requiring its `required` fields and refusing its

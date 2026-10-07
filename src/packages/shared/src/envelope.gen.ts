@@ -10,11 +10,13 @@
 // (direction and reason per entry in envelope-asymmetries.ts; proved per entry by scripts/check-envelope.ts,
 // `moon run check-envelope`). Each validator is the Zod source json-schema-to-zod wrote from the Rust JSON
 // Schema and each type is json-schema-to-typescript's reading of the same schema. The request's `args` and
-// policy_current's `overlay` carry the schemas ops.gen.ts and policy.gen.ts export, inlined and held equal at
-// generation. The extension->host writer schemas exist for their types only (constructor-site `satisfies`);
-// the enforcing reader for those frames is the Rust serde parser.
+// policy_current's `overlay` are the schemas ops.gen.ts and policy.gen.ts export, imported. The
+// extension->host writer schemas exist for their types only (constructor-site `satisfies`); the enforcing
+// reader for those frames is the Rust serde parser.
 
 import { z } from "zod";
+import { type OpArgs, OpArgsSchema } from "./ops.gen";
+import { type PolicyOverlay, PolicyOverlaySchema } from "./policy.gen";
 
 // The request envelope (BridgeReq) and the response envelope (BridgeResp): the faithful bases, then the
 // enforced validators the extension runs (the base plus the asymmetry table; strict like the host).
@@ -37,29 +39,7 @@ export const BridgeRespWireSchema = z
   .strict();
 
 export interface BridgeReqEnvelope {
-  args: {
-    tabId?: number;
-    url?: string;
-    ref?: string;
-    selector?: string;
-    value?: string;
-    direction?: string;
-    pixels?: number;
-    nav?: boolean;
-    text?: string;
-    timeoutMs?: number;
-    code?: string;
-    frameId?: string;
-    domain?: string;
-    name?: string;
-    key?: string;
-    type?: string;
-    keys?: string;
-    limit?: number;
-    action?: string;
-    promptText?: string;
-    path?: string;
-  };
+  args: OpArgs;
   browser?: string;
   id: number | string;
   op: string;
@@ -67,31 +47,7 @@ export interface BridgeReqEnvelope {
 
 export const BridgeReqSchema = z
   .object({
-    "args": z
-      .object({
-        "tabId": z.number().int().gte(-9007199254740991).lte(9007199254740991).optional(),
-        "url": z.string().optional(),
-        "ref": z.string().optional(),
-        "selector": z.string().optional(),
-        "value": z.string().optional(),
-        "direction": z.string().optional(),
-        "pixels": z.number().int().gte(-9007199254740991).lte(9007199254740991).optional(),
-        "nav": z.boolean().optional(),
-        "text": z.string().optional(),
-        "timeoutMs": z.number().int().gte(-9007199254740991).lte(9007199254740991).optional(),
-        "code": z.string().optional(),
-        "frameId": z.string().optional(),
-        "domain": z.string().optional(),
-        "name": z.string().optional(),
-        "key": z.string().optional(),
-        "type": z.string().optional(),
-        "keys": z.string().optional(),
-        "limit": z.number().int().gte(-9007199254740991).lte(9007199254740991).optional(),
-        "action": z.string().optional(),
-        "promptText": z.string().optional(),
-        "path": z.string().optional(),
-      })
-      .strict(),
+    "args": OpArgsSchema,
     "browser": z
       .string()
       .regex(/^[A-Za-z0-9._-]+$/)
@@ -841,26 +797,7 @@ export type PolicyCurrentFrame =
       baseline: string;
       error?: never;
       ok: true;
-      overlay?: {
-        cdpMode?: boolean;
-        fileUploadEnabled?: boolean;
-        handleDialogEnabled?: boolean;
-        pageEvalEnabled?: boolean;
-        confirmHighRiskClick?: boolean;
-        confirmPageEval?: boolean;
-        presenceConfirm?: boolean;
-        confirmTabClose?: boolean;
-        warnPreciseSnapshot?: boolean;
-        evalMask?: boolean;
-        hostReverifyMs?: number;
-        confirmGraceMs?: number;
-        clickToastTimeoutMs?: number;
-        evalToastTimeoutMs?: number;
-        /**
-         * @maxItems 256
-         */
-        disabledTools?: string[];
-      };
+      overlay?: PolicyOverlay;
       sig?: string;
       type: "policy_current";
       [k: string]: unknown;
@@ -881,26 +818,7 @@ export const PolicyCurrentFrameSchema = z.union([
       "baseline": z.string().min(1),
       "error": z.never().optional(),
       "ok": z.literal(true),
-      "overlay": z
-        .object({
-          "cdpMode": z.boolean().optional(),
-          "fileUploadEnabled": z.boolean().optional(),
-          "handleDialogEnabled": z.boolean().optional(),
-          "pageEvalEnabled": z.boolean().optional(),
-          "confirmHighRiskClick": z.boolean().optional(),
-          "confirmPageEval": z.boolean().optional(),
-          "presenceConfirm": z.boolean().optional(),
-          "confirmTabClose": z.boolean().optional(),
-          "warnPreciseSnapshot": z.boolean().optional(),
-          "evalMask": z.boolean().optional(),
-          "hostReverifyMs": z.number().int().gte(0).optional(),
-          "confirmGraceMs": z.number().int().gte(0).optional(),
-          "clickToastTimeoutMs": z.number().int().gte(0).optional(),
-          "evalToastTimeoutMs": z.number().int().gte(0).optional(),
-          "disabledTools": z.array(z.string().min(1).max(128)).max(256).optional(),
-        })
-        .strict()
-        .optional(),
+      "overlay": PolicyOverlaySchema.optional(),
       "sig": z.string().min(1).optional(),
       "type": z.literal("policy_current"),
     })

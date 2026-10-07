@@ -40,10 +40,10 @@
 //   A1  an asymmetry entry names a path the prepared Rust schema has, and its node is in the shape the change
 //       expects (a `string` change on a plain string, a `string-arm` on a number, ...); a stale or misplaced
 //       entry aborts instead of sitting inert
-//   A2  a `generated-schema` entry inlines the schema another generated module owns, built here from the same
-//       Rust output; the inlined node is cross-checked against the Rust node it replaces (same field inventory,
-//       same base type per field, strict where the Rust node refuses unknown fields) and the written owner
-//       module must read equal to it (two generated modules, two Rust emitters, held equal here)
+//   A2  a `generated-schema` entry puts the schema another generated module exports in place of a node, imported
+//       by name; the imported schema is cross-checked against the Rust node it stands in for (same field
+//       inventory, same base type per field, strict where the Rust node refuses unknown fields), two Rust
+//       emitters held to each other
 //   A3  an `ok-split` entry (at `$`) names a required boolean discriminant and one arm per value; each arm's
 //       required and forbidden fields exist on the frame, and the reader is a union whose arms require and
 //       refuse exactly those fields, so a frame the typed producer cannot emit (ok with an error, a refusal
@@ -62,12 +62,12 @@ import {
 import {
   assertSchemaRules,
   emitFromRust,
+  type ImportedSchema,
+  importedNode,
+  importedOf,
+  importsOf,
   isObject,
   type JsonObject,
-  opArgsSchema,
-  type PolicyShape,
-  policyOverlaySchema,
-  readsEqual,
   schemaSource,
   show,
   typeSource,
@@ -402,20 +402,17 @@ export function prepare(node: unknown, path: string): unknown {
 // introduces (never read from the Rust schema; prepare refuses them there):
 //   minLength / maxLength / pattern on a string node   -> the `string` change
 //   additionalProperties: true on an object node       -> the loose-frames rule
-//   the owner module's schema in place of a node       -> the `generated-schema` change
+//   another module's exported schema, imported, in place of a node -> the `generated-schema` change
 //   a `false` property schema                          -> a field an ok-split arm forbids: a present value (null
 //                                                         included) fails the arm, absence passes
 
-/** A `generated-schema` replacement the pass performed, kept for the A2 cross-checks in main. */
+/** A `generated-schema` replacement the pass performed, kept for the A2 cross-check in main. */
 export interface GeneratedReplacement {
   path: string;
-  symbol: string;
-  from: string;
-  /** The prepared Rust node the owner's schema stands in for: its own null arm dropped when it was an optional
-   * property, its children as prepared. */
+  imported: ImportedSchema;
+  /** The prepared Rust node the imported schema stands in for: its own null arm dropped when it was an
+   * optional property, its children as prepared. */
   rust: unknown;
-  /** The owner's schema as inlined. */
-  inlined: unknown;
 }
 
 export interface AsymmetryPass {
@@ -441,18 +438,19 @@ function dropNullArm(node: JsonObject): JsonObject {
   return node;
 }
 
-function applyChange(
-  node: JsonObject,
-  change: Change,
-  path: string,
-  owned: ReadonlyMap<string, unknown>,
-): JsonObject {
+/** The exported type of a generated validator: its export name minus `Schema`. */
+const typeOf = (schemaName: string) => schemaName.replace(/Schema$/, "");
+
+function applyChange(node: JsonObject, change: Change, path: string): JsonObject {
   const refuse = (expected: string): never => {
     throw new Error(
       `gen-envelope: ${path} is not ${expected} (got ${show(node)}), so the ${change.change} ` +
         "asymmetry cannot apply (A1)",
     );
   };
+  if (importedOf(node) !== undefined) {
+    throw new Error(`gen-envelope: ${path} already stands for an imported schema (A1)`);
+  }
   switch (change.change) {
     case "string": {
       if (node.type !== "string" || Object.keys(node).length !== 1) refuse("a plain string node");
@@ -500,15 +498,12 @@ function applyChange(
         additionalProperties: false,
       };
     }
-    case "generated-schema": {
-      const inlined = owned.get(change.symbol);
-      if (!isObject(inlined)) {
-        throw new Error(
-          `gen-envelope: ${path}: no schema named ${change.symbol} is built here to inline (A1)`,
-        );
-      }
-      return inlined;
-    }
+    case "generated-schema":
+      return importedNode({
+        from: change.from,
+        symbol: change.symbol,
+        type: typeOf(change.symbol),
+      });
     case "ok-split":
       // Exhaustiveness only: the pass applies an ok-split after the field changes (applyOkSplit), never here.
       throw new Error(`gen-envelope: ${path}: an ok-split is applied after the field changes (A3)`);
@@ -560,20 +555,15 @@ function applyOkSplit(
 }
 
 /** Apply the reader rules and this kind's asymmetry entries to a prepared schema (A1). `loose` is the
- * loose-frames rule: true for control frames, false for the envelopes. `owned` holds the schemas other
- * generated modules own, by export name, for the generated-schema entries to inline. Every entry must be
- * consumed. */
+ * loose-frames rule: true for control frames, false for the envelopes. Every entry must be consumed. */
 export function applyAsymmetries(
   prepared: unknown,
   kind: string,
   entries: Readonly<Record<string, Asymmetry>>,
   loose: boolean,
-  owned: ReadonlyMap<string, unknown> = new Map(),
 ): AsymmetryPass {
   const consumed = new Set<string>();
   const replacements: GeneratedReplacement[] = [];
-  // An inlined owner schema is walked no further: it is strict and complete as its module wrote it.
-  const inlined = new Set<unknown>();
   const visit = (node: unknown, path: string): unknown => {
     if (!isObject(node)) return node;
     let out: JsonObject = node;
@@ -589,18 +579,14 @@ export function applyAsymmetries(
       }
       for (const change of entry.changes) {
         if (change.change === "ok-split") continue;
-        if (inlined.has(out)) {
-          throw new Error(`gen-envelope: ${path} is already a generated-schema replacement (A1)`);
-        }
         const rust = out;
-        out = applyChange(out, change, path, owned);
-        if (change.change === "generated-schema") {
-          inlined.add(out);
-          replacements.push({ path, symbol: change.symbol, from: change.from, rust, inlined: out });
-        }
+        out = applyChange(out, change, path);
+        const imported = importedOf(out);
+        if (imported !== undefined) replacements.push({ path, imported, rust });
       }
     }
-    if (inlined.has(out)) return out;
+    // An imported schema is its module's to walk: strict and complete as that module wrote it.
+    if (importedOf(out) !== undefined) return out;
     if (isObject(out.properties)) {
       const required = new Set(Array.isArray(out.required) ? out.required : []);
       const props: JsonObject = {};
@@ -792,7 +778,7 @@ export function assertFramePlan(group: Group, variants: Map<string, unknown>): v
   }
 }
 
-// ---- A2: the generated-schema cross-check -------------------------------------------
+// ---- A2: the imported schema against the Rust node it stands in for ----------------------
 
 const nonNullType = (node: unknown): string | undefined => {
   if (!isObject(node)) return undefined;
@@ -800,29 +786,28 @@ const nonNullType = (node: unknown): string | undefined => {
   return types.filter((t) => t !== "null" && t !== undefined).join("|") || undefined;
 };
 
-/** Hold a generated schema to the Rust object node it replaces: same field names, same base type per field
- * (the null arm aside; the asymmetry table owns that), and strict where the Rust node refuses unknown fields
- * (the loose-frames rule never reaches a replaced node, so a loose replacement would be a silent widening).
+/** Hold an imported schema to the Rust object node it stands in for: same field names, same base type per
+ * field (the null arm aside; the asymmetry table owns that), and strict where the Rust node refuses unknown
+ * fields (the loose-frames rule never reaches a replaced node, so a loose import would be a silent widening).
  * Skipped for the any-schema (nothing to hold). */
 export function assertGeneratedMatches(
   replacement: GeneratedReplacement,
   generated: z.ZodType,
 ): void {
-  const rust = replacement.rust;
+  const { rust, path, imported } = replacement;
   if (!isObject(rust) || !isObject(rust.properties)) return;
   const derived = z.toJSONSchema(generated) as JsonObject;
   const derivedProps = isObject(derived.properties) ? derived.properties : {};
   if (rust.additionalProperties === false && derived.additionalProperties !== false) {
     throw new Error(
-      `gen-envelope: ${replacement.path}: ${replacement.symbol} admits unknown fields where the Rust node ` +
-        "refuses them (A2)",
+      `gen-envelope: ${path}: ${imported.symbol} admits unknown fields where the Rust node refuses them (A2)`,
     );
   }
   const rustKeys = Object.keys(rust.properties).sort();
   const derivedKeys = Object.keys(derivedProps).sort();
   if (rustKeys.join() !== derivedKeys.join()) {
     throw new Error(
-      `gen-envelope: ${replacement.path}: ${replacement.symbol} has fields [${derivedKeys.join(", ")}] ` +
+      `gen-envelope: ${path}: ${imported.symbol} has fields [${derivedKeys.join(", ")}] ` +
         `but the Rust node has [${rustKeys.join(", ")}] (A2)`,
     );
   }
@@ -831,8 +816,7 @@ export function assertGeneratedMatches(
     const got = nonNullType(derivedProps[key]);
     if (want !== got) {
       throw new Error(
-        `gen-envelope: ${replacement.path}.${key}: ${replacement.symbol} says ${got} but the Rust node ` +
-          `says ${want} (A2)`,
+        `gen-envelope: ${path}.${key}: ${imported.symbol} says ${got} but the Rust node says ${want} (A2)`,
       );
     }
   }
@@ -868,43 +852,48 @@ async function main(): Promise<void> {
     return prepare(variants[group].get(tag), `$.${group}.${tag}`);
   }
 
-  // G6: the typed command is split off. Its per-op args schemas are the same Rust structs scripts/gen-ops.ts
-  // reads from emit_contract, so the OpArgs bag is built here too, from this emitter's view of them, and the
-  // policy overlay from emit_policy_contract as gen-ops.ts builds it: the schemas the asymmetry table inlines,
-  // which A2 then holds equal to what the owner modules export (two Rust emitters, two generated modules).
-  const { envelope: requestEnvelope, commands } = splitFlattenedCommand(
-    fromRust.request,
-    "$.request",
-  );
-  const preparedCommands = new Map<string, JsonObject>();
-  for (const [op, args] of commands) {
-    const prepared = prepare(args, `$.request.${op}.args`);
-    if (!isObject(prepared)) {
-      throw new Error(`gen-envelope: ${op} args schema did not prepare to an object schema (G6)`);
-    }
-    preparedCommands.set(op, prepared);
-  }
-  const policy = emitFromRust(root, "emit_policy_contract") as PolicyShape;
-  const owned = new Map<string, unknown>([
-    ["OpArgsSchema", opArgsSchema(preparedCommands)],
-    ["PolicyOverlaySchema", policyOverlaySchema(policy)],
-  ]);
+  // G6: the typed command is split off; its per-op args schemas are scripts/gen-ops.ts's, and the request's
+  // args node is OpArgsSchema imported from there (the asymmetry table's generated-schema entry).
+  const { envelope: requestEnvelope } = splitFlattenedCommand(fromRust.request, "$.request");
 
   const replacements: GeneratedReplacement[] = [];
   function enforced(kind: string, prepared: unknown, loose: boolean): unknown {
-    const pass = applyAsymmetries(prepared, kind, ASYMMETRIES[kind] ?? {}, loose, owned);
+    const pass = applyAsymmetries(prepared, kind, ASYMMETRIES[kind] ?? {}, loose);
     replacements.push(...pass.replacements);
     return pass.schema;
   }
   const kindsWithEntries = new Set(Object.keys(ASYMMETRIES));
 
+  // The validators the generated-schema entries import, read from the generated tree gen-ops.ts wrote just
+  // before this script runs: the emitted source is evaluated against them for the rules, and A2 holds each to
+  // the Rust node it stands in for.
+  const owners = new Map<string, z.ZodType>();
+  async function owner(imported: ImportedSchema): Promise<z.ZodType> {
+    const key = `${imported.from}#${imported.symbol}`;
+    const known = owners.get(key);
+    if (known !== undefined) return known;
+    const module = (await import(join(root, "src/packages/shared/src", imported.from))) as Record<
+      string,
+      unknown
+    >;
+    const schema = module[imported.symbol];
+    if (!(schema instanceof z.ZodType)) {
+      throw new Error(
+        `gen-envelope: ${imported.from} exports no Zod schema named ${imported.symbol} (A2)`,
+      );
+    }
+    owners.set(key, schema);
+    return schema;
+  }
+
   const pieces: string[] = [];
-  const typeOf = (schemaName: string) => schemaName.replace(/Schema$/, "");
-  /** One exported validator: the schema rules over the library's reading first, then the exported type (the
+  /** One exported validator: the schema rules over the emitted validator first, then the exported type (the
    * enforced readers and the writers have one; the faithful bases are the gate's and have none), then the
    * schema itself. `loose` is the loose-frames rule, true only for an enforced control-frame reader. */
   async function exportSchema(name: string, node: unknown, loose: boolean, type?: string) {
-    assertSchemaRules(name, node, loose);
+    const imports: Record<string, z.ZodType> = {};
+    for (const imported of importsOf(node)) imports[imported.symbol] = await owner(imported);
+    assertSchemaRules(name, node, loose, imports);
     if (type !== undefined) pieces.push(await typeSource(type, node), "");
     pieces.push(schemaSource(name, type, node), "");
   }
@@ -1040,26 +1029,33 @@ async function main(): Promise<void> {
     );
   }
 
-  // A2: every inlined owner schema against the Rust node it replaced and against the module that owns it
-  // (imported from the generated tree gen-ops.ts wrote just before this script runs).
+  // A2: every imported schema against the Rust node it stands in for.
   for (const replacement of replacements) {
-    const module = (await import(
-      join(root, "src/packages/shared/src", replacement.from)
-    )) as Record<string, unknown>;
-    const owner = module[replacement.symbol];
-    if (!(owner instanceof z.ZodType)) {
-      throw new Error(
-        `gen-envelope: ${replacement.from} exports no Zod schema named ${replacement.symbol} (A2)`,
-      );
-    }
-    assertGeneratedMatches(replacement, owner);
-    if (!readsEqual(replacement.inlined, owner)) {
-      throw new Error(
-        `gen-envelope: ${replacement.path}: the schema inlined for ${replacement.symbol} reads differently ` +
-          `from the one ${replacement.from} exports (A2)`,
-      );
-    }
+    assertGeneratedMatches(replacement, await owner(replacement.imported));
   }
+
+  // The import lines: one per owner module, the validator and its type. A symbol two modules export under one
+  // name cannot share the module scope.
+  const bySymbol = new Map<string, ImportedSchema>();
+  for (const { imported } of replacements) {
+    const prior = bySymbol.get(imported.symbol);
+    if (prior !== undefined && prior.from !== imported.from) {
+      throw new Error(
+        `gen-envelope: ${imported.symbol} is imported from both ${prior.from} and ${imported.from} (A2)`,
+      );
+    }
+    bySymbol.set(imported.symbol, imported);
+  }
+  const byModule = new Map<string, ImportedSchema[]>();
+  for (const imported of bySymbol.values()) {
+    byModule.set(imported.from, [...(byModule.get(imported.from) ?? []), imported]);
+  }
+  const importLines = [...byModule.keys()].sort().map((from) => {
+    const names = (byModule.get(from) ?? [])
+      .flatMap((imported) => [imported.symbol, `type ${imported.type}`])
+      .sort();
+    return `import { ${names.join(", ")} } from ${JSON.stringify(from)};`;
+  });
 
   const manifest = (table: Record<Group, Readonly<Record<string, unknown>> | readonly string[]>) =>
     GROUPS.map((group) => {
@@ -1110,11 +1106,12 @@ async function main(): Promise<void> {
 // (direction and reason per entry in envelope-asymmetries.ts; proved per entry by scripts/check-envelope.ts,
 // \`moon run check-envelope\`). Each validator is the Zod source json-schema-to-zod wrote from the Rust JSON
 // Schema and each type is json-schema-to-typescript's reading of the same schema. The request's \`args\` and
-// policy_current's \`overlay\` carry the schemas ops.gen.ts and policy.gen.ts export, inlined and held equal at
-// generation. The extension->host writer schemas exist for their types only (constructor-site \`satisfies\`);
-// the enforcing reader for those frames is the Rust serde parser.
+// policy_current's \`overlay\` are the schemas ops.gen.ts and policy.gen.ts export, imported. The
+// extension->host writer schemas exist for their types only (constructor-site \`satisfies\`); the enforcing
+// reader for those frames is the Rust serde parser.
 
 import { z } from "zod";
+${importLines.join("\n")}
 
 ${pieces.join("\n")}
 `;

@@ -35,7 +35,36 @@ export function show(v: unknown): string {
   return JSON.stringify(v) ?? String(v);
 }
 
-/** The Zod source json-schema-to-zod writes for a schema: the validator the generated module ships. */
+/** A schema another generated module exports, standing in for a node: the validator is the `symbol` imported
+ * from `from`, the type its exported `type`. */
+export interface ImportedSchema {
+  from: string;
+  symbol: string;
+  type: string;
+}
+
+/** The node that stands for an imported schema; `tsType` is json-schema-to-typescript's keyword for a type it
+ * emits by name. */
+export function importedNode(imported: ImportedSchema): JsonObject {
+  return { imported, tsType: imported.type };
+}
+
+export function importedOf(node: JsonObject): ImportedSchema | undefined {
+  return isObject(node.imported) ? (node.imported as unknown as ImportedSchema) : undefined;
+}
+
+/** Every imported schema a tree refers to, each once. */
+export function importsOf(schema: unknown): ImportedSchema[] {
+  const seen = new Map<string, ImportedSchema>();
+  for (const [, node] of schemaNodes(schema)) {
+    const imported = importedOf(node);
+    if (imported !== undefined) seen.set(`${imported.from}#${imported.symbol}`, imported);
+  }
+  return [...seen.values()];
+}
+
+/** The Zod source json-schema-to-zod writes for a schema: the validator the generated module ships, an
+ * imported node spelled as its symbol. */
 export function zodSource(schema: unknown): string {
   for (const [path, node] of schemaNodes(schema)) {
     if ("oneOf" in node) {
@@ -44,13 +73,27 @@ export function zodSource(schema: unknown): string {
       );
     }
   }
-  return jsonSchemaToZod(schema as ZodInput, { module: "none", zodVersion: 4 });
+  return jsonSchemaToZod(schema as ZodInput, {
+    module: "none",
+    zodVersion: 4,
+    parserOverride: (node) => importedOf(node as JsonObject)?.symbol,
+  });
 }
 
-/** The shipped validator, built from that same source, so the rules and the equality judge what the module
- * will run and not the schema it was written from. */
-export function emittedValidator(schema: unknown): z.ZodType {
-  return new Function("z", `return ${zodSource(schema)};`)(z) as z.ZodType;
+/** The shipped validator, built from that same source, so the rules judge what the module will run and not
+ * the schema it was written from. `imports` supplies the validators the imported nodes name, by symbol. */
+export function emittedValidator(
+  schema: unknown,
+  imports: Readonly<Record<string, z.ZodType>> = {},
+): z.ZodType {
+  const symbols = importsOf(schema).map((imported) => imported.symbol);
+  for (const symbol of symbols) {
+    if (!(symbol in imports)) {
+      throw new Error(`gen-schema: no validator supplied for the imported ${symbol}`);
+    }
+  }
+  const build = new Function("z", ...symbols, `return ${zodSource(schema)};`);
+  return build(z, ...symbols.map((symbol) => imports[symbol])) as z.ZodType;
 }
 
 /** A validator's reading, serialized as the INPUT side of a JSON Schema (the output side of a stripping
@@ -61,8 +104,11 @@ function inputReading(validator: z.ZodType): JsonObject {
   return reading;
 }
 
-export function emittedReading(schema: unknown): JsonObject {
-  return inputReading(emittedValidator(schema));
+export function emittedReading(
+  schema: unknown,
+  imports: Readonly<Record<string, z.ZodType>> = {},
+): JsonObject {
+  return inputReading(emittedValidator(schema, imports));
 }
 
 /** Every object schema node of a tree, depth first, each under its JSON pointer from the root (`#`,
@@ -145,15 +191,13 @@ export function assertDiscriminated(branches: JsonObject[], fail: (why: string) 
   return fail("is a union of objects with no discriminating required const");
 }
 
-export function assertSchemaRules(name: string, schema: unknown, loose: boolean): void {
-  assertReadingRules(name, emittedReading(schema), loose);
-}
-
-/** Whether a schema inlined into one generated module reads the same, emitted, as the validator another
- * generated module exports: the equality A2 (scripts/gen-envelope.ts) holds the two to, so the request's args
- * and the policy overlay accept exactly what OpArgsSchema and PolicyOverlaySchema accept. */
-export function readsEqual(schema: unknown, exported: z.ZodType): boolean {
-  return Bun.deepEquals(emittedReading(schema), inputReading(exported), true);
+export function assertSchemaRules(
+  name: string,
+  schema: unknown,
+  loose: boolean,
+  imports: Readonly<Record<string, z.ZodType>> = {},
+): void {
+  assertReadingRules(name, emittedReading(schema, imports), loose);
 }
 
 // ---- the schemas both generators build -----------------------------------------------

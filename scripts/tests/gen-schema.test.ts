@@ -1,13 +1,11 @@
 // The rules scripts/gen-schema.ts holds every emitted validator to (R1-R4), each shown firing on the schema
 // it exists to refuse; the external facts the emission leans on (which keywords json-schema-to-zod reads,
 // what json-schema-to-typescript makes of the node shapes the generators produce, how change-case names a
-// type after an op); and the equality A2 holds an inlined schema and its owner module to. The emitted
-// validator is the artifact under test, so every case goes through the real emitter, never a hand-built
+// type after an op). The emitted validator is the artifact under test, so every case goes through the real emitter, never a hand-built
 // reading, except R3, which guards the emitter itself.
 
 import { describe, expect, test } from "bun:test";
 import { pascalCase } from "change-case";
-import { z } from "zod";
 import { OP_NAMES } from "../../src/packages/shared/src/ops.gen";
 import {
   assertReadingRules,
@@ -15,7 +13,6 @@ import {
   emittedReading,
   emittedValidator,
   opArgsSchema,
-  readsEqual,
   typeSource,
 } from "../gen-schema";
 
@@ -235,24 +232,5 @@ describe("the OpArgs bag", () => {
       ["b", strict({ x: { type: "integer" } })],
     ]);
     expect(() => opArgsSchema(argsByOp)).toThrow(/conflicting schemas for arg "x"/);
-  });
-});
-
-describe("readsEqual, the equality an inlined schema and its owner module are held to", () => {
-  const node = strict({ a: { type: "string", minLength: 1 }, n: { type: "integer", minimum: 0 } }, [
-    "a",
-  ]);
-  test("a module's exported schema reads equal to the node inlined elsewhere; a lost bound or a lost field does not", () => {
-    expect(readsEqual(node, emittedValidator(node))).toBe(true);
-    expect(
-      readsEqual(node, z.strictObject({ a: z.string().min(1), n: z.int().min(0).optional() })),
-    ).toBe(true);
-    expect(readsEqual(node, z.strictObject({ a: z.string(), n: z.int().min(0).optional() }))).toBe(
-      false,
-    );
-    expect(readsEqual(node, z.strictObject({ a: z.string().min(1) }))).toBe(false);
-    expect(
-      readsEqual(node, z.looseObject({ a: z.string().min(1), n: z.int().min(0).optional() })),
-    ).toBe(false);
   });
 });
