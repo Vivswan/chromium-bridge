@@ -783,8 +783,9 @@ impl WriteVerdict {
 }
 
 /// One superseded policy record as the options page lists it: the wire projection of
-/// [`crate::policy::PolicyHistoryEntryReport`], whose `held` is `null` for a damaged ring entry; the frame
-/// omits the field instead, since the readers refuse `null` at every optional field.
+/// [`crate::policy::PolicyHistoryEntryReport`]. A damaged record travels with `held` omitted (the report's
+/// `null`; the readers refuse `null` at every optional field), and so does one whose timestamp is past the
+/// JS-safe bound the readers enforce, its timestamp omitted too: one unreadable row, never a frame refused whole.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -793,7 +794,9 @@ pub struct PolicyHistoryRow {
     pub id: String,
     pub signed: bool,
     pub overlay_active: bool,
-    pub superseded_unix: u64,
+    /// Unix seconds when the record stopped being the current store.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub superseded_unix: Option<crate::tools::args::JsUint>,
     /// The record's revision with the policy it held, what a rollback to it re-derives.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub held: Option<crate::policy::HeldPolicy>,
@@ -801,12 +804,17 @@ pub struct PolicyHistoryRow {
 
 impl From<&crate::policy::PolicyHistoryEntryReport> for PolicyHistoryRow {
     fn from(entry: &crate::policy::PolicyHistoryEntryReport) -> Self {
+        let (superseded_unix, held) =
+            match crate::tools::args::JsUint::try_from(entry.superseded_unix) {
+                Ok(at) => (Some(at), entry.held.clone()),
+                Err(_) => (None, None),
+            };
         PolicyHistoryRow {
             id: entry.id.clone(),
             signed: entry.signed,
             overlay_active: entry.overlay_active,
-            superseded_unix: entry.superseded_unix,
-            held: entry.held.clone(),
+            superseded_unix,
+            held,
         }
     }
 }

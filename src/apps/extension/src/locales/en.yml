@@ -326,6 +326,7 @@ policy:
   history_differs: "Changes on roll-back"
   history_same: "Same as the policy enforced now"
   history_damaged: "Unreadable entry, superseded $1"
+  history_damaged_undated: "Unreadable entry"
   rollback: "Roll back"
 
 kill:

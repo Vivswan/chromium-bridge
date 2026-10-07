@@ -315,6 +315,24 @@ describe("policy history", () => {
     });
     expect(failed(await refused).error).toBe("the policy history is unreadable");
   });
+
+  test("a row the host could not date is accepted as damaged; a timestamp past the JS-safe bound still fails the frame", async () => {
+    // The host omits a timestamp it cannot represent (with what the record held) rather than emitting a number
+    // the safe-integers reader rule refuses, so one damaged record no longer sinks every readable row. The rule
+    // itself stays: a frame carrying such a number is not the host's.
+    const dated = { id: "b2", signed: false, overlay_active: true, superseded_unix: 21 };
+    const undated = { id: "c3", signed: true, overlay_active: false };
+    const p = requestPolicyHistory();
+    handleHostAdminFrame({ type: "policy_history_result", ok: true, entries: [undated, dated] });
+    await expect(p).resolves.toEqual({ ok: true, entries: [undated, dated] });
+    const past = requestPolicyHistory();
+    handleHostAdminFrame({
+      type: "policy_history_result",
+      ok: true,
+      entries: [{ ...dated, superseded_unix: Number.MAX_SAFE_INTEGER + 1 }],
+    });
+    expect(failed(await past).error).toBe("malformed policy_history_result from host");
+  });
 });
 
 describe("fail-closed: every unanswered or unusable exchange resolves to a refusal", () => {

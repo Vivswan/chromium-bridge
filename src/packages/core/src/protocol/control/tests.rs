@@ -872,14 +872,14 @@ fn registration_and_restrict_outcomes_map_onto_the_pinned_wire_shapes() {
                     id: "a1".into(),
                     signed: true,
                     overlay_active: false,
-                    superseded_unix: 10,
+                    superseded_unix: Some(crate::tools::args::JsUint::try_from(10).unwrap()),
                     held: Some(held),
                 },
                 PolicyHistoryRow {
                     id: "b2".into(),
                     signed: false,
                     overlay_active: true,
-                    superseded_unix: 11,
+                    superseded_unix: Some(crate::tools::args::JsUint::try_from(11).unwrap()),
                     held: None,
                 },
             ])
@@ -910,6 +910,49 @@ fn registration_and_restrict_outcomes_map_onto_the_pinned_wire_shapes() {
         )
         .unwrap(),
         json!({ "type": "policy_history_result", "ok": false, "error": "ring unreadable" })
+    );
+}
+
+#[test]
+fn a_record_past_the_js_safe_timestamp_travels_as_a_damaged_row_not_as_a_refused_reply() {
+    // The page's generated reader refuses an integer past 2^53 - 1 (its safe-integer rule), so a record the
+    // CLI renders fine would otherwise sink the whole policy_history_result and every readable row with it;
+    // it travels as one damaged row (no timestamp, nothing held) beside them. The bound itself, exactly, is
+    // the positive control.
+    use crate::policy::{HeldPolicy, PolicyHistoryEntryReport, PolicyValues, JS_SAFE_INT_MAX};
+    let effective = PolicyValues::default();
+    let record = |id: &str, superseded_unix: u64| PolicyHistoryEntryReport {
+        id: id.into(),
+        signed: true,
+        overlay_active: false,
+        superseded_unix,
+        held: Some(HeldPolicy {
+            revision: 3,
+            effective: effective.clone(),
+        }),
+    };
+    let records = [
+        record("a1", JS_SAFE_INT_MAX + 1),
+        record("b2", JS_SAFE_INT_MAX),
+    ];
+    let frame =
+        HistoryReport::Entries(records.iter().map(PolicyHistoryRow::from).collect()).into_frame();
+    assert_eq!(
+        serde_json::to_value(frame).unwrap(),
+        json!({
+            "type": "policy_history_result",
+            "ok": true,
+            "entries": [
+                { "id": "a1", "signed": true, "overlay_active": false },
+                {
+                    "id": "b2",
+                    "signed": true,
+                    "overlay_active": false,
+                    "superseded_unix": JS_SAFE_INT_MAX,
+                    "held": { "revision": 3, "effective": serde_json::to_value(&effective).unwrap() },
+                },
+            ],
+        })
     );
 }
 

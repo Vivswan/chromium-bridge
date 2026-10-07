@@ -324,6 +324,7 @@ policy:
   history_differs: "回滚后会改变"
   history_same: "与当前生效的策略相同"
   history_damaged: "无法读取的条目, 于 $1 被取代"
+  history_damaged_undated: "无法读取的条目"
   rollback: "回滚"
 
 kill:
