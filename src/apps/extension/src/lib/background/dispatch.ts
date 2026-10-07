@@ -11,9 +11,9 @@
 // posts nothing for.
 
 import type { BridgeReq } from "@chromium-bridge/shared/envelope";
-import { BridgeCancelSchema } from "@chromium-bridge/shared/envelope.gen";
-import { isOpName, type OpName } from "@chromium-bridge/shared/ops.gen";
-import type { PolicyValues } from "@chromium-bridge/shared/policy.gen";
+import { BridgeCancelSchema } from "@chromium-bridge/shared/generated/envelope";
+import { isOpName, type OpName } from "@chromium-bridge/shared/generated/ops";
+import type { PolicyValues } from "@chromium-bridge/shared/generated/policy";
 import { unreachable } from "@chromium-bridge/shared/util";
 import { browser } from "wxt/browser";
 import { inLife } from "../shared/in-life";

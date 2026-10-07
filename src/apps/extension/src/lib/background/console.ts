@@ -9,7 +9,7 @@
 // they leave the extension (console lines can carry tokens). Mirrors the
 // transient-attach shape of precise.ts.
 
-import type { OpArgs } from "@chromium-bridge/shared/ops.gen";
+import type { OpArgs } from "@chromium-bridge/shared/generated/ops";
 import type { Browser } from "wxt/browser";
 import { browser } from "wxt/browser";
 import { maskString } from "../shared/masking";

@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 
-// Two identity facts no other gate reaches. check-gen owns the Rust-vs-generated-TS diff (gen-ops.ts also
-// re-derives the extension id from the key and checks the host id's charset while regenerating), and
-// src/apps/extension/tests/shared/manifest.test.ts asserts the manifest SOURCE (wxt.config.ts).
+// Two identity facts no other gate reaches. gen-ops.ts re-derives the extension id from the key and checks the
+// host id's charset while generating the TS side, and src/apps/extension/tests/shared/manifest.test.ts asserts
+// the manifest SOURCE (wxt.config.ts).
 //
 //   built manifest   -> the shipped artifact keeps the pinned key, the exact permission set, the Chrome floor,
 //                       no install-time host access, and no manifest-declared content scripts; the task depends
@@ -24,7 +24,7 @@ import {
   EXTENSION_MANIFEST_KEY,
   NATIVE_HOST_ID,
   PINNED_EXTENSION_ID,
-} from "../src/packages/shared/src/identity.gen";
+} from "../src/packages/shared/generated/identity";
 
 const BUILT_MANIFEST = "build/extension/chrome-mv3/manifest.json";
 

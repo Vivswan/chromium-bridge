@@ -1,7 +1,7 @@
 // Tab resolution, content-script injection, and the tab-level tools
 // (tab_list / tab_focus / tab_open / tab_close).
 
-import type { PolicyValues } from "@chromium-bridge/shared/policy.gen";
+import type { PolicyValues } from "@chromium-bridge/shared/generated/policy";
 import type { Browser } from "wxt/browser";
 import { browser } from "wxt/browser";
 import { getSetting } from "../shared/settings";

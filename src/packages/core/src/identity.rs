@@ -1,9 +1,9 @@
 //! The bridge's identity constants: the values that make this deployment of
 //! chromium-bridge recognizably itself across every process boundary. This
 //! module is the canonical source; the TypeScript side receives
-//! them through the generated `src/packages/shared/src/identity.gen.ts` (`moon
-//! run gen`), the registration engine consumes them directly, `moon run
-//! check-gen` proves the generated copy fresh, and `scripts/check-extension-id.ts`
+//! them through the generated `src/packages/shared/generated/identity.ts`
+//! (`moon run gen`, rebuilt by every task that reads it), the registration
+//! engine consumes them directly, and `scripts/check-extension-id.ts`
 //! verifies the built extension manifest and that this file stays the only
 //! definition site.
 
@@ -23,7 +23,7 @@ pub const EXTENSION_MANIFEST_KEY: &str = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCg
 
 /// The extension ID Chrome derives from [`EXTENSION_MANIFEST_KEY`], pinned so the host manifest and the
 /// registration and doctor surfaces need no crypto round-trip; `scripts/gen-ops.ts` recomputes the derivation
-/// and asserts it against this literal under `moon run check-gen`.
+/// and asserts it against this literal on every generation.
 pub const PINNED_EXTENSION_ID: &str = "mkjjlmjbcljpcfkfadfmhblmmddkdihf";
 
 #[cfg(test)]

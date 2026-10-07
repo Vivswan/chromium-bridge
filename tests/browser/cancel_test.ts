@@ -19,7 +19,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { NATIVE_HOST_ID } from "@chromium-bridge/shared/identity.gen";
+import { NATIVE_HOST_ID } from "@chromium-bridge/shared/generated/identity";
 import puppeteer, { type Browser } from "puppeteer-core";
 import { assertIsolatedBrowserOrSkip, extensionDir, finishSuite } from "./browser-safety";
 

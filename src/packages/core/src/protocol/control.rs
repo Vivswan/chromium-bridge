@@ -921,9 +921,9 @@ pub enum HostControlTag {
     BrowserRevokeResult,
 }
 
-/// Which way a control frame travels. The browser->host set is the [`HostRequest`] roster; the
-/// `host_request_variants_match_their_wire_enum_variants` test holds the three equal: this table, the
-/// HostRequest variants, and the writer types the extension generates.
+/// Which way a control frame travels. The browser->host set is the [`HostRequest`] roster: the
+/// `host_request_variants_match_their_wire_enum_variants` test holds the two equal, and the envelope
+/// schema emitter carries this table to the TS generator, which holds its writer plan to it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
     BrowserToHost,

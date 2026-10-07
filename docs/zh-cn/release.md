@@ -36,7 +36,7 @@
 update-release.yml 在一个矩阵上构建 `binaries` 作业 (目前为 `macos-14/arm64`、`ubuntu-22.04/x64` 和 `windows-2022/x64`; Intel macOS 被**有意省略**, 因为托管运行器稀缺, Linux 则使用较旧的 glibc 基线以扩大兼容性)。对每个目标:
 
 1. `bun scripts/build-repro.ts` 生成确定性的发布二进制。
-2. `bun install --frozen-lockfile && bun run --cwd src/apps/extension build` 生成扩展包。
+2. `bun install --frozen-lockfile` 与 `moon run extension:build` 生成扩展包; 构建会先生成契约模块与 WXT 类型。
 3. 所有内容打包为 `chromium-bridge-<tag>-<platform>-<arch>.tar.gz` (Windows 上为 `.zip`), 包含二进制、`extension/dist`、`RELEASE.txt`、`LICENSE.md` 和 `README.md`。
 4. 同一个二进制被封装进该平台的安装程序 (见下一节)。
 5. 生成压缩包的 `.sha256`、压缩包内二进制单独的 `.binary.sha256` 以及安装程序的 `.sha256`, 并由一个构建来源证明覆盖全部三个文件; 它的 Sigstore 捆绑包成为 `chromium-bridge-<tag>-<platform>-<arch>.attestation.jsonl` 资产。独立的扩展 zip 和 SBOM 以同样方式附带 `<asset>.attestation.jsonl` 捆绑包; `--bundle` 验证方式记录在 [SECURITY.md](../../.github/SECURITY.md#release-artifact-integrity) 中。

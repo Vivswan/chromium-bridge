@@ -3,7 +3,7 @@
 // automatically on startup and after any disconnect.
 
 import { parseBridgeReq } from "@chromium-bridge/shared/envelope";
-import { NATIVE_HOST_ID } from "@chromium-bridge/shared/identity.gen";
+import { NATIVE_HOST_ID } from "@chromium-bridge/shared/generated/identity";
 import { unreachable } from "@chromium-bridge/shared/util";
 import type { Browser } from "wxt/browser";
 import { browser } from "wxt/browser";

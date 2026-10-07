@@ -6,8 +6,8 @@
 // warned via an informational toast before attach.
 
 import { InfoToastResultSchema, PageReplySchema } from "@chromium-bridge/shared/content-msg";
-import type { OpArgs } from "@chromium-bridge/shared/ops.gen";
-import type { PolicyValues } from "@chromium-bridge/shared/policy.gen";
+import type { OpArgs } from "@chromium-bridge/shared/generated/ops";
+import type { PolicyValues } from "@chromium-bridge/shared/generated/policy";
 import { browser } from "wxt/browser";
 import { initI18n, t } from "../i18n";
 import { ensureAllowed } from "./allowlist-store";

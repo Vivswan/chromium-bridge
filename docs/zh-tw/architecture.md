@@ -497,31 +497,31 @@ panic 訊息預設輸出到 stdout, 會損毀 NM 訊框與 MCP NDJSON。緩解: 
 
 ## 11. 協定邊界契約: 錯誤分類與交握
 
-跨程序契約位於 Rust 核心, 即單一事實來源; TypeScript 端由它產生, 執行階段行為也對照它驗證。標準模組及其衍生產物:
+跨程序契約位於 Rust 核心, 即單一事實來源; TypeScript 端由它產生到 `src/packages/shared/generated` (建置產物, 從不追蹤), 執行階段行為也對照它驗證。標準模組及其衍生產物:
 
-- **工具目錄** (`src/packages/core/src/tools/catalogue.rs`): 每個工具的名稱、面向模型的英文描述、JSON-Schema `inputSchema`, 以及策略中繼資料 (風險 / 範圍 / 權限 / 確認)。`moon run gen` 執行核心的 `emit_contract` 範例與 `scripts/gen-ops.ts`, 產生 `src/packages/shared/src/ops.gen.ts`: op 名稱、策略中繼資料, 以及每個工具的 Zod 參數驗證器。
-- `BridgeCommand` 請求聯集從這些驗證器推導而來, 所以編譯期型別與執行階段檢查是同一份產物。CI 會重新產生並在任何差異時失敗, 因此簽入的 TS 不可能偏離 Rust 來源。UI 標籤刻意不納入契約; 它們是擴充功能的 UI 文案 (擴充功能 `*.yml` 語言包中的 `tools.<op>` 鍵)。
-- **錯誤分類** (`src/packages/core/src/error.rs` 中的 `ERROR_SPECS`): 穩定的跨程序 `code`, 附帶 `category`、`retryable`, 以及面向使用者/模型的 `message`。`CallError::code()` 把 Rust 的工具呼叫錯誤對應到該表的一個子集 (`cargo test` 強制檢查成員資格), 而 `src/packages/shared/src/errors.gen.ts` 給 TS 消費者同樣的代碼常數 (目前無人使用; 見第 11.1 節)。
-- **能力** (`src/packages/core/src/tools/capabilities.rs`): 目錄之上可協商的分組, 輸出到 `src/packages/shared/src/protocol.gen.ts`。`cargo test` 強制每個經橋接路由的工具恰好被一個能力涵蓋, 且每個能力的權限等於其工具權限的聯集。
-- **協定版本** (`src/packages/core/src/protocol.rs`): 內部橋接協定的整數 (`BRIDGE_PROTOCOL_VERSION`), 以及伺服器所說的 MCP JSON-RPC 修訂版 (`MCP_PROTOCOL_VERSION`, 逐請求把關、由 `server/discover` 宣告、由協定 e2e 測試套件斷言), 兩者都輸出到 `protocol.gen.ts`。
-- **稽核轉送允許清單** (`src/packages/core/src/audit.rs` 中的 `EXTENSION_AUDIT_KINDS`): 主機透過 `audit_event` 控制訊框接受的、由擴充功能擁有的稽核種類 (`extension_kind` 由同一份清單推導), 輸出到 `src/packages/shared/src/audit.gen.ts`。擴充功能的轉送集合及其稽核環詞彙中被轉送的前綴都建立在產生的常數上, 所以轉送邊界的兩側不可能分歧。
-- **身分** (`src/packages/core/src/identity.rs`): 原生訊息主機 id 與固定的擴充功能資訊清單金鑰, 輸出到 `src/packages/shared/src/identity.gen.ts`。擴充功能匯入 `NATIVE_HOST_ID` 用於 `connectNative`, `EXTENSION_MANIFEST_KEY` 用於建置出的資訊清單, 以及由金鑰推導的 `PINNED_EXTENSION_ID` 用於啟動時的自我檢查。註冊引擎直接使用這些常數, 所以不存在會漂移的安裝程式副本。
-- **身分閘門**: `moon run check-gen` 證明產生的 TS 是新鮮的 (重新產生會從金鑰重新推導 id), 而 `scripts/check-extension-id.ts` (`moon run check-extension-id`, 屬於 `moon run ci`) 驗證建置出的資訊清單與唯一定義處規則。
-- **主機金鑰簽章契約** (`src/packages/core/src/enclave/`: `challenge.rs` 定義網域字串與欄位邊界, `pubkey.rs` 與 `mod.rs` 定義金鑰與簽章的位元組長度以及 `enclave_error` 原因碼): 由核心的 `emit_enclave_contract` 範例輸出到 `src/packages/shared/src/enclave.gen.ts` (常數加上 `EnclaveReasonCode` 聯集, 擴充功能的登記狀態機對它做窮盡分類) 與 `enclave-fixture.gen.ts`。
+- **工具目錄** (`src/packages/core/src/tools/catalogue.rs`): 每個工具的名稱、面向模型的英文描述、JSON-Schema `inputSchema`, 以及策略中繼資料 (風險 / 範圍 / 權限 / 確認)。`moon run gen` 執行核心的 `emit_contract` 範例與 `scripts/gen-ops.ts`, 產生 `ops.ts`: op 名稱、策略中繼資料, 以及每個工具的 Zod 參數驗證器。
+- `BridgeCommand` 請求聯集從這些驗證器推導而來, 所以編譯期型別與執行階段檢查是同一份產物。每個讀取產生 TS 的任務都會先從 Rust 來源重新建置它, 因此不存在可能偏離的簽入副本。UI 標籤刻意不納入契約; 它們是擴充功能的 UI 文案 (擴充功能 `*.yml` 語言包中的 `tools.<op>` 鍵)。
+- **錯誤分類** (`src/packages/core/src/error.rs` 中的 `ERROR_SPECS`): 穩定的跨程序 `code`, 附帶 `category`、`retryable`, 以及面向使用者/模型的 `message`。`CallError::code()` 把 Rust 的工具呼叫錯誤對應到該表的一個子集 (`cargo test` 強制檢查成員資格), 而 `errors.ts` 給 TS 消費者同樣的代碼常數 (目前無人使用; 見第 11.1 節)。
+- **能力** (`src/packages/core/src/tools/capabilities.rs`): 目錄之上可協商的分組, 輸出到 `protocol.ts`。`cargo test` 強制每個經橋接路由的工具恰好被一個能力涵蓋, 且每個能力的權限等於其工具權限的聯集。
+- **協定版本** (`src/packages/core/src/protocol.rs`): 內部橋接協定的整數 (`BRIDGE_PROTOCOL_VERSION`), 以及伺服器所說的 MCP JSON-RPC 修訂版 (`MCP_PROTOCOL_VERSION`, 逐請求把關、由 `server/discover` 宣告、由協定 e2e 測試套件斷言), 兩者都輸出到 `protocol.ts`。
+- **稽核轉送允許清單** (`src/packages/core/src/audit.rs` 中的 `EXTENSION_AUDIT_KINDS`): 主機透過 `audit_event` 控制訊框接受的、由擴充功能擁有的稽核種類 (`extension_kind` 由同一份清單推導), 輸出到 `audit.ts`。擴充功能的轉送集合及其稽核環詞彙中被轉送的前綴都建立在產生的常數上, 所以轉送邊界的兩側不可能分歧。
+- **身分** (`src/packages/core/src/identity.rs`): 原生訊息主機 id 與固定的擴充功能資訊清單金鑰, 輸出到 `identity.ts`。擴充功能匯入 `NATIVE_HOST_ID` 用於 `connectNative`, `EXTENSION_MANIFEST_KEY` 用於建置出的資訊清單, 以及由金鑰推導的 `PINNED_EXTENSION_ID` 用於啟動時的自我檢查。註冊引擎直接使用這些常數, 所以不存在會漂移的安裝程式副本。
+- **身分閘門**: 產生 TS 時會從金鑰重新推導 id (`scripts/gen-ops.ts` 在不相符時失敗), 而 `scripts/check-extension-id.ts` (`moon run check-extension-id`, 屬於 `moon run ci`) 驗證建置出的資訊清單與唯一定義處規則。
+- **主機金鑰簽章契約** (`src/packages/core/src/enclave/`: `challenge.rs` 定義網域字串與欄位邊界, `pubkey.rs` 與 `mod.rs` 定義金鑰與簽章的位元組長度以及 `enclave_error` 原因碼): 由核心的 `emit_enclave_contract` 範例輸出到 `enclave.ts` (常數加上 `EnclaveReasonCode` 聯集, 擴充功能的登記狀態機對它做窮盡分類) 與 `enclave-fixture.ts`。
 - 夾具檔保存黃金向量: Rust 建構的訊息位元組加上確定性的軟體 P256 證明, 由 `src/apps/extension/tests/background/enclave-golden.test.ts` 透過擴充功能的 WebCrypto 驗證器重放, 所以簽章訊息的編碼本身在兩種語言間被固定下來。夾具檔的簽署金鑰是公開的測試資料, 在兩側都被列入主機身分的拒絕清單 (核心中的 `ensure_not_fixture_key`, 擴充功能配對驗證器與已儲存固定值驗證器中的 `ENCLAVE_FIXTURE_KEY_ID`)。
 - **策略文件與方向** (`src/packages/core/src/policy/`): 主機持有的 `PolicyDoc`、十五個策略欄位 (四個能力授予、確認策略、`disabledTools`、確認逾時)、它們的預設拒絕值、每個欄位的寬鬆方向表, 以及 `relaxes`/`restricts` 比較, 加上簽章儲存與 `set_signed`/`restrict` 寫入接縫。
-- `moon run gen` 輸出 `src/packages/shared/src/policy.gen.ts`: 簽章網域常數、帶方向的欄位清單、預設值, 以及針對文件、數值與限制覆蓋層的嚴格 Zod 驗證器。擴充功能自己從輸出的表重新計算每一次方向比較; 它從不相信主機對變更方向的說法。
+- `moon run gen` 輸出 `policy.ts`: 簽章網域常數、帶方向的欄位清單、預設值, 以及針對文件、數值與限制覆蓋層的嚴格 Zod 驗證器。擴充功能自己從輸出的表重新計算每一次方向比較; 它從不相信主機對變更方向的說法。
 - 授予由主機金鑰對 `UTF8("chromium-bridge-policy-v1") || 0x00 || doc_bytes` 簽章, 這是與主機金鑰挑戰網域並列的一個以 NUL 分隔的簽章網域, 相對於它為單射, 所以一種儀式的產物不可能被重放成另一種。
 - 任何地方都沒有正規化步驟: 主機簽章並儲存精確的文件位元組, 擴充功能先用其固定的金鑰驗證收到的精確位元組, 再對同一份位元組做嚴格解析。第 11.3 節說明承載這一切的訊框。
-- **線路信封與控制訊框** (`src/packages/core/src/protocol.rs` 中的 `BridgeReq` / `BridgeResp`; `src/packages/core/src/protocol/control.rs` 中的 `EnclaveControl`、內嵌 `allowlist::ClientEntry` 的 `AdminControl`、`PolicyControl` 與 `WebAuthnControl`): Rust 型別就是契約, `moon run gen` 從它們產生擴充功能的驗證器到 `src/packages/shared/src/envelope.gen.ts`。下表列出每一層及其擁有者; `moon run check-gen` 在差異過期時失敗。
+- **線路信封與控制訊框** (`src/packages/core/src/protocol.rs` 中的 `BridgeReq` / `BridgeResp`; `src/packages/core/src/protocol/control.rs` 中的 `EnclaveControl`、內嵌 `allowlist::ClientEntry` 的 `AdminControl`、`PolicyControl` 與 `WebAuthnControl`): Rust 型別就是契約, `moon run gen` 從它們產生擴充功能的驗證器到 `envelope.ts`。下表列出每一層及其擁有者。
 
 | 層 | 擁有者 | 內容 |
 |-------|-------|---------------|
 | 忠實基底, 每個信封與主機->擴充功能訊框各一 | `scripts/gen-envelope.ts` (對 Rust 輸入的規則 G1-G7、A1-A3; 寧可中止產生, 也不輸出任何比 Rust 解析器更弱的東西) 與 `scripts/gen-schema.ts` (每個驗證器都是 json-schema-to-zod 從其 schema 寫出的 Zod 原始碼, 每個型別都是 json-schema-to-typescript 對同一 schema 的讀取, 輸出的驗證器在寫入檔案前須符合規則 R1-R4) | 嚴格物件, 必要欄位必填, 不發明預設值 |
-| 強制驗證器, 擴充功能實際執行的那個 | `src/packages/shared/src/envelope-asymmetries.ts` | 基底加上恰好表中的那些項目, 每項帶方向與理由; 由一個具型別裁決建構的訊框 (`policy_current`、`enroll_result`、`presence_result`) 在這裡宣告其 ok 分支, 並輸出為其各分支的聯集, 所以混合其分支的訊框會讓讀取器失敗; 請求的 `args` 與 `policy_current` 的 `overlay` 就是從 `ops.gen.ts` 與 `policy.gen.ts` 匯入的 schema |
+| 強制驗證器, 擴充功能實際執行的那個 | `src/packages/shared/src/envelope-asymmetries.ts` | 基底加上恰好表中的那些項目, 每項帶方向與理由; 由一個具型別裁決建構的訊框 (`policy_current`、`enroll_result`、`presence_result`) 在這裡宣告其 ok 分支, 並輸出為其各分支的聯集, 所以混合其分支的訊框會讓讀取器失敗; 請求的 `args` 與 `policy_current` 的 `overlay` 就是從 `ops.ts` 與 `policy.ts` 匯入的 schema |
 | 擴充功能->主機訊框的寫入端 schema | `scripts/gen-envelope.ts` | 建構處以 `satisfies` 對照的型別; 強制執行的讀取器是 Rust serde 解析器 |
 | 閘門 (`moon run check-envelope`) | `scripts/check-envelope.ts` | 用兩個驗證器證明每個項目的探測, 把入站分類器約束在讀取器計畫內, 拒絕任何讀取器上手寫的精煉 |
-| 產生基底的行為測試 | `src/packages/shared/tests/envelope.gen.test.ts` | 未知欄位、缺少必要欄位、型別混淆、巢狀多餘欄位 |
+| 產生基底的行為測試 | `src/packages/shared/tests/wire-validators.test.ts` | 未知欄位、缺少必要欄位、型別混淆、巢狀多餘欄位 |
 
 ### 11.1 錯誤分類 (ERROR_SPECS)
 
@@ -535,7 +535,7 @@ panic 訊息預設輸出到 stdout, 會損毀 NM 訊框與 MCP NDJSON。緩解: 
 | `PROTOCOL_MISMATCH` | 尚無: 等待版本/能力交握接線 (第 11.2 節) |
 | `SITE_NOT_ALLOWED`、`USER_DENIED`、`TAB_NOT_FOUND`、... | 尚無: 需要擴充功能以結構化錯誤回報取代自由格式字串 |
 
-MCP 伺服器 (`src/packages/core/src/error.rs` 中的 `CallError::code()`) 是唯一的指派者, 涵蓋該表的一個子集; 產生到 `errors.gen.ts` 的 TS 常數是為未來的消費者準備的。
+MCP 伺服器 (`src/packages/core/src/error.rs` 中的 `CallError::code()`) 是唯一的指派者, 涵蓋該表的一個子集; 產生到 `errors.ts` 的 TS 常數是為未來的消費者準備的。
 
 ### 11.2 能力 / 版本交握
 
@@ -608,7 +608,7 @@ flowchart LR
 <!-- BEGIN GENERATED: architecture-map (bun scripts/render-architecture-map.ts; derived from architecture.yml) -->
 ```mermaid
 graph TD
-  shared["src/packages/shared/src/"]
+  shared["src/packages/shared/src/<br>src/packages/shared/generated/"]
   extension_background["src/apps/extension/src/entrypoints/background.ts<br>src/apps/extension/src/lib/background/<br>src/apps/extension/src/lib/webauthn/"]
   extension_content["src/apps/extension/src/entrypoints/content.ts<br>src/apps/extension/src/lib/content/"]
   extension_confirm["src/apps/extension/src/entrypoints/confirm/"]

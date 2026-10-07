@@ -1,12 +1,12 @@
 // Golden-vector replay: the cross-language enclave crypto contract, pinned.
 //
-// The fixture ("@chromium-bridge/shared/enclave-fixture.gen") is
+// The fixture ("@chromium-bridge/shared/generated/enclave-fixture") is
 // generated from the Rust core by `moon run gen`: message bytes built by
 // challenge_message and deterministic software-P256 signatures in the raw
 // r || s form the host's own signer emits. Replaying it
 // through the extension's WebCrypto verifier means either side drifting from
-// the shared byte contract breaks a gate: a Rust-side change regenerates the
-// fixture (check-gen fails until it does), and a TS verifier that no longer
+// the shared byte contract breaks a gate: a Rust-side change rebuilds the
+// fixture before this suite runs, and a TS verifier that no longer
 // reconstructs or accepts those exact bytes fails here.
 //
 // The fixture key's private scalar is public repo data, so it is deny-listed
@@ -23,8 +23,8 @@ import {
   ENCLAVE_FIXTURE_KEY_ID,
   MAX_CONTEXT_BYTES,
   MAX_NONCE_BYTES,
-} from "@chromium-bridge/shared/enclave.gen";
-import { ENCLAVE_GOLDEN_FIXTURE } from "@chromium-bridge/shared/enclave-fixture.gen";
+} from "@chromium-bridge/shared/generated/enclave";
+import { ENCLAVE_GOLDEN_FIXTURE } from "@chromium-bridge/shared/generated/enclave-fixture";
 import { describe, expect, test } from "vitest";
 import {
   base64Decode,

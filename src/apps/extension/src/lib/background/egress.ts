@@ -15,7 +15,7 @@
 //   in the page walk itself; cookie_get masks in cookies.ts).
 
 import { StorageReadResultSchema } from "@chromium-bridge/shared/content-msg";
-import type { PolicyValues } from "@chromium-bridge/shared/policy.gen";
+import type { PolicyValues } from "@chromium-bridge/shared/generated/policy";
 import { maskSensitive, maskString } from "../shared/masking";
 import type { PageOp } from "../shared/page-ops";
 

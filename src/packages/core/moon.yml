@@ -34,13 +34,9 @@ tasks:
     inputs: ['@group(workspace-rust)', '$RUSTFLAGS']
 
   test:
-    # One test (protocol/control/tests.rs) reads src/packages/shared/src/envelope.gen.ts to hold the Rust frame
-    # roster to the generated one, so this task is a reader under the root moon.yml header's mutex rule.
     description: 'Rust unit + integration tests (cargo-nextest)'
     command: 'cargo nextest run --frozen'
     inputs: ['@group(workspace-rust)', '$RUSTFLAGS']
-    options:
-      mutex: 'generated-contract'
 
   test-doc:
     description: 'Rust doctests'

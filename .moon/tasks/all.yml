@@ -7,11 +7,11 @@
 #
 # THE CONTRACT EDGE. The Rust core is the canonical cross-process contract: the gen-shared task runs the
 # contract emitters (scripts/gen-ops.ts drives the core's emit_contract example, scripts/gen-envelope.ts
-# the wire-schema emission) and writes the checked-in src/packages/shared/src/*.gen.ts modules. Downstream
-# TS tasks (shared, extension) declare this group as an input so a change anywhere in the core crate
-# invalidates their caches. Deliberately over-broad (the whole crate, every gen-*.ts script, everything
-# that decides what emit_contract compiles to) because a stale cache hit on the contract path is the one
-# failure mode this repo cannot accept.
+# the wire-schema emission) and writes the gitignored src/packages/shared/generated/ modules. Downstream
+# TS tasks (shared, extension) depend on that task and declare this group as an input so a change anywhere
+# in the core crate invalidates their caches. Deliberately over-broad (the whole crate, every gen-*.ts
+# script, everything that decides what emit_contract compiles to) because a stale cache hit on the contract
+# path is the one failure mode this repo cannot accept.
 $schema: 'https://moonrepo.dev/schemas/tasks.json'
 
 taskOptions:

@@ -6,6 +6,7 @@
   "type": "module",
   "sideEffects": false,
   "exports": {
+    "./generated/*": "./generated/*.ts",
     "./*": "./src/*.ts"
   },
   "scripts": {

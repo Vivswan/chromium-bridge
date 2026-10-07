@@ -1,10 +1,10 @@
 // The native-messaging boundary for bridge requests: parseBridgeReq validates one inbound frame against the
-// generated request envelope (BridgeReqSchema in envelope.gen.ts, the Rust BridgeReq plus the asymmetry table)
+// generated request envelope (BridgeReqSchema in generated/envelope.ts, the Rust BridgeReq plus the asymmetry table)
 // and then against the op's own generated validator, fail closed.
 
 import type { z } from "zod";
-import { BridgeReqSchema } from "./envelope.gen";
-import { type BridgeCommand, isOpName, OP_ARG_SCHEMAS } from "./ops.gen";
+import { BridgeReqSchema } from "../generated/envelope";
+import { type BridgeCommand, isOpName, OP_ARG_SCHEMAS } from "../generated/ops";
 
 // A fully validated request: the generated per-op command union intersected with the envelope fields. The
 // intersection distributes over the union, so consumers narrow on `op` and get exactly the args that tool

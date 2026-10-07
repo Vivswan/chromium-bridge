@@ -22,7 +22,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { NATIVE_HOST_ID, PINNED_EXTENSION_ID } from "../src/packages/shared/src/identity.gen.ts";
+import { NATIVE_HOST_ID, PINNED_EXTENSION_ID } from "../src/packages/shared/generated/identity.ts";
 import { CommandChecks, die, type Finished, repoRoot, selectMode } from "./lib.ts";
 
 /** The binary under test behind one call, so a test can stand a fake in for it. */

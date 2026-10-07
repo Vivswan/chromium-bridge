@@ -2,8 +2,8 @@
 
 // Docs-literal parity gate: the living docs must state the canonical identifiers, paths, and protocol
 // versions exactly as the code defines them, or a rename in the code leaves the troubleshooting and
-// security docs quietly wrong. The values come from the generated contract modules (check-gen keeps
-// those equal to the Rust core), so no cargo is needed here, plus two the Rust core does not own: the
+// security docs quietly wrong. The values come from the generated contract modules (rebuilt from the Rust
+// core by the gen-shared task this gate depends on), plus two the Rust core does not own: the
 // fleet's release bundle name, which no file in this repository carries, and the extension manifest's
 // Chrome floor.
 //
@@ -15,7 +15,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MINIMUM_CHROME_VERSION } from "../src/apps/extension/src/lib/shared/manifest-surface";
-import { CHALLENGE_DOMAIN } from "../src/packages/shared/src/enclave.gen";
+import { CHALLENGE_DOMAIN } from "../src/packages/shared/generated/enclave";
 import {
   AUDIT_DEFAULT_LIMIT,
   BROWSER_KEYS,
@@ -26,12 +26,12 @@ import {
   LOG_FORMATS,
   LOG_LEVEL_ENV,
   LOG_LEVELS,
-} from "../src/packages/shared/src/host.gen";
-import { NATIVE_HOST_ID, PINNED_EXTENSION_ID } from "../src/packages/shared/src/identity.gen";
+} from "../src/packages/shared/generated/host";
+import { NATIVE_HOST_ID, PINNED_EXTENSION_ID } from "../src/packages/shared/generated/identity";
 import {
   BRIDGE_PROTOCOL_VERSION,
   MCP_PROTOCOL_VERSION,
-} from "../src/packages/shared/src/protocol.gen";
+} from "../src/packages/shared/generated/protocol";
 
 export interface Violation {
   doc: string;
@@ -417,8 +417,8 @@ if (import.meta.main) {
     }
     console.error(
       `\ncheck-docs-literals: ${violations.length} stale or missing doc literal(s). ` +
-        "The canonical values are the generated contract modules in src/packages/shared/src " +
-        "(identity, enclave, protocol, host .gen.ts, each emitted from the Rust core), " +
+        "The canonical values are the generated contract modules in src/packages/shared/generated " +
+        "(identity, enclave, protocol, host, each emitted from the Rust core), " +
         "RELEASE_BUNDLE_NAME (this script, mirroring the fleet's publish leg), and the extension's " +
         "manifest surface (src/apps/extension/src/lib/shared/manifest-surface.ts); update the docs to match.",
     );

@@ -19,16 +19,16 @@
 #                                                          counts for every task, a command word for a task run from the
 #                                                          workspace root, a glob on either side is refused, and an
 #                                                          undeclared read is invisible
-#   a bun task whose script spawns cargo                -> the same flag and env by convention (gen-shared, check-gen,
+#   a bun task whose script spawns cargo                -> the same flag and env by convention (gen-ops, gen-envelope,
 #                                                          check-gen-isolation): the auditor sees only a task's own command
-#   reads or writes src/packages/shared/src/*.gen.ts    -> options.mutex 'generated-contract', shared with gen-shared,
-#                                                          so one invocation never overlaps a reader with the rewrite
+#   reads src/packages/shared/generated/                -> `deps` on gen-shared (the directory is a build output, absent in
+#                                                          a fresh checkout) and options.mutex 'generated-contract', shared
+#                                                          with the writers, so one invocation never overlaps a reader with
+#                                                          the rewrite
 # Nothing reachable from `gate` installs or fetches; `setup` is the one bootstrap, and nothing depends on it
 # (`ci` adds tools CI provisions in its own steps, such as uv's). A missing package or crate fails its task
-# with the tool's own message; CI is the source of truth for a tree that drifted from its lockfiles. A dependency
-# on gen-shared was rejected for the readers: it would put a cargo build into every TS task and into CI's
-# build-free jobs, while check-gen already proves the committed modules fresh. The per-project moon.yml files
-# follow the same rules.
+# with the tool's own message; CI is the source of truth for a tree that drifted from its lockfiles. The
+# per-project moon.yml files follow the same rules.
 #
 # The build, ci, test, test-rust, test-ts, release, and gen aggregates set `runDepsInParallel: false`, so their
 # steps run in the listed order. lint's two deps still run in parallel: clippy reads nothing gen-shared writes.
@@ -93,7 +93,6 @@ tasks:
       - 'extension:build'
       - '~:hygiene'
       - '~:test-fuzz'
-      - '~:check-gen'
       - '~:check-envelope'
       - '~:check-gen-isolation'
     options:
@@ -152,6 +151,7 @@ tasks:
 
   dev:
     description: 'Dev everything: extension (WXT) + the landing page (Astro) + a dev browser in one terminal; Ctrl-C stops all'
+    deps: ['~:gen-shared']
     command: 'bun scripts/dev.ts'
     preset: 'server'
 
@@ -181,6 +181,7 @@ tasks:
 
   fix:
     description: 'Auto-fix everything: Biome lint+format fixes, then cargo fmt (root + fuzz workspaces)'
+    deps: ['~:gen-shared']
     script: 'bun run biome check --write . && cargo fmt && cargo fmt --manifest-path src/packages/core/fuzz/Cargo.toml'
     options:
       mutex: 'generated-contract'
@@ -194,8 +195,11 @@ tasks:
       - 'core:lint'
       - '~:lint-ts'
 
+  # Biome's project-domain rules index the generated modules for type inference even though .gitignore keeps
+  # them out of diagnostics and formatting, so the lint runs read them; the format-only tasks do not.
   lint-ts:
     description: 'Lint TS/JS/JSON (Biome; what `bun run lint` delegates to)'
+    deps: ['~:gen-shared']
     command: 'bun run biome lint .'
     inputs: ['**/*', '!**/node_modules/**']
     options:
@@ -203,6 +207,7 @@ tasks:
 
   check-ts:
     description: 'Lint + format-check all TS/JS/JSON, warnings fail (biome ci; what `bun run check` delegates to)'
+    deps: ['~:gen-shared']
     command: 'bun run biome ci . --error-on-warnings'
     inputs: ['**/*', '!**/node_modules/**']
     options:
@@ -244,12 +249,15 @@ tasks:
   # ----- typescript aggregates ----------------------------------------------
 
   typecheck:
-    # The extension's tsconfig extends the gitignored .wxt/tsconfig.json and its i18n module types against the
-    # generated #i18n key structure, so tsc needs them regenerated first; no earlier gate step does that.
+    # The extension's tsconfig includes the gitignored .wxt/wxt.d.ts, which references the generated type
+    # declarations (the #i18n key structure among them), so extension:prepare (which itself follows gen-shared)
+    # runs first.
     description: 'Type-check every TS project (extension, tests, scripts, src/packages/shared); regenerates the WXT types first'
+    deps:
+      - '~:gen-shared'
+      - 'extension:prepare'
     script: |
       set -e
-      bun run --cwd src/apps/extension wxt prepare
       bun run tsc -p src/apps/extension
       bun run tsc -p tests/browser
       bun run tsc -p tests/interop
@@ -272,6 +280,7 @@ tasks:
     # SAFETY: only ever run against an isolated Chrome for Testing via CHROME_BIN, never a browser holding a
     # real session (tests/README.md). The runner builds the extension and owns the suite-ran canary.
     description: 'DOM + smoke + security proofs (needs bun + isolated Chrome via CHROME_BIN; builds the extension first)'
+    deps: ['~:gen-shared']
     command: 'bun tests/browser/run_all.ts'
     options:
       mutex: 'generated-contract'
@@ -293,7 +302,9 @@ tasks:
     # throwaway runtime dir) through the real extension, so it needs the Rust build the browser CI job does not
     # have, which is why it is not in run_all.ts.
     description: 'The WebAuthn exchange end to end against the real host in the isolated Chrome (needs CHROME_BIN; builds the extension and the release binary first)'
-    deps: ['~:build-release']
+    deps:
+      - '~:gen-shared'
+      - '~:build-release'
     script: |
       set -e
       bun run --cwd src/apps/extension build
@@ -415,23 +426,48 @@ tasks:
       runDepsInParallel: false
 
   gen-shared:
-    description: 'Regenerate the TS contract modules from the Rust core (src/packages/shared/src/*.gen.ts)'
-    script: |
-      set -e
-      bun scripts/gen-ops.ts
-      bun scripts/gen-envelope.ts
-      bun run biome check --write \
-        src/packages/shared/src/ops.gen.ts \
-        src/packages/shared/src/identity.gen.ts \
-        src/packages/shared/src/errors.gen.ts \
-        src/packages/shared/src/protocol.gen.ts \
-        src/packages/shared/src/enclave.gen.ts \
-        src/packages/shared/src/enclave-fixture.gen.ts \
-        src/packages/shared/src/envelope.gen.ts \
-        src/packages/shared/src/audit.gen.ts \
-        src/packages/shared/src/refusals.gen.ts \
-        src/packages/shared/src/host.gen.ts \
-        src/packages/shared/src/policy.gen.ts
+    # The TS side of the contract is a build output (gitignored, absent in a fresh checkout): every task that
+    # imports it depends on this aggregate, so one `moon run` builds it before the first reader. Two command
+    # tasks rather than one script: moon runs a script through pwsh on Windows, where `set -e` stops nothing.
+    description: 'Build the TS contract modules from the Rust core into src/packages/shared/generated/ (every reader task depends on this)'
+    deps:
+      - '~:gen-ops'
+      - '~:gen-envelope'
+    options:
+      mutex: 'generated-contract'
+      runDepsInParallel: false
+
+  gen-ops:
+    description: 'The catalogue, taxonomy, protocol, identity, audit, refusal, host, enclave, and policy modules, from the core emitter examples'
+    command: 'bun scripts/gen-ops.ts'
+    inputs: ['@group(rust-contract)']
+    outputs:
+      - '/src/packages/shared/generated/audit.ts'
+      - '/src/packages/shared/generated/enclave-fixture.ts'
+      - '/src/packages/shared/generated/enclave.ts'
+      - '/src/packages/shared/generated/errors.ts'
+      - '/src/packages/shared/generated/host.ts'
+      - '/src/packages/shared/generated/identity.ts'
+      - '/src/packages/shared/generated/ops.ts'
+      - '/src/packages/shared/generated/policy.ts'
+      - '/src/packages/shared/generated/protocol.ts'
+      - '/src/packages/shared/generated/refusals.ts'
+    env:
+      RUSTUP_AUTO_INSTALL: '0'
+    options:
+      mutex: 'generated-contract'
+
+  gen-envelope:
+    # After gen-ops: the asymmetry table replaces nodes with schemas ops.ts and policy.ts export, and the
+    # generator imports them to hold each replacement to its Rust node.
+    description: 'The wire validators (envelope.ts) from the core wire types plus the asymmetry table'
+    deps: ['~:gen-ops']
+    command: 'bun scripts/gen-envelope.ts'
+    inputs:
+      - '@group(rust-contract)'
+      - '/src/packages/shared/src/envelope-asymmetries.ts'
+    outputs:
+      - '/src/packages/shared/generated/envelope.ts'
     env:
       RUSTUP_AUTO_INSTALL: '0'
     options:
@@ -441,30 +477,17 @@ tasks:
     description: 'Render the extension icon rasters from the assets/icon/ SVGs (build artifacts, gitignored)'
     command: 'bun scripts/gen-icons.ts'
 
-  check-gen:
-    # scripts/check-gen.ts judges only the generated modules (tracked or newly written), so local WIP in the
-    # hand-written files sharing the directory cannot false-fail the staleness gate.
-    description: 'Staleness gate for the generated shared contract modules + envelope generator fail-closed rules'
-    deps: ['~:gen-shared']
-    script: |
-      set -e
-      bun scripts/check-gen.ts
-      bun test scripts/tests/check-gen.test.ts scripts/tests/gen-envelope.test.ts scripts/tests/gen-schema.test.ts
-    env:
-      RUSTUP_AUTO_INSTALL: '0'
-    options:
-      mutex: 'generated-contract'
-
   check-envelope:
     # The generated enforced validators differ from their faithful bases exactly as the asymmetry table declares
     # (every entry's probes, both reader rules), the inbound classifiers match the generated reader plan, and the
-    # hand-written refinements stay pinned. Base freshness is check-gen's job; the bun test covers the gate's
-    # rules against tables a live run cannot mutate.
-    description: 'Envelope asymmetry gate: generated validators match the asymmetry table, classifiers match the reader plan'
+    # hand-written refinements stay pinned. The bun tests cover the gate's rules against tables a live run cannot
+    # mutate, and the generators' own fail-closed rules against inputs that would convert weaker.
+    description: 'Envelope asymmetry gate: generated validators match the asymmetry table, classifiers match the reader plan, the generators refuse what would convert weaker'
+    deps: ['~:gen-shared']
     script: |
       set -e
       bun scripts/check-envelope.ts
-      bun test scripts/tests/check-envelope.test.ts
+      bun test scripts/tests/check-envelope.test.ts scripts/tests/gen-envelope.test.ts scripts/tests/gen-schema.test.ts
     options:
       mutex: 'generated-contract'
 
@@ -493,6 +516,7 @@ tasks:
       - '~:check-hasher'
       - '~:check-moon-edges'
       - '~:check-ignored'
+      - '~:check-install-hooks'
       - '~:check-cjk'
       - '~:check-typography'
       - '~:check-fuzz-smoke'
@@ -510,6 +534,7 @@ tasks:
 
   check-ci-scripts:
     description: "Unit tests for the TypeScript behind CI's workflow steps (image digest and tag, Linux registration scenarios, installer smoke, mutants shard, auto-format commit, release packaging, uv check, toolchain pin cross-check)"
+    deps: ['~:gen-shared']
     command: 'bun test scripts/tests/ci-image.test.ts scripts/tests/linux-registration.test.ts scripts/tests/installer-smoke.test.ts scripts/tests/mutants-shard.test.ts scripts/tests/auto-format-commit.test.ts scripts/tests/release-package.test.ts scripts/tests/check-uv.test.ts scripts/tests/check-toolchain.test.ts'
     options:
       mutex: 'generated-contract'
@@ -573,6 +598,13 @@ tasks:
       bun scripts/check-ignored.ts
       bun test scripts/tests/check-ignored.test.ts scripts/tests/lib.test.ts
 
+  check-install-hooks:
+    description: 'No workspace package.json declares a script bun runs at install time (preinstall, install, postinstall, preprepare, prepare, postprepare): bun install must never depend on a build output'
+    script: |
+      set -e
+      bun scripts/check-install-hooks.ts
+      bun test scripts/tests/check-install-hooks.test.ts
+
   check-yaml:
     # The managed ci.yml's yamllint job installs its own, unpinned, version (a template-sync decision), so
     # bump this pin when CI surfaces a rule this version lacks. uvx comes with uv (proto-provisioned).
@@ -587,6 +619,7 @@ tasks:
 
   check-docs-literals:
     description: 'Living docs state the canonical identifiers, paths, and protocol versions exactly'
+    deps: ['~:gen-shared']
     script: |
       set -e
       bun scripts/check-docs-literals.ts
@@ -596,6 +629,7 @@ tasks:
 
   check-docs-policy:
     description: 'Risk matrix, tool-count headlines, and settings-defaults docs match the catalogue and settings schema'
+    deps: ['~:gen-shared']
     script: |
       set -e
       bun scripts/check-docs-policy.ts
@@ -628,6 +662,7 @@ tasks:
 
   check-architecture:
     description: 'The TS import graph equals architecture.yml in both directions, the module map rendered into docs/architecture.md is current, and every diagram box and demonstration link on that page names real code'
+    deps: ['~:gen-shared']
     script: |
       set -e
       bun scripts/arch-lint.ts

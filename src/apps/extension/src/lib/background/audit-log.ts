@@ -19,13 +19,13 @@
 // toggles, which the host audits authoritatively when it HANDLES them) stay
 // in the ring for the panel and are not forwarded.
 
-import { AUDIT_FORWARDED_KINDS } from "@chromium-bridge/shared/audit.gen";
 import {
   type AuditEntry,
   AuditEntrySchema,
   type AuditEventKind,
 } from "@chromium-bridge/shared/enclave";
-import type { AuditEventWire } from "@chromium-bridge/shared/envelope.gen";
+import { AUDIT_FORWARDED_KINDS } from "@chromium-bridge/shared/generated/audit";
+import type { AuditEventWire } from "@chromium-bridge/shared/generated/envelope";
 import pLimit from "p-limit";
 import { browser } from "wxt/browser";
 import { z } from "zod";
@@ -40,7 +40,7 @@ const AUDIT_RING_KEY = "auditRing";
 const AUDIT_RING_MAX = 200;
 
 /** The kinds forwarded to the host's on-disk trail: the GENERATED host
- * whitelist (audit.gen.ts <- audit.rs, the `audit::extension_kind` set), so
+ * whitelist (generated/audit.ts <- audit.rs, the `audit::extension_kind` set), so
  * this set cannot drift from what the host accepts; anything else is
  * local-display only. */
 const FORWARDED_KINDS: ReadonlySet<AuditEventKind> = new Set(AUDIT_FORWARDED_KINDS);

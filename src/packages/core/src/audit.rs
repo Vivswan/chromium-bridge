@@ -366,7 +366,7 @@ fn serde_variant_name<T: Serialize>(v: &T) -> String {
 /// This list is the single source for both sides of the forwarding boundary:
 /// the host's [`extension_kind`] whitelist derives from it, and the contract
 /// emitter (`emit_contract`) carries its wire names into the generated TS
-/// (src/packages/shared/src/audit.gen.ts) that the extension's forwarding
+/// (src/packages/shared/generated/audit.ts) that the extension's forwarding
 /// set and audit-ring vocabulary build on.
 pub const EXTENSION_AUDIT_KINDS: &[AuditKind] = &[
     AuditKind::ConfirmShown,
@@ -762,7 +762,7 @@ mod tests {
     fn extension_kinds_admit_only_extension_decisions() {
         // The full whitelist, wire name by wire name: extension_kind resolves
         // each, and the emitted wire-name list (what emit_contract carries
-        // into audit.gen.ts) is exactly this set, in this order.
+        // into generated/audit.ts) is exactly this set, in this order.
         let expected = [
             ("confirm_shown", AuditKind::ConfirmShown),
             ("confirm_allowed", AuditKind::ConfirmAllowed),

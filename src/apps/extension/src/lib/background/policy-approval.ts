@@ -10,7 +10,7 @@
 // One approval per push, never blanket: nothing here caches a verdict or opens a grace window, and every
 // round trip is audit-visible through the service's confirm_shown/confirm_denied events.
 
-import { POLICY_FIELDS } from "@chromium-bridge/shared/policy.gen";
+import { POLICY_FIELDS } from "@chromium-bridge/shared/generated/policy";
 import { relaxedPolicyFields } from "@chromium-bridge/shared/policy-compare";
 import { currentPanicEpoch } from "./brake";
 import { confirmWithUser } from "./confirm/service";

@@ -1,5 +1,5 @@
-import type { HealthReport, RegistrationRow } from "@chromium-bridge/shared/envelope.gen";
-import { BROWSER_KEYS } from "@chromium-bridge/shared/host.gen";
+import type { HealthReport, RegistrationRow } from "@chromium-bridge/shared/generated/envelope";
+import { BROWSER_KEYS } from "@chromium-bridge/shared/generated/host";
 import type { RuntimeRequest, RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";

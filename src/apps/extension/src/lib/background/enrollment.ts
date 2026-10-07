@@ -18,13 +18,16 @@ import {
   EnclaveInboundFrameSchema,
   type EnclavePin,
 } from "@chromium-bridge/shared/enclave";
-import { type EnclaveReasonCode, isEnclaveReasonCode } from "@chromium-bridge/shared/enclave.gen";
+import {
+  type EnclaveReasonCode,
+  isEnclaveReasonCode,
+} from "@chromium-bridge/shared/generated/enclave";
 import {
   type EnclaveChallengeWire,
   EnclaveErrorFrameSchema,
   EnclaveProofFrameSchema,
   type EnclaveRevokeWire,
-} from "@chromium-bridge/shared/envelope.gen";
+} from "@chromium-bridge/shared/generated/envelope";
 import type { EnrollmentStatus, RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
 import pLimit from "p-limit";
 import { browser } from "wxt/browser";
@@ -294,7 +297,7 @@ async function maybePeriodicReverify(pin: EnclavePin): Promise<void> {
 // ---- inbound control frames ----------------------------------------------------
 
 // The reason vocabulary is the GENERATED EnclaveReasonCode union
-// (enclave.gen.ts, from the host's reason_code in
+// (generated/enclave.ts, from the host's reason_code in
 // src/packages/core/src/enclave/mod.rs). Both tables below are Records over
 // the full union, so a code added on the Rust side cannot compile here
 // without an explicit latch classification AND help text.

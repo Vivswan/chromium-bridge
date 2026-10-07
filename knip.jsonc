@@ -37,7 +37,10 @@
     // page's main.tsx (the page's index.html loads it).
     "src/apps/extension": {
       "entry": ["src/entrypoints/*.ts", "src/entrypoints/*/main.tsx"],
-      "project": ["src/**/*.{ts,tsx,css}", "tests/**/*.{ts,tsx}"]
+      "project": ["src/**/*.{ts,tsx,css}", "tests/**/*.{ts,tsx}"],
+      // #i18n is the module @wxt-dev/i18n generates into .wxt/ at `wxt prepare`, a build output the fleet's
+      // knip run (a bare install) does not have; the typecheck resolves it.
+      "ignoreUnresolved": ["#i18n"]
     },
     "src/packages/shared": {
       "project": ["src/**/*.ts", "tests/**/*.ts"]

@@ -1,4 +1,4 @@
-// The generated wire validators (envelope.gen.ts), exercised adversarially: hostile frames - unknown fields,
+// The generated wire validators (generated/envelope.ts), exercised adversarially: hostile frames - unknown fields,
 // missing required fields, type confusion, nested extras - must all be refused by the faithful base AND by the
 // enforced validator the extension runs, and nothing may be silently defaulted. This is the runtime proof that
 // the generated validators fail closed like the Rust serde parsers they are derived from; the per-entry
@@ -38,7 +38,7 @@ import {
   PolicyCurrentWireSchema,
   PolicyGetWireSchema,
   TrustedClientSchema,
-} from "../src/envelope.gen";
+} from "../generated/envelope";
 
 type Frame = Record<string, unknown>;
 

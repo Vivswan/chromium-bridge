@@ -6,7 +6,7 @@
 import type {
   EnrollOptionsFrame,
   PresenceRequestFrame,
-} from "@chromium-bridge/shared/envelope.gen";
+} from "@chromium-bridge/shared/generated/envelope";
 import { describe, expect, test } from "vitest";
 import {
   assert,

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-// Generate the extension's wire validators (src/packages/shared/src/envelope.gen.ts) from the Rust core's
+// Generate the extension's wire validators (src/packages/shared/generated/envelope.ts) from the Rust core's
 // schemars-derived JSON Schemas: the FAITHFUL base per envelope and control frame (strict objects, required
 // fields required, no defaults), and beside each reader base the ENFORCED validator, which is that base plus
 // exactly the asymmetries declared in src/packages/shared/src/envelope-asymmetries.ts. The extension runs the
@@ -12,7 +12,6 @@
 //   `moon run gen`   -> cargo example emit_envelope_schema (gen-only `envelope-schema` feature) -> dereference
 //                       -> prepare -> applyAsymmetries (readers only) -> gen-schema (rules, type, Zod source)
 //                       -> write
-//   check-gen in CI  -> regenerates and fails on a stale diff
 //
 // Fail-closed rules over the Rust input; a violation aborts, because shipping a weaker parser than the Rust
 // contract is never an option. The error messages cite them by number.
@@ -49,7 +48,7 @@
 //       refuse exactly those fields, so a frame the typed producer cannot emit (ok with an error, a refusal
 //       without its reason) fails the reader rather than a consumer's re-check
 
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import $RefParser from "@apidevtools/json-schema-ref-parser";
@@ -74,6 +73,7 @@ import {
   show,
   typeSource,
 } from "./gen-schema";
+import { generatedDir } from "./lib.ts";
 
 // Keys that annotate a schema without constraining instances; stripped before emission (schemars puts a field's
 // doc comment here).
@@ -748,8 +748,18 @@ export function assertSignalPlan(variants: Map<string, unknown>): void {
   }
 }
 
-/** G7: every Rust variant planned exactly once, every planned tag a Rust variant, every bare tag fieldless. */
-export function assertFramePlan(group: Group, variants: Map<string, unknown>): void {
+/** The way a control tag travels, as the Rust emitter spells it from the core's direction table. */
+export type FrameDirection = "browser_to_host" | "host_to_browser";
+
+/** G7: every Rust variant planned exactly once, every planned tag a Rust variant, every bare tag fieldless,
+ * and the plan agrees with the direction table: a writer is a browser->host frame (the host parses it as a
+ * HostRequest), a reader or bare tag a host->browser frame. The Rust side holds HostRequest to the same
+ * table, so the frames the extension writes and the frames the host accepts are one roster. */
+export function assertFramePlan(
+  group: Group,
+  variants: Map<string, unknown>,
+  directions: Readonly<Record<string, FrameDirection>>,
+): void {
   const planned = new Map<string, string>();
   const plan = (tag: string, how: string) => {
     const prior = planned.get(tag);
@@ -782,6 +792,16 @@ export function assertFramePlan(group: Group, variants: Map<string, unknown>): v
       if (fields.length > 0 || !keys.includes("type")) {
         throw new Error(`gen-envelope: bare tag ${tag} carries fields ${fields.join(", ")} (G7)`);
       }
+    }
+    const direction = directions[tag];
+    if (direction === undefined) {
+      throw new Error(`gen-envelope: the Rust direction table has no entry for ${tag} (G7)`);
+    }
+    const expected: FrameDirection = how === "a writer" ? "browser_to_host" : "host_to_browser";
+    if (direction !== expected) {
+      throw new Error(
+        `gen-envelope: ${tag} is planned as ${how} but the Rust direction table says ${direction} (G7)`,
+      );
     }
   }
 }
@@ -844,6 +864,7 @@ async function main(): Promise<void> {
     admin: unknown;
     policy: unknown;
     webauthn: unknown;
+    directions: Readonly<Record<string, FrameDirection>>;
   };
 
   const variants = {
@@ -852,7 +873,7 @@ async function main(): Promise<void> {
     policy: await splitTaggedUnionSchema(fromRust.policy),
     webauthn: await splitTaggedUnionSchema(fromRust.webauthn),
   };
-  for (const group of GROUPS) assertFramePlan(group, variants[group]);
+  for (const group of GROUPS) assertFramePlan(group, variants[group], fromRust.directions);
   const signals = await splitTaggedUnionSchema(fromRust.signal);
   assertSignalPlan(signals);
 
@@ -880,10 +901,7 @@ async function main(): Promise<void> {
     const key = `${imported.from}#${imported.symbol}`;
     const known = owners.get(key);
     if (known !== undefined) return known;
-    const module = (await import(join(root, "src/packages/shared/src", imported.from))) as Record<
-      string,
-      unknown
-    >;
+    const module = (await import(join(generatedDir, imported.from))) as Record<string, unknown>;
     const schema = module[imported.symbol];
     if (!(schema instanceof z.ZodType)) {
       throw new Error(
@@ -1095,13 +1113,6 @@ async function main(): Promise<void> {
     }
   }
 
-  pieces.push(
-    "// Which extension->host frames have a generated writer schema above.",
-    "export const GENERATED_WRITER_FRAMES = {",
-    ...manifest(WRITER_FRAMES),
-    "} as const;",
-  );
-
   const out = `// GENERATED from the Rust core wire types (src/packages/core/src/protocol.rs and
 // protocol/control.rs; AdminControl embeds allowlist::ClientEntry, PolicyControl embeds
 // policy::PolicyOverlay, WebAuthnControl carries the WebAuthn ceremonies) by scripts/gen-envelope.ts -
@@ -1114,7 +1125,7 @@ async function main(): Promise<void> {
 // (direction and reason per entry in envelope-asymmetries.ts; proved per entry by scripts/check-envelope.ts,
 // \`moon run check-envelope\`). Each validator is the Zod source json-schema-to-zod wrote from the Rust JSON
 // Schema and each type is json-schema-to-typescript's reading of the same schema. The request's \`args\` and
-// policy_current's \`overlay\` are the schemas ops.gen.ts and policy.gen.ts export, imported. The
+// policy_current's \`overlay\` are the schemas ops.ts and policy.ts export, imported. The
 // extension->host writer schemas exist for their types only (constructor-site \`satisfies\`); the enforcing
 // reader for those frames is the Rust serde parser.
 
@@ -1124,8 +1135,9 @@ ${importLines.join("\n")}
 ${pieces.join("\n")}
 `;
 
-  writeFileSync(join(root, "src/packages/shared/src/envelope.gen.ts"), out);
-  console.log("generated src/packages/shared/src/envelope.gen.ts from the Rust wire types");
+  mkdirSync(generatedDir, { recursive: true });
+  writeFileSync(join(generatedDir, "envelope.ts"), out);
+  console.log("generated src/packages/shared/generated/envelope.ts from the Rust wire types");
 }
 
 if (import.meta.main) await main();

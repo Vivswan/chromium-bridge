@@ -1,14 +1,14 @@
-// Internal consistency of the generated catalogue (ops.gen.ts): the per-op
+// Internal consistency of the generated catalogue (generated/ops.ts): the per-op
 // validators, the envelope-level OpArgs union, and the inferred BridgeCommand
 // types must all agree with each other. The catalogue's SOURCE is the Rust
-// core (src/packages/core/src/tools/catalogue.rs); faithful generation is enforced
-// by CI regenerating and diffing the checked-in files (`moon run gen`
-// idempotency), so these tests own the semantics, not the provenance.
+// core (src/packages/core/src/tools/catalogue.rs) and the module is rebuilt
+// from it before this suite runs, so these tests own the semantics, not the
+// provenance: the generator's two derivations of one source held together.
 
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
-import type { BridgeCommand } from "../src/ops.gen";
-import { isOpName, OP_ARG_SCHEMAS, OP_NAMES, OpArgsSchema, TOOL_META } from "../src/ops.gen";
+import type { BridgeCommand } from "../generated/ops";
+import { isOpName, OP_ARG_SCHEMAS, OP_NAMES, OpArgsSchema, TOOL_META } from "../generated/ops";
 
 describe("ops catalogue", () => {
   test("op names are unique and recognized by isOpName", () => {

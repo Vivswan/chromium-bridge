@@ -6,7 +6,9 @@
 # the inherited rust-contract file group (.moon/tasks/all.yml): the extension
 # enforces the contract's generated validators at its trust boundaries, so a
 # Rust core change must invalidate these caches. Never narrow that edge. The
-# project-wide mutex follows the root moon.yml header's rule.
+# validators are a build output of the root gen-shared task, so every task
+# that bundles or tests them depends on it. The project-wide mutex follows
+# the root moon.yml header's rule.
 $schema: 'https://moonrepo.dev/schemas/project.json'
 
 language: 'typescript'
@@ -26,12 +28,21 @@ fileGroups:
     - '/bun.lock'
 
 tasks:
+  prepare:
+    # WXT's codegen (.wxt/tsconfig.json, the #i18n module types) loads wxt.config.ts, which imports the generated
+    # identity module, so it runs after gen-shared and never from an install hook: installing dependencies must
+    # not depend on a build output. The tasks whose tsc or vitest read .wxt depend on this one.
+    description: 'Generate the WXT tsconfig and module types (.wxt/) from wxt.config.ts'
+    deps: ['root:gen-shared']
+    command: 'bun run wxt prepare'
+
   build:
     # package.json build: gen-icons then wxt build. The icon generator reads
     # assets/icon/*.svg and lives in scripts/ (gen-icons.ts + its imports);
     # the whole scripts/ tree is declared so a new helper import there can
     # never be an undeclared input.
     description: 'Build the extension bundle (src/ -> build/extension/; generates icons first)'
+    deps: ['~:prepare']
     command: 'bun run build'
     inputs:
       - '**/*'
@@ -48,11 +59,13 @@ tasks:
 
   dev:
     description: 'WXT dev mode: rebuild on change'
+    deps: ['~:prepare']
     command: 'bun run dev'
     preset: 'server'
 
   test:
     description: "Unit-test the extension's shared modules (vitest + fakeBrowser; no real browser)"
+    deps: ['~:prepare']
     command: 'bun run test'
     inputs:
       - '**/*'
@@ -63,11 +76,13 @@ tasks:
       - '/src/apps/web/src/styles/landing.css'
 
   typecheck:
-    description: "Type-check the extension (tsc against the WXT-generated tsconfig)"
+    description: "Type-check the extension (tsc with the WXT-generated type declarations under .wxt/)"
+    deps: ['~:prepare']
     command: 'bun run typecheck'
 
   lint:
     description: "Biome lint for the extension workspace"
+    deps: ['root:gen-shared']
     command: 'bun run biome lint $projectSource'
     inputs:
       - '**/*'

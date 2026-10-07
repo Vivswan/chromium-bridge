@@ -41,7 +41,7 @@ import {
   MCP_META_CLIENT_CAPABILITIES,
   MCP_META_PROTOCOL_VERSION,
   MCP_PROTOCOL_VERSION,
-} from "@chromium-bridge/shared/protocol.gen";
+} from "@chromium-bridge/shared/generated/protocol";
 import puppeteer from "puppeteer-core";
 import {
   assertHostIsolated,

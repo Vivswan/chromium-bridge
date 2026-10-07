@@ -1,5 +1,5 @@
 // The extension's deliberate parser asymmetries, as GENERATOR INPUT: every place the enforced validators in
-// envelope.gen.ts accept more or less than the Rust parser. scripts/gen-envelope.ts applies each entry at its path
+// generated/envelope.ts accept more or less than the Rust parser. scripts/gen-envelope.ts applies each entry at its path
 // (refusing a path the Rust schema lacks or a node outside the shape the change expects) and emits the enforced
 // validator as the faithful base plus exactly these changes; scripts/check-envelope.ts runs every probe against
 // the generated base and enforced validators and prints this table for the PR reviewer.
@@ -195,7 +195,7 @@ export const ASYMMETRIES: Readonly<Record<string, Readonly<Record<string, Asymme
         "The host leaves args free-form at the envelope (its command enum validates them per op); the " +
         "extension narrows them to the generated OpArgs bag here and to the op's own validator in " +
         "parseBridgeReq.",
-      changes: [{ change: "generated-schema", symbol: "OpArgsSchema", from: "./ops.gen" }],
+      changes: [{ change: "generated-schema", symbol: "OpArgsSchema", from: "./ops" }],
       probes: { refuses: ["not an object", { notAnArg: 1 }], accepts: [{}] },
     },
   },
@@ -405,9 +405,7 @@ export const ASYMMETRIES: Readonly<Record<string, Readonly<Record<string, Asymme
         "The overlay is the generated PolicyOverlaySchema: strict like the host's, with the disabledTools caps " +
         "applied at parse time where the host applies them in PolicyDoc::validate; an overlay field the " +
         "catalogue does not own is a policy claim nobody owns and fails the frame.",
-      changes: [
-        { change: "generated-schema", symbol: "PolicyOverlaySchema", from: "./policy.gen" },
-      ],
+      changes: [{ change: "generated-schema", symbol: "PolicyOverlaySchema", from: "./policy" }],
       probes: {
         refuses: [{ disabledTools: [""] }, { disabledTools: ["a".repeat(129)] }, { cdpMode: null }],
         accepts: [{ pageEvalEnabled: false, confirmGraceMs: Number.MAX_SAFE_INTEGER }],

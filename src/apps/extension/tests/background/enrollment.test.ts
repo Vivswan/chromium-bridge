@@ -1,6 +1,6 @@
-import { ENCLAVE_FIXTURE_KEY_ID } from "@chromium-bridge/shared/enclave.gen";
-import { ENCLAVE_GOLDEN_FIXTURE } from "@chromium-bridge/shared/enclave-fixture.gen";
-import { POLICY_DEFAULTS } from "@chromium-bridge/shared/policy.gen";
+import { ENCLAVE_FIXTURE_KEY_ID } from "@chromium-bridge/shared/generated/enclave";
+import { ENCLAVE_GOLDEN_FIXTURE } from "@chromium-bridge/shared/generated/enclave-fixture";
+import { POLICY_DEFAULTS } from "@chromium-bridge/shared/generated/policy";
 import type { EnrollmentStatus } from "@chromium-bridge/shared/runtime-msg";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";

@@ -3,7 +3,7 @@
 // lane, and the host audit trail, the fail-closed deadline, and the unsolicited-frame drops. The host side (the
 // resolver read, the fix, the restriction seam, the trail reader) is covered by the Rust unit tests.
 
-import type { AuditTrailEntry, RegistrationRow } from "@chromium-bridge/shared/envelope.gen";
+import type { AuditTrailEntry, RegistrationRow } from "@chromium-bridge/shared/generated/envelope";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   collaborator,

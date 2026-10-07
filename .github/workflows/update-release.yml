@@ -60,6 +60,8 @@ jobs:
           # Pin to the tag release-please just published: this run's own sha
           # IS that commit today, but the tag is what users verify against.
           ref: ${{ inputs.tag }}
+          # Full history: this job runs moon, whose changed-files query reads a base ref.
+          fetch-depth: 0
       - uses: ./.github/actions/setup-moon
         with:
           cargo: "true"
@@ -75,10 +77,14 @@ jobs:
         shell: bash
         run: bun scripts/build-repro.ts
 
+      # extension:build generates the contract modules and the WXT types first (its gen tasks' cargo runs take
+      # --frozen, which never fetches, so the crates are fetched first). One step per command: the Windows leg
+      # runs a block under PowerShell, where a failed native command does not stop the next one.
+      - run: bun install --frozen-lockfile
+      - run: cargo fetch --locked
+      - run: cargo fetch --locked --manifest-path src/packages/core/fuzz/Cargo.toml
       - name: Build extension bundle
-        run: |
-          bun install --frozen-lockfile
-          bun run --cwd src/apps/extension build
+        run: moon run extension:build
 
       - name: Package release archive
         id: pkg

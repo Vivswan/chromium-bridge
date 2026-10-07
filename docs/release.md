@@ -36,7 +36,7 @@ Each packaging job's first step is a **version consistency check**: after stripp
 update-release.yml builds the `binaries` job on a matrix (currently `macos-14/arm64`, `ubuntu-22.04/x64`, and `windows-2022/x64`; Intel macOS is **deliberately omitted** because hosted runners are scarce, and Linux uses an older glibc baseline to widen compatibility). For each target:
 
 1. `bun scripts/build-repro.ts` produces the deterministic release binary.
-2. `bun install --frozen-lockfile && bun run --cwd src/apps/extension build` produces the extension bundle.
+2. `bun install --frozen-lockfile` and `moon run extension:build` produce the extension bundle; the build generates the contract modules and the WXT types first.
 3. Everything is packed into `chromium-bridge-<tag>-<platform>-<arch>.tar.gz` (`.zip` on Windows), containing the binary, `extension/dist`, `RELEASE.txt`, `LICENSE.md`, and `README.md`.
 4. The same binary is wrapped into the platform's installer (next section).
 5. A `.sha256` for the archive, a separate `.binary.sha256` for the binary inside it, and a `.sha256` for the installer are generated, and one build-provenance attestation covers all three files; its Sigstore bundle becomes the `chromium-bridge-<tag>-<platform>-<arch>.attestation.jsonl` asset. The standalone extension zip and the SBOM ship `<asset>.attestation.jsonl` bundles the same way; `--bundle` verification is documented in [SECURITY.md](../.github/SECURITY.md#release-artifact-integrity).

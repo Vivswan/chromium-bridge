@@ -24,16 +24,28 @@ jobs:
       contents: write
       pull-requests: write
     steps:
+      # Full history on a job that runs moon: on a pull request moon's changed-files query reads the base
+      # branch, which a depth-1 checkout lacks.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.ref }}
           persist-credentials: false
+          fetch-depth: 0
 
       - uses: ./.github/actions/setup-moon
+        with:
+          cargo: "true"
       # The repo's pinned biome (a devDependency, resolved from bun.lock) -
       # not a floating registry fetch - so this formats exactly like
-      # `moon run fix` and the extension job's biome gate.
+      # `moon run fix` and the extension job's biome gate. `biome check` lints
+      # as well as formats, and its project-domain rules index the generated
+      # contract modules, so they are built from the Rust core first (the gen
+      # tasks' cargo runs take --frozen, which never fetches).
       - run: bun install --frozen-lockfile
+      - run: |
+          cargo fetch --locked
+          cargo fetch --locked --manifest-path src/packages/core/fuzz/Cargo.toml
+      - run: moon run gen-shared
       - name: Format (biome)
         run: bun x biome check --write .
 

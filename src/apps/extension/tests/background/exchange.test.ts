@@ -155,7 +155,7 @@ describe("claim: close now, settle later", () => {
     expect(x.answer({ type: "a_result", n: 0 })).toBe(false);
     const second = x.request({ type: "a" }, { read: (r) => `second:${r.n}` });
     expect(second.posted).toBe(true);
-    claimed?.settle({ type: "a_result", n: 1 });
+    void claimed?.settle({ type: "a_result", n: 1 });
     await expect(first.view).resolves.toBe("first:1");
     expect(x.isOpen()).toBe(true);
     expect(x.answer({ type: "a_result", n: 2 })).toBe(true);
@@ -179,7 +179,7 @@ describe("claim: close now, settle later", () => {
     );
     expect(x.claim("b_result")).toBeNull();
     expect(x.isOpen()).toBe(true);
-    x.claim("a_result")?.fail("the mirror could not be written");
+    void x.claim("a_result")?.fail("the mirror could not be written");
     await expect(view).resolves.toBe("failed");
     expect(seen).toEqual([
       { why: "failed", error: "the mirror could not be written", posted: true },
@@ -200,7 +200,7 @@ describe("hold: a reply owed by another collaborator", () => {
     expect(x.claim("a_result")).toBeNull();
     expect(x.claim()).toBeNull();
     expect(x.isOpen()).toBe(true);
-    x.claim("b_result")?.settle({ type: "b_result", n: 3 });
+    void x.claim("b_result")?.settle({ type: "b_result", n: 3 });
     await expect(held).resolves.toBe("held:3");
     const unanswered = x.hold({ read: () => "never" });
     vi.advanceTimersByTime(HOST_REPLY_TIMEOUT_MS + 1);

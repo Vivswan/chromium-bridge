@@ -3,7 +3,7 @@
 // sessions down on the PUSH path (the accepted push writes the policy
 // storage keys, which the listener watches).
 
-import { POLICY_DEFAULTS, type PolicyValues } from "@chromium-bridge/shared/policy.gen";
+import { POLICY_DEFAULTS, type PolicyValues } from "@chromium-bridge/shared/generated/policy";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 

@@ -15,12 +15,12 @@ import {
   type RegistrationRepairWire,
   RegistrationStatusResultSchema,
   type RegistrationStatusWire,
-} from "@chromium-bridge/shared/envelope.gen";
+} from "@chromium-bridge/shared/generated/envelope";
+import type { PolicyOverlay } from "@chromium-bridge/shared/generated/policy";
 import {
   type HostAdminInboundFrame,
   HostAdminInboundFrameSchema,
 } from "@chromium-bridge/shared/host-admin";
-import type { PolicyOverlay } from "@chromium-bridge/shared/policy.gen";
 import type { Refusal, RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
 import { inLife } from "../shared/in-life";
 import type { PortCollaborator } from "./connection";

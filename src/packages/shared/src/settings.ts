@@ -4,7 +4,7 @@
 //
 // Only fields the browser itself owns live here: the site-scope opt-in, tab
 // grouping, and the display language. The policy fields are host-owned
-// (the generated policy contract in policy.gen.ts governs them), and
+// (the generated policy contract in generated/policy.ts governs them), and
 // `requireEnrollment` is retired - enrollment is simply required.
 //
 // The Settings type is inferred from the schema, and DEFAULTS is derived by

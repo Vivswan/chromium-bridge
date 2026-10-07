@@ -19,6 +19,11 @@
 # committed
 /src/apps/extension/src/public/icons/
 
+# The shared package's TypeScript side of the Rust contract, written by
+# `moon run gen-shared` (scripts/gen-ops.ts, scripts/gen-envelope.ts); every
+# task that reads it depends on that task, so nothing here is tracked
+/src/packages/shared/generated/
+
 # Unified build-output folder: all build deliverables (extension bundle, web
 # site) land in /build/, covered by the managed Python section below.
 

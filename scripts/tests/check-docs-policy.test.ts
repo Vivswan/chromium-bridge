@@ -152,7 +152,7 @@ describe("offByDefaultViolations", () => {
     ]);
     expect(v).toEqual([
       "gate field `fileUploadEnabled` (for `page_upload`) is not a policy field in the " +
-        "generated policy contract (policy.gen.ts)",
+        "generated policy contract (generated/policy.ts)",
     ]);
   });
 
@@ -222,7 +222,7 @@ describe("securityDefaultsViolations", () => {
   test("a row for a key neither contract has is flagged", () => {
     expect(securityDefaultsViolations(table, { confirmGraceMs: 60000 }, required)).toEqual([
       "SECURITY.md documents `confirmPageEval`, which is neither a policy field " +
-        "(policy.gen.ts) nor a settings key (settings.ts)",
+        "(generated/policy.ts) nor a settings key (settings.ts)",
     ]);
   });
 

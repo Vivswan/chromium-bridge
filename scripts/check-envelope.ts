@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
-// The envelope asymmetry gate. The extension's wire validators are GENERATED (envelope.gen.ts, kept fresh by
-// `moon run check-gen`): a faithful base per envelope and control frame, and beside each reader base the
+// The envelope asymmetry gate. The extension's wire validators are GENERATED (generated/envelope.ts, rebuilt
+// before this gate runs): a faithful base per envelope and control frame, and beside each reader base the
 // enforced validator, which is that base plus the asymmetry table (src/packages/shared/src/envelope-asymmetries.ts).
 // This gate holds what generation alone cannot:
 //
@@ -21,12 +21,12 @@
 // import.meta.main via `moon run check-envelope` (part of `moon run ci`).
 
 import { z } from "zod";
+import * as generated from "../src/packages/shared/generated/envelope";
 import {
   ADMIN_RESULT_FRAME_TYPES,
   ENCLAVE_FRAME_TYPES,
   POLICY_FRAME_TYPES,
 } from "../src/packages/shared/src/enclave";
-import * as generated from "../src/packages/shared/src/envelope.gen";
 import {
   ASYMMETRIES,
   type Asymmetry,
@@ -65,7 +65,7 @@ export interface ReaderPair {
 function exported(name: string): z.ZodType {
   const schema = (generated as Record<string, unknown>)[name];
   if (!(schema instanceof z.ZodType)) {
-    throw new Error(`check-envelope: envelope.gen.ts exports no Zod schema named ${name}`);
+    throw new Error(`check-envelope: generated/envelope.ts exports no Zod schema named ${name}`);
   }
   return schema;
 }

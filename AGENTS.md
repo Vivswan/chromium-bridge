@@ -50,7 +50,7 @@ Chromium Bridge: Authenticated MCP bridge to your real Chromium browsers (Brave,
 ### Decisions to keep
 
 - stdout is protocol in both binary modes; diagnostics go to stderr (`src/packages/core/src/log.rs`).
-- The Rust core is the single cross-process contract and generates the TypeScript side; never hand-edit a `*.gen.ts`.
+- The Rust core is the single cross-process contract and generates the TypeScript side into each package's `generated/` directory at build time; nothing there is source.
 - Never develop on `main`: one branch per change, landed by squash-merge PR. The surfaces that get extra security review are listed in `.github/SECURITY.md`.
 
 ### Security principle: zero trust

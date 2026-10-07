@@ -3,7 +3,7 @@
 // one-entry overlay, a control whose move would relax it is disabled with the needs-presence note, and the
 // pre-cutover, blocked, and refused states render without any field control.
 
-import { POLICY_DEFAULTS, type PolicyValues } from "@chromium-bridge/shared/policy.gen";
+import { POLICY_DEFAULTS, type PolicyValues } from "@chromium-bridge/shared/generated/policy";
 import type { PolicyPosture } from "@chromium-bridge/shared/runtime-msg";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

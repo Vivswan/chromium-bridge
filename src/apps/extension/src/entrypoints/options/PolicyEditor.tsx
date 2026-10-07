@@ -1,4 +1,4 @@
-import { OP_NAMES } from "@chromium-bridge/shared/ops.gen";
+import { OP_NAMES } from "@chromium-bridge/shared/generated/ops";
 import {
   BOOL_POLICY_FIELDS,
   type BoolPolicyField,
@@ -7,7 +7,7 @@ import {
   POLICY_DIRECTIONS,
   type PolicyOverlay,
   type PolicyValues,
-} from "@chromium-bridge/shared/policy.gen";
+} from "@chromium-bridge/shared/generated/policy";
 import { foldPolicyOverlay, relaxedPolicyFields } from "@chromium-bridge/shared/policy-compare";
 import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
 import { useCallback, useEffect, useId, useState } from "react";

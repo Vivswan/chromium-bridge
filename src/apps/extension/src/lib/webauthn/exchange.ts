@@ -39,7 +39,7 @@ import {
   type PresenceRequestFrame,
   PresenceRequestFrameSchema,
   PresenceResultFrameSchema,
-} from "@chromium-bridge/shared/envelope.gen";
+} from "@chromium-bridge/shared/generated/envelope";
 import {
   WEBAUTHN_ENROLLMENT_KEY,
   type WebAuthnEnrollment,

@@ -4,7 +4,7 @@
 
 # layer -> the repository paths it owns; a trailing slash is a directory, and a file has one owner.
 layers:
-  shared: [src/packages/shared/src/]
+  shared: [src/packages/shared/src/, src/packages/shared/generated/]
   extension/background:
     - src/apps/extension/src/entrypoints/background.ts
     - src/apps/extension/src/lib/background/
@@ -46,7 +46,9 @@ exclude:
 
 # Specifier prefix -> the directory it stands for. The extension reaches the shared package through
 # its workspace name and its own tree through WXT's `@/`; the bundler resolves both, so the lint must.
+# The first matching prefix wins, so the generated subtree's prefix comes before the package's.
 aliases:
+  "@chromium-bridge/shared/generated/": src/packages/shared/generated/
   "@chromium-bridge/shared/": src/packages/shared/src/
   "@/": src/apps/extension/src/
 

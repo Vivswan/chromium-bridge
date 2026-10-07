@@ -1,5 +1,5 @@
 // Hand-written policy comparison and folding over the GENERATED catalogue
-// (policy.gen.ts <- src/packages/core/src/policy/mod.rs). The Rust core owns
+// (generated/policy.ts <- src/packages/core/src/policy/mod.rs). The Rust core owns
 // the semantics (`field_relaxes`, `fold`, `zero_top_rank`); this module
 // recomputes them from POLICY_DIRECTIONS and policyFieldKind so the
 // extension never trusts a host's claim about which way a change points,
@@ -16,7 +16,7 @@ import {
   type PolicyOverlay,
   type PolicyValues,
   policyFieldKind,
-} from "./policy.gen";
+} from "../generated/policy";
 
 /** hostReverifyMs on the permissiveness scale (Rust zero_top_rank): 0 means
  * never re-verify, the MOST permissive value, so it maps to the top before

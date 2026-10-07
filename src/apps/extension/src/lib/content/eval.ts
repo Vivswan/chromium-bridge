@@ -5,7 +5,7 @@
 // arrives, and the result is masked SW-side on egress (background/egress.ts);
 // this module only executes and serializes.
 
-import type { OpArgs } from "@chromium-bridge/shared/ops.gen";
+import type { OpArgs } from "@chromium-bridge/shared/generated/ops";
 import { truncate } from "./util";
 
 export async function runEval(args: OpArgs) {

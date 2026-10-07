@@ -13,7 +13,7 @@ import {
   ContentMsgSchema,
   PageReplySchema,
 } from "@chromium-bridge/shared/content-msg";
-import type { OpArgs } from "@chromium-bridge/shared/ops.gen";
+import type { OpArgs } from "@chromium-bridge/shared/generated/ops";
 import { browser } from "wxt/browser";
 import type { ClickProbe } from "../../dom/page-api";
 import type { PageOp } from "../../shared/page-ops";
