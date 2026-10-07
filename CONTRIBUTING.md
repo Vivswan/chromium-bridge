@@ -60,7 +60,9 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org): `typ
 - Allowed `type`: `build` `chore` `ci` `docs` `feat` `fix` `perf` `refactor` `revert` `style` `test`. This is the fleet-wide list; CI enforces it on the PR title (the `pr-title` check) and on every commit subject in the push/PR range (the fleet's validate-commit-names action).
 - Prefer the most precise type over `chore`: dependency bumps -> `build`, workflow changes -> `ci`, documentation -> `docs`.
 - `scope` is optional and names the area (`core`, `extension`, `options`, `cli`, `gen`, `ci`, ...).
-- `subject` is a declarative sentence: what the change does once it lands, not an instruction. `the pre-commit gate runs the repository's own toolchain and installs nothing`, not `run the gate with the repo toolchain`. The same two checks hold the grammar: lower-case start, no trailing period, one scope. The *why* goes in the body. One logical change per commit.
+- `subject` is a declarative sentence: what the change does once it lands, not an instruction. `the pre-commit gate runs the repository's own toolchain and installs nothing`, not `run the gate with the repo toolchain`.
+- The two checks above hold the subject's grammar: lower-case start, no trailing period, one scope.
+- The *why* goes in the body, and one commit carries one logical change.
 
 ## Safety (non-negotiable)
 
