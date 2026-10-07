@@ -8,8 +8,8 @@ export interface FakeWebAuthn {
   calls: { create: unknown[]; get: unknown[] };
   /** What `create` answers (or throws); the test sets it per case. */
   createResponse: () => RegistrationResponseJSON;
-  /** What `get` answers (or throws). */
-  getResponse: () => AuthenticationResponseJSON;
+  /** What `get` answers (or throws); a promise holds the ceremony open until the test settles it. */
+  getResponse: () => AuthenticationResponseJSON | Promise<AuthenticationResponseJSON>;
 }
 
 export function installFakeWebAuthn(): FakeWebAuthn {
@@ -47,7 +47,7 @@ export function installFakeWebAuthn(): FakeWebAuthn {
       },
       async get({ publicKey }: { publicKey: unknown }) {
         fake.calls.get.push(publicKey);
-        return new FakePublicKeyCredential(fake.getResponse());
+        return new FakePublicKeyCredential(await fake.getResponse());
       },
     },
   });

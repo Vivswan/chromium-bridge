@@ -1,6 +1,7 @@
 import type { PresenceRequestFrame } from "@chromium-bridge/shared/generated/envelope";
 import type { Refusal } from "@chromium-bridge/shared/runtime-msg";
 import { useCallback, useState } from "react";
+import { flushSync } from "react-dom";
 import { send } from "@/lib/messages";
 import { ceremonyFailure } from "@/lib/refusals";
 import { assert } from "@/lib/shared/webauthn-ceremony";
@@ -14,11 +15,15 @@ import { assert } from "@/lib/shared/webauthn-ceremony";
 //   begin -> { request }         allowed_credential_ids empty -> the window may confirm (the host re-checks that
 //                                when the answer arrives); otherwise this browser's authenticator signs it
 //   begin -> { ok: false }       the host's refusal before any request, in the CLI's words
+//
+// Every state that holds the host's request carries it, so the page can show what the tap or the click
+// approves before the authenticator is asked; WebAuthn's request options have no field for that text (the
+// challenge is the host's statement, which binds it).
 
 export type PresenceAct =
   | { kind: "idle" }
   | { kind: "asking" }
-  | { kind: "tapping" }
+  | { kind: "tapping"; request: PresenceRequestFrame }
   | { kind: "confirm_window"; request: PresenceRequestFrame }
   | { kind: "confirming" }
   | { kind: "refused"; reason: string };
@@ -27,10 +32,19 @@ export type PresenceAct =
  * pair_client. */
 export type ActBegun = { ok: true; request: PresenceRequestFrame | null } | Refusal;
 
-const BUSY: ReadonlySet<PresenceAct["kind"]> = new Set(["asking", "tapping", "confirming"]);
+/** The states in which the host holds an act the page has not settled: the controls that could start another
+ * act, or edit what this one was asked for, are disabled in all of them (`confirm_window` included, since the
+ * offered click answers for the values first submitted). */
+const PENDING: ReadonlySet<PresenceAct["kind"]> = new Set([
+  "asking",
+  "tapping",
+  "confirm_window",
+  "confirming",
+]);
 
 export interface PresenceActControls {
   act: PresenceAct;
+  /** An act is outstanding on this hook. */
   busy: boolean;
   /** Run one act from the message that begins it. */
   run: (begin: () => Promise<ActBegun>) => Promise<void>;
@@ -57,7 +71,8 @@ export function usePresenceAct(onApplied?: () => void): PresenceActControls {
 
   const tap = useCallback(
     async (request: PresenceRequestFrame) => {
-      setAct({ kind: "tapping" });
+      // Committed before the authenticator's prompt covers the page, not merely scheduled.
+      flushSync(() => setAct({ kind: "tapping", request }));
       let response: Awaited<ReturnType<typeof assert>>;
       try {
         response = await assert(request);
@@ -101,5 +116,5 @@ export function usePresenceAct(onApplied?: () => void): PresenceActControls {
 
   const cancel = useCallback(() => setAct({ kind: "idle" }), []);
 
-  return { act, busy: BUSY.has(act.kind), run, confirmWindow, cancel };
+  return { act, busy: PENDING.has(act.kind), run, confirmWindow, cancel };
 }

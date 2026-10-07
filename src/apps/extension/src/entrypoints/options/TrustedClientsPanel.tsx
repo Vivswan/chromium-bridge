@@ -139,7 +139,10 @@ export function TrustedClientsPanel() {
         <div className="mt-4">
           <div className="text-[13px] font-medium">{t("clients.pair_title")}</div>
           <p className="consequence mt-1">{t("clients.pair_desc")}</p>
-          <div className="mt-2 flex flex-wrap items-end gap-3">
+          <fieldset
+            disabled={formBusy}
+            className="m-0 mt-2 flex min-w-0 flex-wrap items-end gap-3 border-0 p-0"
+          >
             <label htmlFor={ids.name} className="text-[11px] text-text-3">
               {t("clients.pair_name")}
               <input
@@ -174,10 +177,10 @@ export function TrustedClientsPanel() {
                 className="mt-0.5 block w-full rounded-md border border-edge-strong bg-surface-1 px-2 py-1 font-mono text-xs text-text-1"
               />
             </label>
-            <Button onClick={pair} disabled={formBusy || name === "" || value === ""}>
+            <Button onClick={pair} disabled={name === "" || value === ""}>
               {t("clients.pair")}
             </Button>
-          </div>
+          </fieldset>
           <div
             role="alert"
             className={formError ? "mt-2 text-xs font-semibold text-danger" : "sr-only"}

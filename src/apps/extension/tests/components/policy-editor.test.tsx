@@ -31,7 +31,7 @@ const REQUEST: PresenceRequestFrame = {
 type Reply = Record<string, unknown>;
 
 let sent: Reply[];
-let replies: Record<string, () => Reply>;
+let replies: Record<string, () => Reply | Promise<Reply>>;
 let posture: PolicyPosture;
 let webauthn: FakeWebAuthn;
 
@@ -138,6 +138,9 @@ const ASSERT = {
   signature: "c2lnbmF0dXJl",
 };
 
+const applyFor = (input: HTMLElement) =>
+  (input.closest(".flex.items-start") as HTMLElement).querySelector("button") as HTMLElement;
+
 const writes = () =>
   sent.filter((m) =>
     ["restrict_policy", "grant_policy", "rollback_policy"].includes(String(m.type)),
@@ -173,8 +176,6 @@ describe("PolicyEditor lanes", () => {
   test("a window applies as a restriction when shorter and as a grant when longer; a blank draft applies nothing", async () => {
     await mount();
     const grace = await screen.findByLabelText("Re-confirm grace window");
-    const applyFor = (input: HTMLElement) =>
-      (input.closest(".flex.items-start") as HTMLElement).querySelector("button") as HTMLElement;
     // A blank draft once read as Number("") = 0, a tightening the user never typed.
     await userEvent.clear(grace);
     expect(applyFor(grace)).toBeDisabled();
@@ -190,6 +191,59 @@ describe("PolicyEditor lanes", () => {
     await waitFor(() =>
       expect(writes()[1]).toEqual({ type: "grant_policy", overlay: { confirmGraceMs: 90000 } }),
     );
+  });
+
+  test("while a submitted window awaits the host, every control is disabled and the draft stays the submitted value", async () => {
+    // The input stayed editable while its submitted value awaited authorization, so the editor could show
+    // 30000 while the tap authorized 90000. One pending flag covers the whole editor, history included.
+    replies.get_policy_history = () => ({
+      ok: true,
+      entries: [
+        {
+          id: "a1",
+          revision: 2,
+          signed: true,
+          overlay_active: false,
+          superseded_unix: 1_700_000_000,
+        },
+      ],
+    });
+    let answer!: (reply: Reply) => void;
+    replies.grant_policy = () =>
+      new Promise<Reply>((resolve) => {
+        answer = resolve;
+      });
+    await mount();
+    const grace = await screen.findByLabelText("Re-confirm grace window");
+    await screen.findByRole("button", { name: "Roll back" });
+    await userEvent.clear(grace);
+    await userEvent.type(grace, "90000");
+    await userEvent.click(applyFor(grace));
+    await screen.findByText("asking");
+    expect(grace).toBeDisabled();
+    expect(grace).toHaveValue(90000);
+    const controls = () => [
+      ...screen.getAllByRole("switch"),
+      ...screen.getAllByRole("button"),
+      ...screen.getAllByRole("spinbutton"),
+      screen.getByRole("combobox"),
+    ];
+    for (const control of controls()) expect(control).toBeDisabled();
+    // The tool picker is a composite control that does not inherit the fieldset's state: pending must keep
+    // it shut, and it must open once the act settles (the control for this assertion).
+    await userEvent.click(screen.getByRole("combobox"));
+    expect(screen.queryByRole("listbox")).toBeNull();
+    answer({ ok: true, request: REQUEST });
+    await waitFor(() => expect(asserts()).toEqual([ASSERT]));
+    await waitFor(() => expect(grace).toBeEnabled());
+    // The fixture's effective value never moves, so the 90000 draft still differs and its Apply is on. The
+    // other row's Apply (an unchanged draft) and Disable (no pick) are off on their own.
+    expect(applyFor(grace)).toBeEnabled();
+    for (const control of controls()) {
+      if (!["Apply", "Disable"].includes(control.textContent ?? "")) expect(control).toBeEnabled();
+    }
+    await userEvent.click(screen.getByRole("combobox"));
+    await screen.findByRole("listbox");
   });
 
   test("re-enabling a disabled tool posts the whole remaining set as a grant", async () => {
@@ -351,9 +405,7 @@ describe("PolicyEditor lanes", () => {
     const grace = screen.getByLabelText("Re-confirm grace window");
     await userEvent.clear(grace);
     await userEvent.type(grace, "1000");
-    await userEvent.click(
-      (grace.closest(".flex.items-start") as HTMLElement).querySelector("button") as HTMLElement,
-    );
+    await userEvent.click(applyFor(grace));
     await waitFor(() =>
       expect(writes()).toEqual([
         { type: "grant_policy", overlay: { cdpMode: true } },

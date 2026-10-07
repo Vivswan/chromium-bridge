@@ -22,7 +22,7 @@ const REQUEST: PresenceRequestFrame = {
 type Reply = Record<string, unknown>;
 
 let sent: Reply[];
-let replies: Record<string, () => Reply>;
+let replies: Record<string, () => Reply | Promise<Reply>>;
 let webauthn: FakeWebAuthn;
 
 // Synthetic messages: the test pins which sentence a code selects, not the English wording.
@@ -123,6 +123,32 @@ describe("KillSwitchPanel release", () => {
     await screen.findByText("alive");
     expect(screen.queryByRole("button", { name: "Release kill switch" })).toBeNull();
     expect(screen.getByRole("button", { name: "Engage kill switch" })).toBeEnabled();
+  });
+
+  test("the host's action is on screen while this browser's authenticator is asked for the tap", async () => {
+    // A tap approves whatever statement the host minted; the page once showed that statement only for a
+    // software confirmation, so a hardware tap was asked for blind. The authenticator's prompt covers the page
+    // the moment `get` is entered, so the statement must be committed by then, not merely scheduled.
+    let tapped!: () => void;
+    const held = new Promise<void>((resolve) => {
+      tapped = resolve;
+    });
+    let onScreenAtGet: boolean | null = null;
+    webauthn.getResponse = () => {
+      onScreenAtGet = screen.queryByText(REQUEST.action) !== null;
+      return held.then(() => assertedCredential("Y3JlZC1h"));
+    };
+    await mount();
+    await userEvent.click(screen.getByRole("button", { name: "Release kill switch" }));
+    await screen.findByText("tapping");
+    expect(onScreenAtGet).toBe(true);
+    expect(screen.getByText(REQUEST.action)).toBeInTheDocument();
+    expect(sent.map((m) => m.type)).toEqual(["get_kill", "kill_release"]);
+    tapped();
+    await waitFor(() =>
+      expect(sent).toEqual([{ type: "get_kill" }, { type: "kill_release" }, ASSERT]),
+    );
+    expect(screen.queryByText(REQUEST.action)).toBeNull();
   });
 
   test("a request admitting no credential is offered as a software confirmation, and Confirm answers with its nonce", async () => {

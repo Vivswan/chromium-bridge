@@ -20,7 +20,7 @@ const REQUEST: PresenceRequestFrame = {
 type Reply = Record<string, unknown>;
 
 let sent: Reply[];
-let replies: Record<string, () => Reply>;
+let replies: Record<string, () => Reply | Promise<Reply>>;
 let webauthn: FakeWebAuthn;
 
 // Synthetic messages: the test pins which sentence a key selects, not the English wording.
@@ -128,6 +128,27 @@ describe("TrustedClientsPanel pairing", () => {
     // The form is cleared for the next client only once the host reported the pairing.
     expect(screen.getByLabelText("Name")).toHaveValue("");
     expect(screen.getByRole("button", { name: "Trust" })).toBeDisabled();
+  });
+
+  test("while the pairing awaits the host and the tap, the form is disabled and keeps the submitted values", async () => {
+    // Only the Trust button honoured the pending state, so the name, kind, and value could be edited while
+    // the host paired the values first submitted.
+    let answer!: (reply: Reply) => void;
+    replies.pair_client = () =>
+      new Promise<Reply>((resolve) => {
+        answer = resolve;
+      });
+    await mount();
+    await fill("codex", "signer", "TEAMID");
+    await screen.findByText("asking");
+    const inputs = ["Name", "Anchor value", "Hash of the client binary", "Code signer"];
+    for (const label of inputs) expect(screen.getByLabelText(label)).toBeDisabled();
+    expect(screen.getByLabelText("Name")).toHaveValue("codex");
+    expect(screen.getByLabelText("Anchor value")).toHaveValue("TEAMID");
+    answer({ ok: true, request: REQUEST });
+    await waitFor(() => expect(sent.at(-1)).toEqual({ type: "get_clients" }));
+    for (const label of inputs) expect(screen.getByLabelText(label)).toBeEnabled();
+    expect(screen.getByLabelText("Name")).toHaveValue("");
   });
 
   test.each([

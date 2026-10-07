@@ -111,7 +111,7 @@ export function PolicyEditor() {
     if (needsTap(overlay)) grant(overlay);
     else void restrict(overlay);
   };
-  const rowBusy = busy || presence.busy;
+  const pending = busy || presence.busy;
   return (
     <div className="py-1">
       {firstBaseline ? (
@@ -122,21 +122,15 @@ export function PolicyEditor() {
       ) : (
         <p className="consequence m-0">{t("policy.desc")}</p>
       )}
-      {BOOL_POLICY_FIELDS.map((field) => (
-        <BoolRow
-          key={field}
-          field={field}
-          {...{ effective, needsTap, busy: rowBusy, onEdit: edit }}
-        />
-      ))}
-      {MS_POLICY_FIELDS.map((field) => (
-        <MsRow
-          key={field}
-          field={field}
-          {...{ effective, needsTap, busy: rowBusy, onEdit: edit }}
-        />
-      ))}
-      <ToolsRow {...{ effective, needsTap, busy: rowBusy, onEdit: edit }} />
+      <fieldset disabled={pending} className={FORM}>
+        {BOOL_POLICY_FIELDS.map((field) => (
+          <BoolRow key={field} field={field} {...{ effective, needsTap, onEdit: edit }} />
+        ))}
+        {MS_POLICY_FIELDS.map((field) => (
+          <MsRow key={field} field={field} {...{ effective, needsTap, onEdit: edit }} />
+        ))}
+        <ToolsRow {...{ effective, pending, onEdit: edit }} />
+      </fieldset>
       {!firstBaseline && <p className="consequence mt-2">{t("policy.effective_note")}</p>}
       <div
         role="alert"
@@ -151,7 +145,7 @@ export function PolicyEditor() {
       />
       <HistoryBlock
         history={history}
-        busy={rowBusy}
+        pending={pending}
         onRefresh={() => void refreshHistory()}
         onRollback={(entry) => {
           setActionError(null);
@@ -168,11 +162,13 @@ export function PolicyEditor() {
   );
 }
 
+/** The disabled-fieldset wrapper's own box reset; `min-w-0` lifts the element's min-content floor. */
+const FORM = "m-0 min-w-0 border-0 p-0";
+
 interface RowProps {
   effective: PolicyValues;
   /** Whether `overlay` takes the grant lane: it relaxes a field, or no baseline exists yet. */
   needsTap: (overlay: PolicyOverlay) => boolean;
-  busy: boolean;
   onEdit: (overlay: PolicyOverlay) => void;
 }
 
@@ -182,13 +178,7 @@ function wouldRelax(effective: PolicyValues, overlay: PolicyOverlay): boolean {
   return relaxedPolicyFields(foldPolicyOverlay(effective, overlay), effective).length > 0;
 }
 
-function BoolRow({
-  field,
-  effective,
-  needsTap,
-  busy,
-  onEdit,
-}: RowProps & { field: BoolPolicyField }) {
+function BoolRow({ field, effective, needsTap, onEdit }: RowProps & { field: BoolPolicyField }) {
   const { t } = useI18n();
   const id = useId();
   const checked = effective[field];
@@ -206,7 +196,6 @@ function BoolRow({
       <Switch
         id={id}
         checked={checked}
-        disabled={busy}
         onCheckedChange={(next) => onEdit({ [field]: next })}
         className="mt-0.5"
       />
@@ -222,7 +211,7 @@ function parseDuration(draft: string): number | null {
   return Number.isSafeInteger(n) && n >= 0 ? n : null;
 }
 
-function MsRow({ field, effective, needsTap, busy, onEdit }: RowProps & { field: MsPolicyField }) {
+function MsRow({ field, effective, needsTap, onEdit }: RowProps & { field: MsPolicyField }) {
   const { t } = useI18n();
   const id = useId();
   const current = effective[field];
@@ -261,7 +250,7 @@ function MsRow({ field, effective, needsTap, busy, onEdit }: RowProps & { field:
           onClick={() => {
             if (candidate !== null) onEdit({ [field]: candidate });
           }}
-          disabled={busy || !changed}
+          disabled={!changed}
         >
           {t("policy.apply")}
         </Button>
@@ -270,7 +259,11 @@ function MsRow({ field, effective, needsTap, busy, onEdit }: RowProps & { field:
   );
 }
 
-function ToolsRow({ effective, busy, onEdit }: Omit<RowProps, "needsTap">) {
+function ToolsRow({
+  effective,
+  pending,
+  onEdit,
+}: Omit<RowProps, "needsTap"> & { pending: boolean }) {
   const { t } = useI18n();
   const disabled = effective.disabledTools;
   const candidates = OP_NAMES.filter((op) => !disabled.includes(op));
@@ -291,7 +284,6 @@ function ToolsRow({ effective, busy, onEdit }: Omit<RowProps, "needsTap">) {
               aria-label={t("policy.enable_tool", [tool])}
               title={t("policy.needs_presence")}
               className="cursor-pointer text-text-3 hover:text-text-1 disabled:cursor-default"
-              disabled={busy}
               onClick={() => onEdit({ disabledTools: disabled.filter((d) => d !== tool) })}
             >
               x
@@ -300,7 +292,8 @@ function ToolsRow({ effective, busy, onEdit }: Omit<RowProps, "needsTap">) {
         ))}
       </div>
       <div className="mt-2 flex items-center gap-2">
-        <Select value={pick} onValueChange={setPick}>
+        {/* The Radix select reads its own prop, not the disabled fieldset around it. */}
+        <Select value={pick} onValueChange={setPick} disabled={pending}>
           <SelectTrigger className="min-w-48" aria-label={t("policy.pick_tool")}>
             <SelectValue placeholder={t("policy.pick_tool")} />
           </SelectTrigger>
@@ -317,7 +310,7 @@ function ToolsRow({ effective, busy, onEdit }: Omit<RowProps, "needsTap">) {
             onEdit({ disabledTools: [...disabled, pick] });
             setPick("");
           }}
-          disabled={busy || pick === "" || disabled.includes(pick)}
+          disabled={pick === "" || disabled.includes(pick)}
         >
           {t("policy.disable_tool")}
         </Button>
@@ -328,24 +321,24 @@ function ToolsRow({ effective, busy, onEdit }: Omit<RowProps, "needsTap">) {
 
 function HistoryBlock({
   history,
-  busy,
+  pending,
   onRefresh,
   onRollback,
 }: {
   history: RuntimeResponse<"get_policy_history"> | null;
-  busy: boolean;
+  pending: boolean;
   onRefresh: () => void;
   onRollback: (entry: RollbackEntry) => void;
 }) {
   const { t } = useI18n();
   return (
-    <div className="mt-4">
+    <fieldset disabled={pending} className={`${FORM} mt-4`}>
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="text-[13px] font-medium">{t("policy.history_title")}</div>
           <p className="consequence mt-1">{t("policy.history_desc")}</p>
         </div>
-        <Button variant="ghost" onClick={onRefresh} disabled={busy}>
+        <Button variant="ghost" onClick={onRefresh}>
           {t("policy.history_refresh")}
         </Button>
       </div>
@@ -361,11 +354,11 @@ function HistoryBlock({
       {history?.ok && history.entries.length > 0 && (
         <ul className="m-0 mt-1 list-none p-0">
           {historyEntries(history.entries).map((entry) => (
-            <HistoryRowItem key={entry.key} entry={entry} busy={busy} onRollback={onRollback} />
+            <HistoryRowItem key={entry.key} entry={entry} onRollback={onRollback} />
           ))}
         </ul>
       )}
-    </div>
+    </fieldset>
   );
 }
 
@@ -405,11 +398,9 @@ function historyEntries(rows: PolicyHistoryRow[]): HistoryEntry[] {
 
 function HistoryRowItem({
   entry,
-  busy,
   onRollback,
 }: {
   entry: HistoryEntry;
-  busy: boolean;
   onRollback: (entry: RollbackEntry) => void;
 }) {
   const { t } = useI18n();
@@ -433,7 +424,7 @@ function HistoryRowItem({
           {entry.overlayActive && `, ${t("policy.history_overlay")}`}
         </div>
       </div>
-      <Button variant="ghost" onClick={() => onRollback(entry)} disabled={busy}>
+      <Button variant="ghost" onClick={() => onRollback(entry)}>
         {t("policy.rollback")}
       </Button>
     </li>
