@@ -31,7 +31,7 @@ Four tools have no first-party proto plugin and are installed once by hand: `car
 | [`typos`](https://github.com/crate-ci/typos) + [`cargo-machete`](https://github.com/bnjbvr/cargo-machete) | spelling + unused-dependency gates | `moon run typos` / `moon run machete`; CI gates typos in the managed ci.yml and machete in checks.yml |
 | [`actionlint`](https://github.com/rhysd/actionlint) | GitHub Actions workflow lint gate | `moon run check-actions`; CI runs it in the managed ci.yml's actionlint job |
 
-Git hooks are managed by [lefthook](https://lefthook.dev) (`lefthook.yml`): `moon run setup` wires a pre-commit hook that runs `moon run gate`, the checks the repository's own toolchain provides, and `moon run ci` adds the tools only CI provisions.
+Git hooks are managed by [lefthook](https://lefthook.dev) (`lefthook.yml`): `moon run setup` wires hooks that run `moon run gate`, the checks the repository's own toolchain provides, before a commit and after a rebase; `moon run ci` adds the tools only CI provisions.
 
 ## Layout
 

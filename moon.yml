@@ -3,7 +3,7 @@
 # uncached by the workspace default (.moon/tasks/all.yml says why).
 #
 # These rules govern every `moon run`, whatever targets the caller names together, so no caller has to; the
-# first three are read back from the resolved graph by scripts/check-moon-edges.ts, the last two are not:
+# first four are read back from the resolved graph by scripts/check-moon-edges.ts, the last two are not:
 #   runs a package binary                               -> `bun run <bin>` (node_modules/.bin, then PATH; never bun's
 #                                                          global cache, which is where bunx finds a bare name when
 #                                                          node_modules is absent)
@@ -14,6 +14,11 @@
 #                                                          reads no crates and has no such flag) and carries
 #                                                          RUSTUP_AUTO_INSTALL=0 in its env (rustup would otherwise
 #                                                          download a missing pinned toolchain)
+#   names a build/ path                                 -> depends on the other task whose outputs write it, so one run
+#                                                          never judges an artifact an earlier checkout built; an input
+#                                                          counts for every task, a command word for a task run from the
+#                                                          workspace root, a glob on either side is refused, and an
+#                                                          undeclared read is invisible
 #   a bun task whose script spawns cargo                -> the same flag and env by convention (gen-shared, check-gen,
 #                                                          check-gen-isolation): the auditor sees only a task's own command
 #   reads or writes src/packages/shared/src/*.gen.ts    -> options.mutex 'generated-contract', shared with gen-shared,
@@ -477,10 +482,10 @@ tasks:
 
   # ----- version + repo hygiene checks ---------------------------------------
 
-  # The one list of the bun-side checks that need no build: CI's hygiene job (checks.yml) runs this task and
-  # `ci` depends on it, so a check added here runs in both.
+  # The one list of the bun-side checks: CI's hygiene job (checks.yml) runs this task and `ci` depends on it,
+  # so a check added here runs in both.
   hygiene:
-    description: 'Every bun-side check that needs no build (versions, pins, CJK, typography, docs parity, compose); CI runs the same task'
+    description: 'Every bun-side check (versions, the built manifest, pins, CJK, typography, docs parity, compose); CI runs the same task'
     deps:
       - '~:check-version'
       - '~:check-extension-id'
@@ -516,7 +521,12 @@ tasks:
 
   check-extension-id:
     description: 'Verify the built extension manifest keeps the pinned key and permission surface, and identity.rs stays the only definition site'
-    command: 'bun scripts/check-extension-id.ts'
+    deps: ['extension:build']
+    script: |
+      set -e
+      bun scripts/check-extension-id.ts
+      bun test scripts/tests/check-extension-id.test.ts
+    inputs: ['/build/extension/chrome-mv3/manifest.json']
     options:
       mutex: 'generated-contract'
 
@@ -551,7 +561,7 @@ tasks:
     command: 'bun scripts/check-moon-hasher.ts'
 
   check-moon-edges:
-    description: "The header's first three rules, read from moon's resolved task graph: no bunx anywhere, and the gate's graph holds only own-toolchain commands (cargo verbs with --frozen, no bun install)"
+    description: "The header's first four rules, read from moon's resolved task graph: no bunx anywhere, the gate's graph holds only own-toolchain commands (cargo verbs with --frozen, no bun install), and every named build/ path follows the task that writes it"
     script: |
       set -e
       bun scripts/check-moon-edges.ts

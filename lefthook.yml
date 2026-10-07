@@ -1,7 +1,16 @@
-# Git hooks, managed by lefthook (https://lefthook.dev). The hook checks and fails, never installs, stages, or
-# commits; what `gate` may run is the root moon.yml header's rule.
+# Git hooks, managed by lefthook (https://lefthook.dev). The hooks check and fail, never install, stage, or
+# commit; what `gate` may run is the root moon.yml header's rule.
 #
 #   wire or re-wire the hooks   -> `moon run setup` (lefthook's postinstall) or `lefthook install`
+#   a commit staging a change   -> pre-commit runs the gate
+#   a message-only amend        -> no gate: lefthook skips every pre-commit job when nothing is staged, and the tree
+#                                  is unchanged (judged already if the commit that made it ran the gate)
+#   a rebase rewriting commits  -> post-rewrite runs the gate, since the commits a rebase re-creates pass no gate (git
+#                                  invokes pre-commit for none of them but a reword, which stages nothing); the
+#                                  verdict comes after they exist, and a red one is fixed and amended, which
+#                                  pre-commit judges
+#   automatic commits           -> a clean cherry-pick or merge, and filter-branch, meet no hook here (a conflict
+#                                  resolved by hand commits through pre-commit); CI judges the PR
 #   moon and cargo              -> proto's ~/.proto/shims and ~/.proto/bin (`proto install`, .prototools) and rustup's
 #                                  ~/.cargo/bin, prefixed below so a git client that starts hooks without your
 #                                  shell's PATH still finds them
@@ -9,7 +18,15 @@
 #                                  yields to an inherited value, and a commit must never download a toolchain
 #   skip for a WIP commit       -> LEFTHOOK=0 git commit (CI runs the full gate on the PR)
 
+templates:
+  gate: PATH="$HOME/.proto/shims:$HOME/.proto/bin:$HOME/.cargo/bin:$PATH" RUSTUP_AUTO_INSTALL=0 moon run gate
+
 pre-commit:
   jobs:
     - name: gate
-      run: PATH="$HOME/.proto/shims:$HOME/.proto/bin:$HOME/.cargo/bin:$PATH" RUSTUP_AUTO_INSTALL=0 moon run gate
+      run: '{gate}'
+
+post-rewrite:
+  jobs:
+    - name: gate after a rebase
+      run: 'test "{1}" != rebase || {gate}'
