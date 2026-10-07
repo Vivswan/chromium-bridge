@@ -1,9 +1,9 @@
 // The rules scripts/gen-schema.ts holds every emitted validator to (R1-R4), each shown firing on the schema
-// it exists to refuse; the external facts the emission leans on (which keywords zod's fromJSONSchema reads,
+// it exists to refuse; the external facts the emission leans on (which keywords json-schema-to-zod reads,
 // what json-schema-to-typescript makes of the node shapes the generators produce, how change-case names a
-// type after an op); and the equality A2 holds an inlined schema and its owner module to. The library's
-// reading is the artifact under test, so every case goes
-// through the real library, never a hand-built reading, except R3, which guards the library itself.
+// type after an op); and the equality A2 holds an inlined schema and its owner module to. The emitted
+// validator is the artifact under test, so every case goes through the real emitter, never a hand-built
+// reading, except R3, which guards the emitter itself.
 
 import { describe, expect, test } from "bun:test";
 import { pascalCase } from "change-case";
@@ -12,7 +12,8 @@ import { OP_NAMES } from "../../src/packages/shared/src/ops.gen";
 import {
   assertReadingRules,
   assertSchemaRules,
-  libraryReading,
+  emittedReading,
+  emittedValidator,
   opArgsSchema,
   readsEqual,
   typeSource,
@@ -26,34 +27,20 @@ const strict = (properties: Record<string, unknown>, required: string[] = []) =>
 });
 
 describe("the reading rules refuse what they exist to refuse", () => {
-  test("R1: an object the library reads as open fails unless the schema is a loose reader", () => {
+  test("R1: an object emitted open (unknown keys stripped) fails; the loose form passes only on a loose reader", () => {
     const open = { type: "object", properties: { a: { type: "string" } } };
     expect(() => assertSchemaRules("X", open, false)).toThrow(
-      /\$ is an object read as \{\}, not strict \(R1\)/,
+      /\$ is an object read as "open", not strict \(R1\)/,
     );
-    expect(() => assertSchemaRules("X", open, true)).not.toThrow();
+    expect(() => assertSchemaRules("X", open, true)).toThrow(/\(R1\)/);
+    const loose = { ...open, additionalProperties: true };
+    expect(() => assertSchemaRules("X", loose, false)).toThrow(/\(R1\)/);
+    expect(() => assertSchemaRules("X", loose, true)).not.toThrow();
     // Nested: the loose allowance covers every object of a loose reader, a strict one covers none.
     const nestedOpen = strict({ inner: { type: "object", properties: {} } }, ["inner"]);
     expect(() => assertSchemaRules("X", nestedOpen, false)).toThrow(
       /\$\.properties\.inner .*\(R1\)/,
     );
-    // A oneOf's branches are walked too (prepare rewrites a discriminated oneOf to anyOf, but the walk owes
-    // nothing to that).
-    const oneOfOpen = {
-      oneOf: [
-        {
-          type: "object",
-          properties: { kind: { type: "string", const: "a" } },
-          required: ["kind"],
-        },
-        {
-          type: "object",
-          properties: { kind: { type: "string", const: "b" } },
-          required: ["kind"],
-        },
-      ],
-    };
-    expect(() => assertSchemaRules("X", oneOfOpen, false)).toThrow(/oneOf\[0\] .*\(R1\)/);
     // An additionalProperties SCHEMA is neither strict nor the loose form.
     const typedExtras = {
       type: "object",
@@ -69,13 +56,13 @@ describe("the reading rules refuse what they exist to refuse", () => {
     ).toThrow(/\$\.properties\.a carries a default \(R2\)/);
   });
 
-  test("R3: an integer the library reads without JS-safe bounds fails (a hand-built reading; the library adds the bounds itself)", () => {
+  test("R3: an integer read without JS-safe bounds fails (a hand-built reading; the emitter adds the bounds itself)", () => {
     expect(() => assertReadingRules("X", { type: "integer" }, false)).toThrow(/\(R3\)/);
     expect(() =>
       assertReadingRules("X", { type: "integer", minimum: 0, maximum: 2 ** 53 }, false),
     ).toThrow(/\(R3\)/);
     expect(() =>
-      assertReadingRules("X", libraryReading({ type: "integer", minimum: 0 }), false),
+      assertReadingRules("X", emittedReading({ type: "integer", minimum: 0 }), false),
     ).not.toThrow();
   });
 
@@ -113,21 +100,19 @@ describe("the reading rules refuse what they exist to refuse", () => {
     expect(() =>
       assertSchemaRules("X", { anyOf: [...plain.anyOf, { type: "null" }] }, false),
     ).toThrow(/\(R4\)/);
-    // Nor does nesting one of them inside an inner union, nor spelling the union as oneOf (which zod reads as
-    // exclusive while the type reader emits a plain union; only discrimination makes the two agree).
+    // Nor does nesting one of them inside an inner union.
     const [first, second] = plain.anyOf;
     expect(() =>
       assertSchemaRules("X", { anyOf: [{ anyOf: [first, { type: "null" }] }, second] }, false),
     ).toThrow(/\(R4\)/);
-    expect(() => assertSchemaRules("X", { oneOf: plain.anyOf }, false)).toThrow(/\(R4\)/);
   });
 });
 
 // The keyword lists the generators admit: prepare's allowlist (scripts/gen-envelope.ts) and the asymmetry
-// table's changes. Each must change the library's reading when present, or the Rust parser would enforce a
+// table's changes. Each must change the emitted validator when present, or the Rust parser would enforce a
 // constraint the extension silently dropped.
-describe("every keyword the generators admit is read by the library", () => {
-  const read = (schema: unknown) => JSON.stringify(libraryReading(schema));
+describe("every keyword the generators admit is read by the emitter", () => {
+  const read = (schema: unknown) => JSON.stringify(emittedReading(schema));
   test.each<[string, unknown, unknown]>([
     ["required", strict({ a: { type: "string" } }, ["a"]), strict({ a: { type: "string" } })],
     ["additionalProperties: false", strict({}), { type: "object", properties: {} }],
@@ -150,7 +135,7 @@ describe("every keyword the generators admit is read by the library", () => {
     expect(read(withKeyword)).not.toBe(read(without));
   });
 
-  test("and a keyword the library ignores reads the same with or without it (why prepare's allowlist exists)", () => {
+  test("and a keyword the emitter ignores reads the same with or without it (why prepare's allowlist exists)", () => {
     expect(read({ type: "array", items: { type: "string" }, uniqueItems: true })).toBe(
       read({ type: "array", items: { type: "string" } }),
     );
@@ -160,11 +145,11 @@ describe("every keyword the generators admit is read by the library", () => {
   });
 });
 
-// The keyword census above compares standalone null arms; this is the required-property case. A converter that
+// The keyword census above compares standalone null arms; this is the required-property case. An emitter that
 // made every required string nullable passes every census case and R1-R4 and fails only here.
 test("a property without a null arm refuses null; the null arm admits it", () => {
-  const reader = z.fromJSONSchema(
-    strict({ a: { type: "string" }, b: { type: ["string", "null"] } }, ["a", "b"]) as never,
+  const reader = emittedValidator(
+    strict({ a: { type: "string" }, b: { type: ["string", "null"] } }, ["a", "b"]),
   );
   expect(reader.safeParse({ a: "x", b: null }).success).toBe(true);
   expect(reader.safeParse({ a: null, b: null }).success).toBe(false);
@@ -258,7 +243,7 @@ describe("readsEqual, the equality an inlined schema and its owner module are he
     "a",
   ]);
   test("a module's exported schema reads equal to the node inlined elsewhere; a lost bound or a lost field does not", () => {
-    expect(readsEqual(node, z.fromJSONSchema(node as never))).toBe(true);
+    expect(readsEqual(node, emittedValidator(node))).toBe(true);
     expect(
       readsEqual(node, z.strictObject({ a: z.string().min(1), n: z.int().min(0).optional() })),
     ).toBe(true);

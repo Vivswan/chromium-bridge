@@ -421,7 +421,7 @@ tasks:
       set -e
       bun scripts/gen-ops.ts
       bun scripts/gen-envelope.ts
-      bun run biome format --write \
+      bun run biome check --write \
         src/packages/shared/src/ops.gen.ts \
         src/packages/shared/src/identity.gen.ts \
         src/packages/shared/src/errors.gen.ts \

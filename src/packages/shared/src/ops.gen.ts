@@ -2,9 +2,9 @@
 // args.rs) by scripts/gen-ops.ts - DO NOT EDIT. Edit the catalogue, then run
 // `moon run gen`.
 //
-// The tool catalogue, TS side. Each per-op validator and its type are two readings (zod's, json-schema-to-typescript's)
-// of the one JSON Schema the Rust args struct emitted, and BridgeCommand is built from them, so the compile-time
-// types and the runtime checks have a single source.
+// The tool catalogue, TS side. Each per-op validator is the Zod source json-schema-to-zod wrote from the one JSON
+// Schema the Rust args struct emitted, its type json-schema-to-typescript's reading of the same schema, and
+// BridgeCommand is built from them, so the compile-time types and the runtime checks have a single source.
 
 import { z } from "zod";
 import type { PolicyFieldName, PolicyValues } from "./policy.gen";
@@ -362,172 +362,80 @@ export interface PageUploadArgs {
 
 // The extension parses an inbound request's args against its op's validator before dispatching, fail closed.
 export const OP_ARG_SCHEMAS = {
-  list_browsers: z.fromJSONSchema({
-    "additionalProperties": false,
-    "type": "object",
-    "properties": {},
-  }) as z.ZodType<ListBrowsersArgs>,
-  tab_list: z.fromJSONSchema({
-    "additionalProperties": false,
-    "type": "object",
-    "properties": {},
-  }) as z.ZodType<TabListArgs>,
-  tab_focus: z.fromJSONSchema({
-    "additionalProperties": false,
-    "properties": {
-      "tabId": { "maximum": 9007199254740991, "minimum": -9007199254740991, "type": "integer" },
-    },
-    "required": ["tabId"],
-    "type": "object",
-  }) as z.ZodType<TabFocusArgs>,
-  tab_open: z.fromJSONSchema({
-    "additionalProperties": false,
-    "properties": { "url": { "type": "string" } },
-    "required": ["url"],
-    "type": "object",
-  }) as z.ZodType<TabOpenArgs>,
-  tab_close: z.fromJSONSchema({
-    "additionalProperties": false,
-    "properties": {
-      "tabId": { "maximum": 9007199254740991, "minimum": -9007199254740991, "type": "integer" },
-    },
-    "required": ["tabId"],
-    "type": "object",
-  }) as z.ZodType<TabCloseArgs>,
-  page_snapshot: z.fromJSONSchema({
-    "additionalProperties": false,
-    "type": "object",
-    "properties": {},
-  }) as z.ZodType<PageSnapshotArgs>,
-  page_click: z.fromJSONSchema({
-    "additionalProperties": false,
-    "properties": { "ref": { "type": "string" }, "selector": { "type": "string" } },
-    "type": "object",
-  }) as z.ZodType<PageClickArgs>,
-  page_fill: z.fromJSONSchema({
-    "additionalProperties": false,
-    "properties": {
-      "ref": { "type": "string" },
-      "selector": { "type": "string" },
-      "value": { "type": "string" },
-    },
-    "required": ["value"],
-    "type": "object",
-  }) as z.ZodType<PageFillArgs>,
-  page_text: z.fromJSONSchema({
-    "additionalProperties": false,
-    "type": "object",
-    "properties": {},
-  }) as z.ZodType<PageTextArgs>,
-  page_screenshot: z.fromJSONSchema({
-    "additionalProperties": false,
-    "type": "object",
-    "properties": {},
-  }) as z.ZodType<PageScreenshotArgs>,
-  page_scroll: z.fromJSONSchema({
-    "additionalProperties": false,
-    "properties": {
-      "direction": { "type": "string" },
-      "pixels": { "maximum": 9007199254740991, "minimum": -9007199254740991, "type": "integer" },
-    },
-    "type": "object",
-  }) as z.ZodType<PageScrollArgs>,
-  page_wait_for: z.fromJSONSchema({
-    "additionalProperties": false,
-    "properties": {
-      "nav": { "type": "boolean" },
-      "selector": { "type": "string" },
-      "text": { "type": "string" },
-      "timeoutMs": { "maximum": 9007199254740991, "minimum": -9007199254740991, "type": "integer" },
-    },
-    "type": "object",
-  }) as z.ZodType<PageWaitForArgs>,
-  page_eval: z.fromJSONSchema({
-    "additionalProperties": false,
-    "properties": { "code": { "type": "string" } },
-    "required": ["code"],
-    "type": "object",
-  }) as z.ZodType<PageEvalArgs>,
-  page_snapshot_precise: z.fromJSONSchema({
-    "additionalProperties": false,
-    "properties": { "frameId": { "type": "string" } },
-    "type": "object",
-  }) as z.ZodType<PageSnapshotPreciseArgs>,
-  cookie_get: z.fromJSONSchema({
-    "additionalProperties": false,
-    "properties": {
-      "domain": { "type": "string" },
-      "name": { "type": "string" },
-      "url": { "type": "string" },
-    },
-    "type": "object",
-  }) as z.ZodType<CookieGetArgs>,
-  storage_get: z.fromJSONSchema({
-    "additionalProperties": false,
-    "properties": { "key": { "type": "string" }, "type": { "type": "string" } },
-    "type": "object",
-  }) as z.ZodType<StorageGetArgs>,
-  page_navigate: z.fromJSONSchema({
-    "additionalProperties": false,
-    "properties": { "url": { "type": "string" } },
-    "required": ["url"],
-    "type": "object",
-  }) as z.ZodType<PageNavigateArgs>,
-  page_back: z.fromJSONSchema({
-    "additionalProperties": false,
-    "type": "object",
-    "properties": {},
-  }) as z.ZodType<PageBackArgs>,
-  page_forward: z.fromJSONSchema({
-    "additionalProperties": false,
-    "type": "object",
-    "properties": {},
-  }) as z.ZodType<PageForwardArgs>,
-  page_reload: z.fromJSONSchema({
-    "additionalProperties": false,
-    "type": "object",
-    "properties": {},
-  }) as z.ZodType<PageReloadArgs>,
-  page_press: z.fromJSONSchema({
-    "additionalProperties": false,
-    "properties": { "keys": { "type": "string" } },
-    "required": ["keys"],
-    "type": "object",
-  }) as z.ZodType<PagePressArgs>,
-  page_hover: z.fromJSONSchema({
-    "additionalProperties": false,
-    "properties": { "ref": { "type": "string" }, "selector": { "type": "string" } },
-    "type": "object",
-  }) as z.ZodType<PageHoverArgs>,
-  page_select: z.fromJSONSchema({
-    "additionalProperties": false,
-    "properties": {
-      "ref": { "type": "string" },
-      "selector": { "type": "string" },
-      "value": { "type": "string" },
-    },
-    "required": ["value"],
-    "type": "object",
-  }) as z.ZodType<PageSelectArgs>,
-  console_get: z.fromJSONSchema({
-    "additionalProperties": false,
-    "properties": {
-      "limit": { "maximum": 9007199254740991, "minimum": -9007199254740991, "type": "integer" },
-    },
-    "type": "object",
-  }) as z.ZodType<ConsoleGetArgs>,
-  page_handle_dialog: z.fromJSONSchema({
-    "additionalProperties": false,
-    "properties": { "action": { "type": "string" }, "promptText": { "type": "string" } },
-    "required": ["action"],
-    "type": "object",
-  }) as z.ZodType<PageHandleDialogArgs>,
-  page_upload: z.fromJSONSchema({
-    "additionalProperties": false,
-    "properties": { "path": { "type": "string" }, "selector": { "type": "string" } },
-    "required": ["selector", "path"],
-    "type": "object",
-  }) as z.ZodType<PageUploadArgs>,
+  list_browsers: z.object({}).strict() as z.ZodType<ListBrowsersArgs>,
+  tab_list: z.object({}).strict() as z.ZodType<TabListArgs>,
+  tab_focus: z
+    .object({ "tabId": z.number().int().gte(-9007199254740991).lte(9007199254740991) })
+    .strict() as z.ZodType<TabFocusArgs>,
+  tab_open: z.object({ "url": z.string() }).strict() as z.ZodType<TabOpenArgs>,
+  tab_close: z
+    .object({ "tabId": z.number().int().gte(-9007199254740991).lte(9007199254740991) })
+    .strict() as z.ZodType<TabCloseArgs>,
+  page_snapshot: z.object({}).strict() as z.ZodType<PageSnapshotArgs>,
+  page_click: z
+    .object({ "ref": z.string().optional(), "selector": z.string().optional() })
+    .strict() as z.ZodType<PageClickArgs>,
+  page_fill: z
+    .object({
+      "ref": z.string().optional(),
+      "selector": z.string().optional(),
+      "value": z.string(),
+    })
+    .strict() as z.ZodType<PageFillArgs>,
+  page_text: z.object({}).strict() as z.ZodType<PageTextArgs>,
+  page_screenshot: z.object({}).strict() as z.ZodType<PageScreenshotArgs>,
+  page_scroll: z
+    .object({
+      "direction": z.string().optional(),
+      "pixels": z.number().int().gte(-9007199254740991).lte(9007199254740991).optional(),
+    })
+    .strict() as z.ZodType<PageScrollArgs>,
+  page_wait_for: z
+    .object({
+      "nav": z.boolean().optional(),
+      "selector": z.string().optional(),
+      "text": z.string().optional(),
+      "timeoutMs": z.number().int().gte(-9007199254740991).lte(9007199254740991).optional(),
+    })
+    .strict() as z.ZodType<PageWaitForArgs>,
+  page_eval: z.object({ "code": z.string() }).strict() as z.ZodType<PageEvalArgs>,
+  page_snapshot_precise: z
+    .object({ "frameId": z.string().optional() })
+    .strict() as z.ZodType<PageSnapshotPreciseArgs>,
+  cookie_get: z
+    .object({
+      "domain": z.string().optional(),
+      "name": z.string().optional(),
+      "url": z.string().optional(),
+    })
+    .strict() as z.ZodType<CookieGetArgs>,
+  storage_get: z
+    .object({ "key": z.string().optional(), "type": z.string().optional() })
+    .strict() as z.ZodType<StorageGetArgs>,
+  page_navigate: z.object({ "url": z.string() }).strict() as z.ZodType<PageNavigateArgs>,
+  page_back: z.object({}).strict() as z.ZodType<PageBackArgs>,
+  page_forward: z.object({}).strict() as z.ZodType<PageForwardArgs>,
+  page_reload: z.object({}).strict() as z.ZodType<PageReloadArgs>,
+  page_press: z.object({ "keys": z.string() }).strict() as z.ZodType<PagePressArgs>,
+  page_hover: z
+    .object({ "ref": z.string().optional(), "selector": z.string().optional() })
+    .strict() as z.ZodType<PageHoverArgs>,
+  page_select: z
+    .object({
+      "ref": z.string().optional(),
+      "selector": z.string().optional(),
+      "value": z.string(),
+    })
+    .strict() as z.ZodType<PageSelectArgs>,
+  console_get: z
+    .object({ "limit": z.number().int().gte(-9007199254740991).lte(9007199254740991).optional() })
+    .strict() as z.ZodType<ConsoleGetArgs>,
+  page_handle_dialog: z
+    .object({ "action": z.string(), "promptText": z.string().optional() })
+    .strict() as z.ZodType<PageHandleDialogArgs>,
+  page_upload: z
+    .object({ "path": z.string(), "selector": z.string() })
+    .strict() as z.ZodType<PageUploadArgs>,
 } as const satisfies Readonly<Record<OpName, z.ZodType>>;
 
 // Discriminated on `op`, so a consumer narrows the args to exactly the fields that tool accepts. envelope.ts
@@ -561,31 +469,28 @@ export interface OpArgs {
   path?: string;
 }
 
-export const OpArgsSchema = z.fromJSONSchema({
-  "type": "object",
-  "additionalProperties": false,
-  "properties": {
-    "tabId": { "maximum": 9007199254740991, "minimum": -9007199254740991, "type": "integer" },
-    "url": { "type": "string" },
-    "ref": { "type": "string" },
-    "selector": { "type": "string" },
-    "value": { "type": "string" },
-    "direction": { "type": "string" },
-    "pixels": { "maximum": 9007199254740991, "minimum": -9007199254740991, "type": "integer" },
-    "nav": { "type": "boolean" },
-    "text": { "type": "string" },
-    "timeoutMs": { "maximum": 9007199254740991, "minimum": -9007199254740991, "type": "integer" },
-    "code": { "type": "string" },
-    "frameId": { "type": "string" },
-    "domain": { "type": "string" },
-    "name": { "type": "string" },
-    "key": { "type": "string" },
-    "type": { "type": "string" },
-    "keys": { "type": "string" },
-    "limit": { "maximum": 9007199254740991, "minimum": -9007199254740991, "type": "integer" },
-    "action": { "type": "string" },
-    "promptText": { "type": "string" },
-    "path": { "type": "string" },
-  },
-  "required": [],
-}) as z.ZodType<OpArgs>;
+export const OpArgsSchema = z
+  .object({
+    "tabId": z.number().int().gte(-9007199254740991).lte(9007199254740991).optional(),
+    "url": z.string().optional(),
+    "ref": z.string().optional(),
+    "selector": z.string().optional(),
+    "value": z.string().optional(),
+    "direction": z.string().optional(),
+    "pixels": z.number().int().gte(-9007199254740991).lte(9007199254740991).optional(),
+    "nav": z.boolean().optional(),
+    "text": z.string().optional(),
+    "timeoutMs": z.number().int().gte(-9007199254740991).lte(9007199254740991).optional(),
+    "code": z.string().optional(),
+    "frameId": z.string().optional(),
+    "domain": z.string().optional(),
+    "name": z.string().optional(),
+    "key": z.string().optional(),
+    "type": z.string().optional(),
+    "keys": z.string().optional(),
+    "limit": z.number().int().gte(-9007199254740991).lte(9007199254740991).optional(),
+    "action": z.string().optional(),
+    "promptText": z.string().optional(),
+    "path": z.string().optional(),
+  })
+  .strict() as z.ZodType<OpArgs>;

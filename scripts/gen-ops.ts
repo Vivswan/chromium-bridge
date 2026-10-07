@@ -109,7 +109,7 @@ const meta = contract.tools
   .join("\n");
 
 // Each tool's args schema goes through the envelope generator's fail-closed rules (scripts/gen-envelope.ts), so a
-// struct the rules cannot model faithfully aborts generation here too; the library's reading of each is then
+// struct the rules cannot model faithfully aborts generation here too; the emitted validator of each is then
 // held to the schema rules (scripts/gen-schema.ts) before anything is written.
 const preparedArgs = new Map<string, JsonObject>();
 for (const t of contract.tools) {
@@ -140,9 +140,9 @@ const opsOut = `// GENERATED from the Rust core (src/packages/core/src/tools/cat
 // args.rs) by scripts/gen-ops.ts - DO NOT EDIT. Edit the catalogue, then run
 // \`moon run gen\`.
 //
-// The tool catalogue, TS side. Each per-op validator and its type are two readings (zod's, json-schema-to-typescript's)
-// of the one JSON Schema the Rust args struct emitted, and BridgeCommand is built from them, so the compile-time
-// types and the runtime checks have a single source.
+// The tool catalogue, TS side. Each per-op validator is the Zod source json-schema-to-zod wrote from the one JSON
+// Schema the Rust args struct emitted, its type json-schema-to-typescript's reading of the same schema, and
+// BridgeCommand is built from them, so the compile-time types and the runtime checks have a single source.
 
 import { z } from "zod";
 import type { PolicyFieldName, PolicyValues } from "./policy.gen";

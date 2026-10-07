@@ -17,6 +17,7 @@ import {
   splitFlattenedCommand,
   splitTaggedUnionSchema,
 } from "../gen-envelope";
+import { emittedValidator } from "../gen-schema";
 
 const strictObject = (properties: Record<string, unknown>, required: string[]) => ({
   type: "object",
@@ -366,7 +367,7 @@ describe("applyAsymmetries", () => {
     ...strictObject(properties, required),
     additionalProperties: true,
   });
-  const reads = (schema: unknown) => z.fromJSONSchema(schema as never);
+  const reads = (schema: unknown) => emittedValidator(schema);
 
   test("the reader rules: null arms dropped on every Option, objects loose on a control frame only", () => {
     const control = applyAsymmetries(reader, "t", {}, true).schema;
@@ -760,27 +761,40 @@ describe("splitTaggedUnionSchema", () => {
     oneOf: [{ ...variantA, properties: { ...variantA.properties, x } }, variantB],
     $defs: defs,
   });
-  const partX = (schema: unknown) =>
-    (splitTaggedUnionSchema(schema).get("a") as { properties: { x: unknown } }).properties.x;
+  const partX = async (schema: unknown) =>
+    ((await splitTaggedUnionSchema(schema)).get("a") as { properties: { x: unknown } }).properties
+      .x;
 
-  test("splits per tag and inlines $defs indirection (an annotation beside the $ref is dropped)", () => {
-    const parts = splitTaggedUnionSchema({ oneOf: [variantA, variantB], $defs: defs });
+  test("splits per tag and dereferences the $defs indirection; a sibling beside the $ref is merged into the target, the sibling winning a collision", async () => {
+    const parts = await splitTaggedUnionSchema({ oneOf: [variantA, variantB], $defs: defs });
     expect([...parts.keys()]).toEqual(["a", "b"]);
-    expect(partX({ oneOf: [variantA, variantB], $defs: defs })).toEqual({ type: "string" });
-    expect(partX(withX({ $ref: "#/$defs/X", description: "doc" }))).toEqual({ type: "string" });
+    expect(await partX({ oneOf: [variantA, variantB], $defs: defs })).toEqual({ type: "string" });
+    expect(await partX(withX({ $ref: "#/$defs/X", description: "doc" }))).toEqual({
+      description: "doc",
+      type: "string",
+    });
+    expect(await partX(withX({ $ref: "#/$defs/X", minLength: 1 }))).toEqual({
+      minLength: 1,
+      type: "string",
+    });
+    expect(await partX(withX({ $ref: "#/$defs/X", type: "integer" }))).toEqual({
+      type: "integer",
+    });
   });
 
-  test("refuses non-unions, tagless variants, duplicate tags, and a $ref with constraint siblings", () => {
-    expect(() => splitTaggedUnionSchema({ type: "object" })).toThrow("oneOf");
-    expect(() => splitTaggedUnionSchema({ oneOf: [{ type: "object", properties: {} }] })).toThrow(
-      "type",
+  test("refuses non-unions, tagless variants, duplicate tags, and an unresolvable $ref; an external $ref stays for prepare to refuse", async () => {
+    await expect(splitTaggedUnionSchema({ type: "object" })).rejects.toThrow("oneOf");
+    await expect(
+      splitTaggedUnionSchema({ oneOf: [{ type: "object", properties: {} }] }),
+    ).rejects.toThrow("type");
+    await expect(splitTaggedUnionSchema({ oneOf: [variantB, variantB] })).rejects.toThrow(
+      "duplicate",
     );
-    expect(() => splitTaggedUnionSchema({ oneOf: [variantB, variantB] })).toThrow("duplicate");
-    expect(() => splitTaggedUnionSchema(withX({ $ref: "#/$defs/X", minLength: 1 }))).toThrow(
-      "siblings",
+    await expect(splitTaggedUnionSchema(withX({ $ref: "#/$defs/Missing" }))).rejects.toThrow(
+      "Missing",
     );
-    expect(() => splitTaggedUnionSchema(withX({ $ref: "#/$defs/Missing" }))).toThrow(
-      "unresolvable",
-    );
+    const external = await partX(withX({ $ref: "other.json#/X" }));
+    expect(external).toEqual({ $ref: "other.json#/X" });
+    expect(() => prepare(external, "$")).toThrow("G4");
   });
 });

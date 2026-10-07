@@ -5,12 +5,13 @@
 // fields required, no defaults), and beside each reader base the ENFORCED validator, which is that base plus
 // exactly the asymmetries declared in src/packages/shared/src/envelope-asymmetries.ts. The extension runs the
 // enforced validators; the bases exist so the asymmetry gate (scripts/check-envelope.ts) can prove each entry.
-// Every validator is zod's own reading of its JSON Schema (z.fromJSONSchema) and every exported type is
-// json-schema-to-typescript's reading of the same schema; scripts/gen-schema.ts holds both readings to the
-// schema rules R1-R4 before the file is written.
+// Every validator is the Zod source json-schema-to-zod writes from its JSON Schema and every exported type is
+// json-schema-to-typescript's reading of the same schema; scripts/gen-schema.ts holds the emitted validator to
+// the schema rules R1-R4 before the file is written.
 //
-//   `moon run gen`   -> cargo example emit_envelope_schema (gen-only `envelope-schema` feature) -> prepare ->
-//                       applyAsymmetries (readers only) -> gen-schema (rules, type, z.fromJSONSchema) -> write
+//   `moon run gen`   -> cargo example emit_envelope_schema (gen-only `envelope-schema` feature) -> dereference
+//                       -> prepare -> applyAsymmetries (readers only) -> gen-schema (rules, type, Zod source)
+//                       -> write
 //   check-gen in CI  -> regenerates and fails on a stale diff
 //
 // Fail-closed rules over the Rust input; a violation aborts, because shipping a weaker parser than the Rust
@@ -22,7 +23,8 @@
 //       values the frame never carried (required-ness is unchanged: schemars already leaves defaulted fields optional)
 //   G3  oneOf only as a discriminated union (the same required const tag in every branch, values distinct), then
 //       rewritten to anyOf: the mutual exclusivity needs no exclusive-union check at runtime
-//   G4  every $ref inlined before emission; nothing downstream resolves one
+//   G4  every internal $ref dereferenced (json-schema-ref-parser) before emission, an external one left in
+//       place for prepare to refuse; nothing downstream resolves one
 //   G5  every keyword and type on the supported list below, in a position the library enforces (the keyword
 //       census in scripts/tests/gen-schema.test.ts says which it reads); an unlisted keyword aborts until
 //       support lands in that census AND in the adversarial tests. The empty schema {} is the contract's own
@@ -50,6 +52,7 @@
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import $RefParser from "@apidevtools/json-schema-ref-parser";
 import { z } from "zod";
 import {
   ASYMMETRIES,
@@ -81,45 +84,17 @@ export const ANNOTATION_KEYS = new Set([
   "examples",
 ]);
 
-// The subset of those that are also harmless BESIDE a $ref: $id and $schema are excluded because they alter
-// $ref resolution (base URI / dialect).
-const REF_SIBLING_ANNOTATION_KEYS = new Set(["$comment", "title", "description", "examples"]);
-
-// Inline every internal $ref against the root's $defs (G4).
-function deref(node: unknown, defs: JsonObject): unknown {
-  if (Array.isArray(node)) return node.map((item) => deref(item, defs));
-  if (!isObject(node)) return node;
-  const ref = node.$ref;
-  if (typeof ref === "string") {
-    const name = ref.match(/^#\/\$defs\/(.+)$/)?.[1];
-    if (name === undefined || !(name in defs)) {
-      throw new Error(`gen-envelope: unresolvable $ref ${ref} (G4)`);
-    }
-    // A $ref node's constraint siblings would be lost by a plain inline of the target; neither derivation
-    // emits that form, so refuse it rather than silently merging. Pure-annotation siblings constrain nothing.
-    for (const key of Object.keys(node)) {
-      if (key !== "$ref" && !REF_SIBLING_ANNOTATION_KEYS.has(key)) {
-        throw new Error(
-          `gen-envelope: $ref with constraint siblings is not supported: ${ref} (G4)`,
-        );
-      }
-    }
-    return deref(defs[name], defs);
-  }
-  const out: JsonObject = {};
-  for (const [key, value] of Object.entries(node)) {
-    out[key] = deref(value, defs);
-  }
-  return out;
-}
-
-/** Split an internally-tagged (serde `tag = "type"`) enum schema into one subschema per tag, with $defs
- * indirection inlined first. Refuses anything that is not exactly the shape schemars emits for such an enum: a
- * top-level oneOf whose every branch is an object schema carrying a unique string `type` const. */
-export function splitTaggedUnionSchema(schema: unknown): Map<string, unknown> {
+/** Split an internally-tagged (serde `tag = "type"`) enum schema into one subschema per tag, every internal
+ * $ref dereferenced first (G4). Refuses anything that is not exactly the shape schemars emits for such an
+ * enum: a top-level oneOf whose every branch is an object schema carrying a unique string `type` const. */
+export async function splitTaggedUnionSchema(schema: unknown): Promise<Map<string, unknown>> {
   if (!isObject(schema)) throw new Error("gen-envelope: split expected a schema object");
-  const defs = isObject(schema.$defs) ? schema.$defs : {};
-  const inlined = deref({ ...schema, $defs: undefined }, defs) as JsonObject;
+  // dereference rewrites its argument in place; the Rust output is read once per group, so a copy keeps the
+  // caller's object as it was.
+  const inlined = (await $RefParser.dereference(structuredClone(schema) as never, {
+    resolve: { external: false },
+  })) as JsonObject;
+  delete inlined.$defs;
   const variants = inlined.oneOf;
   if (!Array.isArray(variants)) throw new Error("gen-envelope: split expected a top-level oneOf");
   const out = new Map<string, unknown>();
@@ -880,13 +855,13 @@ async function main(): Promise<void> {
   };
 
   const variants = {
-    enclave: splitTaggedUnionSchema(fromRust.enclave),
-    admin: splitTaggedUnionSchema(fromRust.admin),
-    policy: splitTaggedUnionSchema(fromRust.policy),
-    webauthn: splitTaggedUnionSchema(fromRust.webauthn),
+    enclave: await splitTaggedUnionSchema(fromRust.enclave),
+    admin: await splitTaggedUnionSchema(fromRust.admin),
+    policy: await splitTaggedUnionSchema(fromRust.policy),
+    webauthn: await splitTaggedUnionSchema(fromRust.webauthn),
   };
   for (const group of GROUPS) assertFramePlan(group, variants[group]);
-  const signals = splitTaggedUnionSchema(fromRust.signal);
+  const signals = await splitTaggedUnionSchema(fromRust.signal);
   assertSignalPlan(signals);
 
   function preparedFrame(group: Group, tag: string): unknown {
@@ -1133,11 +1108,11 @@ async function main(): Promise<void> {
 // (*WireSchema: strict objects, required fields required, no defaults; rules G1-G7 in scripts/gen-envelope.ts)
 // and the ENFORCED validator the extension runs, which is the base plus exactly the asymmetry table
 // (direction and reason per entry in envelope-asymmetries.ts; proved per entry by scripts/check-envelope.ts,
-// \`moon run check-envelope\`). Each validator is zod's reading of the JSON Schema beside it and each type is
-// json-schema-to-typescript's reading of the same schema. The request's \`args\` and policy_current's
-// \`overlay\` carry the schemas ops.gen.ts and policy.gen.ts export, inlined and held equal at generation. The
-// extension->host writer schemas exist for their types only (constructor-site \`satisfies\`); the enforcing
-// reader for those frames is the Rust serde parser.
+// \`moon run check-envelope\`). Each validator is the Zod source json-schema-to-zod wrote from the Rust JSON
+// Schema and each type is json-schema-to-typescript's reading of the same schema. The request's \`args\` and
+// policy_current's \`overlay\` carry the schemas ops.gen.ts and policy.gen.ts export, inlined and held equal at
+// generation. The extension->host writer schemas exist for their types only (constructor-site \`satisfies\`);
+// the enforcing reader for those frames is the Rust serde parser.
 
 import { z } from "zod";
 

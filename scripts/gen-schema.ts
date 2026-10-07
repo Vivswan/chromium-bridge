@@ -1,7 +1,7 @@
 // One JSON-Schema-to-Zod emission for both generators (scripts/gen-ops.ts and scripts/gen-envelope.ts): the
-// validator is the library's reading of a prepared JSON Schema (z.fromJSONSchema), the exported type is
+// validator is the Zod source json-schema-to-zod writes from a prepared JSON Schema, the exported type is
 // json-schema-to-typescript's reading of the same schema, and the rules the repository holds its validators
-// to are checks over the library's reading, run before anything is written:
+// to are checks over the emitted validator's own reading, run before anything is written:
 //
 //   R1  every object node is closed: additionalProperties false, or the loose form only on a reader under the
 //       loose-frames rule (src/packages/shared/src/envelope-asymmetries.ts) - a Rust type losing
@@ -10,14 +10,18 @@
 //       the frame never carried
 //   R3  every integer is a JS-safe integer (the safe-integers rule of the asymmetry table): above 2^53 - 1 two
 //       consecutive host u64 values could read equal here
-//   R4  the object branches of a union (nested unions flattened, oneOf included) are discriminated: one key
-//       required in every branch, a distinct const each, whatever non-object arms ride beside them. A plain
-//       union of overlapping objects would admit a frame no branch's producer emits
+//   R4  the object branches of a union (nested unions flattened) are discriminated: one key required in every
+//       branch, a distinct const each, whatever non-object arms ride beside them. A plain union of overlapping
+//       objects would admit a frame no branch's producer emits
 //
-// Which keywords the library reads at all is pinned once, in scripts/tests/gen-schema.test.ts, against the
+// A oneOf never reaches the emitter: prepare has rewritten every discriminated oneOf to anyOf (G3), and the
+// emitter's exclusive form is a refinement the reading cannot see, so one that slipped through fails here.
+//
+// Which keywords the emitter reads at all is pinned once, in scripts/tests/gen-schema.test.ts, against the
 // keyword lists the generators admit (prepare's allowlist and the asymmetry table's changes).
 
 import { compile, type JSONSchema as TypeSchema } from "json-schema-to-typescript";
+import { jsonSchemaToZod, type JsonSchema as ZodInput } from "json-schema-to-zod";
 import { z } from "zod";
 
 export type JsonObject = Record<string, unknown>;
@@ -30,18 +34,34 @@ export function show(v: unknown): string {
   return JSON.stringify(v) ?? String(v);
 }
 
-/** The library's reading of a JSON Schema, serialized as the INPUT side of a JSON Schema again (the output
- * side of a stripping object also says additionalProperties: false, so only the input side tells strict from
- * strip). */
-export function libraryReading(schema: unknown): JsonObject {
-  const reading = z.toJSONSchema(
-    z.fromJSONSchema(schema as Parameters<typeof z.fromJSONSchema>[0]),
-    {
-      io: "input",
-    },
-  ) as JsonObject;
+/** The Zod source json-schema-to-zod writes for a schema: the validator the generated module ships. */
+export function zodSource(schema: unknown): string {
+  for (const [path, node] of schemaNodes(schema)) {
+    if ("oneOf" in node) {
+      throw new Error(
+        `gen-schema: ${path} carries a oneOf the emitter would turn into an opaque refinement; prepare rewrites it to anyOf (G3)`,
+      );
+    }
+  }
+  return jsonSchemaToZod(schema as ZodInput, { module: "none", zodVersion: 4 });
+}
+
+/** The shipped validator, built from that same source, so the rules and the equality judge what the module
+ * will run and not the schema it was written from. */
+export function emittedValidator(schema: unknown): z.ZodType {
+  return new Function("z", `return ${zodSource(schema)};`)(z) as z.ZodType;
+}
+
+/** A validator's reading, serialized as the INPUT side of a JSON Schema (the output side of a stripping
+ * object also says additionalProperties: false, so only the input side tells strict from strip). */
+function inputReading(validator: z.ZodType): JsonObject {
+  const reading = z.toJSONSchema(validator, { io: "input" }) as JsonObject;
   delete reading.$schema;
   return reading;
+}
+
+export function emittedReading(schema: unknown): JsonObject {
+  return inputReading(emittedValidator(schema));
 }
 
 /** Every schema node of a tree (the root, property values, items, union branches), depth first. */
@@ -101,19 +121,14 @@ export function assertReadingRules(name: string, reading: JsonObject, loose: boo
   }
 }
 
-/** The leaf branches of a union node, nested unions flattened and oneOf read like anyOf (zod reads oneOf as an
- * exclusive union, which equals the plain union exactly when the object branches are discriminated, so R4 is
- * what makes the two readings agree). A non-union node has no branches. */
+/** The leaf branches of a union node, nested unions flattened. A non-union node has no branches. */
 function unionBranches(node: JsonObject): JsonObject[] {
   const out: JsonObject[] = [];
-  for (const combinator of ["anyOf", "oneOf"] as const) {
-    const branches = node[combinator];
-    if (!Array.isArray(branches)) continue;
-    for (const branch of branches) {
-      if (!isObject(branch)) continue;
-      const nested = unionBranches(branch);
-      out.push(...(nested.length > 0 ? nested : [branch]));
-    }
+  if (!Array.isArray(node.anyOf)) return out;
+  for (const branch of node.anyOf) {
+    if (!isObject(branch)) continue;
+    const nested = unionBranches(branch);
+    out.push(...(nested.length > 0 ? nested : [branch]));
   }
   return out;
 }
@@ -139,18 +154,15 @@ export function assertDiscriminated(branches: JsonObject[], fail: (why: string) 
   return fail("is a union of objects with no discriminating required const");
 }
 
-/** The gate for one emitted validator: the rules over the library's reading of its schema. */
 export function assertSchemaRules(name: string, schema: unknown, loose: boolean): void {
-  assertReadingRules(name, libraryReading(schema), loose);
+  assertReadingRules(name, emittedReading(schema), loose);
 }
 
-/** Whether a schema inlined into one generated module reads the same to the library as the schema another
+/** Whether a schema inlined into one generated module reads the same, emitted, as the validator another
  * generated module exports: the equality A2 (scripts/gen-envelope.ts) holds the two to, so the request's args
  * and the policy overlay accept exactly what OpArgsSchema and PolicyOverlaySchema accept. */
 export function readsEqual(schema: unknown, exported: z.ZodType): boolean {
-  const theirs = z.toJSONSchema(exported, { io: "input" }) as JsonObject;
-  delete theirs.$schema;
-  return Bun.deepEquals(libraryReading(schema), theirs, true);
+  return Bun.deepEquals(emittedReading(schema), inputReading(exported), true);
 }
 
 // ---- the schemas both generators build -----------------------------------------------
@@ -250,16 +262,14 @@ export function policyOverlaySchema(policy: PolicyShape): JsonObject {
 
 // ---- emission -------------------------------------------------------------------------
 
-/** The expression of one validator: the library's reading of `schema`, typed as the exported `type`. */
 export function schemaExpression(type: string, schema: unknown): string {
-  return `z.fromJSONSchema(${show(schema)}) as z.ZodType<${type}>`;
+  return `${zodSource(schema)} as z.ZodType<${type}>`;
 }
 
-/** The source of one exported validator; without a `type` it is exported as the library types it (a faithful
- * base, which only the gate reads). */
+/** The source of one exported validator; without a `type` it is exported as zod types it (a faithful base,
+ * which only the gate reads). */
 export function schemaSource(name: string, type: string | undefined, schema: unknown): string {
-  const expression =
-    type === undefined ? `z.fromJSONSchema(${show(schema)})` : schemaExpression(type, schema);
+  const expression = type === undefined ? zodSource(schema) : schemaExpression(type, schema);
   return `export const ${name} = ${expression};`;
 }
 

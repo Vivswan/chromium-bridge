@@ -517,8 +517,8 @@ panic 消息默认输出到 stdout, 会破坏 NM 帧与 MCP NDJSON。缓解: rel
 
 | 层 | 归属 | 内容 |
 |-------|-------|---------------|
-| 忠实基线, 每个信封与每个主机->扩展帧一份 | `scripts/gen-envelope.ts` (规则 G1-G7、A1-A3; 生成宁可中止也不输出任何比 Rust 解析器更弱的东西) | 严格对象, 必填字段必填, 不杜撰默认值 |
-| 强制校验器, 扩展实际运行的那个 | `src/packages/shared/src/envelope-asymmetries.ts` | 基线加上恰好表中的那些条目, 每条带方向与理由; 由一个带类型的裁决构建的帧 (`policy_current`、`enroll_result`、`presence_result`) 在此声明其 ok 分裂, 并被生成为可区分联合类型, 因此混合其分支的帧会被读取方拒绝 |
+| 忠实基线, 每个信封与每个主机->扩展帧一份 | `scripts/gen-envelope.ts` (对 Rust 输入的规则 G1-G7、A1-A3; 生成宁可中止也不输出任何比 Rust 解析器更弱的东西) 与 `scripts/gen-schema.ts` (每个校验器都是 json-schema-to-zod 从其 schema 写出的 Zod 源码, 每个类型都是 json-schema-to-typescript 对同一 schema 的读取, 输出的校验器在写入文件前须满足规则 R1-R4) | 严格对象, 必填字段必填, 不杜撰默认值 |
+| 强制校验器, 扩展实际运行的那个 | `src/packages/shared/src/envelope-asymmetries.ts` | 基线加上恰好表中的那些条目, 每条带方向与理由; 由一个带类型的裁决构建的帧 (`policy_current`、`enroll_result`、`presence_result`) 在此声明其 ok 分裂, 并被生成为其各分支的联合类型, 因此混合其分支的帧会被读取方拒绝; 请求的 `args` 与 `policy_current` 的 `overlay` 内联 `ops.gen.ts` 与 `policy.gen.ts` 导出的 schema, 并在生成时与之保持相等 |
 | 扩展->主机帧的写入方 schema | `scripts/gen-envelope.ts` | 供构造点 `satisfies` 的类型; 执行约束的读取方是 Rust serde 解析器 |
 | 门禁 (`moon run check-envelope`) | `scripts/check-envelope.ts` | 对两个校验器证明每个条目的探针, 让入站分类器遵守读取方计划, 拒绝任何读取方上手写的细化 |
 | 生成基线的行为测试 | `src/packages/shared/tests/envelope.gen.test.ts` | 未知字段、缺失必填字段、类型混淆、嵌套多余字段 |

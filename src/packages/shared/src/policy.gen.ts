@@ -163,48 +163,25 @@ export interface PolicyValues {
   disabledTools: string[];
 }
 
-export const PolicyValuesSchema = z.fromJSONSchema({
-  "type": "object",
-  "additionalProperties": false,
-  "properties": {
-    "cdpMode": { "type": "boolean" },
-    "fileUploadEnabled": { "type": "boolean" },
-    "handleDialogEnabled": { "type": "boolean" },
-    "pageEvalEnabled": { "type": "boolean" },
-    "confirmHighRiskClick": { "type": "boolean" },
-    "confirmPageEval": { "type": "boolean" },
-    "presenceConfirm": { "type": "boolean" },
-    "confirmTabClose": { "type": "boolean" },
-    "warnPreciseSnapshot": { "type": "boolean" },
-    "evalMask": { "type": "boolean" },
-    "hostReverifyMs": { "type": "integer", "minimum": 0 },
-    "confirmGraceMs": { "type": "integer", "minimum": 0 },
-    "clickToastTimeoutMs": { "type": "integer", "minimum": 0 },
-    "evalToastTimeoutMs": { "type": "integer", "minimum": 0 },
-    "disabledTools": {
-      "type": "array",
-      "items": { "type": "string", "minLength": 1, "maxLength": 128 },
-      "maxItems": 256,
-    },
-  },
-  "required": [
-    "cdpMode",
-    "fileUploadEnabled",
-    "handleDialogEnabled",
-    "pageEvalEnabled",
-    "confirmHighRiskClick",
-    "confirmPageEval",
-    "presenceConfirm",
-    "confirmTabClose",
-    "warnPreciseSnapshot",
-    "evalMask",
-    "hostReverifyMs",
-    "confirmGraceMs",
-    "clickToastTimeoutMs",
-    "evalToastTimeoutMs",
-    "disabledTools",
-  ],
-}) as z.ZodType<PolicyValues>;
+export const PolicyValuesSchema = z
+  .object({
+    "cdpMode": z.boolean(),
+    "fileUploadEnabled": z.boolean(),
+    "handleDialogEnabled": z.boolean(),
+    "pageEvalEnabled": z.boolean(),
+    "confirmHighRiskClick": z.boolean(),
+    "confirmPageEval": z.boolean(),
+    "presenceConfirm": z.boolean(),
+    "confirmTabClose": z.boolean(),
+    "warnPreciseSnapshot": z.boolean(),
+    "evalMask": z.boolean(),
+    "hostReverifyMs": z.number().int().gte(0),
+    "confirmGraceMs": z.number().int().gte(0),
+    "clickToastTimeoutMs": z.number().int().gte(0),
+    "evalToastTimeoutMs": z.number().int().gte(0),
+    "disabledTools": z.array(z.string().min(1).max(128)).max(256),
+  })
+  .strict() as z.ZodType<PolicyValues>;
 
 // The signed policy document (Rust PolicyDoc), strict-parsed only AFTER the signature verifies. `touched` sits
 // inside the signed bytes so a fresh signature warrants relaxation on exactly those fields, never the document at
@@ -249,76 +226,46 @@ export interface PolicyDoc {
   disabledTools: string[];
 }
 
-export const PolicyDocSchema = z.fromJSONSchema({
-  "type": "object",
-  "additionalProperties": false,
-  "properties": {
-    "v": { "type": "integer", "const": 1 },
-    "revision": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
-    "touched": {
-      "type": "array",
-      "items": {
-        "type": "string",
-        "enum": [
-          "cdpMode",
-          "fileUploadEnabled",
-          "handleDialogEnabled",
-          "pageEvalEnabled",
-          "confirmHighRiskClick",
-          "confirmPageEval",
-          "presenceConfirm",
-          "confirmTabClose",
-          "warnPreciseSnapshot",
-          "evalMask",
-          "hostReverifyMs",
-          "confirmGraceMs",
-          "clickToastTimeoutMs",
-          "evalToastTimeoutMs",
-          "disabledTools",
-        ],
-      },
-    },
-    "cdpMode": { "type": "boolean" },
-    "fileUploadEnabled": { "type": "boolean" },
-    "handleDialogEnabled": { "type": "boolean" },
-    "pageEvalEnabled": { "type": "boolean" },
-    "confirmHighRiskClick": { "type": "boolean" },
-    "confirmPageEval": { "type": "boolean" },
-    "presenceConfirm": { "type": "boolean" },
-    "confirmTabClose": { "type": "boolean" },
-    "warnPreciseSnapshot": { "type": "boolean" },
-    "evalMask": { "type": "boolean" },
-    "hostReverifyMs": { "type": "integer", "minimum": 0 },
-    "confirmGraceMs": { "type": "integer", "minimum": 0 },
-    "clickToastTimeoutMs": { "type": "integer", "minimum": 0 },
-    "evalToastTimeoutMs": { "type": "integer", "minimum": 0 },
-    "disabledTools": {
-      "type": "array",
-      "items": { "type": "string", "minLength": 1, "maxLength": 128 },
-      "maxItems": 256,
-    },
-  },
-  "required": [
-    "v",
-    "revision",
-    "touched",
-    "cdpMode",
-    "fileUploadEnabled",
-    "handleDialogEnabled",
-    "pageEvalEnabled",
-    "confirmHighRiskClick",
-    "confirmPageEval",
-    "presenceConfirm",
-    "confirmTabClose",
-    "warnPreciseSnapshot",
-    "evalMask",
-    "hostReverifyMs",
-    "confirmGraceMs",
-    "clickToastTimeoutMs",
-    "evalToastTimeoutMs",
-    "disabledTools",
-  ],
-}) as z.ZodType<PolicyDoc>;
+export const PolicyDocSchema = z
+  .object({
+    "v": z.literal(1),
+    "revision": z.number().int().gte(0).lte(9007199254740991),
+    "touched": z.array(
+      z.enum([
+        "cdpMode",
+        "fileUploadEnabled",
+        "handleDialogEnabled",
+        "pageEvalEnabled",
+        "confirmHighRiskClick",
+        "confirmPageEval",
+        "presenceConfirm",
+        "confirmTabClose",
+        "warnPreciseSnapshot",
+        "evalMask",
+        "hostReverifyMs",
+        "confirmGraceMs",
+        "clickToastTimeoutMs",
+        "evalToastTimeoutMs",
+        "disabledTools",
+      ]),
+    ),
+    "cdpMode": z.boolean(),
+    "fileUploadEnabled": z.boolean(),
+    "handleDialogEnabled": z.boolean(),
+    "pageEvalEnabled": z.boolean(),
+    "confirmHighRiskClick": z.boolean(),
+    "confirmPageEval": z.boolean(),
+    "presenceConfirm": z.boolean(),
+    "confirmTabClose": z.boolean(),
+    "warnPreciseSnapshot": z.boolean(),
+    "evalMask": z.boolean(),
+    "hostReverifyMs": z.number().int().gte(0),
+    "confirmGraceMs": z.number().int().gte(0),
+    "clickToastTimeoutMs": z.number().int().gte(0),
+    "evalToastTimeoutMs": z.number().int().gte(0),
+    "disabledTools": z.array(z.string().min(1).max(128)).max(256),
+  })
+  .strict() as z.ZodType<PolicyDoc>;
 
 // The unsigned restriction overlay (Rust PolicyOverlay), every field optional under the document's bounds. Strict,
 // unlike the loose control-frame wrappers: an overlay field the catalogue does not own fails the whole frame parse.
@@ -344,32 +291,25 @@ export interface PolicyOverlay {
   disabledTools?: string[];
 }
 
-export const PolicyOverlaySchema = z.fromJSONSchema({
-  "type": "object",
-  "additionalProperties": false,
-  "properties": {
-    "cdpMode": { "type": "boolean" },
-    "fileUploadEnabled": { "type": "boolean" },
-    "handleDialogEnabled": { "type": "boolean" },
-    "pageEvalEnabled": { "type": "boolean" },
-    "confirmHighRiskClick": { "type": "boolean" },
-    "confirmPageEval": { "type": "boolean" },
-    "presenceConfirm": { "type": "boolean" },
-    "confirmTabClose": { "type": "boolean" },
-    "warnPreciseSnapshot": { "type": "boolean" },
-    "evalMask": { "type": "boolean" },
-    "hostReverifyMs": { "type": "integer", "minimum": 0 },
-    "confirmGraceMs": { "type": "integer", "minimum": 0 },
-    "clickToastTimeoutMs": { "type": "integer", "minimum": 0 },
-    "evalToastTimeoutMs": { "type": "integer", "minimum": 0 },
-    "disabledTools": {
-      "type": "array",
-      "items": { "type": "string", "minLength": 1, "maxLength": 128 },
-      "maxItems": 256,
-    },
-  },
-  "required": [],
-}) as z.ZodType<PolicyOverlay>;
+export const PolicyOverlaySchema = z
+  .object({
+    "cdpMode": z.boolean().optional(),
+    "fileUploadEnabled": z.boolean().optional(),
+    "handleDialogEnabled": z.boolean().optional(),
+    "pageEvalEnabled": z.boolean().optional(),
+    "confirmHighRiskClick": z.boolean().optional(),
+    "confirmPageEval": z.boolean().optional(),
+    "presenceConfirm": z.boolean().optional(),
+    "confirmTabClose": z.boolean().optional(),
+    "warnPreciseSnapshot": z.boolean().optional(),
+    "evalMask": z.boolean().optional(),
+    "hostReverifyMs": z.number().int().gte(0).optional(),
+    "confirmGraceMs": z.number().int().gte(0).optional(),
+    "clickToastTimeoutMs": z.number().int().gte(0).optional(),
+    "evalToastTimeoutMs": z.number().int().gte(0).optional(),
+    "disabledTools": z.array(z.string().min(1).max(128)).max(256).optional(),
+  })
+  .strict() as z.ZodType<PolicyOverlay>;
 
 // Deep-frozen: the pre-cutover posture hands this instance out as the effective policy, so a caller mutating its
 // "copy" must throw instead of rewriting the defaults for everyone after it.
