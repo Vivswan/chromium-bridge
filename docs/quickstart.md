@@ -53,7 +53,55 @@ The full command reference (pairing, trusted clients, revocation, the kill switc
 
 ## What you should see
 
-- `chromium-bridge doctor` reports your browser's registration as `ok` and, once your MCP client has a session open, the server as reachable.
+`chromium-bridge doctor` with Chrome registered and the MCP server running (your MCP client starts it), captured on a fresh macOS home:
+
+```text
+$ chromium-bridge doctor
+chromium-bridge doctor - v0.1.0
+platform:        macos/aarch64
+lock file:       /tmp/quickstart-home/Library/Application Support/chromium-bridge/run.lock
+  present: yes
+  endpoint: /tmp/quickstart-home/Library/Application Support/chromium-bridge/run.sock
+  pid:     77652
+  secret:  <redacted, 32 chars>
+mcp server:      reachable (socket connect OK)
+kill switch:     off (bridge activity permitted)
+policy baseline: none yet (pre-cutover; the extension keeps enforcing its deny baseline until `chromium-bridge policy set` signs a baseline)
+native manifests: (host id com.vivswan.chromium_bridge.host)
+  chrome    detected      user    manifest ok         /tmp/quickstart-home/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json
+                          system  manifest missing    /Library/Google/Chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json
+                          user    pointer  ok         /tmp/quickstart-home/Library/Application Support/Google/Chrome/External Extensions/mkjjlmjbcljpcfkfadfmhblmmddkdihf.json
+                          system  pointer  missing    /Library/Application Support/Google/Chrome/External Extensions/mkjjlmjbcljpcfkfadfmhblmmddkdihf.json
+  chromium  not detected  user    manifest missing    /tmp/quickstart-home/Library/Application Support/Chromium/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json
+                          system  manifest missing    /Library/Application Support/Chromium/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json
+                          user    pointer  missing    /tmp/quickstart-home/Library/Application Support/Chromium/External Extensions/mkjjlmjbcljpcfkfadfmhblmmddkdihf.json
+                          system  pointer  missing    /Library/Application Support/Google/Chrome/External Extensions/mkjjlmjbcljpcfkfadfmhblmmddkdihf.json
+  brave     not detected  user    manifest ok         /tmp/quickstart-home/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json (reads chrome's)
+                          system  manifest missing    /Library/Google/Chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json (reads chrome's)
+                          user    pointer  missing    /tmp/quickstart-home/Library/Application Support/BraveSoftware/Brave-Browser/External Extensions/mkjjlmjbcljpcfkfadfmhblmmddkdihf.json
+                          system  pointer  missing    /Library/Application Support/Google/Chrome/External Extensions/mkjjlmjbcljpcfkfadfmhblmmddkdihf.json
+  edge      not detected  user    manifest missing    /tmp/quickstart-home/Library/Application Support/Microsoft Edge/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json
+                          system  manifest missing    /Library/Microsoft/Edge/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json
+                          user    pointer  missing    /tmp/quickstart-home/Library/Application Support/Microsoft Edge/External Extensions/mkjjlmjbcljpcfkfadfmhblmmddkdihf.json
+                          system  pointer  missing    /Library/Application Support/Google/Chrome/External Extensions/mkjjlmjbcljpcfkfadfmhblmmddkdihf.json
+  vivaldi   not detected  user    manifest missing    /tmp/quickstart-home/Library/Application Support/Vivaldi/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json
+                          system  manifest missing    /Library/Application Support/Vivaldi/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json
+                          user    pointer  missing    /tmp/quickstart-home/Library/Application Support/Vivaldi/External Extensions/mkjjlmjbcljpcfkfadfmhblmmddkdihf.json
+                          system  pointer  missing    /Library/Application Support/Google/Chrome/External Extensions/mkjjlmjbcljpcfkfadfmhblmmddkdihf.json
+  opera     not detected  user    manifest missing    /tmp/quickstart-home/Library/Application Support/com.operasoftware.Opera/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json
+                          system  manifest missing    /Library/Google/Chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json (reads chrome's)
+                          user    pointer  missing    /tmp/quickstart-home/Library/Application Support/com.operasoftware.Opera/External Extensions/mkjjlmjbcljpcfkfadfmhblmmddkdihf.json
+                          system  pointer  missing    /Library/Application Support/Google/Chrome/External Extensions/mkjjlmjbcljpcfkfadfmhblmmddkdihf.json
+
+note: the checks above cover the MCP server + native-host bridge only.
+They do NOT confirm the Chrome extension is loaded and connected. Verify
+that via the Chromium Bridge toolbar icon (approve the target site) and
+the extension's Service Worker console at chrome://extensions.
+
+OK
+```
+
+- The capture ran in a scratch home at `/tmp/quickstart-home`. On your machine the paths that start with it sit under your own home directory by default, and Linux and Windows print their own locations.
 - The extension's toolbar icon shows the connection state.
 - The first tool call against a new site raises an approval prompt in the browser; high-risk actions raise a confirmation window.
 
