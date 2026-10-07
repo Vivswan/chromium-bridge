@@ -12,7 +12,8 @@
 
 use super::{
     field_differs, fold, restricts_or_equal, FieldKind, PolicyDoc, PolicyField, PolicyHistory,
-    PolicyOverlay, PolicyStore, PolicyValues, PolicyWriteError, StoreObservation,
+    PolicyHistoryEntry, PolicyOverlay, PolicyStore, PolicyValues, PolicyWriteError,
+    StoreObservation,
 };
 use serde::{Deserialize, Serialize};
 
@@ -30,28 +31,45 @@ pub struct Grant {
 }
 
 impl Grant {
-    /// The touched fields with their new values, in catalogue order, in the spellings the CLI's flags take, as
-    /// a presence prompt shows them: `cdpMode=on,confirmGraceMs=30000,disabledTools=[page_eval,page_upload]`.
+    /// The touched fields with their new values, as a presence prompt shows them ([`summarize`]).
     pub fn summary(&self) -> String {
-        self.touched
-            .iter()
-            .map(|field| {
-                let value = match field.kind() {
-                    FieldKind::Bool(f) => {
-                        if self.values.get_bool(f) {
-                            "on".to_string()
-                        } else {
-                            "off".to_string()
-                        }
-                    }
-                    FieldKind::Ms(f) => self.values.get_ms(f).to_string(),
-                    FieldKind::ToolSet(f) => format!("[{}]", self.values.get_tools(f).join(",")),
-                };
-                format!("{}={value}", field.wire_name())
-            })
-            .collect::<Vec<_>>()
-            .join(",")
+        summarize(&self.values, &self.touched)
     }
+}
+
+/// `fields` with their values, in the order given, in the spellings the CLI's flags take:
+/// `cdpMode=on,confirmGraceMs=30000,disabledTools=[page_eval,page_upload]`. The options page spells a
+/// history row the same way (policy-compare.ts summarizePolicyFields).
+pub fn summarize(values: &PolicyValues, fields: &[PolicyField]) -> String {
+    fields
+        .iter()
+        .map(|field| {
+            let value = match field.kind() {
+                FieldKind::Bool(f) => {
+                    if values.get_bool(f) {
+                        "on".to_string()
+                    } else {
+                        "off".to_string()
+                    }
+                }
+                FieldKind::Ms(f) => values.get_ms(f).to_string(),
+                FieldKind::ToolSet(f) => format!("[{}]", values.get_tools(f).join(",")),
+            };
+            format!("{}={value}", field.wire_name())
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// A ring entry's baseline revision and the effective policy it held (its baseline under its overlay), or
+/// `None` for a damaged entry: a baseline that does not decode, or an overlay whose tool list breaks the
+/// bounds every reader of the policy enforces (an entry is published whole or not at all).
+pub fn entry_state(entry: &PolicyHistoryEntry) -> Option<(u64, PolicyValues)> {
+    let doc = decode_entry_doc(&entry.baseline_b64).ok()?;
+    let overlay = entry.overlay.clone().unwrap_or_default();
+    let effective = fold(&doc.values(), &overlay);
+    super::validate_disabled_tools(&effective.disabled_tools).ok()?;
+    Some((doc.revision, effective))
 }
 
 /// What `policy set` writes for `overlay`: the touched set is the fields the overlay names, in catalogue order,
@@ -257,16 +275,12 @@ pub fn rollback_inputs(
 fn find_history_effective(history: &PolicyHistory, revision: u64) -> Result<PolicyValues, String> {
     let mut available = Vec::new();
     let mut matches: Vec<PolicyValues> = Vec::new();
-    for entry in &history.entries {
-        let Ok(doc) = decode_entry_doc(&entry.baseline_b64) else {
-            continue;
-        };
-        if !available.contains(&doc.revision) {
-            available.push(doc.revision);
+    for (held, effective) in history.entries.iter().filter_map(entry_state) {
+        if !available.contains(&held) {
+            available.push(held);
         }
-        if doc.revision == revision {
-            let overlay = entry.overlay.clone().unwrap_or_default();
-            matches.push(fold(&doc.values(), &overlay));
+        if held == revision {
+            matches.push(effective);
         }
     }
     match matches.first() {

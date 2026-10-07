@@ -323,6 +323,8 @@ policy:
   history_signed: "signed"
   history_unsigned: "unsigned"
   history_overlay: "with restrictions"
+  history_restores: "Restores: $1"
+  history_same: "Same as the policy enforced now"
   history_damaged: "Unreadable entry, superseded $1"
   rollback: "Roll back"
 

@@ -18,12 +18,14 @@ import {
   policyFieldKind,
 } from "../generated/policy";
 import {
+  differingPolicyFields,
   foldPolicyOverlay,
   policyFieldRelaxes,
   policyRelaxes,
   policyValuesEqual,
   policyValuesFrom,
   relaxedPolicyFields,
+  summarizePolicyFields,
 } from "../src/policy-compare";
 
 function values(overrides: Partial<PolicyValues> = {}): PolicyValues {
@@ -213,5 +215,56 @@ describe("policyValuesEqual", () => {
         values({ disabledTools: ["a", "b"] }),
       ),
     ).toBe(false);
+  });
+});
+
+// The options page spells a history row's policy as the CLI's `policy history` and the host's presence
+// statements spell it (plan.rs summarize, whose doc comment carries this exact line), so the two surfaces read
+// the same; and "what differs" is the host's own field_differs (a relaxation either way), so an order-only
+// change to disabledTools is no difference while a dropped entry is.
+describe("history row spelling", () => {
+  test("summarizePolicyFields spells fields as the CLI's flags and the presence statement do", () => {
+    const v = values({
+      cdpMode: true,
+      confirmGraceMs: 30000,
+      disabledTools: ["page_eval", "page_upload"],
+    });
+    expect(summarizePolicyFields(v, ["cdpMode", "confirmGraceMs", "disabledTools"])).toBe(
+      "cdpMode=on,confirmGraceMs=30000,disabledTools=[page_eval,page_upload]",
+    );
+    expect(summarizePolicyFields(v, ["pageEvalEnabled", "hostReverifyMs"])).toBe(
+      "pageEvalEnabled=off,hostReverifyMs=0",
+    );
+  });
+
+  const DIFFERING: {
+    name: string;
+    a: PolicyValues;
+    b: PolicyValues;
+    differing: PolicyFieldName[];
+  }[] = [
+    { name: "equal values", a: values(), b: values(), differing: [] },
+    {
+      name: "a reordered tool set",
+      a: values({ disabledTools: ["a", "b"] }),
+      b: values({ disabledTools: ["b", "a"] }),
+      differing: [],
+    },
+    {
+      name: "a dropped tool and a flipped bool",
+      a: values({ cdpMode: true, disabledTools: ["a"] }),
+      b: values({ disabledTools: ["a", "b"] }),
+      differing: ["cdpMode", "disabledTools"],
+    },
+    {
+      name: "a window moved either way",
+      a: values({ confirmGraceMs: 1 }),
+      b: values({ confirmGraceMs: 2 }),
+      differing: ["confirmGraceMs"],
+    },
+  ];
+  test.each(DIFFERING)("differingPolicyFields names $name", ({ a, b, differing }) => {
+    expect(differingPolicyFields(a, b)).toEqual(differing);
+    expect(differingPolicyFields(b, a)).toEqual(differing);
   });
 });

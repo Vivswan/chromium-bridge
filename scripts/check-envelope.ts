@@ -22,6 +22,7 @@
 
 import { z } from "zod";
 import * as generated from "../src/packages/shared/generated/envelope";
+import { POLICY_DEFAULTS } from "../src/packages/shared/generated/policy";
 import {
   ADMIN_RESULT_FRAME_TYPES,
   ENCLAVE_FRAME_TYPES,
@@ -164,7 +165,16 @@ const FRAMES: Readonly<Record<string, FrameArms>> = {
     {
       type: "policy_history_result",
       ok: true,
-      entries: [{ id: "a1", revision: 3, signed: true, overlay_active: false, superseded_unix: 1 }],
+      entries: [
+        {
+          id: "a1",
+          revision: 3,
+          signed: true,
+          overlay_active: false,
+          superseded_unix: 1,
+          effective: POLICY_DEFAULTS,
+        },
+      ],
     },
     { type: "policy_history_result", ok: false, error: "the policy history is unreadable" },
   ],

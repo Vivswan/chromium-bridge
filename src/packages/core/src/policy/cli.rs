@@ -14,7 +14,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::plan::{
-    decode_entry_doc, plan_grant, refused_grant, rollback_inputs, touched_fields, wire_names,
+    entry_state, plan_grant, refused_grant, rollback_inputs, summarize, touched_fields, wire_names,
 };
 use super::{
     confirm_unmoved, prepare_grant, restrict, restrict_planned, set_signed, FieldKind, Grant,
@@ -138,6 +138,9 @@ pub struct PolicyHistoryEntryReport {
     pub overlay_active: bool,
     /// Unix seconds when the record stopped being the current store.
     pub superseded_unix: u64,
+    /// The policy the record held (its baseline under its overlay), what a rollback to it re-derives; `null`
+    /// exactly when `revision` is.
+    pub effective: Option<PolicyValues>,
 }
 
 /// The failure object the WRITE subcommands print on stdout under `--json`, with the same frozen-wire posture as
@@ -204,12 +207,16 @@ fn history_report(history: &PolicyHistory) -> PolicyHistoryReport {
         entries: history
             .entries
             .iter()
-            .map(|e| PolicyHistoryEntryReport {
-                id: e.id(),
-                revision: decode_entry_doc(&e.baseline_b64).ok().map(|d| d.revision),
-                signed: e.sig_b64.is_some(),
-                overlay_active: e.overlay.is_some(),
-                superseded_unix: e.superseded_unix,
+            .map(|e| {
+                let state = entry_state(e);
+                PolicyHistoryEntryReport {
+                    id: e.id(),
+                    revision: state.as_ref().map(|(revision, _)| *revision),
+                    signed: e.sig_b64.is_some(),
+                    overlay_active: e.overlay.is_some(),
+                    superseded_unix: e.superseded_unix,
+                    effective: state.map(|(_, effective)| effective),
+                }
             })
             .collect(),
     }
@@ -299,8 +306,13 @@ fn render_history(r: &PolicyHistoryReport) -> String {
             .revision
             .map(|n| n.to_string())
             .unwrap_or_else(|| "?".to_string());
+        let effective = e
+            .effective
+            .as_ref()
+            .map(|values| summarize(values, PolicyField::ALL))
+            .unwrap_or_else(|| "?".to_string());
         out.push_str(&format!(
-            "  revision {revision:<6} {} {} superseded_unix={} entry={}\n",
+            "  revision {revision:<6} {} {} superseded_unix={} entry={} effective={effective}\n",
             if e.signed { "signed  " } else { "unsigned" },
             if e.overlay_active {
                 "overlay"

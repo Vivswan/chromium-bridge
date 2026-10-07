@@ -10,7 +10,12 @@ import {
   type PolicyOverlay,
   type PolicyValues,
 } from "@chromium-bridge/shared/generated/policy";
-import { foldPolicyOverlay, relaxedPolicyFields } from "@chromium-bridge/shared/policy-compare";
+import {
+  differingPolicyFields,
+  foldPolicyOverlay,
+  relaxedPolicyFields,
+  summarizePolicyFields,
+} from "@chromium-bridge/shared/policy-compare";
 import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
 import { useCallback, useEffect, useId, useState } from "react";
 import { browser } from "wxt/browser";
@@ -145,6 +150,7 @@ export function PolicyEditor() {
       />
       <HistoryBlock
         history={history}
+        effective={effective}
         pending={pending}
         onRefresh={() => void refreshHistory()}
         onRollback={(entry) => {
@@ -321,11 +327,14 @@ function ToolsRow({
 
 function HistoryBlock({
   history,
+  effective,
   pending,
   onRefresh,
   onRollback,
 }: {
   history: RuntimeResponse<"get_policy_history"> | null;
+  /** What this browser enforces now, which each row's policy is read against. */
+  effective: PolicyValues;
   pending: boolean;
   onRefresh: () => void;
   onRollback: (entry: RollbackEntry) => void;
@@ -354,7 +363,12 @@ function HistoryBlock({
       {history?.ok && history.entries.length > 0 && (
         <ul className="m-0 mt-1 list-none p-0">
           {historyEntries(history.entries).map((entry) => (
-            <HistoryRowItem key={entry.key} entry={entry} onRollback={onRollback} />
+            <HistoryRowItem
+              key={entry.key}
+              entry={entry}
+              effective={effective}
+              onRollback={onRollback}
+            />
           ))}
         </ul>
       )}
@@ -362,12 +376,19 @@ function HistoryBlock({
   );
 }
 
-/** One ring entry as the page renders it, decided once where the wire row enters: a readable revision with its
- * roll-back, or a damaged entry that offers none. The roll-back names the record's content identity, since a
- * revision alone can be ambiguous (policy/plan.rs find_history_effective says when). Two identical records (one
- * restriction repeated within a second) share an id and a state, so the row key adds the occurrence. */
+/** One ring entry as the page renders it, decided once where the wire row enters: a readable revision with the
+ * policy it held and its roll-back, or a damaged entry (the host omits both fields together) that offers none.
+ * The roll-back names the record's content identity, since a revision alone can be ambiguous
+ * (policy/plan.rs find_history_effective says when). Two identical records (one restriction repeated within a
+ * second) share an id and a state, so the row key adds the occurrence. */
 type HistoryEntry = { id: string; key: string; supersededAt: string } & (
-  | { kind: "revision"; revision: number; signed: boolean; overlayActive: boolean }
+  | {
+      kind: "revision";
+      revision: number;
+      effective: PolicyValues;
+      signed: boolean;
+      overlayActive: boolean;
+    }
   | { kind: "damaged" }
 );
 
@@ -384,23 +405,38 @@ function historyEntries(rows: PolicyHistoryRow[]): HistoryEntry[] {
       key: `${row.id}-${nth}`,
       supersededAt: new Date(row.superseded_unix * 1000).toLocaleString(),
     };
-    return row.revision === undefined
+    return row.revision === undefined || row.effective === undefined
       ? { ...shared, kind: "damaged" }
       : {
           ...shared,
           kind: "revision",
           revision: row.revision,
+          effective: row.effective,
           signed: row.signed,
           overlayActive: row.overlay_active,
         };
   });
 }
 
+/** What rolling back to a row would change, in the CLI's spelling, or that it would change nothing. */
+function restores(
+  t: ReturnType<typeof useI18n>["t"],
+  held: PolicyValues,
+  effective: PolicyValues,
+): string {
+  const changed = differingPolicyFields(held, effective);
+  return changed.length === 0
+    ? t("policy.history_same")
+    : t("policy.history_restores", [summarizePolicyFields(held, changed)]);
+}
+
 function HistoryRowItem({
   entry,
+  effective,
   onRollback,
 }: {
   entry: HistoryEntry;
+  effective: PolicyValues;
   onRollback: (entry: RollbackEntry) => void;
 }) {
   const { t } = useI18n();
@@ -422,6 +458,9 @@ function HistoryRowItem({
         <div className="font-mono text-[11px] text-text-3">
           {entry.signed ? t("policy.history_signed") : t("policy.history_unsigned")}
           {entry.overlayActive && `, ${t("policy.history_overlay")}`}
+        </div>
+        <div className="font-mono text-[11px] text-text-2">
+          {restores(t, entry.effective, effective)}
         </div>
       </div>
       <Button variant="ghost" onClick={() => onRollback(entry)}>

@@ -855,7 +855,10 @@ fn registration_and_restrict_outcomes_map_onto_the_pinned_wire_shapes() {
             json!({ "type": tag, "ok": false, "error": "relaxes the effective policy" })
         );
     }
-    // The history rows travel exactly when the ring read; a damaged entry's revision is omitted, never null.
+    // The history rows travel exactly when the ring read; a damaged entry's revision and effective policy are
+    // omitted, never null, and a readable entry carries the policy it held so a surface can show what a
+    // rollback to it re-derives.
+    let held = crate::policy::PolicyValues::default();
     assert_eq!(
         serde_json::to_value(
             HistoryReport::Entries(vec![
@@ -865,6 +868,7 @@ fn registration_and_restrict_outcomes_map_onto_the_pinned_wire_shapes() {
                     signed: true,
                     overlay_active: false,
                     superseded_unix: 10,
+                    effective: Some(held.clone()),
                 },
                 PolicyHistoryRow {
                     id: "b2".into(),
@@ -872,6 +876,7 @@ fn registration_and_restrict_outcomes_map_onto_the_pinned_wire_shapes() {
                     signed: false,
                     overlay_active: true,
                     superseded_unix: 11,
+                    effective: None,
                 },
             ])
             .into_frame()
@@ -881,7 +886,14 @@ fn registration_and_restrict_outcomes_map_onto_the_pinned_wire_shapes() {
             "type": "policy_history_result",
             "ok": true,
             "entries": [
-                { "id": "a1", "revision": 3, "signed": true, "overlay_active": false, "superseded_unix": 10 },
+                {
+                    "id": "a1",
+                    "revision": 3,
+                    "signed": true,
+                    "overlay_active": false,
+                    "superseded_unix": 10,
+                    "effective": serde_json::to_value(&held).unwrap(),
+                },
                 { "id": "b2", "signed": false, "overlay_active": true, "superseded_unix": 11 },
             ],
         })

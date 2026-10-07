@@ -321,6 +321,8 @@ policy:
   history_signed: "已签名"
   history_unsigned: "未签名"
   history_overlay: "含限制"
+  history_restores: "恢复为: $1"
+  history_same: "与当前生效的策略相同"
   history_damaged: "无法读取的条目, 于 $1 被取代"
   rollback: "回滚"
 

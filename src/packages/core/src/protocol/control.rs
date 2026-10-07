@@ -796,6 +796,9 @@ pub struct PolicyHistoryRow {
     pub signed: bool,
     pub overlay_active: bool,
     pub superseded_unix: u64,
+    /// The policy the record held, what a rollback to it re-derives; travels exactly when `revision` does.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective: Option<crate::policy::PolicyValues>,
 }
 
 impl From<&crate::policy::PolicyHistoryEntryReport> for PolicyHistoryRow {
@@ -806,6 +809,7 @@ impl From<&crate::policy::PolicyHistoryEntryReport> for PolicyHistoryRow {
             signed: entry.signed,
             overlay_active: entry.overlay_active,
             superseded_unix: entry.superseded_unix,
+            effective: entry.effective.clone(),
         }
     }
 }

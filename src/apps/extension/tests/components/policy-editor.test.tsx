@@ -90,6 +90,8 @@ beforeEach(() => {
     policy_history_signed: { message: "signed" },
     policy_history_unsigned: { message: "unsigned" },
     policy_history_overlay: { message: "with restrictions" },
+    policy_history_restores: { message: "Restores: $1" },
+    policy_history_same: { message: "Same as now" },
     policy_history_damaged: { message: "Unreadable entry, superseded $1" },
     policy_rollback: { message: "Roll back" },
     presence_asking: { message: "asking" },
@@ -205,6 +207,7 @@ describe("PolicyEditor lanes", () => {
           signed: true,
           overlay_active: false,
           superseded_unix: 1_700_000_000,
+          effective: EFFECTIVE,
         },
       ],
     });
@@ -306,6 +309,7 @@ describe("PolicyEditor lanes", () => {
           signed: true,
           overlay_active: true,
           superseded_unix: 1_700_000_000,
+          effective: EFFECTIVE,
         },
         { id: "b2", signed: false, overlay_active: false, superseded_unix: 1_700_000_100 },
       ],
@@ -314,6 +318,7 @@ describe("PolicyEditor lanes", () => {
     await screen.findByText(/^Revision 2, superseded /);
     await screen.findByText(/^Unreadable entry, superseded /);
     expect(screen.getByText("signed, with restrictions")).toBeInTheDocument();
+    expect(screen.getByText("Same as now")).toBeInTheDocument();
     const rollbacks = screen.getAllByRole("button", { name: "Roll back" });
     expect(rollbacks).toHaveLength(1);
     // Applied free: no request, and the ring is re-read.
@@ -345,9 +350,11 @@ describe("PolicyEditor lanes", () => {
     await waitFor(() => expect(asserts()).toEqual([ASSERT]));
   });
 
-  test("two rows at one revision roll back by the row, not the revision", async () => {
+  test("two rows at one revision read apart by what each restores, and roll back by the row, not the revision", async () => {
     // Every restriction while revision 4 was current pushed a ring entry at revision 4; the host refuses
-    // "revision 4" as ambiguous, so the page names the row it listed.
+    // "revision 4" as ambiguous, so the page names the row it listed. The two rows once rendered identically
+    // ("signed", the same second) while their buttons posted different ids; each now shows the fields a
+    // roll-back to it would change against the policy enforced now, in the CLI's spelling.
     replies.get_policy_history = () => ({
       ok: true,
       entries: [
@@ -355,8 +362,9 @@ describe("PolicyEditor lanes", () => {
           id: "c3",
           revision: 4,
           signed: true,
-          overlay_active: false,
+          overlay_active: true,
           superseded_unix: 1_700_000_000,
+          effective: { ...EFFECTIVE, pageEvalEnabled: false },
         },
         {
           id: "d4",
@@ -364,12 +372,18 @@ describe("PolicyEditor lanes", () => {
           signed: true,
           overlay_active: true,
           superseded_unix: 1_700_000_000,
+          effective: { ...EFFECTIVE, cdpMode: true, pageEvalEnabled: false, disabledTools: [] },
         },
       ],
     });
     await mount();
     const rollbacks = await screen.findAllByRole("button", { name: "Roll back" });
     expect(rollbacks).toHaveLength(2);
+    expect(screen.getAllByText("signed, with restrictions")).toHaveLength(2);
+    expect(screen.getByText("Restores: pageEvalEnabled=off")).toBeInTheDocument();
+    expect(
+      screen.getByText("Restores: cdpMode=on,pageEvalEnabled=off,disabledTools=[]"),
+    ).toBeInTheDocument();
     await userEvent.click(rollbacks[1] as HTMLElement);
     await waitFor(() =>
       expect(writes()).toEqual([

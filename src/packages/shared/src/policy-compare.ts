@@ -68,6 +68,33 @@ export function relaxedPolicyFields(
   return POLICY_FIELDS.filter((f) => policyFieldRelaxes(f, candidate, anchor));
 }
 
+/** Every field on which `a` and `b` differ, in catalogue order (Rust field_differs: a relaxation either way, so
+ * disabledTools compares as a set). */
+export function differingPolicyFields(a: PolicyValues, b: PolicyValues): PolicyFieldName[] {
+  return POLICY_FIELDS.filter((f) => policyFieldRelaxes(f, a, b) || policyFieldRelaxes(f, b, a));
+}
+
+/** `fields` with their values in `values`, spelled as the CLI's flags and the host's presence statements spell
+ * them (Rust plan.rs summarize): `cdpMode=on,confirmGraceMs=30000,disabledTools=[page_eval,page_upload]`. */
+export function summarizePolicyFields(
+  values: PolicyValues,
+  fields: readonly PolicyFieldName[],
+): string {
+  return fields.map((f) => spellPolicyField(values, f)).join(",");
+}
+
+function spellPolicyField(values: PolicyValues, field: PolicyFieldName): string {
+  const handle = policyFieldKind(field);
+  switch (handle.kind) {
+    case "bool":
+      return `${field}=${values[handle.field] ? "on" : "off"}`;
+    case "ms":
+      return `${field}=${values[handle.field]}`;
+    case "toolSet":
+      return `${field}=[${values[handle.field].join(",")}]`;
+  }
+}
+
 /** Whether `candidate` moves ANY field toward its permissive pole relative
  * to `anchor` (Rust relaxes). A relaxation is a capability grant: it needs a
  * fresh signature naming the field in its touched set (pinned lane) or the

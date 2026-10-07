@@ -126,12 +126,14 @@ fn history_report_maps_entries_and_tolerates_a_damaged_one() {
     use super::super::PolicyHistoryEntry;
     let good = PolicyDoc {
         revision: 5,
+        page_eval_enabled: true,
         ..PolicyDoc::default()
     };
+    let good_b64 = base64_encode(&serde_json::to_vec(&good).unwrap());
     let history = PolicyHistory {
         entries: vec![
             PolicyHistoryEntry {
-                baseline_b64: base64_encode(&serde_json::to_vec(&good).unwrap()),
+                baseline_b64: good_b64.clone(),
                 sig_b64: Some(base64_encode(b"s")),
                 key_id: None,
                 overlay: Some(PolicyOverlay {
@@ -147,14 +149,52 @@ fn history_report_maps_entries_and_tolerates_a_damaged_one() {
                 overlay: None,
                 superseded_unix: 222,
             },
+            // A readable baseline under an overlay the policy's own bounds refuse: the ring's parse admits
+            // it, so the report must, or the extension's reader would refuse the whole frame over one row.
+            PolicyHistoryEntry {
+                baseline_b64: good_b64,
+                sig_b64: None,
+                key_id: None,
+                overlay: Some(PolicyOverlay {
+                    disabled_tools: Some(vec![String::new()]),
+                    ..PolicyOverlay::default()
+                }),
+                superseded_unix: 333,
+            },
         ],
     };
     let r = history_report(&history);
+    assert_eq!(r.entries.len(), 3);
+    assert_eq!(
+        (r.entries[2].revision, r.entries[2].effective.as_ref()),
+        (None, None)
+    );
     assert_eq!(r.entries[0].revision, Some(5));
     assert!(r.entries[0].signed);
     assert!(r.entries[0].overlay_active);
-    // A damaged entry keeps its slot with a null revision.
+    // The effective policy is the baseline under its overlay: pageEval restricted back off.
+    assert_eq!(
+        r.entries[0].effective,
+        Some(PolicyValues {
+            page_eval_enabled: false,
+            ..good.values()
+        })
+    );
+    // A damaged entry keeps its slot with a null revision and no effective policy.
     assert_eq!(r.entries[1].revision, None);
+    assert_eq!(r.entries[1].effective, None);
     assert!(!r.entries[1].signed);
     assert_eq!(r.entries[1].superseded_unix, 222);
+    // The prose names each row's record and the policy it held, so two records at one revision read apart.
+    let text = render_history(&r);
+    assert!(
+        text.contains(&format!("entry={} effective=cdpMode=off,", r.entries[0].id)),
+        "{text}"
+    );
+    assert!(text.contains("pageEvalEnabled=off,"), "{text}");
+    assert!(
+        text.contains("revision ?      unsigned no-overlay superseded_unix=222 entry="),
+        "{text}"
+    );
+    assert!(text.contains(" effective=?\n"), "{text}");
 }

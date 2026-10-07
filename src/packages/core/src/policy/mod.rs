@@ -288,6 +288,7 @@ macro_rules! policy_fields {
         /// Its own `deny_unknown_fields` is load-bearing: serde does NOT inherit a container attribute from an
         /// embedding type, so without it an unknown field inside a report's `effective` would parse silently.
         #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+        #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
         #[serde(deny_unknown_fields)]
         pub struct PolicyValues {
             $(#[serde(rename = $bw)] pub $bf: bool,)+

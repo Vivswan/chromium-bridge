@@ -238,7 +238,7 @@ chromium-bridge policy rollback --revision <n> [--entry <id>] [--json]
 - **The old signed artifact is never written back:** a lower revision must keep failing the extension's ratchet, which is the anti-replay property, not a limitation.
 - **One revision, several records:** every restriction made while a revision was current pushed a record at that revision, so `policy history` lists each record's `entry` id and `--entry <id>` names the one to restore; a bare `--revision` is refused where it is ambiguous. The page's roll-back buttons name the record the same way.
 - **A store that moves under a rollback** is refused: the diff was planned over one read of the store, so a write another surface lands between that read and the rollback's own (a restriction from the options page, say) refuses as a conflict with nothing written, and "already there" is confirmed the same way. Run the rollback again over the new state.
-- **The options page's Previous revisions list** shows the same ring as `policy history` and rolls back the same way, taking the lane the direction decides.
+- **The options page's Previous revisions list** shows the same ring as `policy history` and rolls back the same way, taking the lane the direction decides; each record carries the policy it held (`effective=` on the CLI's line), and the page shows what rolling back to it would change.
 
 **`--json` contracts.** `show`, `history`, `set`, and `rollback` accept `--json`, which swaps the prose for a versioned report on stdout (and, for the write lanes, a versioned error object on refusal). Check the `v` field first and refuse a newer value before reading anything else (fail closed).
 

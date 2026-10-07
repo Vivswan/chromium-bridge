@@ -13,6 +13,8 @@
 //   widen  -> the Zod side accepts at least one value the Rust parser refuses; its `accepts` probes name values
 //             the enforced validator admits (the base refuses them when the schema can see the widening)
 
+import { POLICY_DEFAULTS } from "../generated/policy";
+
 export type AsymmetryDirection = "widen" | "narrow";
 
 /** One change the generator applies to the Rust-derived node at an entry's path, in order. */
@@ -414,6 +416,21 @@ export const ASYMMETRIES: Readonly<Record<string, Readonly<Record<string, Asymme
         ],
       },
     ),
+    "$.properties.entries.items.properties.effective": {
+      direction: "narrow",
+      reason:
+        "A row's effective policy is the generated PolicyValuesSchema: strict like the host's, with the " +
+        "disabledTools caps applied at parse time where the host applies them in PolicyDoc::validate; a field " +
+        "the catalogue does not own is a policy claim nobody owns and fails the frame.",
+      changes: [{ change: "generated-schema", symbol: "PolicyValuesSchema", from: "./policy" }],
+      probes: {
+        refuses: [
+          { ...POLICY_DEFAULTS, disabledTools: [""] },
+          { ...POLICY_DEFAULTS, disabledTools: ["a".repeat(129)] },
+        ],
+        accepts: [{ ...POLICY_DEFAULTS, pageEvalEnabled: true, disabledTools: ["page_upload"] }],
+      },
+    },
   },
   presence_request: {
     "$.properties.challenge": HOST_MINTED,
