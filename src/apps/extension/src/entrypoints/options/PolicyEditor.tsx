@@ -354,8 +354,8 @@ function HistoryBlock({
       )}
       {history?.ok && history.entries.length > 0 && (
         <ul className="m-0 mt-1 list-none p-0">
-          {keyedRows(history.entries).map(([key, row]) => (
-            <HistoryRowItem key={key} row={row} busy={busy} onRollback={onRollback} />
+          {keyedRows(history.entries).map((entry) => (
+            <HistoryRowItem key={entry.key} entry={entry} busy={busy} onRollback={onRollback} />
           ))}
         </ul>
       )}
@@ -363,49 +363,69 @@ function HistoryBlock({
   );
 }
 
-/** The ring may hold one revision several times (each restriction while it was current), so a row's key is its
- * revision and time plus how many identical rows precede it. */
-function keyedRows(rows: PolicyHistoryRow[]): Array<[string, PolicyHistoryRow]> {
+/** One ring entry as the page renders it, decided once where the wire row enters: a readable revision with its
+ * roll-back, or a damaged entry that offers none. The ring may hold one revision several times (each
+ * restriction while it was current), so the key is the revision and time plus how many identical rows precede. */
+type HistoryEntry = { key: string; supersededAt: string } & (
+  | { kind: "revision"; revision: number; signed: boolean; overlayActive: boolean }
+  | { kind: "damaged" }
+);
+
+function keyedRows(rows: PolicyHistoryRow[]): HistoryEntry[] {
   const seen = new Map<string, number>();
   return rows.map((row) => {
     const base = `${row.revision ?? "damaged"}-${row.superseded_unix}`;
     const nth = seen.get(base) ?? 0;
     seen.set(base, nth + 1);
-    return [`${base}-${nth}`, row];
+    const shared = {
+      key: `${base}-${nth}`,
+      supersededAt: new Date(row.superseded_unix * 1000).toLocaleString(),
+    };
+    return row.revision === undefined
+      ? { ...shared, kind: "damaged" }
+      : {
+          ...shared,
+          kind: "revision",
+          revision: row.revision,
+          signed: row.signed,
+          overlayActive: row.overlay_active,
+        };
   });
 }
 
 function HistoryRowItem({
-  row,
+  entry,
   busy,
   onRollback,
 }: {
-  row: PolicyHistoryRow;
+  entry: HistoryEntry;
   busy: boolean;
   onRollback: (revision: number) => void;
 }) {
   const { t } = useI18n();
-  const superseded = new Date(row.superseded_unix * 1000).toLocaleString();
+  if (entry.kind === "damaged") {
+    return (
+      <li className="flex items-center gap-3 border-b border-edge py-2 last:border-b-0">
+        <div className="min-w-0 flex-1 text-xs font-medium text-text-1">
+          {t("policy.history_damaged", [entry.supersededAt])}
+        </div>
+      </li>
+    );
+  }
   return (
     <li className="flex items-center gap-3 border-b border-edge py-2 last:border-b-0">
       <div className="min-w-0 flex-1">
         <div className="text-xs font-medium text-text-1">
-          {row.revision === undefined
-            ? t("policy.history_damaged", [superseded])
-            : t("policy.history_row", [String(row.revision), superseded])}
+          {t("policy.history_row", [String(entry.revision), entry.supersededAt])}
         </div>
-        {row.revision !== undefined && (
-          <div className="font-mono text-[11px] text-text-3">
-            {row.signed ? t("policy.history_signed") : t("policy.history_unsigned")}
-            {row.overlay_active && `, ${t("policy.history_overlay")}`}
-          </div>
-        )}
+        <div className="font-mono text-[11px] text-text-3">
+          {entry.signed ? t("policy.history_signed") : t("policy.history_unsigned")}
+          {entry.overlayActive && `, ${t("policy.history_overlay")}`}
+        </div>
       </div>
-      {row.revision !== undefined && (
-        <Button variant="ghost" onClick={() => onRollback(row.revision ?? 0)} disabled={busy}>
-          {t("policy.rollback")}
-        </Button>
-      )}
+      <Button variant="ghost" onClick={() => onRollback(entry.revision)} disabled={busy}>
+        {t("policy.rollback")}
+      </Button>
     </li>
   );
 }
