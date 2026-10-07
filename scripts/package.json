@@ -16,6 +16,7 @@
     "change-case": "^5.4.4",
     "json-schema-to-typescript": "^15.0.4",
     "json-schema-to-zod": "2.8.1",
+    "json-schema-traverse": "1.0.0",
     "mvdan-sh": "0.10.1",
     "oxc-parser": "^0.152.0",
     "remark-parse": "^11.0.0",

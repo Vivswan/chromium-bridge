@@ -30,7 +30,7 @@ describe("the reading rules refuse what they exist to refuse", () => {
   test("R1: an object emitted open (unknown keys stripped) fails; the loose form passes only on a loose reader", () => {
     const open = { type: "object", properties: { a: { type: "string" } } };
     expect(() => assertSchemaRules("X", open, false)).toThrow(
-      /\$ is an object read as "open", not strict \(R1\)/,
+      /# is an object read as "open", not strict \(R1\)/,
     );
     expect(() => assertSchemaRules("X", open, true)).toThrow(/\(R1\)/);
     const loose = { ...open, additionalProperties: true };
@@ -39,7 +39,7 @@ describe("the reading rules refuse what they exist to refuse", () => {
     // Nested: the loose allowance covers every object of a loose reader, a strict one covers none.
     const nestedOpen = strict({ inner: { type: "object", properties: {} } }, ["inner"]);
     expect(() => assertSchemaRules("X", nestedOpen, false)).toThrow(
-      /\$\.properties\.inner .*\(R1\)/,
+      /#\/properties\/inner .*\(R1\)/,
     );
     // An additionalProperties SCHEMA is neither strict nor the loose form.
     const typedExtras = {
@@ -53,7 +53,7 @@ describe("the reading rules refuse what they exist to refuse", () => {
   test("R2: a default anywhere fails", () => {
     expect(() =>
       assertSchemaRules("X", strict({ a: { type: "integer", default: 0 } }), false),
-    ).toThrow(/\$\.properties\.a carries a default \(R2\)/);
+    ).toThrow(/#\/properties\/a carries a default \(R2\)/);
   });
 
   test("R3: an integer read without JS-safe bounds fails (a hand-built reading; the emitter adds the bounds itself)", () => {

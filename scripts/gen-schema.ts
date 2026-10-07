@@ -22,6 +22,7 @@
 
 import { compile, type JSONSchema as TypeSchema } from "json-schema-to-typescript";
 import { jsonSchemaToZod, type JsonSchema as ZodInput } from "json-schema-to-zod";
+import traverse from "json-schema-traverse";
 import { z } from "zod";
 
 export type JsonObject = Record<string, unknown>;
@@ -64,23 +65,13 @@ export function emittedReading(schema: unknown): JsonObject {
   return inputReading(emittedValidator(schema));
 }
 
-/** Every schema node of a tree (the root, property values, items, union branches), depth first. */
-export function* schemaNodes(node: unknown, path = "$"): Generator<[string, JsonObject]> {
-  if (!isObject(node)) return;
-  yield [path, node];
-  if (isObject(node.properties)) {
-    for (const [name, sub] of Object.entries(node.properties)) {
-      yield* schemaNodes(sub, `${path}.properties.${name}`);
-    }
-  }
-  if (node.items !== undefined) yield* schemaNodes(node.items, `${path}.items`);
-  for (const combinator of ["anyOf", "oneOf"] as const) {
-    const branches = node[combinator];
-    if (!Array.isArray(branches)) continue;
-    for (const [i, branch] of branches.entries()) {
-      yield* schemaNodes(branch, `${path}.${combinator}[${i}]`);
-    }
-  }
+/** Every object schema node of a tree, depth first, each under its JSON pointer from the root (`#`,
+ * `#/properties/x`, `#/anyOf/0`), which is how a diagnostic names it. */
+export function schemaNodes(root: unknown): [string, JsonObject][] {
+  const out: [string, JsonObject][] = [];
+  if (!isObject(root)) return out;
+  traverse(root, { cb: (node, pointer) => out.push([`#${pointer}`, node]) });
+  return out;
 }
 
 const SAFE = Number.MAX_SAFE_INTEGER;
