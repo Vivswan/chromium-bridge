@@ -13,8 +13,6 @@
 //   widen  -> the Zod side accepts at least one value the Rust parser refuses; its `accepts` probes name values
 //             the enforced validator admits (the base refuses them when the schema can see the widening)
 
-import { POLICY_DEFAULTS } from "../generated/policy";
-
 export type AsymmetryDirection = "widen" | "narrow";
 
 /** One change the generator applies to the Rust-derived node at an entry's path, in order. */
@@ -149,6 +147,27 @@ function okSplit(
     probes,
   };
 }
+
+// A full set of policy values for the probes at a PolicyValues node: every field is required there, so a probe
+// is the whole object. This table is generator input and imports nothing the generator writes, so the values
+// are written here; a field the Rust policy gains makes the faithful base refuse the probe, which the gate names.
+const HELD_POLICY_VALUES = {
+  cdpMode: false,
+  fileUploadEnabled: false,
+  handleDialogEnabled: false,
+  pageEvalEnabled: false,
+  confirmHighRiskClick: true,
+  confirmPageEval: true,
+  presenceConfirm: true,
+  confirmTabClose: true,
+  warnPreciseSnapshot: true,
+  evalMask: true,
+  hostReverifyMs: 0,
+  confirmGraceMs: 60000,
+  clickToastTimeoutMs: 30000,
+  evalToastTimeoutMs: 45000,
+  disabledTools: [],
+};
 
 const HOST_MINTED: Asymmetry = {
   direction: "narrow",
@@ -425,10 +444,10 @@ export const ASYMMETRIES: Readonly<Record<string, Readonly<Record<string, Asymme
       changes: [{ change: "generated-schema", symbol: "PolicyValuesSchema", from: "./policy" }],
       probes: {
         refuses: [
-          { ...POLICY_DEFAULTS, disabledTools: [""] },
-          { ...POLICY_DEFAULTS, disabledTools: ["a".repeat(129)] },
+          { ...HELD_POLICY_VALUES, disabledTools: [""] },
+          { ...HELD_POLICY_VALUES, disabledTools: ["a".repeat(129)] },
         ],
-        accepts: [{ ...POLICY_DEFAULTS, pageEvalEnabled: true, disabledTools: ["page_upload"] }],
+        accepts: [{ ...HELD_POLICY_VALUES, pageEvalEnabled: true, disabledTools: ["page_upload"] }],
       },
     },
   },
