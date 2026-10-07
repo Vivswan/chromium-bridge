@@ -158,32 +158,45 @@ export function assertReadingRules(name: string, reading: JsonObject, loose: boo
   }
 }
 
-/** The leaf branches of a union node, nested unions flattened. A non-union node has no branches. */
+/** The leaf branches of a union node, nested unions flattened; a union inside a branch's property belongs
+ * to that property, not to this union. */
 function unionBranches(node: JsonObject): JsonObject[] {
-  const out: JsonObject[] = [];
-  if (!Array.isArray(node.anyOf)) return out;
-  for (const branch of node.anyOf) {
-    if (!isObject(branch)) continue;
-    const nested = unionBranches(branch);
-    out.push(...(nested.length > 0 ? nested : [branch]));
-  }
-  return out;
+  const leaves: JsonObject[] = [];
+  traverse(node, {
+    cb: (sub, pointer) => {
+      if (/^(\/anyOf\/\d+)+$/.test(pointer) && !Array.isArray(sub.anyOf)) leaves.push(sub);
+    },
+  });
+  return leaves;
 }
 
-/** The branches share one required key whose const differs in every branch; returns that key. */
-export function assertDiscriminated(branches: JsonObject[], fail: (why: string) => never): string {
+/** The branches are object schemas sharing one required key whose const differs in every branch; returns that
+ * key, or `fail`s with why. `tags` is the const's admitted type: serde's tag is a string (G3), an ok-split arm's
+ * is a boolean, so R4 admits any. */
+export function assertDiscriminated(
+  branches: unknown[],
+  fail: (why: string) => never,
+  tags: "string" | "any" = "any",
+): string {
   const first = branches[0];
-  if (first === undefined || !isObject(first.properties)) {
-    return fail("is a union with no object branches");
+  if (first === undefined || !isObject(first) || !isObject(first.properties)) {
+    return fail("has no object branches");
+  }
+  const objects: JsonObject[] = [];
+  for (const branch of branches) {
+    if (!isObject(branch) || branch.type !== "object" || !isObject(branch.properties)) {
+      return fail("has a non-object branch");
+    }
+    objects.push(branch);
   }
   outer: for (const candidate of Object.keys(first.properties)) {
     const seen = new Set<string>();
-    for (const branch of branches) {
-      const props = isObject(branch.properties) ? branch.properties : {};
-      const tagNode = props[candidate];
+    for (const branch of objects) {
+      const tagNode = (branch.properties as JsonObject)[candidate];
       const tag = isObject(tagNode) ? tagNode.const : undefined;
+      const usable = tags === "string" ? typeof tag === "string" : tag !== undefined;
       const required = Array.isArray(branch.required) ? branch.required : [];
-      if (tag === undefined || seen.has(show(tag)) || !required.includes(candidate)) continue outer;
+      if (!usable || seen.has(show(tag)) || !required.includes(candidate)) continue outer;
       seen.add(show(tag));
     }
     return candidate;

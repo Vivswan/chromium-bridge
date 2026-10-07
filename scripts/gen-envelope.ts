@@ -60,6 +60,7 @@ import {
   type Change,
 } from "../src/packages/shared/src/envelope-asymmetries";
 import {
+  assertDiscriminated,
   assertSchemaRules,
   emitFromRust,
   type ImportedSchema,
@@ -118,27 +119,13 @@ export async function splitTaggedUnionSchema(schema: unknown): Promise<Map<strin
 // G3: accept the branch list only if some property is a required string const in every branch with all values
 // distinct; the union is then discriminated and oneOf/anyOf coincide. Returns the discriminating property.
 export function assertDiscriminatedUnion(branches: unknown[], path: string): string {
-  const first = branches[0];
-  if (branches.length === 0 || !isObject(first) || !isObject(first.properties)) {
-    throw new Error(`gen-envelope: oneOf at ${path} has no object branches (G3)`);
-  }
-  outer: for (const candidate of Object.keys(first.properties)) {
-    const seen = new Set<string>();
-    for (const branch of branches) {
-      if (!isObject(branch) || branch.type !== "object" || !isObject(branch.properties)) {
-        throw new Error(`gen-envelope: oneOf at ${path} has a non-object branch (G3)`);
-      }
-      const tagNode = branch.properties[candidate];
-      const tag = isObject(tagNode) ? tagNode.const : undefined;
-      const required = Array.isArray(branch.required) ? branch.required : [];
-      if (typeof tag !== "string" || seen.has(tag) || !required.includes(candidate)) {
-        continue outer;
-      }
-      seen.add(tag);
-    }
-    return candidate; // discriminates every branch
-  }
-  throw new Error(`gen-envelope: oneOf at ${path} is not a discriminated union (G3)`);
+  return assertDiscriminated(
+    branches,
+    (why) => {
+      throw new Error(`gen-envelope: oneOf at ${path} ${why} (G3)`);
+    },
+    "string",
+  );
 }
 
 /** The request's flattened command, split back into the two things the rest of the pipeline models (G6). */
