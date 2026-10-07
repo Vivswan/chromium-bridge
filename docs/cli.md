@@ -242,7 +242,7 @@ chromium-bridge policy rollback --revision <n> [--entry <id>] [--json]
 
 **`--json` contracts.** `show`, `history`, `set`, and `rollback` accept `--json`, which swaps the prose for a versioned report on stdout (and, for the write lanes, a versioned error object on refusal). Check the `v` field first and refuse a newer value before reading anything else (fail closed).
 
-Every policy transition is audited with the surface and, for grants, the presence path that authorized the signature (`auth=tty`).
+Every policy transition is audited with the surface and, for grants, the presence path that authorized the signature: `auth=tty` from the CLI, `auth=webauthn:<fingerprint>` or `auth=confirm_window` from the options page. [store_tests.rs](../src/packages/core/src/policy/store/store_tests.rs) and [presence/tests.rs](../src/packages/core/src/native_host/presence/tests.rs) pin the three spellings.
 
 ## Display language (lang)
 

@@ -242,7 +242,7 @@ chromium-bridge policy rollback --revision <n> [--entry <id>] [--json]
 
 **`--json` 契約。** `show`、`history`、`set` 與 `rollback` 都接受 `--json`, 它把文字敘述換成 stdout 上一份帶版本的報告 (寫入通道在拒絕時則是一個帶版本的錯誤物件)。先檢查 `v` 欄位, 遇到更新的值就拒絕, 然後才讀取其他內容 (失敗即關閉)。
 
-每次策略轉換都會記入稽核, 附上介面, 授予時還附上授權該簽章的在場路徑 (`auth=tty`)。
+每次策略轉換都會記入稽核, 附上介面, 授予時還附上授權該簽章的在場路徑: 來自 CLI 的 `auth=tty`, 來自選項頁面的 `auth=webauthn:<fingerprint>` 或 `auth=confirm_window`。[store_tests.rs](../../src/packages/core/src/policy/store/store_tests.rs) 與 [presence/tests.rs](../../src/packages/core/src/native_host/presence/tests.rs) 固定這三種寫法。
 
 ## 顯示語言 (lang)
 

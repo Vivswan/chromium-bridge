@@ -35,7 +35,7 @@ chromium-bridge doctor    # or: chromium-bridge status
 
 - **你看到:** `policy baseline:` 列顯示 `none yet`。
 - **這表示:** 這是切換前的健康狀態。尚未寫入任何已簽章的基準, 所以擴充功能強制執行拒絕基準: 每項能力授予都關閉, 每項確認都開啟。這一列永遠不會改變 `doctor` 的結束碼。
-- **怎麼做:** 什麼都不用做, 除非你想要授予: `chromium-bridge policy set` 會寫入第一個基準 ([CLI 頁面上的策略](cli.md#主機持有的策略-policy))。已存在的儲存區會回報它的修訂版本、`signed` 或 `unsigned`, 以及是否有未簽章的限制覆蓋層生效; 主機只回報是否已簽章, 永遠不會宣稱「valid」, 因為只有擴充功能能用它自己固定的金鑰驗證簽章。
+- **怎麼做:** 什麼都不用做, 除非你想要授予: `chromium-bridge policy set` 或選項頁面的「安全策略」區段會寫入第一個基準 ([CLI 頁面上的策略](cli.md#主機持有的策略-policy))。已存在的儲存區會回報它的修訂版本、`signed` 或 `unsigned`, 以及是否有未簽章的限制覆蓋層生效; 主機只回報是否已簽章, 永遠不會宣稱「valid」, 因為只有擴充功能能用它自己固定的金鑰驗證簽章。
 
 ## doctor 回報 `policy baseline: UNREADABLE`
 

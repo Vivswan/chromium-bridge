@@ -35,7 +35,7 @@ chromium-bridge doctor    # or: chromium-bridge status
 
 - **你看到:** `policy baseline:` 这一行显示 `none yet`。
 - **含义:** 这是切换前的健康状态。尚未写入任何已签名的基线, 因此扩展执行拒绝基线: 所有能力授予关闭, 所有确认开启。这一行从不改变 `doctor` 的退出码。
-- **怎么做:** 什么都不用做, 除非你想要授予: `chromium-bridge policy set` 会写入第一个基线 ([CLI 页面上的策略说明](cli.md#主机持有的策略-policy))。已存在的策略存储会报告它的修订号、`signed` 或 `unsigned`, 以及是否有未签名的限制覆盖层处于活动状态; 主机只报告是否已签名, 从不声称「有效」, 因为只有扩展才能用自己固定的密钥验证签名。
+- **怎么做:** 什么都不用做, 除非你想要授予: `chromium-bridge policy set` 或选项页的「安全策略」部分会写入第一个基线 ([CLI 页面上的策略说明](cli.md#主机持有的策略-policy))。已存在的策略存储会报告它的修订号、`signed` 或 `unsigned`, 以及是否有未签名的限制覆盖层处于活动状态; 主机只报告是否已签名, 从不声称「有效」, 因为只有扩展才能用自己固定的密钥验证签名。
 
 ## doctor 报告 `policy baseline: UNREADABLE`
 
