@@ -151,14 +151,14 @@ tasks:
   # ----- dev loops (local only; never in CI) --------------------------------
 
   dev:
-    description: 'Dev everything: extension (WXT) + web app (Astro) + a dev browser in one terminal; Ctrl-C stops all'
+    description: 'Dev everything: extension (WXT) + the landing page (Astro) + a dev browser in one terminal; Ctrl-C stops all'
     command: 'bun scripts/dev.ts'
     preset: 'server'
 
   dev-web:
     # Not a `persistent` server task: the web project's dev script backgrounds the astro dev daemon itself
     # (`astro dev stop; ASTRO_DEV_BACKGROUND=1 astro dev`) and exits, so here it is a plain one-shot command.
-    description: 'Docs site dev server only; replaces any already-running astro dev (`dev` supersets this)'
+    description: 'Landing page dev server only; replaces any already-running astro dev (`dev` supersets this)'
     command: 'bun run --cwd src/apps/web dev'
     options:
       runInCI: false
@@ -260,11 +260,10 @@ tasks:
       mutex: 'generated-contract'
 
   test-ts:
-    description: 'Unit-test shared + extension + web (the `bun run test` set)'
+    description: 'Unit-test shared + extension (the `bun run test` set)'
     deps:
       - 'shared:test'
       - 'extension:test'
-      - 'web:test'
       - '~:check-harness-driver'
     options:
       runDepsInParallel: false

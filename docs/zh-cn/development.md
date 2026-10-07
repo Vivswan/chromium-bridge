@@ -25,7 +25,7 @@ moon run setup   # installs the bun workspace, the pinned Rust toolchain, and th
 | [moon](https://moonrepo.dev) | 任务运行器 | 规范的命令接口: 每个开发任务都是一个 moon 任务。`moon run help` 列出全部任务; `moon run <task>` 运行其中一个 |
 | Rust (cargo) | `chromium-bridge` 二进制 | 由 `rust-toolchain.toml` 固定 (权威的固定来源; rustup 和 IDE 都读它); `rustfmt` + `clippy` 组件, `cargo-nextest` 作为测试运行器 |
 | bun | 所有 TypeScript 相关工作 | 包管理器、脚本运行器、扩展打包、TS 测试套件。固定在 `.prototools` 中 (并镜像到 `package.json` 的 `packageManager`) |
-| node | vitest 测试套件 (`extension:test`、`web:test`) | 只固定在 `.prototools` 中; 由 proto 安装, 所以没有任何作业或镜像自行安装 |
+| node | vitest 测试套件 (`extension:test`) | 只固定在 `.prototools` 中; 由 proto 安装, 所以没有任何作业或镜像自行安装 |
 | [`uv`](https://docs.astral.sh/uv/) | 协议 e2e 测试 | 安装仓库根目录 `.python-version` 中固定的那个 Python 版本, 所以本地运行和 CI 用同一个解释器。uv 自身只固定在 `.prototools` 中。这些测试套件只用标准库 |
 | Chrome | DOM + 冒烟测试 | `CHROME_BIN` 可覆盖路径 |
 | [`typos`](https://github.com/crate-ci/typos) + [`cargo-machete`](https://github.com/bnjbvr/cargo-machete) | 拼写检查 + 未使用依赖门禁 | `moon run typos` / `moon run machete`; CI 在受管 ci.yml 中把 typos 作为门禁, 在 checks.yml 中把 machete 作为门禁 |
@@ -40,8 +40,8 @@ TypeScript 一侧是一个 bun 工作区, 根在仓库顶层 (`package.json` 的
 ```text
 src/apps/host/           Rust binary "chromium-bridge" (thin argv dispatch over the library)
 src/apps/extension/      MV3 extension (WXT); builds to build/extension (gitignored)
-src/apps/web/            minimal Astro site rendering the repo's markdown docs (bun workspace member;
-                         moon run web:build; not part of `moon run ci`)
+src/apps/web/            the Astro landing page (bun workspace member; moon run web:build; not part
+                         of `moon run ci`); the docs site is the fleet's render of docs/
 src/packages/core/       Rust library "chromium-bridge-core": MCP server + native-host bridge
 src/packages/core/fuzz/  cargo-fuzz workspace: wire parsers + semantic validators
                          (nightly + libFuzzer; see the Fuzzing section below)
@@ -69,7 +69,7 @@ moon 是规范的命令接口: 每个开发任务都是一个 moon 任务, `moon
 
 ```sh
 moon run build     # build everything (see below)
-moon run dev       # dev everything: extension (WXT) + docs site (Astro) + a dev browser
+moon run dev       # dev everything: extension (WXT) + the landing page (Astro) + a dev browser
 moon run test      # rust tests (nextest + doctests) + protocol e2e
 moon run ci        # THE GATE: the cross-platform CI steps (see below for what CI adds)
 moon run release   # pre-release gate: version checks + full ci
@@ -79,7 +79,7 @@ moon run fmt       # format everything: cargo fmt + biome format
 moon run fix       # auto-fix everything: biome check --write + cargo fmt
 ```
 
-`moon run build` 用一条命令构建整个仓库: 对 `src/packages/shared` 做类型检查, 打包扩展 (先渲染图标), 构建文档站点, 对 `scripts/` 做类型检查, 并运行 `cargo build --workspace`。做了横切性改动之后, 用它来证明整张图仍然能编译。
+`moon run build` 用一条命令构建整个仓库: 对 `src/packages/shared` 做类型检查, 打包扩展 (先渲染图标), 构建落地页, 对 `scripts/` 做类型检查, 并运行 `cargo build --workspace`。做了横切性改动之后, 用它来证明整张图仍然能编译。
 
 `moon run ci` 按其 `deps` 列表声明的顺序运行跨平台门禁步骤:
 
@@ -125,7 +125,7 @@ bun run --cwd src/apps/extension build
 | 开发循环 | `dev`、`dev-web`、`extension:dev` |
 | Rust | `core:fmt-check` (= `core:fmt-check-workspace` + `core:fmt-check-fuzz`)、`core:lint` (= `core:lint-workspace` + `core:lint-fuzz`)、`test-rust` (= `core:test` + `core:test-doc` + `core:test-loom`, 后者是在核心的 `loom` 特性下对中介 (broker) 引用计数做模型检查)、`doc`、`build-release`、`build-repro`、`typos`、`machete`、`audit` |
 | 模糊测试工作区 | `fuzz-seeds`、`fuzz-smoke`、`check-fuzz-smoke`、`test-fuzz` (该工作区的 clippy 与 fmt 检查分别由 `core:lint-fuzz` 与 `core:fmt-check-fuzz` 执行) |
-| TypeScript | `typecheck`、`test-ts` (= `shared:test` + `extension:test` + `web:test` + `check-harness-driver`)、`lint-ts`、`check-ts`、`fmt-ts`、`fmt-check-ts`、`extension:build`、`web:build` |
+| TypeScript | `typecheck`、`test-ts` (= `shared:test` + `extension:test` + `check-harness-driver`)、`lint-ts`、`check-ts`、`fmt-ts`、`fmt-check-ts`、`extension:build`、`web:build` |
 | 契约代码生成 | `gen` (= `gen-shared`)、`gen-icons`、`gen-architecture-map`、`check-gen`、`check-envelope`、`check-gen-isolation` |
 | 协议测试套件 | `test-e2e`、`test-adversarial`、`test-chaos`、`check-uv` |
 | 互操作测试套件 | `test-interop` (官方 MCP SDK v2 客户端对发布二进制的测试)、`harness-smoke` (真实的客户端程序 (harness) CLI, 隔离的配置目录; 旧时代打开方式的金丝雀测试) |
@@ -205,7 +205,7 @@ uv 只固定在 `.prototools` 中, python 由 uv 管理: 协议测试套件通�
 | `contract` | 先单独运行 `check-gen` (它会重写生成的模块), 然后是 `check-envelope`、`check-gen-isolation`、`check-refresh-lockfiles` | 镜像 |
 | `hygiene` | `moon run hygiene` | 镜像 |
 | `tooling` | `machete`, 使用 `Containerfile` 固定版本的 cargo-machete | 镜像 |
-| `web` | `web:build`、`web:test` | 镜像 |
+| `web` | `web:build` | 镜像 |
 | `linux-install` | 先下载 `build-release` 的二进制, 再运行 `scripts/linux-registration.ts`: 在隔离的 HOME 和 XDG 目录下运行 `doctor --fix`、重新注册、多浏览器、`uninstall` | 裸运行器: 它只需要那个二进制和一个运行场景驱动脚本的 bun |
 | `protocol` | 对下载的二进制运行 `e2e`、`adversarial` 和 `chaos` 测试套件 | 镜像 |
 | `interop` | 官方 MCP SDK 客户端对下载的二进制的测试 | 镜像 |

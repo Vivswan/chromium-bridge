@@ -25,7 +25,7 @@ moon run setup   # installs the bun workspace, the pinned Rust toolchain, and th
 | [moon](https://moonrepo.dev) | 任務執行器 | 標準的命令介面: 每個開發工作都是一個 moon 任務。`moon run help` 列出全部; `moon run <task>` 執行其中一個 |
 | Rust (cargo) | `chromium-bridge` 執行檔 | 由 `rust-toolchain.toml` 固定 (權威的固定來源; rustup 與 IDE 都讀它); `rustfmt` + `clippy` 元件, 以 `cargo-nextest` 作為測試執行器 |
 | bun | 所有 TypeScript | 套件管理器、指令碼執行器、擴充功能打包、TS 測試套件。固定於 `.prototools` (並鏡像到 `package.json` 的 `packageManager`) |
-| node | vitest 測試套件 (`extension:test`、`web:test`) | 只固定於 `.prototools`; 由 proto 佈建, 所以沒有任何工作或映像檔自行安裝 |
+| node | vitest 測試套件 (`extension:test`) | 只固定於 `.prototools`; 由 proto 佈建, 所以沒有任何工作或映像檔自行安裝 |
 | [`uv`](https://docs.astral.sh/uv/) | 協定 e2e 測試 | 佈建儲存庫根目錄 `.python-version` 所固定的確切 Python 版本, 讓本機執行與 CI 使用同一個直譯器。uv 本身只固定於 `.prototools`。測試套件僅使用標準函式庫 |
 | Chrome | DOM + 冒煙測試 | `CHROME_BIN` 覆寫路徑 |
 | [`typos`](https://github.com/crate-ci/typos) + [`cargo-machete`](https://github.com/bnjbvr/cargo-machete) | 拼字 + 未使用相依套件閘門 | `moon run typos` / `moon run machete`; CI 在受管理的 ci.yml 中把關 typos, 在 checks.yml 中把關 machete |
@@ -40,8 +40,8 @@ TypeScript 這一側是一個以儲存庫頂層為根的 bun 工作區 (`package
 ```text
 src/apps/host/           Rust binary "chromium-bridge" (thin argv dispatch over the library)
 src/apps/extension/      MV3 extension (WXT); builds to build/extension (gitignored)
-src/apps/web/            minimal Astro site rendering the repo's markdown docs (bun workspace member;
-                         moon run web:build; not part of `moon run ci`)
+src/apps/web/            the Astro landing page (bun workspace member; moon run web:build; not part
+                         of `moon run ci`); the docs site is the fleet's render of docs/
 src/packages/core/       Rust library "chromium-bridge-core": MCP server + native-host bridge
 src/packages/core/fuzz/  cargo-fuzz workspace: wire parsers + semantic validators
                          (nightly + libFuzzer; see the Fuzzing section below)
@@ -69,7 +69,7 @@ moon 是標準的命令介面: 每個開發工作都是一個 moon 任務, `moon
 
 ```sh
 moon run build     # build everything (see below)
-moon run dev       # dev everything: extension (WXT) + docs site (Astro) + a dev browser
+moon run dev       # dev everything: extension (WXT) + the landing page (Astro) + a dev browser
 moon run test      # rust tests (nextest + doctests) + protocol e2e
 moon run ci        # THE GATE: the cross-platform CI steps (see below for what CI adds)
 moon run release   # pre-release gate: version checks + full ci
@@ -79,7 +79,7 @@ moon run fmt       # format everything: cargo fmt + biome format
 moon run fix       # auto-fix everything: biome check --write + cargo fmt
 ```
 
-`moon run build` 用一道命令建置整個儲存庫: 對 `src/packages/shared` 做型別檢查、打包擴充功能 (先算繪其圖示)、建置文件網站、對 `scripts/` 做型別檢查, 並執行 `cargo build --workspace`。用它來證明跨領域的變更之後整張圖仍可編譯。
+`moon run build` 用一道命令建置整個儲存庫: 對 `src/packages/shared` 做型別檢查、打包擴充功能 (先算繪其圖示)、建置登陸頁、對 `scripts/` 做型別檢查, 並執行 `cargo build --workspace`。用它來證明跨領域的變更之後整張圖仍可編譯。
 
 `moon run ci` 依其 `deps` 清單宣告的順序執行跨平台的閘門步驟:
 
@@ -125,7 +125,7 @@ bun run --cwd src/apps/extension build
 | 開發迴圈 | `dev`、`dev-web`、`extension:dev` |
 | Rust | `core:fmt-check` (= `core:fmt-check-workspace` + `core:fmt-check-fuzz`)、`core:lint` (= `core:lint-workspace` + `core:lint-fuzz`)、`test-rust` (= `core:test` + `core:test-doc` + `core:test-loom`, 即核心 `loom` 功能下的中介 (broker) 參考計數模型檢查)、`doc`、`build-release`、`build-repro`、`typos`、`machete`、`audit` |
 | 模糊測試工作區 | `fuzz-seeds`、`fuzz-smoke`、`check-fuzz-smoke`、`test-fuzz` (該工作區的 clippy 與 fmt 檢查分別由 `core:lint-fuzz` 與 `core:fmt-check-fuzz` 執行) |
-| TypeScript | `typecheck`、`test-ts` (= `shared:test` + `extension:test` + `web:test` + `check-harness-driver`)、`lint-ts`、`check-ts`、`fmt-ts`、`fmt-check-ts`、`extension:build`、`web:build` |
+| TypeScript | `typecheck`、`test-ts` (= `shared:test` + `extension:test` + `check-harness-driver`)、`lint-ts`、`check-ts`、`fmt-ts`、`fmt-check-ts`、`extension:build`、`web:build` |
 | 契約程式碼產生 | `gen` (= `gen-shared`)、`gen-icons`、`gen-architecture-map`、`check-gen`、`check-envelope`、`check-gen-isolation` |
 | 協定測試套件 | `test-e2e`、`test-adversarial`、`test-chaos`、`check-uv` |
 | 互通測試套件 | `test-interop` (官方 MCP SDK v2 用戶端對發行執行檔)、`harness-smoke` (真實的用戶端程式 (harness) CLI 搭配隔離的設定目錄; 舊時代開啟方式的金絲雀) |
@@ -205,7 +205,7 @@ uv 只固定於 `.prototools`, 而 python 由 uv 擁有: 協定測試套件透�
 | `contract` | 先單獨執行 `check-gen` (它會改寫產生的模組), 再執行 `check-envelope`、`check-gen-isolation`、`check-refresh-lockfiles` | 映像檔 |
 | `hygiene` | `moon run hygiene` | 映像檔 |
 | `tooling` | `machete`, 使用 `Containerfile` 固定版本的 cargo-machete | 映像檔 |
-| `web` | `web:build`、`web:test` | 映像檔 |
+| `web` | `web:build` | 映像檔 |
 | `linux-install` | 先下載 `build-release` 的執行檔, 再執行 `scripts/linux-registration.ts`: 在隔離的 HOME 與 XDG 目錄下執行 `doctor --fix`、重新註冊、多瀏覽器、`uninstall` | 裸機執行器: 它只需要那個執行檔和一個執行情境驅動指令碼的 bun |
 | `protocol` | 對下載的執行檔執行 `e2e`、`adversarial` 與 `chaos` 測試套件 | 映像檔 |
 | `interop` | 官方 MCP SDK 用戶端對下載的執行檔 | 映像檔 |

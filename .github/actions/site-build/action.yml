@@ -1,8 +1,8 @@
 # The repo-owned website hook of the fleet's site leg (reusable-site.yml runs
 # it inside the deploy job and publishes the `dist` directory at the site
-# root). The Astro site reads the two inputs as ASTRO_BASE and ASTRO_SITE
-# (src/apps/web/src/lib/site-identity.ts); the docs it renders live under
-# /docs/<slug>/ of that build.
+# root). The Astro landing page reads the two inputs as ASTRO_BASE and
+# ASTRO_SITE (src/apps/web/src/lib/site-identity.ts); the docs are the leg's
+# own render of docs/ and its locale trees, mounted beside this build.
 name: Build the website
 description: |
   Builds the Astro site in src/apps/web for the fleet's site leg and names the directory to publish.

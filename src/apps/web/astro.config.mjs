@@ -1,11 +1,9 @@
-// The public site: a landing page (src/pages/index.astro) plus the
-// repository's own markdown docs rendered under /docs/ (see
-// src/pages/docs/[...slug].astro). Served as a GitHub Pages project page
-// under /chromium-bridge/, so every internal link and asset must go through
-// import.meta.env.BASE_URL - never a root-absolute path.
-import { satteri } from "@astrojs/markdown-satteri";
+// The public site: the landing page (src/pages/index.astro). The docs are the
+// fleet's site leg's: it renders docs/ and its locale trees under /docs/ beside
+// this build, so this app renders no markdown. Served as a GitHub Pages
+// project page under /chromium-bridge/, so every internal link and asset must
+// go through import.meta.env.BASE_URL - never a root-absolute path.
 import { defineConfig } from "astro/config";
-import { mdLinksPlugin } from "./src/lib/satteri-md-links";
 // Origin + base come from ASTRO_SITE / ASTRO_BASE (defaults: the GitHub Pages
 // project page) so the deploy hook (.github/actions/site-build) can retarget the
 // site, custom domain included, without touching source. See site-identity.ts.
@@ -22,19 +20,8 @@ export default defineConfig({
   build: {
     format: "directory",
   },
-  markdown: {
-    // The default processor plus one plugin: repo-relative .md links become
-    // their rendered /docs/ routes (see satteri-md-links.ts).
-    processor: satteri({
-      hastPlugins: [mdLinksPlugin(SITE_BASE)],
-      // The docs are plain ASCII by rule (check-typography), and smart
-      // punctuation would turn `--fix` into an en dash: wrong on the page and
-      // a heading id GitHub-authored anchors cannot reach.
-      features: { smartPunctuation: false },
-    }),
-  },
   vite: {
-    // Let the dev server read the repo's markdown above the site root.
+    // Let the dev server read the root Cargo.toml the landing page imports.
     server: { fs: { allow: ["../../.."] } },
   },
 });

@@ -292,8 +292,8 @@ jobs:
     permissions:
       contents: read
 
-  # The public web app (src/apps/web) must keep building. Build-only here: the deploy is the managed ci.yml's
-  # site leg, which runs .github/actions/site-build.
+  # The public landing page (src/apps/web) must keep building. Build-only here: the deploy is the managed
+  # ci.yml's site leg, which runs .github/actions/site-build and renders docs/ beside it.
   web:
     name: web app builds
     needs: image
@@ -306,7 +306,7 @@ jobs:
           fetch-depth: 0
       - uses: ./.github/actions/setup-moon
       - run: bun install --frozen-lockfile
-      - run: moon run web:build web:test
+      - run: moon run web:build
 
   # The cargo deny pass gates merges: a new advisory lands as a red PR check, not a silent scheduled failure.
   # nightly.yml calls the same reusable workflow daily. A job calling a reusable workflow fails if any called
