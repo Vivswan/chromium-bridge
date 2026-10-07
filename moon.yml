@@ -522,7 +522,10 @@ tasks:
   check-extension-id:
     description: 'Verify the built extension manifest keeps the pinned key and permission surface, and identity.rs stays the only definition site'
     deps: ['extension:build']
-    command: 'bun scripts/check-extension-id.ts'
+    script: |
+      set -e
+      bun scripts/check-extension-id.ts
+      bun test scripts/tests/check-extension-id.test.ts
     inputs: ['/build/extension/chrome-mv3/manifest.json']
     options:
       mutex: 'generated-contract'

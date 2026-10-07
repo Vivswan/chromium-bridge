@@ -5,8 +5,8 @@
 // src/apps/extension/tests/shared/manifest.test.ts asserts the manifest SOURCE (wxt.config.ts).
 //
 //   built manifest   -> the shipped artifact keeps the pinned key, the exact permission set, the Chrome floor,
-//                       no install-time host access, and no manifest-declared content scripts; skipped loudly
-//                       without a build
+//                       no install-time host access, and no manifest-declared content scripts; the task depends
+//                       on extension:build, so a missing manifest is an error, not a skip
 //   core/src         -> identity.rs is the only file that DEFINES an identity constant, by name (a shadowing
 //                       PINNED_EXTENSION_ID in browsers.rs would feed registration a different allowed_origins
 //                       while the generated TS, emitted from identity.rs, stayed green) or by value. Only a
@@ -26,11 +26,16 @@ import {
   PINNED_EXTENSION_ID,
 } from "../src/packages/shared/src/identity.gen";
 
-const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const problems: string[] = [];
+const BUILT_MANIFEST = "build/extension/chrome-mv3/manifest.json";
 
-const builtManifestPath = resolve(root, "build/extension/chrome-mv3/manifest.json");
-if (existsSync(builtManifestPath)) {
+/** What the built manifest under root gets wrong, against the pinned surface. */
+export function builtManifestProblems(root: string): string[] {
+  const problems: string[] = [];
+  const builtManifestPath = resolve(root, BUILT_MANIFEST);
+  // The task depends on extension:build, so after it an absent manifest is a defect, not a reason to skip.
+  if (!existsSync(builtManifestPath)) {
+    return [`built manifest missing at ${BUILT_MANIFEST}`];
+  }
   const built = JSON.parse(readFileSync(builtManifestPath, "utf8")) as {
     key?: unknown;
     permissions?: unknown;
@@ -63,33 +68,37 @@ if (existsSync(builtManifestPath)) {
   if (JSON.stringify(built.content_scripts ?? []) !== "[]") {
     problems.push("built manifest declares content_scripts; injection must stay runtime-only");
   }
-} else {
-  console.log("note: build/extension/chrome-mv3 not built; skipped built-manifest verification");
+  return problems;
 }
 
-const coreSrc = resolve(root, "src/packages/core/src");
-const identityNames = ["NATIVE_HOST_ID", "PINNED_EXTENSION_ID", "EXTENSION_MANIFEST_KEY"];
-const identityValues = [NATIVE_HOST_ID, PINNED_EXTENSION_ID, EXTENSION_MANIFEST_KEY].map(
-  RegExp.escape,
-);
-const definesIdentity = new RegExp(
-  `^\\s*(?:pub(?:\\([^)]*\\))?\\s+)?(?:const|static)\\s+(?:r#)?(?:(?:${identityNames.join("|")})\\s*:|\\w+\\s*:\\s*&str\\s*=\\s*"(?:${identityValues.join("|")})")`,
-  "m",
-);
-for (const entry of readdirSync(coreSrc, { recursive: true }) as string[]) {
-  if (!entry.endsWith(".rs") || entry === "identity.rs") continue;
-  if (definesIdentity.test(readFileSync(resolve(coreSrc, entry), "utf8"))) {
-    problems.push(
-      `src/packages/core/src/${entry} defines an identity constant (the single source is identity.rs; re-export it instead)`,
+/** The core source files besides identity.rs that define an identity constant, by name or by value. */
+export function identityDefiners(root: string): string[] {
+  const coreSrc = resolve(root, "src/packages/core/src");
+  const identityNames = ["NATIVE_HOST_ID", "PINNED_EXTENSION_ID", "EXTENSION_MANIFEST_KEY"];
+  const identityValues = [NATIVE_HOST_ID, PINNED_EXTENSION_ID, EXTENSION_MANIFEST_KEY].map(
+    RegExp.escape,
+  );
+  const definesIdentity = new RegExp(
+    `^\\s*(?:pub(?:\\([^)]*\\))?\\s+)?(?:const|static)\\s+(?:r#)?(?:(?:${identityNames.join("|")})\\s*:|\\w+\\s*:\\s*&str\\s*=\\s*"(?:${identityValues.join("|")})")`,
+    "m",
+  );
+  return (readdirSync(coreSrc, { recursive: true }) as string[])
+    .filter((entry) => entry.endsWith(".rs") && entry !== "identity.rs")
+    .filter((entry) => definesIdentity.test(readFileSync(resolve(coreSrc, entry), "utf8")))
+    .map(
+      (entry) =>
+        `src/packages/core/src/${entry} defines an identity constant (the single source is identity.rs; re-export it instead)`,
     );
-  }
 }
 
-if (problems.length > 0) {
-  for (const p of problems) console.error(`check-extension-id: ${p}`);
-  process.exit(1);
+if (import.meta.main) {
+  const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
+  const problems = [...builtManifestProblems(root), ...identityDefiners(root)];
+  if (problems.length > 0) {
+    for (const p of problems) console.error(`check-extension-id: ${p}`);
+    process.exit(1);
+  }
+  console.log(
+    `check-extension-id: identity.rs is the only definition site for ${NATIVE_HOST_ID} and ${PINNED_EXTENSION_ID}; the built manifest keeps the pinned security surface`,
+  );
 }
-console.log(
-  `check-extension-id: identity.rs is the only definition site for ${NATIVE_HOST_ID} and ${PINNED_EXTENSION_ID}` +
-    (existsSync(builtManifestPath) ? "; the built manifest keeps the pinned security surface" : ""),
-);
