@@ -257,7 +257,9 @@ clients:
   pair_failed: "配对被拒绝: $1"
   pair_invalid_name: "客户端名称无效 (需要 1-32 个 [A-Za-z0-9._-] 字符, 以字母或数字开头)"
   pair_invalid_hash: "哈希锚点必须是 40 或 64 个小写十六进制字符"
-  pair_invalid_signer: "签名者锚点不能为空"
+  pair_invalid_signer_empty: "签名者锚点不能为空"
+  pair_invalid_signer_nul: "签名者锚点不能包含 NUL 字节"
+  pair_invalid_signer_ill_formed: "签名者锚点不能包含未配对的代理项"
 
 registration:
   desc: "每个浏览器在哪里查找此主机。修复会为每个检测到的浏览器重写清单, 与 `chromium-bridge doctor --fix` 相同。"

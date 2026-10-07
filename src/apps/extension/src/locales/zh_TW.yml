@@ -257,7 +257,9 @@ clients:
   pair_failed: "配對被拒絕: $1"
   pair_invalid_name: "用戶端名稱無效 (需要 1-32 個 [A-Za-z0-9._-] 字元, 以字母或數字開頭)"
   pair_invalid_hash: "雜湊錨點必須是 40 或 64 個小寫十六進位字元"
-  pair_invalid_signer: "簽署者錨點不能為空"
+  pair_invalid_signer_empty: "簽署者錨點不能為空"
+  pair_invalid_signer_nul: "簽署者錨點不能包含 NUL 位元組"
+  pair_invalid_signer_ill_formed: "簽署者錨點不能包含未配對的代理項"
 
 registration:
   desc: "每個瀏覽器在哪裡尋找此主機。修復會為每個偵測到的瀏覽器重寫資訊清單, 與 `chromium-bridge doctor --fix` 相同。"

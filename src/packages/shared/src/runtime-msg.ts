@@ -100,24 +100,56 @@ export type KillView = z.infer<typeof KillViewSchema>;
  * the wire; the host re-checks it at the frame boundary. */
 export const ClientNameSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/);
 
+/** Why an anchor is refused, one code per sentence the host's grammar prints (ipc::identity HashDigest and
+ * SignerId), plus the fault no terminal can type: an unpaired UTF-16 surrogate, which the host's JSON reader
+ * would answer by closing the connection, not with a refusal. The page's sentence table is a Record over this
+ * union, so a fault added here has no sentence until that table gains it, and that is a type error. */
+export const ANCHOR_FAULTS = [
+  "hash_grammar",
+  "signer_empty",
+  "signer_nul",
+  "signer_ill_formed",
+] as const;
+
+export type AnchorFault = (typeof ANCHOR_FAULTS)[number];
+
+const isAnchorFault = (message: string): message is AnchorFault =>
+  (ANCHOR_FAULTS as readonly string[]).includes(message);
+
+function signerFault(value: string): AnchorFault | null {
+  if (value.length === 0) return "signer_empty";
+  if (value.includes("\u0000")) return "signer_nul";
+  if (!value.isWellFormed()) return "signer_ill_formed";
+  return null;
+}
+
 /** The host's anchor grammars (ipc::identity HashDigest: 20 or 32 bytes of lowercase hex; SignerId: non-empty,
- * NUL-free),
- * applied here because the host refuses a malformed anchor at its frame parse WITHOUT touching its pending
- * presence slot, while the worker drops its copy of any pending request the moment an act frame is posted; a
- * frame the host would refuse must therefore never be posted. */
+ * NUL-free, and here also well-formed), applied here because the host refuses a malformed anchor at its frame
+ * parse WITHOUT touching its pending presence slot, while the worker drops its copy of any pending request the
+ * moment an act frame is posted; a frame the host would refuse must therefore never be posted. A refused
+ * `{ kind, value: string }` input's issue carries an [`AnchorFault`] as its message. */
 export const ClientAnchorSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("hash"),
-    value: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
+    value: z
+      .string()
+      .regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/, { error: "hash_grammar" satisfies AnchorFault }),
   }),
   z.strictObject({
     kind: z.literal("signer"),
-    value: z
-      .string()
-      .min(1)
-      .refine((v) => !v.includes("\u0000")),
+    value: z.string().superRefine((value, ctx) => {
+      const fault = signerFault(value);
+      if (fault) ctx.addIssue({ code: "custom", message: fault });
+    }),
   }),
 ]);
+
+/** The fault behind a refused anchor parse of a `{ kind, value: string }` input. */
+export function anchorFault(error: z.ZodError): AnchorFault {
+  const fault = error.issues.map((issue) => issue.message).find(isAnchorFault);
+  if (fault === undefined) throw new Error(`anchor refused without a fault: ${error.message}`);
+  return fault;
+}
 
 /** The answer to a presence-gated act: the host's request, which the page settles with the tap. */
 const TapRequired = z.object({ ok: z.literal(true), request: PresenceRequestFrameSchema });

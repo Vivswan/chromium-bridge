@@ -44,7 +44,9 @@ const EN = Object.fromEntries(
     clients_pair_failed: "Pairing refused: $1",
     clients_pair_invalid_name: "<name grammar sentence>",
     clients_pair_invalid_hash: "<hash grammar sentence>",
-    clients_pair_invalid_signer: "<signer grammar sentence>",
+    clients_pair_invalid_signer_empty: "<signer empty sentence>",
+    clients_pair_invalid_signer_nul: "<signer NUL sentence>",
+    clients_pair_invalid_signer_ill_formed: "<signer surrogate sentence>",
     presence_asking: "asking",
     presence_tapping: "tapping",
     presence_confirming: "confirming",
@@ -163,6 +165,26 @@ describe("TrustedClientsPanel pairing", () => {
       kind: "hash" as const,
       value: "AB".repeat(20),
       sentence: "<hash grammar sentence>",
+    },
+    // Each signer fault gets its own sentence (the CLI's for empty and NUL, the page's for the surrogate), not
+    // one shared refusal.
+    {
+      name: "a blank signer anchor",
+      kind: "signer" as const,
+      value: " ",
+      sentence: "<signer empty sentence>",
+    },
+    {
+      name: "a NUL inside a signer anchor",
+      kind: "signer" as const,
+      value: "A\u0000B",
+      sentence: "<signer NUL sentence>",
+    },
+    {
+      name: "an unpaired surrogate as a signer anchor",
+      kind: "signer" as const,
+      value: "\uD800",
+      sentence: "<signer surrogate sentence>",
     },
   ])("$name is refused before anything is posted", async ({ kind, value, sentence }) => {
     await mount();

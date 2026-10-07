@@ -1,5 +1,7 @@
 import type { TrustedClient } from "@chromium-bridge/shared/generated/envelope";
 import {
+  type AnchorFault,
+  anchorFault,
   ClientAnchorSchema,
   ClientNameSchema,
   type RuntimeResponse,
@@ -7,6 +9,7 @@ import {
 import { useCallback, useEffect, useId, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/hooks/useI18n";
+import type { MessageKey } from "@/lib/i18n";
 import { send } from "@/lib/messages";
 import { PresenceActStatus } from "./PresenceActStatus";
 import { usePresenceAct } from "./usePresenceAct";
@@ -19,6 +22,15 @@ import { usePresenceAct } from "./usePresenceAct";
 // process to measure. The list lives host-side; reads and writes go through the SW router to the native host, so
 // this panel shows a not-connected state when no host is up.
 type AnchorKind = TrustedClient["anchor"]["kind"];
+
+/** The sentence for each anchor fault: the CLI's (ipc::identity) for the three it can print, the page's own
+ * for the unpaired surrogate no terminal types. */
+const ANCHOR_FAULT_KEYS: Readonly<Record<AnchorFault, MessageKey>> = {
+  hash_grammar: "clients.pair_invalid_hash",
+  signer_empty: "clients.pair_invalid_signer_empty",
+  signer_nul: "clients.pair_invalid_signer_nul",
+  signer_ill_formed: "clients.pair_invalid_signer_ill_formed",
+};
 
 export function TrustedClientsPanel() {
   const { t } = useI18n();
@@ -66,9 +78,7 @@ export function TrustedClientsPanel() {
     }
     const anchor = ClientAnchorSchema.safeParse({ kind, value: value.trim() });
     if (!anchor.success) {
-      setFormError(
-        t(kind === "hash" ? "clients.pair_invalid_hash" : "clients.pair_invalid_signer"),
-      );
+      setFormError(t(ANCHOR_FAULT_KEYS[anchorFault(anchor.error)]));
       return;
     }
     void pairing.run(() =>

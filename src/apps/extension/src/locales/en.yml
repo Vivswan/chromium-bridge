@@ -259,7 +259,9 @@ clients:
   pair_failed: "Pairing refused: $1"
   pair_invalid_name: "invalid client name (want 1-32 chars of [A-Za-z0-9._-], starting alphanumeric)"
   pair_invalid_hash: "hash anchor must be 40 or 64 lowercase hex characters"
-  pair_invalid_signer: "signer anchor must be non-empty"
+  pair_invalid_signer_empty: "signer anchor must be non-empty"
+  pair_invalid_signer_nul: "signer anchor must not contain a NUL byte"
+  pair_invalid_signer_ill_formed: "signer anchor must not contain an unpaired surrogate"
 
 registration:
   desc: "Where each browser looks for this host. Repair rewrites the manifests for every detected browser, the same as `chromium-bridge doctor --fix`."

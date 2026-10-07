@@ -5,7 +5,13 @@ import { describe, expect, test } from "bun:test";
 import { z } from "zod";
 import { EnclaveProofFrameSchema } from "../generated/envelope";
 import { CompromisedMarkSchema, EnclaveInboundFrameSchema, EnclavePinSchema } from "../src/enclave";
-import { RUNTIME_CONTRACT, RuntimeMsgSchema, type RuntimeMsgType } from "../src/runtime-msg";
+import {
+  anchorFault,
+  ClientAnchorSchema,
+  RUNTIME_CONTRACT,
+  RuntimeMsgSchema,
+  type RuntimeMsgType,
+} from "../src/runtime-msg";
 import { AllowlistSchema, PendingApprovalsSchema } from "../src/storage";
 
 // The router's one parse is all that stands between an extension-page message and a trust-state mutation; a
@@ -81,6 +87,18 @@ describe("RuntimeMsgSchema", () => {
       {
         name: "with an empty signer anchor",
         msg: { type: "pair_client", name: "codex", anchor: { kind: "signer", value: "" } },
+      },
+      {
+        name: "with a NUL inside the signer anchor",
+        msg: { type: "pair_client", name: "codex", anchor: { kind: "signer", value: "A\u0000B" } },
+      },
+      {
+        name: "with an unpaired high surrogate as the signer anchor",
+        msg: { type: "pair_client", name: "codex", anchor: { kind: "signer", value: "\uD800" } },
+      },
+      {
+        name: "with an unpaired low surrogate inside the signer anchor",
+        msg: { type: "pair_client", name: "codex", anchor: { kind: "signer", value: "A\uDC00B" } },
       },
       {
         name: "with an anchor kind the host has no parser for",
@@ -186,6 +204,33 @@ describe("RuntimeMsgSchema", () => {
   )("refuses $type $name", ({ msg }) => {
     expect(RuntimeMsgSchema.safeParse(msg).success).toBe(false);
   });
+});
+
+// The page shows the CLI's sentence for the fault the host's SignerId grammar names (ipc::identity), so the
+// fault must be told apart here, not folded into one refusal; and a value no terminal can type (an unpaired
+// UTF-16 surrogate) is refused before the host's JSON reader would close the connection over it, while a
+// paired surrogate is ordinary text. Well-formedness is the platform's own judgment (String.isWellFormed).
+describe("ClientAnchorSchema", () => {
+  test.each([
+    { kind: "hash", value: "zz", fault: "hash_grammar" },
+    { kind: "signer", value: "", fault: "signer_empty" },
+    { kind: "signer", value: "A\u0000B", fault: "signer_nul" },
+    { kind: "signer", value: "\uD800", fault: "signer_ill_formed" },
+    { kind: "signer", value: "A\uDC00B", fault: "signer_ill_formed" },
+  ] as const)("names the fault of $kind $value", ({ kind, value, fault }) => {
+    const result = ClientAnchorSchema.safeParse({ kind, value });
+    expect(result.success ? "accepted" : anchorFault(result.error)).toBe(fault);
+  });
+
+  test.each(["TEAMID", "\uD83D\uDE00 Corp", "Developer ID: Example"])(
+    "accepts signer %j",
+    (value) => {
+      expect(ClientAnchorSchema.safeParse({ kind: "signer", value })).toEqual({
+        success: true,
+        data: { kind: "signer", value },
+      });
+    },
+  );
 });
 
 describe("enclave frame schemas", () => {
