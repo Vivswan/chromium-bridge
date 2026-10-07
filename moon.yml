@@ -598,7 +598,7 @@ tasks:
       bun test scripts/tests/check-ignored.test.ts scripts/tests/lib.test.ts
 
   check-install-hooks:
-    description: 'No workspace package.json declares a script bun runs at install time (preinstall, install, postinstall, prepare): bun install must never depend on a build output'
+    description: 'No workspace package.json declares a script bun runs at install time (preinstall, install, postinstall, preprepare, prepare, postprepare): bun install must never depend on a build output'
     script: |
       set -e
       bun scripts/check-install-hooks.ts

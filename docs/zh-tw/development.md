@@ -105,7 +105,7 @@ CI 在此之上還會執行更多: macOS 與 Windows 的 rust 矩陣、覆蓋率
 
 ```sh
 bun install
-moon run gen                             # the TS side of the Rust contract: a core test, the tsc run, and the extension build read it; the moon tasks build it themselves
+moon run gen                             # the TS side of the Rust contract: the tsc run and the extension build read it; the moon tasks build it themselves
 bun run --cwd src/apps/extension wxt prepare   # the WXT tsconfig and module types the extension's tsc reads; moon's extension:prepare
 cargo build --release
 cargo nextest run

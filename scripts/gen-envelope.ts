@@ -748,8 +748,18 @@ export function assertSignalPlan(variants: Map<string, unknown>): void {
   }
 }
 
-/** G7: every Rust variant planned exactly once, every planned tag a Rust variant, every bare tag fieldless. */
-export function assertFramePlan(group: Group, variants: Map<string, unknown>): void {
+/** The way a control tag travels, as the Rust emitter spells it from the core's direction table. */
+export type FrameDirection = "browser_to_host" | "host_to_browser";
+
+/** G7: every Rust variant planned exactly once, every planned tag a Rust variant, every bare tag fieldless,
+ * and the plan agrees with the direction table: a writer is a browser->host frame (the host parses it as a
+ * HostRequest), a reader or bare tag a host->browser frame. The Rust side holds HostRequest to the same
+ * table, so the frames the extension writes and the frames the host accepts are one roster. */
+export function assertFramePlan(
+  group: Group,
+  variants: Map<string, unknown>,
+  directions: Readonly<Record<string, FrameDirection>>,
+): void {
   const planned = new Map<string, string>();
   const plan = (tag: string, how: string) => {
     const prior = planned.get(tag);
@@ -782,6 +792,16 @@ export function assertFramePlan(group: Group, variants: Map<string, unknown>): v
       if (fields.length > 0 || !keys.includes("type")) {
         throw new Error(`gen-envelope: bare tag ${tag} carries fields ${fields.join(", ")} (G7)`);
       }
+    }
+    const direction = directions[tag];
+    if (direction === undefined) {
+      throw new Error(`gen-envelope: the Rust direction table has no entry for ${tag} (G7)`);
+    }
+    const expected: FrameDirection = how === "a writer" ? "browser_to_host" : "host_to_browser";
+    if (direction !== expected) {
+      throw new Error(
+        `gen-envelope: ${tag} is planned as ${how} but the Rust direction table says ${direction} (G7)`,
+      );
     }
   }
 }
@@ -844,6 +864,7 @@ async function main(): Promise<void> {
     admin: unknown;
     policy: unknown;
     webauthn: unknown;
+    directions: Readonly<Record<string, FrameDirection>>;
   };
 
   const variants = {
@@ -852,7 +873,7 @@ async function main(): Promise<void> {
     policy: await splitTaggedUnionSchema(fromRust.policy),
     webauthn: await splitTaggedUnionSchema(fromRust.webauthn),
   };
-  for (const group of GROUPS) assertFramePlan(group, variants[group]);
+  for (const group of GROUPS) assertFramePlan(group, variants[group], fromRust.directions);
   const signals = await splitTaggedUnionSchema(fromRust.signal);
   assertSignalPlan(signals);
 
@@ -1091,13 +1112,6 @@ async function main(): Promise<void> {
       await exportSchema(name, preparedFrame(group, tag), false, typeOf(name));
     }
   }
-
-  pieces.push(
-    "// Which extension->host frames have a generated writer schema above.",
-    "export const GENERATED_WRITER_FRAMES = {",
-    ...manifest(WRITER_FRAMES),
-    "} as const;",
-  );
 
   const out = `// GENERATED from the Rust core wire types (src/packages/core/src/protocol.rs and
 // protocol/control.rs; AdminControl embeds allowlist::ClientEntry, PolicyControl embeds

@@ -10,8 +10,15 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { die, repoRoot } from "./lib.ts";
 
-/** The lifecycle scripts bun runs during `bun install` (its own, then npm's install-time names). */
-export const INSTALL_HOOKS = ["preinstall", "install", "postinstall", "prepare"] as const;
+/** The lifecycle scripts bun runs during `bun install`. */
+export const INSTALL_HOOKS = [
+  "preinstall",
+  "install",
+  "postinstall",
+  "preprepare",
+  "prepare",
+  "postprepare",
+] as const;
 
 export interface InstallHook {
   /** The manifest, relative to the root. */

@@ -43,13 +43,15 @@ describe("installHooks", () => {
       }),
       "tools/package.json": manifest({
         name: "tools",
-        scripts: { preinstall: "echo", install: "echo" },
+        scripts: { preinstall: "echo", install: "echo", preprepare: "echo", postprepare: "echo" },
       }),
     });
     expect(installHooks(root)).toEqual([
       { file: "package.json", script: "prepare" },
       { file: "tools/package.json", script: "preinstall" },
       { file: "tools/package.json", script: "install" },
+      { file: "tools/package.json", script: "preprepare" },
+      { file: "tools/package.json", script: "postprepare" },
     ]);
   });
 

@@ -64,18 +64,9 @@ jobs:
         shard: [0, 1, 2, 3, 4, 5, 6, 7]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
       - uses: ./.github/actions/setup-moon
         with:
           cargo: "true"
-      # The baseline test run reads the generated TS wire module (a build output of the gen tasks, whose cargo runs
-      # take --frozen and so need the crates fetched first).
-      - run: bun install --frozen-lockfile
-      - run: |
-          cargo fetch --locked
-          cargo fetch --locked --manifest-path src/packages/core/fuzz/Cargo.toml
-      - run: moon run gen-shared
       - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
         with:
           tool: cargo-mutants

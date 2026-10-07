@@ -65,21 +65,10 @@ jobs:
           - os: macos-14
           - os: windows-latest
     steps:
-      # Full history on every job that runs moon: in a pull request, `moon run` diffs HEAD against GITHUB_BASE_REF
-      # even without --affected, and that `git diff main HEAD` fails when `main` is unknown, as in a depth-1 checkout.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
       - uses: ./.github/actions/setup-moon
         with:
           cargo: "true"
-      # One core test holds the Rust frame roster to the generated TS wire module, a build output the gen tasks
-      # write (their cargo runs take --frozen, which never fetches, so the crates are fetched first).
-      - run: bun install --frozen-lockfile
-      - run: |
-          cargo fetch --locked
-          cargo fetch --locked --manifest-path src/packages/core/fuzz/Cargo.toml
-      - run: moon run gen-shared
       - if: runner.os == 'Linux'
         run: cargo fmt --check
       - if: runner.os == 'Linux'
@@ -134,18 +123,9 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
       - uses: ./.github/actions/setup-moon
         with:
           cargo: "true"
-      # The core tests read the generated TS wire module (a build output of the gen tasks, whose cargo runs take
-      # --frozen and so need the crates fetched first).
-      - run: bun install --frozen-lockfile
-      - run: |
-          cargo fetch --locked
-          cargo fetch --locked --manifest-path src/packages/core/fuzz/Cargo.toml
-      - run: moon run gen-shared
       - run: rustup component add llvm-tools-preview
       - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
         with:
@@ -258,8 +238,6 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
       - uses: ./.github/actions/release-binary
         with:
           mode: download

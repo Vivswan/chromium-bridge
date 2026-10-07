@@ -105,7 +105,7 @@ The repo-wide verbs cover every language at once: `moon run lint` is clippy plus
 
 ```sh
 bun install
-moon run gen                             # the TS side of the Rust contract: a core test, the tsc run, and the extension build read it; the moon tasks build it themselves
+moon run gen                             # the TS side of the Rust contract: the tsc run and the extension build read it; the moon tasks build it themselves
 bun run --cwd src/apps/extension wxt prepare   # the WXT tsconfig and module types the extension's tsc reads; moon's extension:prepare
 cargo build --release
 cargo nextest run

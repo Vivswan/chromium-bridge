@@ -84,33 +84,14 @@ fn host_control_tags_mirror_the_wire_enums() {
     }
 }
 
-/// The browser->host frames the extension constructs, as the generated wire module lists them
-/// (`GENERATED_WRITER_FRAMES`, kept in step with the wire enums by `moon run check-envelope`).
-fn generated_writer_frames() -> BTreeSet<String> {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../shared/generated/envelope.ts"
-    );
-    let source = std::fs::read_to_string(path).unwrap();
-    let (_, rest) = source
-        .split_once("export const GENERATED_WRITER_FRAMES = {")
-        .unwrap();
-    let (block, _) = rest.split_once("} as const;").unwrap();
-    block
-        .split('"')
-        .skip(1)
-        .step_by(2)
-        .map(str::to_string)
-        .collect()
-}
-
 #[test]
 fn host_request_variants_match_their_wire_enum_variants() {
     // Cross-type consistency: the extension's generated writer types come from the wire enums, while the
-    // host parses HostRequest. The browser->host roster must be one set three ways (the direction table,
-    // the HostRequest variants, the generated writer frames), or a legitimate request classifies as
-    // malformed; and a field present on one side only would make the genuine extension's frame malformed
-    // (or let a field travel unparsed). Shapes are compared as schemas, docs aside.
+    // host parses HostRequest. The browser->host roster must be one set two ways (the direction table and
+    // the HostRequest variants; the TS generator holds its writer plan to the emitted direction table), or
+    // a legitimate request classifies as malformed; and a field present on one side only would make the
+    // genuine extension's frame malformed (or let a field travel unparsed). Shapes are compared as
+    // schemas, docs aside.
     let mut wire = variant_tags::<EnclaveControl>();
     wire.extend(variant_tags::<AdminControl>());
     wire.extend(variant_tags::<PolicyControl>());
@@ -125,11 +106,6 @@ fn host_request_variants_match_their_wire_enum_variants() {
     assert_eq!(
         request_tags, browser_to_host,
         "HostRequest must name exactly the browser->host tags"
-    );
-    assert_eq!(
-        request_tags,
-        generated_writer_frames(),
-        "HostRequest must name exactly the frames the extension's writer types cover"
     );
     for (tag, request) in requests {
         let counterpart = wire

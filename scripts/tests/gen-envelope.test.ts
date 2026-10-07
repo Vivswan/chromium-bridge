@@ -13,6 +13,7 @@ import {
   applyAsymmetries,
   assertFramePlan,
   assertGeneratedMatches,
+  type FrameDirection,
   prepare,
   splitFlattenedCommand,
   splitTaggedUnionSchema,
@@ -645,29 +646,55 @@ describe("assertFramePlan (G7)", () => {
     type: "object",
     properties: { type: { type: "string", const: tag }, ...extra },
   });
+  // The enclave group's direction table as the Rust emitter spells it: the two frames the extension writes
+  // travel browser->host, the three it reads or classifies by tag travel host->browser.
+  const directions: Record<string, FrameDirection> = {
+    enclave_challenge: "browser_to_host",
+    enclave_revoke: "browser_to_host",
+    enclave_proof: "host_to_browser",
+    enclave_error: "host_to_browser",
+    enclave_revoked: "host_to_browser",
+  };
+  const planned = new Map(Object.keys(directions).map((tag) => [tag, variant(tag)]));
+
   test("an unplanned Rust frame, a planned frame the enum lost, and a bare tag with fields are refused", () => {
-    const planned = new Map(
-      [
-        "enclave_challenge",
-        "enclave_proof",
-        "enclave_error",
-        "enclave_revoke",
-        "enclave_revoked",
-      ].map((tag) => [tag, variant(tag)]),
-    );
-    expect(() => assertFramePlan("enclave", planned)).not.toThrow();
+    expect(() => assertFramePlan("enclave", planned, directions)).not.toThrow();
     expect(() =>
-      assertFramePlan("enclave", new Map([...planned, ["enclave_new", variant("enclave_new")]])),
+      assertFramePlan(
+        "enclave",
+        new Map([...planned, ["enclave_new", variant("enclave_new")]]),
+        directions,
+      ),
     ).toThrow("unplanned frame enclave_new");
     const lost = new Map(planned);
     lost.delete("enclave_error");
-    expect(() => assertFramePlan("enclave", lost)).toThrow("has no such frame");
+    expect(() => assertFramePlan("enclave", lost, directions)).toThrow("has no such frame");
     const grown = new Map([
       ...planned,
       ["enclave_revoked", variant("enclave_revoked", { reason: { type: "string" } })],
     ]);
-    expect(() => assertFramePlan("enclave", grown)).toThrow(
+    expect(() => assertFramePlan("enclave", grown, directions)).toThrow(
       "bare tag enclave_revoked carries fields reason",
+    );
+  });
+
+  // The cross-language roster: the Rust test holds HostRequest to the direction table, this rule holds the
+  // writer plan to the same table, so a frame the host accepts without a writer type, or a writer type for a
+  // frame the host never parses as a request, aborts generation instead of surfacing at runtime.
+  test("a plan that disagrees with the direction table is refused: a writer that travels host->browser, a reader that travels browser->host, a tag the table lacks", () => {
+    expect(() =>
+      assertFramePlan("enclave", planned, { ...directions, enclave_revoke: "host_to_browser" }),
+    ).toThrow(
+      "enclave_revoke is planned as a writer but the Rust direction table says host_to_browser",
+    );
+    expect(() =>
+      assertFramePlan("enclave", planned, { ...directions, enclave_proof: "browser_to_host" }),
+    ).toThrow(
+      "enclave_proof is planned as a reader but the Rust direction table says browser_to_host",
+    );
+    const { enclave_revoked: _absent, ...partial } = directions;
+    expect(() => assertFramePlan("enclave", planned, partial)).toThrow(
+      "the Rust direction table has no entry for enclave_revoked",
     );
   });
 });
