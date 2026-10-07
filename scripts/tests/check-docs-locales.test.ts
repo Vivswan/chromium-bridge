@@ -12,16 +12,18 @@ afterEach(() => scratch.remove());
 
 const ENGLISH = { "docs/a.md": "# A\n", "docs/sec/b.md": "# B\n", "README.md": "# R\n" };
 const absent = (locale: LocaleReport["locale"]): LocaleReport => ({ locale, present: false });
-const full = (locale: LocaleReport["locale"]): LocaleReport => ({
+const full = (locale: LocaleReport["locale"]): Extract<LocaleReport, { present: true }> => ({
   locale,
   present: true,
   missing: [],
   extra: [],
+  generatedDrift: [],
+  structureDrift: [],
   readmeMissing: false,
 });
 
-// The contract the rewrite's locale directories must meet: every English page has its mirror and
-// nothing exists in one language only. Both directions are judged, the README rides along, and the
+// The contract a locale directory must meet: every English page has its mirror and nothing exists
+// in one language only. Both directions are judged, the README rides along, and the
 // old `.zh_CN.md` suffix files are not a locale.
 describe("checkLocales", () => {
   const cases: ReadonlyArray<
@@ -47,6 +49,8 @@ describe("checkLocales", () => {
           present: true,
           missing: ["sec/b.md"],
           extra: ["extra.md"],
+          generatedDrift: [],
+          structureDrift: [],
           readmeMissing: true,
         },
         absent("zh-tw"),
@@ -67,6 +71,8 @@ describe("checkLocales", () => {
           present: true,
           missing: ["a.md", "sec/b.md"],
           extra: [],
+          generatedDrift: [],
+          structureDrift: [],
           readmeMissing: false,
         },
       ],
@@ -88,6 +94,116 @@ describe("checkLocales", () => {
       },
       [full("zh-cn"), full("zh-tw")],
       [],
+    ],
+    [
+      "a generated region in a translated page must equal the English one byte for byte; a translated page without the region, or with another name's region, is drift too",
+      {
+        "docs/a.md":
+          "# A\n<!-- BEGIN GENERATED: map (bun x) -->\ngraph TD\n<!-- END GENERATED: map -->\n",
+        "docs/sec/b.md":
+          "# B\n<!-- BEGIN GENERATED: map -->\ngraph TD\n<!-- END GENERATED: map -->\n",
+        "docs/c.md": "# C\n<!-- BEGIN GENERATED: map -->\ngraph TD\n<!-- END GENERATED: map -->\n",
+        "README.md": "# R\n",
+        "docs/zh-cn/a.md":
+          "# \u7532\n<!-- BEGIN GENERATED: map (bun x) -->\ngraph LR\n<!-- END GENERATED: map -->\n",
+        "docs/zh-cn/sec/b.md": "# \u4e59\n",
+        "docs/zh-cn/c.md":
+          "# \u4e19\n<!-- BEGIN GENERATED: chart -->\ngraph TD\n<!-- END GENERATED: chart -->\n",
+        "README.zh-cn.md": "# R\n",
+        "docs/zh-tw/a.md":
+          "# \u7532\n<!-- BEGIN GENERATED: map (bun x) -->\ngraph TD\n<!-- END GENERATED: map -->\n",
+        "docs/zh-tw/sec/b.md":
+          "# \u4e59\n<!-- BEGIN GENERATED: map -->\ngraph TD\n<!-- END GENERATED: map -->\n",
+        "docs/zh-tw/c.md":
+          "# \u4e19\n<!-- BEGIN GENERATED: map -->\ngraph TD\n<!-- END GENERATED: map -->\n",
+        "README.zh-tw.md": "# R\n",
+      },
+      [
+        {
+          ...full("zh-cn"),
+          generatedDrift: [
+            "docs/zh-cn/a.md: generated region map",
+            "docs/zh-cn/c.md: generated region chart",
+            "docs/zh-cn/c.md: generated region map",
+            "docs/zh-cn/sec/b.md: generated region map",
+          ],
+        },
+        full("zh-tw"),
+      ],
+      [
+        "docs/zh-cn/a.md: generated region map differs from the English page's; copy it byte for byte",
+        "docs/zh-cn/c.md: generated region chart differs from the English page's; copy it byte for byte",
+        "docs/zh-cn/c.md: generated region map differs from the English page's; copy it byte for byte",
+        "docs/zh-cn/sec/b.md: generated region map differs from the English page's; copy it byte for byte",
+      ],
+    ],
+    [
+      "a translation keeps the English page's structure: a dropped heading, a lost fence (inside a list item " +
+        "included), a missing table row (an indented one included), a renamed flag, a changed double-backtick or " +
+        "triple-backtick span, or a span whose interior or boundary spaces differ is drift; prose, fence contents, a " +
+        "table's delimiter row, a marker line with trailing text inside a fence, a span wrapped across indented lines " +
+        "(its line break reads as one space), and the headings, rows, and backticks inside a fence are not; the root " +
+        "README is judged too",
+      {
+        "docs/a.md":
+          "# A\n\nRun `pair --reset` then `revoke`, or ``echo `whoami` ``. Use ```doctor --fix``` too.\n\n## B\n\n~~~text\n```\n~~~ not a closer\n# not a heading\n| not | a row |\n`not " +
+          "code`\n~~~\n\n| k | v |\n| --- | --- |\n| `x` | 1 |\n\n1. Run `doctor\n   --fix` now.\n\n   ```sh\n   echo ok\n   ```\n\n   | i | j |\n   | --- | --- |\n   | `y` | 2 |\n",
+        "docs/sec/b.md":
+          "# B\n\nPlain `one` and `two\nthree` and `printf '%s' 'a  b'` into `report.txt `.\n",
+        "README.md": "# R\n\n- `doctor --fix`\n",
+        "docs/zh-cn/a.md":
+          "# \u7532\n\n\u57f7\u884c `pair --reset`, \u6216 ``echo `hostname` ``. Use ```doctor --list``` too.\n\n| k | v |\n| --- | --- |\n\n1. \u57f7\u884c `doctor --fix` now.\n\n   | i | j |\n   | --- | --- |\n",
+        "docs/zh-cn/sec/b.md":
+          "# \u4e59\n\n\u7d14 `one` \u8207 `two three` \u8207 `printf '%s' 'a b'` \u5230 `report.txt`.\n",
+        "README.zh-cn.md": "# R\n\n- `doctor --fix`\n- `doctor --fix`\n",
+        "docs/zh-tw/a.md":
+          "# \u7532\n\n\u57f7\u884c `pair --reset` \u518d `revoke`, \u6216 ``echo `whoami` ``. Use ```doctor --fix``` too.\n\n## " +
+          "\u4e59\n\n~~~text\n```\n\u4e0d\u540c\u7684\u5167\u5bb9\n~~~\n\n| \u9375 | \u503c |\n| --- | --- |\n| `x` | 1 |\n\n1. \u57f7\u884c `doctor\n   --fix` now.\n\n   ```sh\n   \u597d\n  " +
+          " ```\n\n   | i | j |\n   | --- | --- |\n   | `y` | 2 |\n",
+        "docs/zh-tw/sec/b.md":
+          "# \u4e59\n\n\u7d14 `two three` \u8207 `one` \u8207 `printf '%s' 'a  b'` \u5230 `report.txt `.\n",
+        "README.zh-tw.md": "# R\n\n- `doctor --fix`\n",
+      },
+      [
+        {
+          ...full("zh-cn"),
+          structureDrift: [
+            "docs/zh-cn/a.md: headings 1 vs 2 in the English",
+            "docs/zh-cn/a.md: fences 0 vs 2 in the English",
+            "docs/zh-cn/a.md: tableRows 2 vs 4 in the English",
+            "docs/zh-cn/a.md: English only `doctor --fix`",
+            "docs/zh-cn/a.md: translation only `doctor --list`",
+            "docs/zh-cn/a.md: translation only `echo `hostname` `",
+            "docs/zh-cn/a.md: English only `echo `whoami` `",
+            "docs/zh-cn/a.md: English only `revoke`",
+            "docs/zh-cn/a.md: English only `x`",
+            "docs/zh-cn/a.md: English only `y`",
+            "docs/zh-cn/sec/b.md: English only `printf '%s' 'a  b'`",
+            "docs/zh-cn/sec/b.md: translation only `printf '%s' 'a b'`",
+            "docs/zh-cn/sec/b.md: translation only `report.txt`",
+            "docs/zh-cn/sec/b.md: English only `report.txt `",
+            "README.zh-cn.md: translation only `doctor --fix`",
+          ],
+        },
+        full("zh-tw"),
+      ],
+      [
+        "docs/zh-cn/a.md: headings 1 vs 2 in the English; a translation keeps the English page's headings, fences, table rows, and inline code",
+        "docs/zh-cn/a.md: fences 0 vs 2 in the English; a translation keeps the English page's headings, fences, table rows, and inline code",
+        "docs/zh-cn/a.md: tableRows 2 vs 4 in the English; a translation keeps the English page's headings, fences, table rows, and inline code",
+        "docs/zh-cn/a.md: English only `doctor --fix`; a translation keeps the English page's headings, fences, table rows, and inline code",
+        "docs/zh-cn/a.md: translation only `doctor --list`; a translation keeps the English page's headings, fences, table rows, and inline code",
+        "docs/zh-cn/a.md: translation only `echo `hostname` `; a translation keeps the English page's headings, fences, table rows, and inline code",
+        "docs/zh-cn/a.md: English only `echo `whoami` `; a translation keeps the English page's headings, fences, table rows, and inline code",
+        "docs/zh-cn/a.md: English only `revoke`; a translation keeps the English page's headings, fences, table rows, and inline code",
+        "docs/zh-cn/a.md: English only `x`; a translation keeps the English page's headings, fences, table rows, and inline code",
+        "docs/zh-cn/a.md: English only `y`; a translation keeps the English page's headings, fences, table rows, and inline code",
+        "docs/zh-cn/sec/b.md: English only `printf '%s' 'a  b'`; a translation keeps the English page's headings, fences, table rows, and inline code",
+        "docs/zh-cn/sec/b.md: translation only `printf '%s' 'a b'`; a translation keeps the English page's headings, fences, table rows, and inline code",
+        "docs/zh-cn/sec/b.md: translation only `report.txt`; a translation keeps the English page's headings, fences, table rows, and inline code",
+        "docs/zh-cn/sec/b.md: English only `report.txt `; a translation keeps the English page's headings, fences, table rows, and inline code",
+        "README.zh-cn.md: translation only `doctor --fix`; a translation keeps the English page's headings, fences, table rows, and inline code",
+      ],
     ],
   ];
 

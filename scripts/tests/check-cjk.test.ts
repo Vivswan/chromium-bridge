@@ -39,6 +39,20 @@ describe("checkCjk", () => {
     expect(checkCjk(dir, gitEnv())).toEqual({ status: "clean" });
   });
 
+  test("a translated page under a docs locale tree or a root README translation is allowed; the English page beside it is not", () => {
+    const dir = repo({
+      [CONTROL_FILE]: `title: ${HAN}\n`,
+      "docs/zh-cn/security/trust-boundaries.md": `# ${HAN}\n`,
+      "docs/zh-tw/cli.md": `# ${HAN}\n`,
+      "README.zh-cn.md": `# ${HAN}\n`,
+      "README.zh-tw.md": `# ${HAN}\n`,
+    });
+    expect(checkCjk(dir, gitEnv())).toEqual({ status: "clean" });
+    writeFileSync(join(dir, "docs/cli.md"), `# ${HAN}\n`);
+    runGit(dir, gitEnv(), "add", "-A");
+    expect(checkCjk(dir, gitEnv())).toEqual({ status: "hits", hits: `docs/cli.md:1:# ${HAN}` });
+  });
+
   test("a control file without CJK fails the gate instead of passing it vacuously", () => {
     const dir = repo({ [CONTROL_FILE]: "title: plain\n", "README.md": "# Title\n" });
     expect(() => checkCjk(dir, gitEnv())).toThrow("engine is blind");

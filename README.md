@@ -55,7 +55,7 @@ The CLI needs nothing beyond the binary itself, on desktops, headless machines, 
 
    Keep the binary at a stable path (it is registered in place). On Linux, `~/.local/lib/chromium-bridge/` is a good home. `chromium-bridge uninstall` reverses exactly what was registered.
 
-3. Load the extension: the archive's `extension/dist/` directory via `chrome://extensions`, Developer mode, "Load unpacked". Restart the browser. The extension needs Chrome 134 or later; an older browser refuses to load it.
+3. Load the extension: the archive's `extension/dist` directory via `chrome://extensions`, Developer mode, "Load unpacked". Restart the browser. The extension needs Chrome 134 or later; an older browser refuses to load it.
 
 4. On macOS, pair: `chromium-bridge pair` (Touch ID), then approve the fingerprint on the extension's options page; the extension requires enrollment there by default. Linux and Windows skip this step.
 

@@ -1,9 +1,11 @@
 #!/usr/bin/env bun
 // Translated docs live in directories mirroring the English tree, which the docs site turns into
 // locales with a language switcher. A page in one language and not another is a dead switcher
-// entry, so a present locale is judged file-for-file against docs/.
+// entry, so a present locale is judged file-for-file against docs/, and each mirrored page keeps the
+// English page's generated regions byte for byte and its structure (headings, fences, table rows,
+// inline code), since those carry identifiers a translation must not drift from.
 
-import { statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { parseArgs } from "node:util";
 
@@ -19,6 +21,10 @@ export type LocaleReport =
       readonly missing: readonly string[];
       /** Pages under docs/<locale>/ that mirror no English page. */
       readonly extra: readonly string[];
+      /** Mirrored pages whose generated region (`<!-- BEGIN GENERATED: name -->`) differs from the English one, each `<page>: generated region <name>` under its root-relative path. */
+      readonly generatedDrift: readonly string[];
+      /** Mirrored pages whose structure (headings, fences, table rows, inline code) differs from the English one, each `<page>: <measure or span>` under its root-relative path. */
+      readonly structureDrift: readonly string[];
       readonly readmeMissing: boolean;
     };
 
@@ -35,6 +41,81 @@ const isDirectory = (path: string): boolean =>
   statSync(path, { throwIfNoEntry: false })?.isDirectory() ?? false;
 const isFile = (path: string): boolean =>
   statSync(path, { throwIfNoEntry: false })?.isFile() ?? false;
+
+// A generated region is rendered into the English page by a script that knows nothing of the locale
+// copies, so a translated page carries it byte for byte or it is stale: the renderer's own check reads
+// docs/architecture.md alone.
+const GENERATED =
+  /<!-- BEGIN GENERATED: (\S+?)(?: \([^)]*\))? -->\n[\s\S]*?<!-- END GENERATED: \1 -->/g;
+
+function generatedRegions(file: string): Map<string, string> {
+  const regions = new Map<string, string>();
+  for (const match of readFileSync(file, "utf8").matchAll(GENERATED))
+    regions.set(match[1] ?? "", match[0]);
+  return regions;
+}
+
+// A translation keeps the English page's shape: the same headings, fences, and table rows, and the same
+// inline code spans, which are identifiers and never translated. A count or a span that differs is a page
+// that drifted from its English, a missing row or a renamed flag, which no reader of one language sees.
+// Bun's Markdown renderer reads the page, so the constructs' edge cases (a span holding backticks or
+// wrapping a line, a fence inside a list item, a quoted heading) are the parser's, not this check's.
+interface Structure {
+  readonly headings: number;
+  readonly fences: number;
+  /** Header and body rows; the delimiter row is syntax, not a row. */
+  readonly tableRows: number;
+  /** Every inline code span, in order of appearance, its line breaks read as spaces; every other character, a boundary space included, is content. */
+  readonly inlineCode: readonly string[];
+}
+
+function structureOf(file: string): Structure {
+  let headings = 0;
+  let fences = 0;
+  let tableRows = 0;
+  const inlineCode: string[] = [];
+  Bun.markdown.render(readFileSync(file, "utf8"), {
+    heading: () => {
+      headings++;
+      return "";
+    },
+    code: () => {
+      fences++;
+      return "";
+    },
+    tr: () => {
+      tableRows++;
+      return "";
+    },
+    codespan: (content) => {
+      inlineCode.push(content.replace(/\n/g, " "));
+      return "";
+    },
+  });
+  return { headings, fences, tableRows, inlineCode };
+}
+
+function inlineCodeDiff(ours: readonly string[], theirs: readonly string[]): string[] {
+  const counts = new Map<string, number>();
+  for (const span of ours) counts.set(span, (counts.get(span) ?? 0) + 1);
+  for (const span of theirs) counts.set(span, (counts.get(span) ?? 0) - 1);
+  return [...counts]
+    .filter(([, count]) => count !== 0)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(
+      ([span, count]) =>
+        `${count > 0 ? "English only" : "translation only"} \`${span}\`${Math.abs(count) > 1 ? ` x${Math.abs(count)}` : ""}`,
+    );
+}
+
+function structureDriftOf(english: string, translation: string): string[] {
+  const ours = structureOf(english);
+  const theirs = structureOf(translation);
+  const counts = (["headings", "fences", "tableRows"] as const)
+    .filter((measure) => ours[measure] !== theirs[measure])
+    .map((measure) => `${measure} ${theirs[measure]} vs ${ours[measure]} in the English`);
+  return [...counts, ...inlineCodeDiff(ours.inlineCode, theirs.inlineCode)];
+}
 
 function pages(dir: string): string[] {
   if (!isDirectory(dir)) return [];
@@ -58,12 +139,35 @@ export function checkLocales(root: string): LocaleReport[] {
     if (!isDirectory(dir) && !isFile(readme)) return { locale, present: false };
     const mirrored = new Set(pages(dir));
     const wanted = new Set(english);
+    const generatedDrift = english
+      .filter((page) => mirrored.has(page))
+      .flatMap((page) => {
+        const ours = generatedRegions(join(docs, page));
+        const theirs = generatedRegions(join(dir, page));
+        // Both directions: a region the English page lost but the translation kept is drift too.
+        const names = new Set([...ours.keys(), ...theirs.keys()]);
+        return [...names]
+          .filter((name) => ours.get(name) !== theirs.get(name))
+          .sort()
+          .map((name) => `docs/${locale}/${page}: generated region ${name}`);
+      });
+    const readmeMissing = !isFile(readme);
+    const structureDrift = [
+      ...english
+        .filter((page) => mirrored.has(page))
+        .map((page) => [`docs/${locale}/${page}`, join(docs, page), join(dir, page)] as const),
+      ...(readmeMissing ? [] : [[`README.${locale}.md`, join(root, "README.md"), readme] as const]),
+    ].flatMap(([label, ours, theirs]) =>
+      structureDriftOf(ours, theirs).map((detail) => `${label}: ${detail}`),
+    );
     return {
       locale,
       present: true,
       missing: english.filter((page) => !mirrored.has(page)),
       extra: [...mirrored].filter((page) => !wanted.has(page)),
-      readmeMissing: !isFile(readme),
+      generatedDrift,
+      structureDrift,
+      readmeMissing,
     };
   });
 }
@@ -78,6 +182,13 @@ export function problemsOf(reports: readonly LocaleReport[]): string[] {
         (page) => `docs/${locale}/${page} is missing (docs/${page} has no mirror)`,
       ),
       ...report.extra.map((page) => `docs/${locale}/${page} mirrors nothing under docs/`),
+      ...report.generatedDrift.map(
+        (entry) => `${entry} differs from the English page's; copy it byte for byte`,
+      ),
+      ...report.structureDrift.map(
+        (entry) =>
+          `${entry}; a translation keeps the English page's headings, fences, table rows, and inline code`,
+      ),
     ];
   });
 }
@@ -85,7 +196,8 @@ export function problemsOf(reports: readonly LocaleReport[]): string[] {
 const USAGE = [
   "usage: check-docs-locales.ts [--root <dir>]",
   "  --root  the repository root (default: cwd)",
-  "exit 0: every present locale mirrors docs/ file-for-file (or no locale exists yet);" +
+  "exit 0: every present locale mirrors docs/ file-for-file, its generated regions byte-identical and its structure" +
+    " (headings, fences, table rows, inline code) equal to the English (or no locale exists yet);" +
     " 1: problems, each printed; 2: usage or no docs/ under the root",
 ].join("\n");
 

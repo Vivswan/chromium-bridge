@@ -1,5 +1,4 @@
 # Allowed docs-probe findings: page, unit fingerprint, first words. Regenerate with
 # `bun scripts/docs-probe.ts --print-baseline <the pages of moon.yml check-docs-probe>`.
 CONTRIBUTING.md 3ca2c172  # path: .worktrees/
-README.md 9ddf5673  # path: extension/dist/
 docs/quickstart.md 03c4d19c  # list item: On macOS, pair. Run chromium-bridge pair
