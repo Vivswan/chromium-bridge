@@ -41,7 +41,7 @@ This is a small, security-sensitive project (it drives a real logged-in browser)
    ```sh
    moon run ci        # rust fmt/clippy/nextest + typos/machete + TS typecheck/biome/test/build + protocol e2e
    ```
-   - The gate is uncached by design (every step sets `cache: false` in its moon.yml), so it always runs the full suite. `moon ci` (affected-only) is a local convenience, never the gate.
+   - The gate is uncached by design (the workspace task default; [docs/development.md](./docs/development.md#moon-the-canonical-command-interface) says why), so it always runs the full suite. `moon ci` (affected-only) is a local convenience, never the gate.
    - Browser tests (`moon run test-browser`) are not part of `moon run ci`. They run **only** against an isolated Chrome for Testing via `CHROME_BIN`, never your daily Chrome (see Safety below and [tests/README.md](./tests/README.md)).
    - CI runs them in checks.yml's `browser` job (inside the all-green gate) against an isolated Chrome. Runtime-behavior changes (reconnect, handshake, service worker) must still be verified there manually.
 5. **Open a PR and squash-merge.** Push the branch, open a PR against `main`, wait for **all required checks green**, then **squash-merge** (one change = one commit on `main`):
@@ -59,8 +59,8 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org): `typ
 
 - Allowed `type`: `build` `chore` `ci` `docs` `feat` `fix` `perf` `refactor` `revert` `style` `test`. This is the fleet-wide list; CI enforces it on the PR title (the `pr-title` check) and on every commit subject in the push/PR range (the fleet's validate-commit-names action).
 - Prefer the most precise type over `chore`: dependency bumps -> `build`, workflow changes -> `ci`, documentation -> `docs`.
-- `scope` is optional (`session`, `tools`, `error`, `ci`, `ext`, ...).
-- `subject` is imperative, present tense, lower-case, no trailing period; explain the *why* in the body. One logical change per commit.
+- `scope` is optional and names the area (`core`, `extension`, `options`, `cli`, `gen`, `ci`, ...).
+- `subject` is a declarative sentence: what the change does once it lands, not an instruction. `the pre-commit gate runs the repository's own toolchain and installs nothing`, not `run the gate with the repo toolchain`. The same two checks hold the grammar: lower-case start, no trailing period, one scope. The *why* goes in the body. One logical change per commit.
 
 ## Safety (non-negotiable)
 
