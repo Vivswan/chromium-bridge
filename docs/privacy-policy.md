@@ -42,8 +42,8 @@ The extension stores a small amount of configuration in the browser's local exte
 
 - Your list of approved sites (the allowlist).
 - Your extension settings/preferences, including the display language.
-- The security policy in force for this extension, as received from the native host (verified against the host's signature once you have enrolled), and whether the kill switch is engaged.
-- If you enroll, the public-key fingerprint used to verify your own computer's security hardware (never a private key: that stays in the Secure Enclave).
+- The security policy in force for this extension, as received from the native host (verified against the host's signature once you have paired), and whether the kill switch is engaged.
+- If you pair, the fingerprint of the native host's key, used to verify that host (never a private key: the host's key lives in the OS credential store, or in a file in the host's runtime directory when you chose `pair --file-store`; [architecture.md](./architecture.md#43-on-disk-artifacts) owns where).
 - A bounded, local log of recent security decisions (confirmations, revocations), viewable on the options page.
 
 This data never leaves your device and is removed when you uninstall the extension.

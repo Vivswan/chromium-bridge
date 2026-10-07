@@ -31,7 +31,7 @@ moon run setup   # installs the bun workspace, the pinned Rust toolchain, and th
 | [`typos`](https://github.com/crate-ci/typos) + [`cargo-machete`](https://github.com/bnjbvr/cargo-machete) | 拼字 + 未使用相依套件閘門 | `moon run typos` / `moon run machete`; CI 在受管理的 ci.yml 中把關 typos, 在 checks.yml 中把關 machete |
 | [`actionlint`](https://github.com/rhysd/actionlint) | GitHub Actions 工作流程 lint 閘門 | `moon run check-actions`; CI 在受管理的 ci.yml 的 actionlint 工作中執行 |
 
-Git hooks 由 [lefthook](https://lefthook.dev) 管理 (`lefthook.yml`): `moon run setup` 會接上一個執行 `moon run gate` 的 pre-commit hook, 即儲存庫自身工具鏈所能提供的檢查; `moon run ci` 再加上只有 CI 才配備的工具。
+Git hooks 由 [lefthook](https://lefthook.dev) 管理 (`lefthook.yml`): `moon run setup` 會接上多個 hooks, 在提交前與 rebase 後執行 `moon run gate`, 即儲存庫自身工具鏈所能提供的檢查; `moon run ci` 再加上只有 CI 才配備的工具。
 
 ## 目錄配置
 

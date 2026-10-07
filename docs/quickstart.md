@@ -8,7 +8,7 @@ The extension needs Chrome 134 or later; an older browser refuses to load it.
 
 ## The CLI (macOS, Linux, Windows)
 
-The CLI needs nothing but the binary, on desktops, headless machines, and CI alike. The one exception today is pairing on macOS (step 5), which needs a build codesigned with an application identifier.
+The CLI needs nothing but the binary, on desktops, headless machines, and CI alike.
 
 1. **Install it.** Pick one from the [latest release](https://github.com/Vivswan/chromium-bridge/releases/latest); to verify a download first, the commands are in [SECURITY.md](../.github/SECURITY.md#release-artifact-integrity).
 
@@ -37,11 +37,11 @@ The CLI needs nothing but the binary, on desktops, headless machines, and CI ali
 
    Once the listing exists, [cli.md's pointer table](./cli.md#doctor---fix--uninstall-native-messaging-registration) says which browsers then offer the extension from the pointer step 3 left, and where none is written.
 
-5. **On macOS, pair.** Run `chromium-bridge pair` (Touch ID prompts and the key's fingerprint is printed), then approve that fingerprint on the extension's options page. On macOS the extension requires this enrollment unconditionally (the old `requireEnrollment` opt-out was retired) and refuses to act until the pin is in place.
+5. **Pair.** Run `chromium-bridge pair`: it asks for a confirmation typed on the terminal, mints the host key, and prints the key's fingerprint. Approve that fingerprint on the extension's options page; the extension refuses to act until the pin is in place, on every platform ([cli.md](./cli.md#enrollment-pair--revoke--enclave-status) owns the ceremony and its flags).
 
-   Pairing today needs a build codesigned with an application identifier: the plain release binary cannot mint the Enclave key. A later change moves presence to WebAuthn and removes that requirement; it is not implemented yet. Linux and Windows have no Secure Enclave and skip this step.
+6. **Enroll (recommended).** From the options page's identity section, enroll your browser's authenticator. The first enrollment on the machine is trust on first use; every later one needs a tap from an authenticator already enrolled.
 
-6. **Connect your MCP client** to the binary's absolute path. For Claude Code:
+7. **Connect your MCP client** to the binary's absolute path. For Claude Code:
 
    ```sh
    claude mcp add chromium-bridge -- /absolute/path/to/chromium-bridge
@@ -55,15 +55,15 @@ The full command reference (pairing, trusted clients, revocation, the kill switc
 
 - `chromium-bridge doctor` reports your browser's registration as `ok` and, once your MCP client has a session open, the server as reachable.
 - The extension's toolbar icon shows the connection state.
-- The first tool call against a new site raises an approval prompt in the browser; high-risk actions raise a confirmation window; on an enrolled Mac, `page_eval` and `page_upload` raise Touch ID.
+- The first tool call against a new site raises an approval prompt in the browser; high-risk actions raise a confirmation window.
 
 ## Recommended hardening
 
-Pairing (step 5) is required on macOS and is what upgrades the highest-risk confirmations to hardware Touch ID. One more optional ceremony binds the MCP-client side:
+Pairing (step 5) is required on every platform. Enrolling (step 6) is recommended: a browser with no enrolled authenticator answers a presence request, such as a kill-switch release, in the confirmation window instead of with a tap. One more optional ceremony binds the MCP-client side:
 
 - `chromium-bridge pair-client` creates the trusted-client allowlist. Once it exists, only MCP clients whose attested code identity you approved are served, and any surface can revoke one at any time.
 
-Both are described in [cli.md](./cli.md) and the [security page](./security.md).
+All three are described in [cli.md](./cli.md) and the [security page](./security.md).
 
 ## Uninstalling
 
@@ -77,4 +77,6 @@ Both are described in [cli.md](./cli.md) and the [security page](./security.md).
 | Homebrew | `brew uninstall chromium-bridge` |
 | archive | delete the extracted directory |
 
-Enrollment state is separate: `chromium-bridge revoke --all` deletes the host key and forgets every browser and trusted client, and the extension's options page clears its pin.
+Pairing state is separate: `chromium-bridge revoke --all` deletes the host key and forgets every browser and trusted client, and the extension's options page clears its pin.
+
+The authenticators enrolled in step 6 live in `trust.json`. `revoke <browser>` forgets the ones enrolled under that browser's label, which is `default` for every browser on a shared unlabelled manifest, as [cli.md](./cli.md#enrollment-pair--revoke--enclave-status) explains. `revoke --all` starts over, and a `trust.json` that `doctor` cannot read is the [troubleshooting page's](./troubleshooting.md#doctor-says-the-kill-state-or-the-trust-record-is-unreadable) case.
