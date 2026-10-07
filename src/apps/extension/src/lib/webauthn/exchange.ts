@@ -135,9 +135,12 @@ interface AwaitingAct {
 }
 const awaitingAct = inLife<AwaitingAct | null>(() => null);
 /** A reply the host still owes for a request this side gave up on. `accepts` says whether a frame is that
- * reply, and names only frames the host never pushes, since a frame is matched to a debt by its tag alone;
+ * reply, and names only frames the host emits in reply to a frame this side posted, since a frame is matched
+ * to a debt by its tag alone: presence_request is one (the host mints it only for a frame it was sent, even
+ * where it lands outside the asking request's named replies, as an enrollment's does), kill_status_result is
+ * not (the host also pushes it on a transition or an unreadable record, with no frame behind it);
  * `leaves` is the further debt the consumed reply leaves (a late presence_result ok leaves the act's outcome
- * frame owed; an enrollment's pushed request leaves its enroll_result). Oldest first: the host answers in
+ * frame owed; an enrollment's unasked request leaves its enroll_result). Oldest first: the host answers in
  * order, so the oldest debt is paid first and a later request's reply can never be taken before it; a debt
  * is consumed before any correlation, so no reply settles a request it was not for. */
 interface OwedReply {
@@ -568,8 +571,9 @@ function answerPending(
 
 /** Route one inbound WebAuthn frame: a frame owed to a request given up on is dropped first; the rest
  * answers the outstanding exchange (a presence request's reader holds it for the page); a presence request
- * nobody asked for is a host push, held and opening the page where the tap happens, which shows the action
- * before asking for it; anything else is dropped. */
+ * no open request named (an enrollment's on an enrolled machine; OwedReply says which frames the host sends
+ * unasked) is held and opens the page where the tap happens, which shows the action before asking for it;
+ * anything else is dropped. */
 export function handleWebAuthnFrame(msg: WebAuthnInboundFrame): void {
   if (consumeOwed(msg.type, msg)) return;
   if (ceremony.answer(msg)) return;
