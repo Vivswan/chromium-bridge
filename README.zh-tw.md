@@ -20,21 +20,14 @@
 
 chromium-bridge 操作的是一個真實、已通過身分驗證的瀏覽器。它能讀取頁面內容、Cookie (包含 `httpOnly`) 與網頁儲存空間, 也能在你的頁面中執行 JavaScript。護欄如下:
 
-- **核准每一個網站。** 新的來源 (origin) 會觸發提示; 在你尚未核准的網站上, 什麼都不會執行。
-- **確認高風險動作。** 送出表單的點擊、按鍵、關閉分頁、檔案上傳, 以及每一次 `page_eval`, 都要在一個頁面看不到也點不到的、由擴充功能持有的視窗上確認。`page_eval` 與 `page_upload` 每次呼叫都重新確認。同一使用者的程式在這個視窗前後仍能做到的事, 寫在[信任邊界帳冊](./docs/zh-tw/security/trust-boundaries.md#邊界-4-擴充功能---網頁-chrome-api--內容指令碼--dom)裡。
-- **以 WebAuthn 證明在場。** 解除緊急開關需要在該瀏覽器下登記的認證器輕觸一次, 而登記另一個瀏覽器則需要本機上任何一個已登記的認證器輕觸一次; 兩者都由主機驗證。只有在沒有任何已登記的認證器能夠回應時, 才由確認視窗代替。
+- **核准每一個網站。** 頁面層級的工具只在你核准過的來源 (origin) 上執行, 新的來源會提示你; 只有分頁標題與 URL 不需核准 ([矩陣](./docs/zh-tw/security/tool-risk-matrix.md#橫切保護措施)、[標準線](./docs/zh-tw/security.md#一句話說清標準線))。
+- **確認高風險動作。** 送出與連結的點擊、按鍵、選取、關閉分頁、檔案上傳, 以及每一次 `page_eval`, 都要在一個頁面看不到也點不到的、由擴充功能持有的視窗上確認; `page_eval` 與 `page_upload` 每次呼叫都重新確認 ([你要確認什麼](./docs/zh-tw/security.md#你要確認什麼-以及什麼算在場))。同一使用者的程式在這個視窗前後仍能做到的事, 寫在[信任邊界帳冊](./docs/zh-tw/security/trust-boundaries.md#邊界-4-擴充功能---網頁-chrome-api--內容指令碼--dom)裡。
+- **以 WebAuthn 證明在場。** 解除緊急開關需要在該瀏覽器下登記的認證器輕觸一次, 而登記另一個瀏覽器則需要本機上任何一個已登記的認證器輕觸一次; 兩者都由主機驗證。只有在沒有任何已登記的認證器能夠回應時, 才由確認視窗代替 ([什麼算在場](./docs/zh-tw/security.md#你要確認什麼-以及什麼算在場))。
 - **閘門預設開啟。** 每一道閘門都是有文件記載的設定, 放寬任何一道都是明確且知情的選擇 ([SECURITY.md](./.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe))。
-- **憑證唯讀。** Cookie 與儲存空間可以讀取 (一律遮罩: JWT、長十六進位字串、長數字串), 但永遠不能寫入。刻意不提供 `cookie_set` 或 `storage_set`。
-- **經過驗證與證明的橋接。** 在 macOS 與 Linux 上, 主機程序透過一個私有的 Unix domain socket 通訊 (沒有監聽連接埠)。每一條連線都必須通過核心對端 UID 檢查、由核心證明的執行檔身分, 以及以每次執行的秘密為基礎的 HMAC 挑戰。
-- **受信任用戶端允許清單。** MCP 用戶端依據一份以經證明的程式碼身分為鍵的允許清單進行准入, 任何一方都能隨時撤銷信任。
-- **全域緊急開關。** 從 CLI 或擴充功能執行一個動作, 就能停止一切, 直到你以在場證明解除它 (輕觸一次、在該瀏覽器未登記任何認證器時使用確認視窗, 或在終端機輸入指定的語句)。每一個安全決策都會記錄到磁碟上的稽核日誌。
-
-橋接的保證在 macOS、Linux 與 Windows 上都成立; 各作業系統背後的機制不同 ([SECURITY.md](./.github/SECURITY.md#platform-support))。
-
-| 平台 | 橋接傳輸 | 連線的閘門 |
-|---|---|---|
-| macOS、Linux | 私有 Unix domain socket, 無監聽連接埠 | 對端 UID 檢查、核心證明、HMAC 挑戰 |
-| Windows | 只有你的使用者能開啟的具名管道, 無監聽連接埠 | 管道的描述元 (由核心強制執行)、相互證明、HMAC 挑戰 |
+- **Cookie 與網頁儲存空間唯讀。** `cookie_get` 與 `storage_get` 回傳遮罩後的值, 從不寫入 ([矩陣](./docs/zh-tw/security/tool-risk-matrix.md#橫切保護措施)); 遮罩能攔下什麼、會漏掉什麼, 由 [SECURITY.md](./.github/SECURITY.md#masking-is-heuristic-and-best-effort) 負責。
+- **經過驗證與證明的橋接。** 任何作業系統上都沒有監聽連接埠: macOS 與 Linux 上是一個私有的 Unix domain socket, Windows 上是只有你的使用者能開啟的具名管道。每一條連線都要通過同一使用者檢查、相互的執行檔證明, 以及以每次執行的秘密為基礎的 HMAC 挑戰; 各作業系統的機制見 [SECURITY.md 的平台表](./.github/SECURITY.md#platform-support)。
+- **受信任用戶端允許清單, 在你建立之後生效。** `chromium-bridge pair-client` 建立它; 之後只有程式碼身分經過證明且獲你核准的 MCP 用戶端才會獲得服務, 而且任何介面都能隨時撤銷其中一個 ([cli.md](./docs/zh-tw/cli.md#受信任用戶端-pair-client--revoke-client--list-clients))。
+- **全域緊急開關。** 從 CLI 或擴充功能執行一個動作, 就能停止一切, 直到你以在場證明解除它 (輕觸一次、在該瀏覽器未登記任何認證器時使用確認視窗, 或在終端機輸入指定的語句; [cli.md](./docs/zh-tw/cli.md#緊急開關-kill--unkill))。安全決策會記錄到磁碟上的稽核日誌 ([cli.md](./docs/zh-tw/cli.md#日誌與稽核-bb_log--bb_log_format) 負責事件清單及其兩個例外)。
 
 完整細節: [SECURITY.md](./.github/SECURITY.md)、[安全頁面](./docs/zh-tw/security.md)、[信任邊界](./docs/zh-tw/security/trust-boundaries.md)、[各工具風險矩陣](./docs/zh-tw/security/tool-risk-matrix.md)。
 
@@ -42,10 +35,10 @@ chromium-bridge 操作的是一個真實、已通過身分驗證的瀏覽器。�
 
 | | 支援 |
 |---|---|
-| macOS | 提供 Apple Silicon (arm64) 預先建置版本; Intel 需從原始碼建置 |
+| macOS | 提供 Apple Silicon (arm64) 預先建置版本; Intel 需從原始碼建置 ([建置矩陣](./docs/zh-tw/release.md#建置矩陣與預先建置的壓縮檔)) |
 | Linux | 提供 x64 預先建置版本; 任何 Chromium 系瀏覽器 |
 | Windows | 提供 x64 預先建置版本 (原生, 不需管理員權限); 只有你的使用者能開啟、並具相互證明的具名管道 ([SECURITY.md](./.github/SECURITY.md#platform-support)) |
-| 瀏覽器 | 任何 Chromium 系瀏覽器, Manifest V3: `chrome`、`chromium`、`brave`、`edge`、`vivaldi`、`opera` 是已知的 `--browser` 鍵值; 在 macOS 與 Linux 上, 其他變種透過 `doctor --fix --manifest-dir <dir>` 註冊, 而 Windows 上的註冊則是已知瀏覽器的一個 HKCU 登錄機碼 |
+| 瀏覽器 | 任何 Chromium 系瀏覽器, Manifest V3: `chrome`、`chromium`、`brave`、`edge`、`vivaldi`、`opera` 是已知的 `--browser` 鍵值; 在 macOS 與 Linux 上, 其他變種透過 `doctor --fix --manifest-dir <dir>` 註冊, 而 Windows 上的註冊則是已知瀏覽器的一個 HKCU 登錄機碼 ([cli.md](./docs/zh-tw/cli.md#doctor---fix--uninstall-原生訊息註冊)) |
 | MCP 用戶端 | 任何透過 stdio 使用 MCP 協定 `2026-07-28` 的用戶端 |
 | 內部橋接協定 | `1` ([src/packages/core/src/protocol.rs](./src/packages/core/src/protocol.rs) 中的 `BRIDGE_PROTOCOL_VERSION`) |
 
@@ -57,20 +50,20 @@ CLI 除了執行檔本身之外不需要任何東西, 在桌面、無頭機器�
 
 1. 從[最新發行版](https://github.com/Vivswan/chromium-bridge/releases/latest)安裝: `.pkg`、`.msi`、`.deb`、Homebrew (待 [tap](./docs/zh-tw/release.md#homebrew-tap) 建立後), 或壓縮檔。若要先驗證下載的檔案, 命令寫在 [SECURITY.md](./.github/SECURITY.md#release-artifact-integrity)。
 
-2. 將執行檔註冊到你的瀏覽器, 除非安裝程式已經做了 (`.pkg`、`.msi` 與 Homebrew 會做)。註冊是冪等的, 所以同一個命令既是全新安裝, 也是修復, 也是搬移執行檔後的重新註冊:
+2. 將執行檔註冊到你的瀏覽器, 除非安裝程式已經做了: `.pkg`、`.msi` 與 Homebrew 會做, `.deb` 也替安裝當時已有的瀏覽器做了 ([快速入門步驟 3](./docs/zh-tw/quickstart.md#cli-macoslinuxwindows))。這個命令是冪等的: 全新安裝、修復, 以及搬移執行檔後的重新註冊:
 
    ```sh
    chromium-bridge doctor --fix          # every detected browser
    chromium-bridge doctor --fix --browser chrome,brave
    ```
 
-   若使用壓縮檔, 請以 `./` 前綴執行解壓縮出來的執行檔, 並把它放在穩定的路徑 (它是就地註冊的)。`chromium-bridge uninstall` 會精確還原所註冊的內容。
+   若使用壓縮檔, 請以 `./` 前綴從穩定的路徑執行解壓縮出來的執行檔: 它是就地註冊的, 而 `chromium-bridge uninstall` 會精確還原所註冊的內容。
 
 3. 載入擴充功能: 透過 `chrome://extensions`, 開啟開發人員模式, 點「載入未封裝項目」, 選擇壓縮檔中的 `extension/dist` 目錄。重新啟動瀏覽器。擴充功能需要 Chrome 134 或更新版本; 更舊的瀏覽器會拒絕載入它。
 
 4. 配對, 然後登記 (建議): `chromium-bridge pair` 會印出主機金鑰的指紋; 在擴充功能的選項頁面核准它 ([docs/cli.md](./docs/zh-tw/cli.md#登記-pair--revoke--enclave-status))。在同一個頁面登記你瀏覽器的認證器是建議項, 而非必要; [快速入門的強化一節](./docs/zh-tw/quickstart.md#建議的強化)說明它帶來什麼。
 
-5. 將你的 MCP 用戶端連接到執行檔的絕對路徑 (大多數用戶端不會展開 `~`)。不帶參數執行時, 執行檔透過 stdio 使用 MCP 通訊。
+5. 將你的 MCP 用戶端連接到執行檔的絕對路徑。不帶參數執行時, 執行檔透過 stdio 使用 MCP 通訊。
 
    ```sh
    claude mcp add chromium-bridge -- /absolute/path/to/chromium-bridge
@@ -94,7 +87,9 @@ CLI 除了執行檔本身之外不需要任何東西, 在桌面、無頭機器�
 | 執行程式碼與上傳 | `page_eval` (預設關閉; 每次呼叫都要確認, 並顯示完整程式碼)、`page_upload` (預設關閉; 每次呼叫都會連同路徑一起確認) | 嚴重 |
 | 讀取憑證 | `cookie_get` (包含 `httpOnly`, 僅限已列入允許清單的主機)、`storage_get` (同源); 唯讀, 一律遮罩 | 高 |
 
-可以同時連接多個瀏覽器; 在 macOS 與 Linux 上, 每個瀏覽器都有自己的原生主機與標籤 (例如 `chrome` 與 `brave`), 其他每個工具都接受一個選用的 `browser` 參數, 而在連接多個瀏覽器時, 未指定瀏覽器的呼叫會以明確的錯誤失敗, 而不是猜測。刻意不提供任何寫入工具: 偽造的 `httpOnly` Cookie 是工作階段固定攻擊的風險。
+可以同時連接多個瀏覽器。獨自啟動其資訊清單的瀏覽器以自己的標籤接入, 共用同一份資訊清單的瀏覽器則共用中介的預設槽位 ([cli.md](./docs/zh-tw/cli.md#doctor---fix--uninstall-原生訊息註冊) 說明哪些瀏覽器共用); 其他每個工具都接受一個選用的 `browser` 參數, 而在連接多個瀏覽器時, 未指定瀏覽器的呼叫會失敗, 而不是猜測 ([矩陣](./docs/zh-tw/security/tool-risk-matrix.md#橫切保護措施))。
+
+Cookie 與網頁儲存空間刻意設計為唯讀: 沒有 `cookie_set` 或 `storage_set`, 因為偽造的 `httpOnly` Cookie 是工作階段固定攻擊的風險 ([矩陣](./docs/zh-tw/security/tool-risk-matrix.md#橫切保護措施))。
 
 ## 運作原理
 
@@ -115,8 +110,8 @@ MCP client B --stdio--> chromium-bridge ----attach----^   |
                              Chromium Bridge extension (MV3) --> your page
 ```
 
-- **MCP 伺服器 (預設模式):** 由你的 MCP 用戶端透過 stdio 啟動; JSON-RPC 2.0, MCP 協定 `2026-07-28`, 無狀態, 並為較舊的用戶端程式 (harness) 保留暫時的舊版相容性。第一個實例擁有 socket 並成為中介 (broker); 之後的實例以中繼身分附接。
-- **`--native-host`:** 由瀏覽器透過主機資訊清單啟動, 每個瀏覽器一個, 在 macOS 與 Linux 上各有自己的標籤; 一個精簡的橋接, 把 Chrome 的原生訊息訊框轉換為 socket 上的 NDJSON。
+- **MCP 伺服器 (預設模式):** 由你的 MCP 用戶端透過 stdio 啟動; JSON-RPC 2.0, MCP 協定 `2026-07-28`, 無狀態, 並為較舊的用戶端程式 (harness) 保留暫時的舊版相容性 ([architecture.md 3.2](./docs/zh-tw/architecture.md#32-mcp-json-rpc-mcp-伺服器---mcp-用戶端))。第一個實例擁有 socket 並成為中介 (broker); 之後的實例以中繼身分附接 ([5.3](./docs/zh-tw/architecture.md#53-第二個-mcp-用戶端接入))。
+- **`--native-host`:** 由瀏覽器透過主機資訊清單啟動, 每個瀏覽器一個, 標籤由 [cli.md](./docs/zh-tw/cli.md#doctor---fix--uninstall-原生訊息註冊) 為該資訊清單給定; 一個精簡的橋接, 把 Chrome 的原生訊息訊框轉換為 socket 上的 NDJSON。
 - **CLI:** 建立在同一個核心上的管理介面 (註冊、配對、撤銷、緊急開關、稽核)。它不是信任根; 授予能力的動作最終都要通過使用者在場的閘門。
 
 瀏覽器產生原生主機, MCP 用戶端產生伺服器, 所以兩者不是父子關係, 需要 IPC; 主機保持精簡, 讓 MV3 Service Worker 的回收 (約每 5 分鐘一次) 與主機重啟不會遺失工作階段狀態。深入探討見 [docs/architecture.md](./docs/zh-tw/architecture.md)。
