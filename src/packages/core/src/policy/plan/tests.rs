@@ -159,6 +159,19 @@ fn find_history_effective_refuses_an_ambiguous_revision() {
             .unwrap()
             .page_eval_enabled
     );
+    // Nor are two records whose tool lists differ only in order: the list is a set everywhere the policy is
+    // read, and the same judgment decides here.
+    let tools = |names: &[&str]| {
+        entry(Some(PolicyOverlay {
+            disabled_tools: Some(names.iter().map(|n| n.to_string()).collect()),
+            ..PolicyOverlay::default()
+        }))
+    };
+    let history = PolicyHistory {
+        entries: vec![tools(&["a", "b"]), tools(&["b", "a"])],
+    };
+    let effective = find_history_effective(&history, 4).unwrap();
+    assert_eq!(effective.disabled_tools, vec!["a", "b"]);
 }
 
 /// A rollback names a record by its content identity, not its position: two records that share a revision and

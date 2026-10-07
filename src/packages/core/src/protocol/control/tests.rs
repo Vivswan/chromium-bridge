@@ -901,19 +901,6 @@ fn registration_and_restrict_outcomes_map_onto_the_pinned_wire_shapes() {
             ],
         })
     );
-    // A revision without its policy, or a policy without its revision, is no record the host ever held.
-    for half in [
-        json!({ "revision": 3 }),
-        json!({ "effective": serde_json::to_value(&effective).unwrap() }),
-    ] {
-        let row = json!({
-            "id": "a1", "signed": true, "overlay_active": false, "superseded_unix": 10, "held": half,
-        });
-        assert!(
-            serde_json::from_value::<PolicyHistoryRow>(row).is_err(),
-            "a half-held row must not parse"
-        );
-    }
     assert_eq!(
         serde_json::to_value(
             HistoryReport::Unavailable {

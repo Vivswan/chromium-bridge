@@ -71,6 +71,14 @@ fn every_field_relaxes_exactly_toward_its_declared_pole() {
 }
 
 #[test]
+fn policy_equality_reads_the_tool_list_as_a_set_and_every_other_field_exactly() {
+    assert_eq!(with_tools(&["a", "b"]), with_tools(&["b", "a"]));
+    assert_eq!(with_tools(&["a", "b"]), with_tools(&["b", "a", "a"]));
+    assert_ne!(with_tools(&["a", "b"]), with_tools(&["a"]));
+    assert_ne!(with_reverify(0), with_reverify(1));
+}
+
+#[test]
 fn the_orders_a_naive_comparator_gets_wrong() {
     // hostReverifyMs: 0 = never re-verify = MOST permissive, above every
     // positive interval. disabledTools: a set, where dropping any anchor
@@ -188,10 +196,10 @@ fn serialized_bytes_are_the_signed_wire_contract() {
         serde_json::to_string(&values).unwrap(),
         format!("{{{fields}}}")
     );
-    assert_eq!(
-        serde_json::from_str::<PolicyValues>(&format!("{{{fields}}}")).unwrap(),
-        values
-    );
+    let decoded = serde_json::from_str::<PolicyValues>(&format!("{{{fields}}}")).unwrap();
+    assert_eq!(decoded, values);
+    // The wire's tool order round-trips as written; policy equality alone reads the list as a set.
+    assert_eq!(decoded.disabled_tools, values.disabled_tools);
 
     let mut overlay = PolicyOverlay::default();
     for field in PolicyField::ALL {

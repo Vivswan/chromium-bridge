@@ -287,7 +287,8 @@ macro_rules! policy_fields {
         ///
         /// Its own `deny_unknown_fields` is load-bearing: serde does NOT inherit a container attribute from an
         /// embedding type, so without it an unknown field inside a report's `effective` would parse silently.
-        #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+        /// Equality is the lattice's ([`field_differs`]), implemented below, never derived.
+        #[derive(Debug, Clone, Serialize, Deserialize)]
         #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
         #[serde(deny_unknown_fields)]
         pub struct PolicyValues {
@@ -666,6 +667,19 @@ fn field_relaxes(field: PolicyField, candidate: &PolicyValues, anchor: &PolicyVa
 pub(crate) fn field_differs(field: PolicyField, a: &PolicyValues, b: &PolicyValues) -> bool {
     field_relaxes(field, a, b) || field_relaxes(field, b, a)
 }
+
+/// Two policies are equal when no field differs under the lattice: the tool list compares as the set it is
+/// everywhere else, every other field exactly. The one equality every containing type inherits, since a
+/// vector's identity is not a policy's.
+impl PartialEq for PolicyValues {
+    fn eq(&self, other: &Self) -> bool {
+        PolicyField::ALL
+            .iter()
+            .all(|f| !field_differs(*f, self, other))
+    }
+}
+
+impl Eq for PolicyValues {}
 
 /// Whether `candidate` moves ANY field toward its permissive pole relative
 /// to `anchor` (the current effective policy). A relaxation is a capability
