@@ -13,7 +13,6 @@ import {
   applyAsymmetries,
   assertFramePlan,
   assertGeneratedMatches,
-  assertLibraryReadingMatches,
   convert,
   prepare,
   splitFlattenedCommand,
@@ -400,11 +399,13 @@ describe("prepare models string enums (G5 placement)", () => {
 // The asymmetry pass: the table's changes applied at their paths, the reader rules everywhere, and every way
 // an entry can fail to apply (A1). The fixtures are the prepared shapes the Rust readers have today.
 describe("applyAsymmetries", () => {
+  // A control frame as prepare leaves it: a required integer, two Option strings, a tagged union, and an
+  // Option object (serde's Option<Struct>: an anyOf with a null branch).
   const reader = strictObject(
     {
-      id: { type: "integer", format: "uint64", minimum: 0 },
+      id: { type: "integer", minimum: 0 },
       error: { type: ["string", "null"] },
-      label: { type: "string" },
+      label: { type: ["string", "null"] },
       anchor: {
         anyOf: [
           strictObject({ kind: { type: "string", const: "hash" }, value: { type: "string" } }, [
@@ -427,21 +428,48 @@ describe("applyAsymmetries", () => {
     ({ direction: "narrow", reason: "r", changes, probes: {} }) as Parameters<
       typeof applyAsymmetries
     >[2][string];
+  const loose = (properties: Record<string, unknown>, required: string[]) => ({
+    ...strictObject(properties, required),
+    additionalProperties: true,
+  });
+  const reads = (schema: unknown) => z.fromJSONSchema(schema as never);
 
-  test("the reader rules: null arms dropped everywhere, objects loose on a control frame only", () => {
-    const loose = applyAsymmetries(reader, "t", {}, true).schema;
-    expect(convert(loose, "t")).toBe(
-      'z.object({ "id": z.number().int().gte(0), "error": z.string().optional(), "label": z.string().optional(), ' +
-        '"anchor": z.union([z.object({ "kind": z.literal("hash"), "value": z.string() }).catchall(z.unknown()), ' +
-        'z.object({ "kind": z.literal("label"), "value": z.string() }).catchall(z.unknown())]), ' +
-        '"overlay": z.object({ "cdpMode": z.boolean().optional() }).catchall(z.unknown()).optional() }).catchall(z.unknown())',
+  test("the reader rules: null arms dropped on every Option, objects loose on a control frame only", () => {
+    const control = applyAsymmetries(reader, "t", {}, true).schema;
+    expect(control).toEqual(
+      loose(
+        {
+          id: { type: "integer", minimum: 0 },
+          error: { type: "string" },
+          label: { type: "string" },
+          anchor: {
+            anyOf: [
+              loose({ kind: { type: "string", const: "hash" }, value: { type: "string" } }, [
+                "kind",
+                "value",
+              ]),
+              loose({ kind: { type: "string", const: "label" }, value: { type: "string" } }, [
+                "kind",
+                "value",
+              ]),
+            ],
+          },
+          overlay: loose({ cdpMode: { type: "boolean" } }, []),
+        },
+        ["id", "anchor"],
+      ),
     );
-    const strict = applyAsymmetries(reader, "t", {}, false).schema;
-    expect(convert(strict, "t")).toContain('"error": z.string().optional()');
-    expect(convert(strict, "t")).not.toContain("catchall");
+    const envelope = applyAsymmetries(reader, "t", {}, false).schema as {
+      properties: Record<string, unknown>;
+      additionalProperties: unknown;
+    };
+    expect(envelope.additionalProperties).toBe(false);
+    expect(envelope.properties.error).toEqual({ type: "string" });
+    expect(JSON.stringify(envelope)).not.toContain('"additionalProperties":true');
   });
 
-  test("the changes, each at its path, and the emitted spellings", () => {
+  test("the changes, each at its path, as plain JSON Schema; the owner's schema is inlined whole", () => {
+    const overlaySchema = strictObject({ cdpMode: { type: "boolean" } }, []);
     const { schema, replacements } = applyAsymmetries(
       reader,
       "t",
@@ -457,20 +485,35 @@ describe("applyAsymmetries", () => {
         ]),
       },
       true,
+      new Map([["OverlaySchema", overlaySchema]]),
     );
-    expect(convert(schema, "t")).toBe(
-      'z.object({ "id": z.union([z.number().int().gte(0), z.string()]), "error": z.string().optional(), ' +
-        '"label": z.string().min(1).max(32).regex(/^[a-z\\/]+$/).optional(), ' +
-        '"anchor": z.object({ "kind": z.enum(["hash", "label"]), "value": z.string().min(1) }).catchall(z.unknown()), ' +
-        '"overlay": OverlaySchema.optional() }).catchall(z.unknown())',
+    expect(schema).toEqual(
+      loose(
+        {
+          id: { anyOf: [{ type: "integer", minimum: 0 }, { type: "string" }] },
+          error: { type: "string" },
+          label: { type: "string", minLength: 1, maxLength: 32, pattern: "^[a-z/]+$" },
+          anchor: loose(
+            {
+              kind: { type: "string", enum: ["hash", "label"] },
+              value: { type: "string", minLength: 1 },
+            },
+            ["kind", "value"],
+          ),
+          // Inlined as the owner wrote it: strict, and outside the loose-frames rule.
+          overlay: overlaySchema,
+        },
+        ["id", "anchor"],
+      ),
     );
-    // The replacement keeps the Rust node (post null-arm drop) for the A2 cross-check.
+    // The replacement keeps the Rust node (post null-arm drop) and the inlined schema for the A2 cross-checks.
     expect(replacements).toEqual([
       {
         path: "$.properties.overlay",
         symbol: "OverlaySchema",
         from: "./policy.gen",
         rust: strictObject({ cdpMode: { type: ["boolean", "null"] } }, []),
+        inlined: overlaySchema,
       },
     ]);
   });
@@ -498,6 +541,15 @@ describe("applyAsymmetries", () => {
       "A1",
     ],
     [
+      "a generated-schema entry naming a schema nothing builds",
+      {
+        "$.properties.overlay": entry([
+          { change: "generated-schema", symbol: "Ghost", from: "./x" },
+        ]),
+      },
+      "no schema named Ghost",
+    ],
+    [
       "a second change on a generated-schema replacement",
       {
         "$.properties.overlay": entry([
@@ -510,11 +562,17 @@ describe("applyAsymmetries", () => {
   ];
   test.each(refused)("%s is refused", (_, entries, message) => {
     expect(() =>
-      applyAsymmetries(reader, "t", entries as Parameters<typeof applyAsymmetries>[2], true),
+      applyAsymmetries(
+        reader,
+        "t",
+        entries as Parameters<typeof applyAsymmetries>[2],
+        true,
+        new Map([["S", strictObject({}, [])]]),
+      ),
     ).toThrow(message);
   });
 
-  test("an ok-split emits a discriminated union whose arms require and refuse exactly the declared fields (A3)", () => {
+  test("an ok-split is a union whose arms require and refuse exactly the declared fields (A3)", () => {
     // The field-level change (min 1 on label) is applied before the split, so both arms inherit it.
     const verdict = strictObject(
       {
@@ -537,11 +595,29 @@ describe("applyAsymmetries", () => {
       },
       true,
     );
-    expect(convert(schema, "t")).toBe(
-      'z.discriminatedUnion("ok", [' +
-        'z.object({ "ok": z.literal(true), "label": z.string().min(1), "error": z.undefined().optional() }).catchall(z.unknown()), ' +
-        'z.object({ "ok": z.literal(false), "label": z.undefined().optional(), "error": z.string() }).catchall(z.unknown())])',
-    );
+    expect(schema).toEqual({
+      anyOf: [
+        loose(
+          {
+            ok: { type: "boolean", const: true },
+            label: { type: "string", minLength: 1 },
+            error: false,
+          },
+          ["ok", "label"],
+        ),
+        loose({ ok: { type: "boolean", const: false }, label: false, error: { type: "string" } }, [
+          "ok",
+          "error",
+        ]),
+      ],
+    });
+    // The library reads a forbidden field as "absent or nothing": a present value, null included, fails the arm.
+    const reading = reads(schema);
+    expect(reading.safeParse({ ok: true, label: "x" }).success).toBe(true);
+    expect(reading.safeParse({ ok: false, error: "e", extra: 1 }).success).toBe(true);
+    expect(reading.safeParse({ ok: true }).success).toBe(false);
+    expect(reading.safeParse({ ok: true, label: "x", error: "e" }).success).toBe(false);
+    expect(reading.safeParse({ ok: false, error: "e", label: null }).success).toBe(false);
     for (const [why, arms] of [
       ["one arm only", [{ when: true, required: [], forbidden: [] }]],
       [
@@ -578,6 +654,7 @@ describe("applyAsymmetries", () => {
           ]),
         },
         true,
+        new Map([["VerdictSchema", verdict]]),
       ),
     ).toThrow("(A3)");
     // The discriminant must be a required boolean: a string `ok`, or an optional one, is refused.
@@ -624,20 +701,25 @@ describe("applyAsymmetries", () => {
       ),
     ).toThrow("one content field with one schema");
   });
+
   test("a required nullable property and nullable array items keep null; only an optional property drops it", () => {
-    const reader = {
-      type: "object",
-      additionalProperties: false,
-      properties: {
+    const reader = strictObject(
+      {
         values: { type: "array", items: { type: ["string", "null"] } },
         label: { type: ["string", "null"] },
         note: { type: ["string", "null"] },
       },
-      required: ["values", "label"],
-    };
-    expect(convert(applyAsymmetries(reader, "t", {}, false).schema, "t")).toBe(
-      'z.object({ "values": z.array(z.union([z.string(), z.null()])), "label": z.union([z.string(), z.null()]), ' +
-        '"note": z.string().optional() }).strict()',
+      ["values", "label"],
+    );
+    expect(applyAsymmetries(reader, "t", {}, false).schema).toEqual(
+      strictObject(
+        {
+          values: { type: "array", items: { type: ["string", "null"] } },
+          label: { type: ["string", "null"] },
+          note: { type: "string" },
+        },
+        ["values", "label"],
+      ),
     );
   });
 });
@@ -680,6 +762,7 @@ describe("assertGeneratedMatches (A2)", () => {
     symbol: "S",
     from: "./x",
     rust,
+    inlined: {},
   });
   const rustOverlay = {
     type: "object",
@@ -715,53 +798,15 @@ describe("assertGeneratedMatches (A2)", () => {
       additionalProperties: false,
       properties: { cdpMode: { type: ["boolean", "null"] } },
     };
-    const replacement = { path: "$.properties.overlay", symbol: "S", from: "./x", rust };
     expect(() =>
-      assertGeneratedMatches(replacement, z.strictObject({ cdpMode: z.boolean().optional() })),
+      assertGeneratedMatches(
+        replacement(rust),
+        z.strictObject({ cdpMode: z.boolean().optional() }),
+      ),
     ).not.toThrow();
     expect(() =>
-      assertGeneratedMatches(replacement, z.looseObject({ cdpMode: z.boolean().optional() })),
+      assertGeneratedMatches(replacement(rust), z.looseObject({ cdpMode: z.boolean().optional() })),
     ).toThrow("admits unknown fields where the Rust node refuses them");
-  });
-});
-
-// The hand emitter and z.fromJSONSchema are two readings of one node; the oracle holds the emitted schema to
-// the library's, so an integer claim the emitter drops (or invents) is a diff, not a quietly weaker parser.
-describe("assertLibraryReadingMatches (A4)", () => {
-  const node = strictObject(
-    {
-      id: { type: "integer", format: "uint64", minimum: 0 },
-      name: { type: ["string", "null"] },
-      tags: { type: "array", items: { type: "string", enum: ["a", "b"] } },
-    },
-    ["id", "tags"],
-  );
-  test("the pinned emission agrees with the library; one that loses the integer claim or the strict closing is refused", () => {
-    const agreeing = z
-      .object({
-        id: z.number().int().gte(0),
-        name: z.union([z.string(), z.null()]).optional(),
-        tags: z.array(z.enum(["a", "b"])),
-      })
-      .strict();
-    expect(() => assertLibraryReadingMatches("X", node, agreeing)).not.toThrow();
-    const widened = z
-      .object({
-        id: z.number().gte(0),
-        name: z.union([z.string(), z.null()]).optional(),
-        tags: z.array(z.enum(["a", "b"])),
-      })
-      .strict();
-    expect(() => assertLibraryReadingMatches("X", node, widened)).toThrow(
-      /^gen-envelope: X: .*\(A4\)$/,
-    );
-    // A stripping object describes the same OUTPUT as a strict one; the oracle reads the input side.
-    const stripping = z.object({
-      id: z.number().int().gte(0),
-      name: z.union([z.string(), z.null()]).optional(),
-      tags: z.array(z.enum(["a", "b"])),
-    });
-    expect(() => assertLibraryReadingMatches("X", node, stripping)).toThrow(/\(A4\)$/);
   });
 });
 

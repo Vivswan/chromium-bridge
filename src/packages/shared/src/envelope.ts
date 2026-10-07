@@ -16,12 +16,13 @@ export type ParseBridgeReqResult =
   | { ok: false; id?: number | string; error: string };
 
 // Best-effort id extraction from a frame that failed validation, so the refusal can still be correlated with
-// the request that caused it. Only an id the envelope itself vouches for is echoed - a fractional, negative,
-// or unsafe-integer id would make the refusal response malformed too.
-function extractId(msg: unknown): number | string | undefined {
-  if (typeof msg !== "object" || msg === null) return undefined;
-  const id = BridgeReqSchema.shape.id.safeParse((msg as { id?: unknown }).id);
-  return id.success ? id.data : undefined;
+// the request that caused it. Only an id the envelope's own parse found no fault with is echoed - a
+// fractional, negative, or unsafe-integer id would make the refusal response malformed too.
+function extractId(msg: unknown, issues: readonly z.core.$ZodIssue[]): number | string | undefined {
+  if (typeof msg !== "object" || msg === null || Array.isArray(msg)) return undefined;
+  if (issues.some((issue) => issue.path[0] === "id")) return undefined;
+  const { id } = msg as { id?: unknown };
+  return typeof id === "number" || typeof id === "string" ? id : undefined;
 }
 
 // One-line issue summary for refusal messages. The input comes from the native host (already inside the trust
@@ -43,7 +44,7 @@ export function parseBridgeReq(msg: unknown): ParseBridgeReqResult {
   if (!envelope.success) {
     return {
       ok: false,
-      id: extractId(msg),
+      id: extractId(msg, envelope.error.issues),
       error: `malformed bridge request: ${firstIssue(envelope.error)}`,
     };
   }

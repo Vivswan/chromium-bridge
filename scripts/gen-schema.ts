@@ -254,9 +254,12 @@ export function schemaExpression(type: string, schema: unknown): string {
   return `z.fromJSONSchema(${show(schema)}) as z.ZodType<${type}>`;
 }
 
-/** The source of one exported validator. */
-export function schemaSource(name: string, type: string, schema: unknown): string {
-  return `export const ${name} = ${schemaExpression(type, schema)};`;
+/** The source of one exported validator; without a `type` it is exported as the library types it (a faithful
+ * base, which only the gate reads). */
+export function schemaSource(name: string, type: string | undefined, schema: unknown): string {
+  const expression =
+    type === undefined ? `z.fromJSONSchema(${show(schema)})` : schemaExpression(type, schema);
+  return `export const ${name} = ${expression};`;
 }
 
 /** The source of one exported type: json-schema-to-typescript's reading of `schema`. An empty strict object

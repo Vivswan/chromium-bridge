@@ -5,45 +5,47 @@
 // fields required, no defaults), and beside each reader base the ENFORCED validator, which is that base plus
 // exactly the asymmetries declared in src/packages/shared/src/envelope-asymmetries.ts. The extension runs the
 // enforced validators; the bases exist so the asymmetry gate (scripts/check-envelope.ts) can prove each entry.
+// Every validator is zod's own reading of its JSON Schema (z.fromJSONSchema) and every exported type is
+// json-schema-to-typescript's reading of the same schema; scripts/gen-schema.ts holds both readings to the
+// schema rules R1-R4 before the file is written.
 //
 //   `moon run gen`   -> cargo example emit_envelope_schema (gen-only `envelope-schema` feature) -> prepare ->
-//                       applyAsymmetries (readers only) -> emitZod -> write
+//                       applyAsymmetries (readers only) -> gen-schema (rules, type, z.fromJSONSchema) -> write
 //   check-gen in CI  -> regenerates and fails on a stale diff
 //
-// Fail-closed generation rules; a violation aborts, because shipping a weaker parser than the Rust contract is
-// never an option. The error messages cite them by number.
-//   G1  every object declares type: "object" + additionalProperties: false, and the emitted source closes every
-//       z.object( with .strict() (or, on a reader under the loose-frames rule, .catchall(z.unknown())) - neither
-//       a Rust type losing deny_unknown_fields nor an emitter bug slips through
+// Fail-closed rules over the Rust input; a violation aborts, because shipping a weaker parser than the Rust
+// contract is never an option. The error messages cite them by number.
+//   G1  every object declares type: "object" + additionalProperties: false: an object claim is stated, never
+//       inferred, and a Rust type losing deny_unknown_fields fails here (the library's reading is then held
+//       closed by R1)
 //   G2  `default` is stripped: serde fills defaults on the Rust READ side; a .default() would hand consumers
 //       values the frame never carried (required-ness is unchanged: schemars already leaves defaulted fields optional)
 //   G3  oneOf only as a discriminated union (the same required const tag in every branch, values distinct), then
-//       emitted as a plain z.union: the mutual exclusivity needs no extra runtime check
-//   G4  every $ref inlined before emission; the emitter does not resolve them
-//   G5  every keyword and type on the supported list below, in a position the emitter models; an unmodeled
-//       keyword would have to be silently dropped, so it aborts until support lands here AND in the adversarial
-//       tests. The empty schema {} is the contract's own free-form claim (BridgeResp.data, and the request
-//       envelope's args once G6 has split the command off), emitted as z.unknown() so consumers must narrow
+//       rewritten to anyOf: the mutual exclusivity needs no exclusive-union check at runtime
+//   G4  every $ref inlined before emission; nothing downstream resolves one
+//   G5  every keyword and type on the supported list below, in a position the library enforces (the keyword
+//       census in scripts/tests/gen-schema.test.ts says which it reads); an unlisted keyword aborts until
+//       support lands in that census AND in the adversarial tests. The empty schema {} is the contract's own
+//       free-form claim (BridgeResp.data, and the request envelope's args once G6 has split the command off),
+//       read as unknown so consumers must narrow
 //   G6  the request's command (serde `#[serde(flatten)]` of the adjacently tagged BridgeCommand) arrives as the
 //       envelope's own properties beside a `oneOf` of {op, args} branches under `unevaluatedProperties: false`.
 //       splitFlattenedCommand hands it back as the envelope (op: string, args: any) plus one args schema per op:
-//       the envelope base stays a strict object, and the per-op schemas go to scripts/gen-ops.ts
+//       the envelope base stays a strict object, and the per-op schemas are scripts/gen-ops.ts's
 //   G7  every variant of every Rust control-frame enum is planned exactly once below (a reader, a writer, or a
 //       bare classification tag), so an added or renamed variant fails generation until the plan says how the
 //       extension covers it
 //   A1  an asymmetry entry names a path the prepared Rust schema has, and its node is in the shape the change
 //       expects (a `string` change on a plain string, a `string-arm` on a number, ...); a stale or misplaced
 //       entry aborts instead of sitting inert
-//   A2  a `generated-schema` entry replacing an object node is cross-checked against the schema it names: same
-//       field inventory, same base type per field, and strict where the Rust node refuses unknown fields (two
-//       Rust emitters, held equal here)
+//   A2  a `generated-schema` entry inlines the schema another generated module owns, built here from the same
+//       Rust output; the inlined node is cross-checked against the Rust node it replaces (same field inventory,
+//       same base type per field, strict where the Rust node refuses unknown fields) and the written owner
+//       module must read equal to it (two generated modules, two Rust emitters, held equal here)
 //   A3  an `ok-split` entry (at `$`) names a required boolean discriminant and one arm per value; each arm's
-//       required and forbidden fields exist on the frame, and the reader is emitted as a z.discriminatedUnion
-//       whose arms require and refuse exactly those fields, so a frame the typed producer cannot emit (ok with
-//       an error, a refusal without its reason) fails the reader rather than a consumer's re-check
-//   A4  every faithful base and writer schema the file exports is held to Zod's own reading of the prepared
-//       node it came from (z.fromJSONSchema): both serialize to the same JSON Schema, so a keyword this
-//       emitter stops modeling, or a claim it adds that the node does not carry, is a diff against the library
+//       required and forbidden fields exist on the frame, and the reader is a union whose arms require and
+//       refuse exactly those fields, so a frame the typed producer cannot emit (ok with an error, a refusal
+//       without its reason) fails the reader rather than a consumer's re-check
 
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -54,6 +56,15 @@ import {
   type Asymmetry,
   type Change,
 } from "../src/packages/shared/src/envelope-asymmetries";
+import {
+  assertSchemaRules,
+  opArgsSchema,
+  type PolicyShape,
+  policyOverlaySchema,
+  readsEqual,
+  schemaSource,
+  typeSource,
+} from "./gen-schema";
 
 type JsonObject = Record<string, unknown>;
 
@@ -418,27 +429,24 @@ export function prepare(node: unknown, path: string): unknown {
 
 // ---- the asymmetry pass (readers only) -----------------------------------------
 //
-// Node forms only this pass introduces (never read from the Rust schema; prepare refuses them there):
+// The pass writes plain JSON Schema, so its output is the library's input as it stands. Forms only it
+// introduces (never read from the Rust schema; prepare refuses them there):
 //   minLength / maxLength / pattern on a string node   -> the `string` change
-//   $loose: true on an object node                     -> the loose-frames rule, emitted as .catchall(z.unknown())
-//   { $generated: symbol, $from: module }              -> the `generated-schema` change, emitted as the symbol
+//   additionalProperties: true on an object node       -> the loose-frames rule
+//   the owner module's schema in place of a node       -> the `generated-schema` change
+//   a `false` property schema                          -> a field an ok-split arm forbids: a present value (null
+//                                                         included) fails the arm, absence passes
 
-const LOOSE = "$loose";
-const GENERATED = "$generated";
-const GENERATED_FROM = "$from";
-/** An ok-split's union node: the discriminant key; emitted as z.discriminatedUnion over `anyOf`. */
-const DISCRIMINANT = "$discriminant";
-/** A field an ok-split arm forbids: emitted as z.undefined(), so a present value (null included) fails the arm. */
-const FORBIDDEN = "$forbidden";
-
-/** A `generated-schema` replacement the pass performed, kept for the A2 cross-check in main. */
+/** A `generated-schema` replacement the pass performed, kept for the A2 cross-checks in main. */
 export interface GeneratedReplacement {
   path: string;
   symbol: string;
   from: string;
-  /** The prepared Rust node the symbol stands in for: its own null arm dropped when it was an optional
+  /** The prepared Rust node the owner's schema stands in for: its own null arm dropped when it was an optional
    * property, its children as prepared. */
   rust: unknown;
+  /** The owner's schema as inlined. */
+  inlined: unknown;
 }
 
 export interface AsymmetryPass {
@@ -464,7 +472,12 @@ function dropNullArm(node: JsonObject): JsonObject {
   return node;
 }
 
-function applyChange(node: JsonObject, change: Change, path: string): JsonObject {
+function applyChange(
+  node: JsonObject,
+  change: Change,
+  path: string,
+  owned: ReadonlyMap<string, unknown>,
+): JsonObject {
   const refuse = (expected: string): never => {
     throw new Error(
       `gen-envelope: ${path} is not ${expected} (got ${show(node)}), so the ${change.change} ` +
@@ -518,8 +531,15 @@ function applyChange(node: JsonObject, change: Change, path: string): JsonObject
         additionalProperties: false,
       };
     }
-    case "generated-schema":
-      return { [GENERATED]: change.symbol, [GENERATED_FROM]: change.from };
+    case "generated-schema": {
+      const inlined = owned.get(change.symbol);
+      if (!isObject(inlined)) {
+        throw new Error(
+          `gen-envelope: ${path}: no schema named ${change.symbol} is built here to inline (A1)`,
+        );
+      }
+      return inlined;
+    }
     case "ok-split":
       // Exhaustiveness only: the pass applies an ok-split after the field changes (applyOkSplit), never here.
       throw new Error(`gen-envelope: ${path}: an ok-split is applied after the field changes (A3)`);
@@ -563,23 +583,28 @@ function applyOkSplit(
       if (!Object.hasOwn(props, field)) refuse(`forbidden field ${field} is not on the frame`);
       if (armRequired.has(field))
         refuse(`${field} is both required and forbidden on the ok: ${arm.when} arm`);
-      armProps[field] = { [FORBIDDEN]: true };
+      armProps[field] = false;
     }
     return { ...node, properties: armProps, required: [...armRequired] };
   });
-  return { [DISCRIMINANT]: change.discriminant, anyOf: arms };
+  return { anyOf: arms };
 }
 
 /** Apply the reader rules and this kind's asymmetry entries to a prepared schema (A1). `loose` is the
- * loose-frames rule: true for control frames, false for the envelopes. Every entry must be consumed. */
+ * loose-frames rule: true for control frames, false for the envelopes. `owned` holds the schemas other
+ * generated modules own, by export name, for the generated-schema entries to inline. Every entry must be
+ * consumed. */
 export function applyAsymmetries(
   prepared: unknown,
   kind: string,
   entries: Readonly<Record<string, Asymmetry>>,
   loose: boolean,
+  owned: ReadonlyMap<string, unknown> = new Map(),
 ): AsymmetryPass {
   const consumed = new Set<string>();
   const replacements: GeneratedReplacement[] = [];
+  // An inlined owner schema is walked no further: it is strict and complete as its module wrote it.
+  const inlined = new Set<unknown>();
   const visit = (node: unknown, path: string): unknown => {
     if (!isObject(node)) return node;
     let out: JsonObject = node;
@@ -595,17 +620,18 @@ export function applyAsymmetries(
       }
       for (const change of entry.changes) {
         if (change.change === "ok-split") continue;
-        if (GENERATED in out) {
+        if (inlined.has(out)) {
           throw new Error(`gen-envelope: ${path} is already a generated-schema replacement (A1)`);
         }
         const rust = out;
-        out = applyChange(out, change, path);
+        out = applyChange(out, change, path, owned);
         if (change.change === "generated-schema") {
-          replacements.push({ path, symbol: change.symbol, from: change.from, rust });
+          inlined.add(out);
+          replacements.push({ path, symbol: change.symbol, from: change.from, rust, inlined: out });
         }
       }
     }
-    if (GENERATED in out) return out;
+    if (inlined.has(out)) return out;
     if (isObject(out.properties)) {
       const required = new Set(Array.isArray(out.required) ? out.required : []);
       const props: JsonObject = {};
@@ -614,7 +640,7 @@ export function applyAsymmetries(
         props[name] = visit(field, `${path}.properties.${name}`);
       }
       out = { ...out, properties: props };
-      if (loose) out = { ...out, [LOOSE]: true };
+      if (loose) out = { ...out, additionalProperties: true };
     }
     if (isObject(out.items)) out = { ...out, items: visit(out.items, `${path}.items`) };
     if (Array.isArray(out.anyOf)) {
@@ -647,12 +673,6 @@ function emitZod(node: unknown, override?: (node: unknown) => string | undefined
   if (!isObject(node)) {
     throw new Error(`gen-envelope: emitter reached an unprepared node: ${show(node)}`);
   }
-  if (typeof node[GENERATED] === "string") return node[GENERATED];
-  if (node[FORBIDDEN] === true) return "z.undefined()";
-  if (typeof node[DISCRIMINANT] === "string" && Array.isArray(node.anyOf)) {
-    const arms = node.anyOf.map((arm) => emitZod(arm, override));
-    return `z.discriminatedUnion(${JSON.stringify(node[DISCRIMINANT])}, [${arms.join(", ")}])`;
-  }
   if (Array.isArray(node.anyOf)) {
     // A non-empty, pure combinator; a one-branch union is the branch itself.
     if (node.anyOf.length === 1) return emitZod(node.anyOf[0], override);
@@ -679,7 +699,7 @@ function emitZod(node: unknown, override?: (node: unknown) => string | undefined
         return `${JSON.stringify(key)}: ${required.has(key) ? value : `${value}.optional()`}`;
       });
       const object = fields.length === 0 ? "z.object({})" : `z.object({ ${fields.join(", ")} })`;
-      return node[LOOSE] === true ? `${object}.catchall(z.unknown())` : `${object}.strict()`;
+      return `${object}.strict()`;
     }
     case "array": {
       const array = `z.array(${emitZod(node.items, override)})`;
@@ -947,37 +967,11 @@ export function assertGeneratedMatches(
   }
 }
 
-// ---- A4: the library's reading of each faithful schema ---------------------------------
-
-/** Hold an exported schema to Zod's own reading of the prepared node it was emitted from: the two readings
- * must serialize to the same JSON Schema of their INPUT (the output schema of a stripping object also says
- * additionalProperties: false, so only the input side tells strict from strip). The enforced readers carry
- * this pass's own node forms ($loose, $generated, $discriminant, $forbidden), which the library does not
- * read, so the oracle covers the faithful bases and the writer schemas. */
-export function assertLibraryReadingMatches(
-  name: string,
-  prepared: unknown,
-  emitted: z.ZodType,
-): void {
-  const library = z.toJSONSchema(
-    z.fromJSONSchema(prepared as Parameters<typeof z.fromJSONSchema>[0]),
-    { io: "input" },
-  );
-  const ours = z.toJSONSchema(emitted, { io: "input" });
-  if (!Bun.deepEquals(library, ours, true)) {
-    throw new Error(
-      `gen-envelope: ${name}: the emitted schema reads as ${show(ours)} but zod reads the Rust node as ` +
-        `${show(library)} (A4)`,
-    );
-  }
-}
-
 // ---- main ----------------------------------------------------------------------------
 
-async function main(): Promise<void> {
-  const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-
-  // The Rust core is the source: run its envelope-schema emitter.
+/** Run one of the core's gen-only emitter examples and parse what it prints. `-q` keeps cargo's own output
+ * off the pipe; a compile error still lands on stderr and fails loudly here. */
+function emitFromRust(root: string, example: string, features?: string): unknown {
   const emitted = Bun.spawnSync(
     [
       "cargo",
@@ -986,17 +980,23 @@ async function main(): Promise<void> {
       "-q",
       "-p",
       "chromium-bridge-core",
-      "--features",
-      "envelope-schema",
+      ...(features === undefined ? [] : ["--features", features]),
       "--example",
-      "emit_envelope_schema",
+      example,
     ],
     { cwd: root, stderr: "inherit" },
   );
   if (!emitted.success) {
-    throw new Error(`gen-envelope: cargo emit failed with status ${emitted.exitCode}`);
+    throw new Error(`gen-envelope: cargo ${example} failed with status ${emitted.exitCode}`);
   }
-  const fromRust = JSON.parse(emitted.stdout.toString()) as {
+  return JSON.parse(emitted.stdout.toString());
+}
+
+async function main(): Promise<void> {
+  const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+  // The Rust core is the source: run its envelope-schema emitter.
+  const fromRust = emitFromRust(root, "emit_envelope_schema", "envelope-schema") as {
     request: unknown;
     response: unknown;
     signal: unknown;
@@ -1020,39 +1020,48 @@ async function main(): Promise<void> {
     return prepare(variants[group].get(tag), `$.${group}.${tag}`);
   }
 
-  const imports = new Map<string, Set<string>>();
+  // G6: the typed command is split off. Its per-op args schemas are the same Rust structs scripts/gen-ops.ts
+  // reads from emit_contract, so the OpArgs bag is built here too, from this emitter's view of them, and the
+  // policy overlay from emit_policy_contract as gen-ops.ts builds it: the schemas the asymmetry table inlines,
+  // which A2 then holds equal to what the owner modules export (two Rust emitters, two generated modules).
+  const { envelope: requestEnvelope, commands } = splitFlattenedCommand(
+    fromRust.request,
+    "$.request",
+  );
+  const preparedCommands = new Map<string, JsonObject>();
+  for (const [op, args] of commands) {
+    const prepared = prepare(args, `$.request.${op}.args`);
+    if (!isObject(prepared)) {
+      throw new Error(`gen-envelope: ${op} args schema did not prepare to an object schema (G6)`);
+    }
+    preparedCommands.set(op, prepared);
+  }
+  const policy = emitFromRust(root, "emit_policy_contract") as PolicyShape;
+  const owned = new Map<string, unknown>([
+    ["OpArgsSchema", opArgsSchema(preparedCommands)],
+    ["PolicyOverlaySchema", policyOverlaySchema(policy)],
+  ]);
+
   const replacements: GeneratedReplacement[] = [];
   function enforced(kind: string, prepared: unknown, loose: boolean): unknown {
-    const pass = applyAsymmetries(prepared, kind, ASYMMETRIES[kind] ?? {}, loose);
-    for (const r of pass.replacements) {
-      replacements.push(r);
-      const symbols = imports.get(r.from) ?? new Set<string>();
-      symbols.add(r.symbol);
-      imports.set(r.from, symbols);
-    }
+    const pass = applyAsymmetries(prepared, kind, ASYMMETRIES[kind] ?? {}, loose, owned);
+    replacements.push(...pass.replacements);
     return pass.schema;
   }
   const kindsWithEntries = new Set(Object.keys(ASYMMETRIES));
 
   const pieces: string[] = [];
   const typeOf = (schemaName: string) => schemaName.replace(/Schema$/, "");
-  /** Every faithful base and writer schema with the prepared node it was emitted from, for A4; the export
-   * line and the registration are one operation so no emission site can skip the oracle. */
-  const faithful = new Map<string, unknown>();
-  const exportFaithful = (
-    name: string,
-    node: unknown,
-    override?: (node: unknown) => string | undefined,
-  ): string => {
-    faithful.set(name, node);
-    return `export const ${name} = ${convert(node, name, override)};`;
-  };
+  /** One exported validator: the schema rules over the library's reading first, then the exported type (the
+   * enforced readers and the writers have one; the faithful bases are the gate's and have none), then the
+   * schema itself. `loose` is the loose-frames rule, true only for an enforced control-frame reader. */
+  async function exportSchema(name: string, node: unknown, loose: boolean, type?: string) {
+    assertSchemaRules(name, node, loose);
+    if (type !== undefined) pieces.push(await typeSource(type, node), "");
+    pieces.push(schemaSource(name, type, node), "");
+  }
 
-  // G6: the typed command is split off; its per-op args schemas reach the extension through scripts/gen-ops.ts.
-  const request = prepare(
-    splitFlattenedCommand(fromRust.request, "$.request").envelope,
-    "$.request",
-  );
+  const request = prepare(requestEnvelope, "$.request");
   const response = prepare(fromRust.response, "$.response");
   kindsWithEntries.delete("request");
   kindsWithEntries.delete("response");
@@ -1060,18 +1069,20 @@ async function main(): Promise<void> {
   pieces.push(
     "// The request envelope (BridgeReq) and the response envelope (BridgeResp): the faithful bases, then the",
     "// enforced validators the extension runs (the base plus the asymmetry table; strict like the host).",
-    exportFaithful("BridgeReqWireSchema", request),
-    "",
-    exportFaithful("BridgeRespWireSchema", response),
-    "",
-    `export const BridgeReqSchema = ${convert(enforced("request", request, false), "BridgeReqSchema")};`,
-    "",
-    "export type BridgeReqEnvelope = z.infer<typeof BridgeReqSchema>;",
-    "",
-    `export const BridgeRespSchema = ${convert(enforced("response", response, false), "BridgeRespSchema")};`,
-    "",
-    "export type BridgeResp = z.infer<typeof BridgeRespSchema>;",
-    "",
+  );
+  await exportSchema("BridgeReqWireSchema", request, false);
+  await exportSchema("BridgeRespWireSchema", response, false);
+  await exportSchema(
+    "BridgeReqSchema",
+    enforced("request", request, false),
+    false,
+    "BridgeReqEnvelope",
+  );
+  await exportSchema(
+    "BridgeRespSchema",
+    enforced("response", response, false),
+    false,
+    "BridgeResp",
   );
 
   pieces.push(
@@ -1081,21 +1092,14 @@ async function main(): Promise<void> {
   for (const [tag, names] of Object.entries(SIGNAL_FRAMES)) {
     kindsWithEntries.delete(tag);
     const base = prepare(signals.get(tag), `$.signal.${tag}`);
-    pieces.push(
-      exportFaithful(names.wire, base),
-      "",
-      `export const ${names.enforced} = ${convert(enforced(tag, base, false), names.enforced)};`,
-      "",
-      `export type ${typeOf(names.enforced)} = z.infer<typeof ${names.enforced}>;`,
-      "",
-    );
+    await exportSchema(names.wire, base, false);
+    await exportSchema(names.enforced, enforced(tag, base, false), false, typeOf(names.enforced));
   }
 
   // Types embedded in a reader's field (an array's items, or an object field itself), emitted as their own
-  // exports (base and enforced) so a consumer can name the type; the embedding readers reference them by
-  // name (the override substitutes the identical node). An ok-split reader carries the field on one arm
-  // only, so the search walks the arms; on the base an Option field is a union with null, so the object
-  // arm is picked out of it.
+  // exports (base and enforced) so a consumer can name the type; the embedding readers carry the same node
+  // inline. An ok-split reader carries the field on one arm only, so the search walks the arms; on the base
+  // an Option field is a union with null, so the object arm is picked out of it.
   const EMBEDDED_TYPES = [
     {
       group: "admin",
@@ -1153,27 +1157,20 @@ async function main(): Promise<void> {
   };
   const preparedBases = new Map<string, unknown>();
   const enforcedReaders = new Map<string, unknown>();
-  const namedNodes = new Map<unknown, string>();
   for (const item of EMBEDDED_TYPES) {
     const base = preparedFrame(item.group, item.tag);
     const reader = enforced(item.tag, base, true);
     preparedBases.set(item.tag, base);
     enforcedReaders.set(item.tag, reader);
-    const wireNode = embeddedNode(base, item.field, item.tag);
-    const enforcedNode = embeddedNode(reader, item.field, item.tag);
-    namedNodes.set(wireNode, item.wire);
-    namedNodes.set(enforcedNode, item.enforced);
-    pieces.push(
-      `// ${item.doc}`,
-      exportFaithful(item.wire, wireNode),
-      "",
-      `export const ${item.enforced} = ${convert(enforcedNode, item.enforced)};`,
-      "",
-      `export type ${typeOf(item.enforced)} = z.infer<typeof ${item.enforced}>;`,
-      "",
+    pieces.push(`// ${item.doc}`);
+    await exportSchema(item.wire, embeddedNode(base, item.field, item.tag), false);
+    await exportSchema(
+      item.enforced,
+      embeddedNode(reader, item.field, item.tag),
+      true,
+      typeOf(item.enforced),
     );
   }
-  const byName = (node: unknown): string | undefined => namedNodes.get(node);
 
   pieces.push(
     "// The host->extension control frames: the faithful base, then the enforced reader (the base plus the",
@@ -1184,14 +1181,8 @@ async function main(): Promise<void> {
       kindsWithEntries.delete(tag);
       const base = preparedBases.get(tag) ?? preparedFrame(group, tag);
       const reader = enforcedReaders.get(tag) ?? enforced(tag, base, true);
-      pieces.push(
-        exportFaithful(names.wire, base, byName),
-        "",
-        `export const ${names.enforced} = ${convert(reader, names.enforced, byName)};`,
-        "",
-        `export type ${typeOf(names.enforced)} = z.infer<typeof ${names.enforced}>;`,
-        "",
-      );
+      await exportSchema(names.wire, base, false);
+      await exportSchema(names.enforced, reader, true, typeOf(names.enforced));
     }
   }
   if (kindsWithEntries.size > 0) {
@@ -1201,19 +1192,25 @@ async function main(): Promise<void> {
     );
   }
 
-  // A2: every generated-schema replacement against the module it names (imported from the generated tree
-  // gen-ops.ts wrote just before this script runs).
+  // A2: every inlined owner schema against the Rust node it replaced and against the module that owns it
+  // (imported from the generated tree gen-ops.ts wrote just before this script runs).
   for (const replacement of replacements) {
     const module = (await import(
       join(root, "src/packages/shared/src", replacement.from)
     )) as Record<string, unknown>;
-    const generated = module[replacement.symbol];
-    if (!(generated instanceof z.ZodType)) {
+    const owner = module[replacement.symbol];
+    if (!(owner instanceof z.ZodType)) {
       throw new Error(
         `gen-envelope: ${replacement.from} exports no Zod schema named ${replacement.symbol} (A2)`,
       );
     }
-    assertGeneratedMatches(replacement, generated);
+    assertGeneratedMatches(replacement, owner);
+    if (!readsEqual(replacement.inlined, owner)) {
+      throw new Error(
+        `gen-envelope: ${replacement.path}: the schema inlined for ${replacement.symbol} reads differently ` +
+          `from the one ${replacement.from} exports (A2)`,
+      );
+    }
   }
 
   const manifest = (table: Record<Group, Readonly<Record<string, unknown>> | readonly string[]>) =>
@@ -1237,17 +1234,12 @@ async function main(): Promise<void> {
 
   pieces.push(
     "// The extension->host writer frames (the extension constructs these; the enforcing reader is the Rust",
-    "// serde parser). Emitted for their inferred types: constructor sites claim conformance with `satisfies`,",
-    "// so a drifted field or tag is a compile error. Never used as runtime parsers.",
+    "// serde parser). Emitted for their types: constructor sites claim conformance with `satisfies`, so a",
+    "// drifted field or tag is a compile error. Never used as runtime parsers.",
   );
   for (const group of GROUPS) {
     for (const [tag, name] of Object.entries(WRITER_FRAMES[group])) {
-      pieces.push(
-        exportFaithful(name, preparedFrame(group, tag)),
-        "",
-        `export type ${typeOf(name)} = z.infer<typeof ${name}>;`,
-        "",
-      );
+      await exportSchema(name, preparedFrame(group, tag), false, typeOf(name));
     }
   }
 
@@ -1257,10 +1249,6 @@ async function main(): Promise<void> {
     ...manifest(WRITER_FRAMES),
     "} as const;",
   );
-
-  const importLines = [...imports.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([from, symbols]) => `import { ${[...symbols].sort().join(", ")} } from "${from}";`);
 
   const out = `// GENERATED from the Rust core wire types (src/packages/core/src/protocol.rs and
 // protocol/control.rs; AdminControl embeds allowlist::ClientEntry, PolicyControl embeds
@@ -1272,27 +1260,18 @@ async function main(): Promise<void> {
 // (*WireSchema: strict objects, required fields required, no defaults; rules G1-G7 in scripts/gen-envelope.ts)
 // and the ENFORCED validator the extension runs, which is the base plus exactly the asymmetry table
 // (direction and reason per entry in envelope-asymmetries.ts; proved per entry by scripts/check-envelope.ts,
-// \`moon run check-envelope\`). The extension->host writer schemas exist for their inferred types only
-// (constructor-site \`satisfies\`); the enforcing reader for those frames is the Rust serde parser.
+// \`moon run check-envelope\`). Each validator is zod's reading of the JSON Schema beside it and each type is
+// json-schema-to-typescript's reading of the same schema. The request's \`args\` and policy_current's
+// \`overlay\` carry the schemas ops.gen.ts and policy.gen.ts export, inlined and held equal at generation. The
+// extension->host writer schemas exist for their types only (constructor-site \`satisfies\`); the enforcing
+// reader for those frames is the Rust serde parser.
 
 import { z } from "zod";
-${importLines.join("\n")}
 
 ${pieces.join("\n")}
 `;
 
-  const outPath = join(root, "src/packages/shared/src/envelope.gen.ts");
-  writeFileSync(outPath, out);
-
-  // A4 reads the schemas back from the written module, so it judges the file as the extension will import it.
-  const generated = (await import(outPath)) as Record<string, unknown>;
-  for (const [name, node] of faithful) {
-    const emitted = generated[name];
-    if (!(emitted instanceof z.ZodType)) {
-      throw new Error(`gen-envelope: the written module exports no Zod schema named ${name} (A4)`);
-    }
-    assertLibraryReadingMatches(name, node, emitted);
-  }
+  writeFileSync(join(root, "src/packages/shared/src/envelope.gen.ts"), out);
   console.log("generated src/packages/shared/src/envelope.gen.ts from the Rust wire types");
 }
 

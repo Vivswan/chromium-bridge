@@ -8,612 +8,1762 @@
 // (*WireSchema: strict objects, required fields required, no defaults; rules G1-G7 in scripts/gen-envelope.ts)
 // and the ENFORCED validator the extension runs, which is the base plus exactly the asymmetry table
 // (direction and reason per entry in envelope-asymmetries.ts; proved per entry by scripts/check-envelope.ts,
-// `moon run check-envelope`). The extension->host writer schemas exist for their inferred types only
-// (constructor-site `satisfies`); the enforcing reader for those frames is the Rust serde parser.
+// `moon run check-envelope`). Each validator is zod's reading of the JSON Schema beside it and each type is
+// json-schema-to-typescript's reading of the same schema. The request's `args` and policy_current's
+// `overlay` carry the schemas ops.gen.ts and policy.gen.ts export, inlined and held equal at generation. The
+// extension->host writer schemas exist for their types only (constructor-site `satisfies`); the enforcing
+// reader for those frames is the Rust serde parser.
 
 import { z } from "zod";
-import { OpArgsSchema } from "./ops.gen";
-import { PolicyOverlaySchema } from "./policy.gen";
 
 // The request envelope (BridgeReq) and the response envelope (BridgeResp): the faithful bases, then the
 // enforced validators the extension runs (the base plus the asymmetry table; strict like the host).
-export const BridgeReqWireSchema = z
-  .object({
-    "args": z.unknown(),
-    "browser": z.union([z.string(), z.null()]).optional(),
-    "id": z.number().int().gte(0),
-    "op": z.string(),
-  })
-  .strict();
+export const BridgeReqWireSchema = z.fromJSONSchema({
+  "properties": {
+    "args": {},
+    "browser": { "type": ["string", "null"] },
+    "id": { "minimum": 0, "type": "integer" },
+    "op": { "type": "string" },
+  },
+  "required": ["id", "args", "op"],
+  "type": "object",
+  "additionalProperties": false,
+});
 
-export const BridgeRespWireSchema = z
-  .object({
-    "data": z.unknown().optional(),
-    "error": z.union([z.string(), z.null()]).optional(),
-    "id": z.number().int().gte(0),
-    "ok": z.boolean(),
-  })
-  .strict();
+export const BridgeRespWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "data": {},
+    "error": { "type": ["string", "null"] },
+    "id": { "minimum": 0, "type": "integer" },
+    "ok": { "type": "boolean" },
+  },
+  "required": ["id", "ok"],
+  "type": "object",
+});
 
-export const BridgeReqSchema = z
-  .object({
-    "args": OpArgsSchema,
-    "browser": z
-      .string()
-      .min(1)
-      .max(32)
-      .regex(/^[A-Za-z0-9._-]+$/)
-      .optional(),
-    "id": z.union([z.number().int().gte(0), z.string()]),
-    "op": z.string().min(1),
-  })
-  .strict();
+export interface BridgeReqEnvelope {
+  args: {
+    tabId?: number;
+    url?: string;
+    ref?: string;
+    selector?: string;
+    value?: string;
+    direction?: string;
+    pixels?: number;
+    nav?: boolean;
+    text?: string;
+    timeoutMs?: number;
+    code?: string;
+    frameId?: string;
+    domain?: string;
+    name?: string;
+    key?: string;
+    type?: string;
+    keys?: string;
+    limit?: number;
+    action?: string;
+    promptText?: string;
+    path?: string;
+  };
+  browser?: string;
+  id: number | string;
+  op: string;
+}
 
-export type BridgeReqEnvelope = z.infer<typeof BridgeReqSchema>;
+export const BridgeReqSchema = z.fromJSONSchema({
+  "properties": {
+    "args": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tabId": { "maximum": 9007199254740991, "minimum": -9007199254740991, "type": "integer" },
+        "url": { "type": "string" },
+        "ref": { "type": "string" },
+        "selector": { "type": "string" },
+        "value": { "type": "string" },
+        "direction": { "type": "string" },
+        "pixels": { "maximum": 9007199254740991, "minimum": -9007199254740991, "type": "integer" },
+        "nav": { "type": "boolean" },
+        "text": { "type": "string" },
+        "timeoutMs": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer",
+        },
+        "code": { "type": "string" },
+        "frameId": { "type": "string" },
+        "domain": { "type": "string" },
+        "name": { "type": "string" },
+        "key": { "type": "string" },
+        "type": { "type": "string" },
+        "keys": { "type": "string" },
+        "limit": { "maximum": 9007199254740991, "minimum": -9007199254740991, "type": "integer" },
+        "action": { "type": "string" },
+        "promptText": { "type": "string" },
+        "path": { "type": "string" },
+      },
+      "required": [],
+    },
+    "browser": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "pattern": "^[A-Za-z0-9._-]+$",
+    },
+    "id": { "anyOf": [{ "minimum": 0, "type": "integer" }, { "type": "string" }] },
+    "op": { "type": "string", "minLength": 1 },
+  },
+  "required": ["id", "args", "op"],
+  "type": "object",
+  "additionalProperties": false,
+}) as z.ZodType<BridgeReqEnvelope>;
 
-export const BridgeRespSchema = z
-  .object({
-    "data": z.unknown().optional(),
-    "error": z.string().optional(),
-    "id": z.union([z.number().int().gte(0), z.string()]),
-    "ok": z.boolean(),
-  })
-  .strict();
+export interface BridgeResp {
+  data?: unknown;
+  error?: string;
+  id: number | string;
+  ok: boolean;
+}
 
-export type BridgeResp = z.infer<typeof BridgeRespSchema>;
+export const BridgeRespSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "data": {},
+    "error": { "type": "string" },
+    "id": { "anyOf": [{ "minimum": 0, "type": "integer" }, { "type": "string" }] },
+    "ok": { "type": "boolean" },
+  },
+  "required": ["id", "ok"],
+  "type": "object",
+}) as z.ZodType<BridgeResp>;
 
 // The server->extension signal frames (BridgeSignal), one strict reader per variant: the faithful base,
 // then the enforced validator the extension runs.
-export const BridgeCancelWireSchema = z
-  .object({ "id": z.number().int().gte(0), "type": z.literal("cancel") })
-  .strict();
+export const BridgeCancelWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "id": { "minimum": 0, "type": "integer" },
+    "type": { "const": "cancel", "type": "string" },
+  },
+  "required": ["type", "id"],
+  "type": "object",
+});
 
-export const BridgeCancelSchema = z
-  .object({ "id": z.union([z.number().int().gte(0), z.string()]), "type": z.literal("cancel") })
-  .strict();
+export interface BridgeCancel {
+  id: number | string;
+  type: "cancel";
+}
 
-export type BridgeCancel = z.infer<typeof BridgeCancelSchema>;
+export const BridgeCancelSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "id": { "anyOf": [{ "minimum": 0, "type": "integer" }, { "type": "string" }] },
+    "type": { "const": "cancel", "type": "string" },
+  },
+  "required": ["type", "id"],
+  "type": "object",
+}) as z.ZodType<BridgeCancel>;
 
 // One trusted-client entry (allowlist::ClientEntry), embedded in client_list_result's `clients` array.
-export const ClientEntryWireSchema = z
-  .object({
-    "added_unix": z.number().int().gte(0),
-    "anchor": z.union([
-      z.object({ "kind": z.literal("hash"), "value": z.string() }).strict(),
-      z.object({ "kind": z.literal("signer"), "value": z.string() }).strict(),
-    ]),
-    "name": z.string(),
-  })
-  .strict();
+export const ClientEntryWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "added_unix": { "minimum": 0, "type": "integer" },
+    "anchor": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "hash", "type": "string" },
+            "value": { "type": "string" },
+          },
+          "required": ["kind", "value"],
+          "type": "object",
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "signer", "type": "string" },
+            "value": { "type": "string" },
+          },
+          "required": ["kind", "value"],
+          "type": "object",
+        },
+      ],
+    },
+    "name": { "type": "string" },
+  },
+  "required": ["name", "anchor", "added_unix"],
+  "type": "object",
+});
 
-export const TrustedClientSchema = z
-  .object({
-    "added_unix": z.number().int().gte(0),
-    "anchor": z
-      .object({ "kind": z.enum(["hash", "signer"]), "value": z.string().min(1) })
-      .catchall(z.unknown()),
-    "name": z.string(),
-  })
-  .catchall(z.unknown());
+export interface TrustedClient {
+  added_unix: number;
+  anchor: {
+    kind: "hash" | "signer";
+    value: string;
+    [k: string]: unknown;
+  };
+  name: string;
+  [k: string]: unknown;
+}
 
-export type TrustedClient = z.infer<typeof TrustedClientSchema>;
+export const TrustedClientSchema = z.fromJSONSchema({
+  "additionalProperties": true,
+  "properties": {
+    "added_unix": { "minimum": 0, "type": "integer" },
+    "anchor": {
+      "type": "object",
+      "properties": {
+        "kind": { "type": "string", "enum": ["hash", "signer"] },
+        "value": { "type": "string", "minLength": 1 },
+      },
+      "required": ["kind", "value"],
+      "additionalProperties": true,
+    },
+    "name": { "type": "string" },
+  },
+  "required": ["name", "anchor", "added_unix"],
+  "type": "object",
+}) as z.ZodType<TrustedClient>;
 
 // One browser's registration row (protocol::control::RegistrationRow), embedded in registration_status_result's `browsers` array.
-export const RegistrationRowWireSchema = z
-  .object({
-    "browser": z.string(),
-    "detected": z.boolean(),
-    "location": z.string(),
-    "state": z.union([
-      z.object({ "kind": z.literal("missing") }).strict(),
-      z.object({ "kind": z.literal("ok") }).strict(),
-      z.object({ "detail": z.string(), "kind": z.literal("stale") }).strict(),
-      z.object({ "detail": z.string(), "kind": z.literal("foreign") }).strict(),
-      z.object({ "detail": z.string(), "kind": z.literal("unreadable") }).strict(),
-    ]),
-  })
-  .strict();
+export const RegistrationRowWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "browser": { "type": "string" },
+    "detected": { "type": "boolean" },
+    "location": { "type": "string" },
+    "state": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": { "kind": { "const": "missing", "type": "string" } },
+          "required": ["kind"],
+          "type": "object",
+        },
+        {
+          "additionalProperties": false,
+          "properties": { "kind": { "const": "ok", "type": "string" } },
+          "required": ["kind"],
+          "type": "object",
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "detail": { "type": "string" },
+            "kind": { "const": "stale", "type": "string" },
+          },
+          "required": ["kind", "detail"],
+          "type": "object",
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "detail": { "type": "string" },
+            "kind": { "const": "foreign", "type": "string" },
+          },
+          "required": ["kind", "detail"],
+          "type": "object",
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "detail": { "type": "string" },
+            "kind": { "const": "unreadable", "type": "string" },
+          },
+          "required": ["kind", "detail"],
+          "type": "object",
+        },
+      ],
+    },
+  },
+  "required": ["browser", "detected", "state", "location"],
+  "type": "object",
+});
 
-export const RegistrationRowSchema = z
-  .object({
-    "browser": z.string(),
-    "detected": z.boolean(),
-    "location": z.string(),
-    "state": z.union([
-      z.object({ "kind": z.literal("missing") }).catchall(z.unknown()),
-      z.object({ "kind": z.literal("ok") }).catchall(z.unknown()),
-      z.object({ "detail": z.string(), "kind": z.literal("stale") }).catchall(z.unknown()),
-      z.object({ "detail": z.string(), "kind": z.literal("foreign") }).catchall(z.unknown()),
-      z.object({ "detail": z.string(), "kind": z.literal("unreadable") }).catchall(z.unknown()),
-    ]),
-  })
-  .catchall(z.unknown());
+export interface RegistrationRow {
+  browser: string;
+  detected: boolean;
+  location: string;
+  state:
+    | {
+        kind: "missing";
+        [k: string]: unknown;
+      }
+    | {
+        kind: "ok";
+        [k: string]: unknown;
+      }
+    | {
+        detail: string;
+        kind: "stale";
+        [k: string]: unknown;
+      }
+    | {
+        detail: string;
+        kind: "foreign";
+        [k: string]: unknown;
+      }
+    | {
+        detail: string;
+        kind: "unreadable";
+        [k: string]: unknown;
+      };
+  [k: string]: unknown;
+}
 
-export type RegistrationRow = z.infer<typeof RegistrationRowSchema>;
+export const RegistrationRowSchema = z.fromJSONSchema({
+  "additionalProperties": true,
+  "properties": {
+    "browser": { "type": "string" },
+    "detected": { "type": "boolean" },
+    "location": { "type": "string" },
+    "state": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "properties": { "kind": { "const": "missing", "type": "string" } },
+          "required": ["kind"],
+          "type": "object",
+        },
+        {
+          "additionalProperties": true,
+          "properties": { "kind": { "const": "ok", "type": "string" } },
+          "required": ["kind"],
+          "type": "object",
+        },
+        {
+          "additionalProperties": true,
+          "properties": {
+            "detail": { "type": "string" },
+            "kind": { "const": "stale", "type": "string" },
+          },
+          "required": ["kind", "detail"],
+          "type": "object",
+        },
+        {
+          "additionalProperties": true,
+          "properties": {
+            "detail": { "type": "string" },
+            "kind": { "const": "foreign", "type": "string" },
+          },
+          "required": ["kind", "detail"],
+          "type": "object",
+        },
+        {
+          "additionalProperties": true,
+          "properties": {
+            "detail": { "type": "string" },
+            "kind": { "const": "unreadable", "type": "string" },
+          },
+          "required": ["kind", "detail"],
+          "type": "object",
+        },
+      ],
+    },
+  },
+  "required": ["browser", "detected", "state", "location"],
+  "type": "object",
+}) as z.ZodType<RegistrationRow>;
 
 // One line of the host's audit trail (protocol::control::AuditTrailEntry), embedded in audit_read_result's `entries` array.
-export const AuditTrailEntryWireSchema = z.union([
-  z
-    .object({
-      "entry": z.literal("record"),
-      "fields": z.string(),
-      "kind": z.string(),
-      "ts_ms": z.number().int().gte(0).lte(9007199254740991),
-    })
-    .strict(),
-  z.object({ "entry": z.literal("unrecognized"), "text": z.string() }).strict(),
-]);
+export const AuditTrailEntryWireSchema = z.fromJSONSchema({
+  "anyOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "entry": { "const": "record", "type": "string" },
+        "fields": { "type": "string" },
+        "kind": { "type": "string" },
+        "ts_ms": { "maximum": 9007199254740991, "minimum": 0, "type": "integer" },
+      },
+      "required": ["entry", "ts_ms", "kind", "fields"],
+      "type": "object",
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "entry": { "const": "unrecognized", "type": "string" },
+        "text": { "type": "string" },
+      },
+      "required": ["entry", "text"],
+      "type": "object",
+    },
+  ],
+});
 
-export const AuditTrailEntrySchema = z.union([
-  z
-    .object({
-      "entry": z.literal("record"),
-      "fields": z.string(),
-      "kind": z.string(),
-      "ts_ms": z.number().int().gte(0).lte(9007199254740991),
-    })
-    .catchall(z.unknown()),
-  z.object({ "entry": z.literal("unrecognized"), "text": z.string() }).catchall(z.unknown()),
-]);
+export type AuditTrailEntry =
+  | {
+      entry: "record";
+      fields: string;
+      kind: string;
+      ts_ms: number;
+      [k: string]: unknown;
+    }
+  | {
+      entry: "unrecognized";
+      text: string;
+      [k: string]: unknown;
+    };
 
-export type AuditTrailEntry = z.infer<typeof AuditTrailEntrySchema>;
+export const AuditTrailEntrySchema = z.fromJSONSchema({
+  "anyOf": [
+    {
+      "additionalProperties": true,
+      "properties": {
+        "entry": { "const": "record", "type": "string" },
+        "fields": { "type": "string" },
+        "kind": { "type": "string" },
+        "ts_ms": { "maximum": 9007199254740991, "minimum": 0, "type": "integer" },
+      },
+      "required": ["entry", "ts_ms", "kind", "fields"],
+      "type": "object",
+    },
+    {
+      "additionalProperties": true,
+      "properties": {
+        "entry": { "const": "unrecognized", "type": "string" },
+        "text": { "type": "string" },
+      },
+      "required": ["entry", "text"],
+      "type": "object",
+    },
+  ],
+}) as z.ZodType<AuditTrailEntry>;
 
 // The health report (protocol::control::HealthReport), embedded as doctor_report_result's `report`.
-export const HealthReportWireSchema = z
-  .object({
-    "healthy": z.boolean(),
-    "host_key": z.string(),
-    "kill_switch": z.object({ "details": z.array(z.string()), "value": z.string() }).strict(),
-    "lock_file": z.object({ "details": z.array(z.string()), "value": z.string() }).strict(),
-    "mcp_server": z.object({ "details": z.array(z.string()), "value": z.string() }).strict(),
-    "platform": z.string(),
-    "policy_baseline": z.object({ "details": z.array(z.string()), "value": z.string() }).strict(),
-    "summary": z.string(),
-    "version": z.string(),
-  })
-  .strict();
+export const HealthReportWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "healthy": { "type": "boolean" },
+    "host_key": { "type": "string" },
+    "kill_switch": {
+      "additionalProperties": false,
+      "properties": {
+        "details": { "items": { "type": "string" }, "type": "array" },
+        "value": { "type": "string" },
+      },
+      "required": ["value", "details"],
+      "type": "object",
+    },
+    "lock_file": {
+      "additionalProperties": false,
+      "properties": {
+        "details": { "items": { "type": "string" }, "type": "array" },
+        "value": { "type": "string" },
+      },
+      "required": ["value", "details"],
+      "type": "object",
+    },
+    "mcp_server": {
+      "additionalProperties": false,
+      "properties": {
+        "details": { "items": { "type": "string" }, "type": "array" },
+        "value": { "type": "string" },
+      },
+      "required": ["value", "details"],
+      "type": "object",
+    },
+    "platform": { "type": "string" },
+    "policy_baseline": {
+      "additionalProperties": false,
+      "properties": {
+        "details": { "items": { "type": "string" }, "type": "array" },
+        "value": { "type": "string" },
+      },
+      "required": ["value", "details"],
+      "type": "object",
+    },
+    "summary": { "type": "string" },
+    "version": { "type": "string" },
+  },
+  "required": [
+    "version",
+    "platform",
+    "lock_file",
+    "mcp_server",
+    "kill_switch",
+    "policy_baseline",
+    "host_key",
+    "summary",
+    "healthy",
+  ],
+  "type": "object",
+});
 
-export const HealthReportSchema = z
-  .object({
-    "healthy": z.boolean(),
-    "host_key": z.string(),
-    "kill_switch": z
-      .object({ "details": z.array(z.string()), "value": z.string() })
-      .catchall(z.unknown()),
-    "lock_file": z
-      .object({ "details": z.array(z.string()), "value": z.string() })
-      .catchall(z.unknown()),
-    "mcp_server": z
-      .object({ "details": z.array(z.string()), "value": z.string() })
-      .catchall(z.unknown()),
-    "platform": z.string(),
-    "policy_baseline": z
-      .object({ "details": z.array(z.string()), "value": z.string() })
-      .catchall(z.unknown()),
-    "summary": z.string(),
-    "version": z.string(),
-  })
-  .catchall(z.unknown());
+export interface HealthReport {
+  healthy: boolean;
+  host_key: string;
+  kill_switch: {
+    details: string[];
+    value: string;
+    [k: string]: unknown;
+  };
+  lock_file: {
+    details: string[];
+    value: string;
+    [k: string]: unknown;
+  };
+  mcp_server: {
+    details: string[];
+    value: string;
+    [k: string]: unknown;
+  };
+  platform: string;
+  policy_baseline: {
+    details: string[];
+    value: string;
+    [k: string]: unknown;
+  };
+  summary: string;
+  version: string;
+  [k: string]: unknown;
+}
 
-export type HealthReport = z.infer<typeof HealthReportSchema>;
+export const HealthReportSchema = z.fromJSONSchema({
+  "additionalProperties": true,
+  "properties": {
+    "healthy": { "type": "boolean" },
+    "host_key": { "type": "string" },
+    "kill_switch": {
+      "additionalProperties": true,
+      "properties": {
+        "details": { "items": { "type": "string" }, "type": "array" },
+        "value": { "type": "string" },
+      },
+      "required": ["value", "details"],
+      "type": "object",
+    },
+    "lock_file": {
+      "additionalProperties": true,
+      "properties": {
+        "details": { "items": { "type": "string" }, "type": "array" },
+        "value": { "type": "string" },
+      },
+      "required": ["value", "details"],
+      "type": "object",
+    },
+    "mcp_server": {
+      "additionalProperties": true,
+      "properties": {
+        "details": { "items": { "type": "string" }, "type": "array" },
+        "value": { "type": "string" },
+      },
+      "required": ["value", "details"],
+      "type": "object",
+    },
+    "platform": { "type": "string" },
+    "policy_baseline": {
+      "additionalProperties": true,
+      "properties": {
+        "details": { "items": { "type": "string" }, "type": "array" },
+        "value": { "type": "string" },
+      },
+      "required": ["value", "details"],
+      "type": "object",
+    },
+    "summary": { "type": "string" },
+    "version": { "type": "string" },
+  },
+  "required": [
+    "version",
+    "platform",
+    "lock_file",
+    "mcp_server",
+    "kill_switch",
+    "policy_baseline",
+    "host_key",
+    "summary",
+    "healthy",
+  ],
+  "type": "object",
+}) as z.ZodType<HealthReport>;
 
 // The host->extension control frames: the faithful base, then the enforced reader (the base plus the
 // asymmetry table, read loose under its loose-frames rule).
-export const EnclaveProofWireSchema = z
-  .object({
-    "key_id": z.string(),
-    "pubkey": z.string(),
-    "sig": z.string(),
-    "type": z.literal("enclave_proof"),
-  })
-  .strict();
+export const EnclaveProofWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "key_id": { "type": "string" },
+    "pubkey": { "type": "string" },
+    "sig": { "type": "string" },
+    "type": { "const": "enclave_proof", "type": "string" },
+  },
+  "required": ["type", "sig", "key_id", "pubkey"],
+  "type": "object",
+});
 
-export const EnclaveProofFrameSchema = z
-  .object({
-    "key_id": z.string().min(1),
-    "pubkey": z.string().min(1),
-    "sig": z.string().min(1),
-    "type": z.literal("enclave_proof"),
-  })
-  .catchall(z.unknown());
+export interface EnclaveProofFrame {
+  key_id: string;
+  pubkey: string;
+  sig: string;
+  type: "enclave_proof";
+  [k: string]: unknown;
+}
 
-export type EnclaveProofFrame = z.infer<typeof EnclaveProofFrameSchema>;
+export const EnclaveProofFrameSchema = z.fromJSONSchema({
+  "additionalProperties": true,
+  "properties": {
+    "key_id": { "type": "string", "minLength": 1 },
+    "pubkey": { "type": "string", "minLength": 1 },
+    "sig": { "type": "string", "minLength": 1 },
+    "type": { "const": "enclave_proof", "type": "string" },
+  },
+  "required": ["type", "sig", "key_id", "pubkey"],
+  "type": "object",
+}) as z.ZodType<EnclaveProofFrame>;
 
-export const EnclaveErrorWireSchema = z
-  .object({ "reason": z.string(), "type": z.literal("enclave_error") })
-  .strict();
+export const EnclaveErrorWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "reason": { "type": "string" },
+    "type": { "const": "enclave_error", "type": "string" },
+  },
+  "required": ["type", "reason"],
+  "type": "object",
+});
 
-export const EnclaveErrorFrameSchema = z
-  .object({ "reason": z.string(), "type": z.literal("enclave_error") })
-  .catchall(z.unknown());
+export interface EnclaveErrorFrame {
+  reason: string;
+  type: "enclave_error";
+  [k: string]: unknown;
+}
 
-export type EnclaveErrorFrame = z.infer<typeof EnclaveErrorFrameSchema>;
+export const EnclaveErrorFrameSchema = z.fromJSONSchema({
+  "additionalProperties": true,
+  "properties": {
+    "reason": { "type": "string" },
+    "type": { "const": "enclave_error", "type": "string" },
+  },
+  "required": ["type", "reason"],
+  "type": "object",
+}) as z.ZodType<EnclaveErrorFrame>;
 
-export const ClientListResultWireSchema = z
-  .object({
-    "clients": z.array(ClientEntryWireSchema),
-    "enrolled": z.boolean(),
-    "error": z.union([z.string(), z.null()]).optional(),
-    "ok": z.boolean(),
-    "type": z.literal("client_list_result"),
-  })
-  .strict();
+export const ClientListResultWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "clients": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "added_unix": { "minimum": 0, "type": "integer" },
+          "anchor": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": { "const": "hash", "type": "string" },
+                  "value": { "type": "string" },
+                },
+                "required": ["kind", "value"],
+                "type": "object",
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": { "const": "signer", "type": "string" },
+                  "value": { "type": "string" },
+                },
+                "required": ["kind", "value"],
+                "type": "object",
+              },
+            ],
+          },
+          "name": { "type": "string" },
+        },
+        "required": ["name", "anchor", "added_unix"],
+        "type": "object",
+      },
+      "type": "array",
+    },
+    "enrolled": { "type": "boolean" },
+    "error": { "type": ["string", "null"] },
+    "ok": { "type": "boolean" },
+    "type": { "const": "client_list_result", "type": "string" },
+  },
+  "required": ["type", "ok", "enrolled", "clients"],
+  "type": "object",
+});
 
-export const ClientListResultSchema = z
-  .object({
-    "clients": z.array(TrustedClientSchema),
-    "enrolled": z.boolean(),
-    "error": z.string().optional(),
-    "ok": z.boolean(),
-    "type": z.literal("client_list_result"),
-  })
-  .catchall(z.unknown());
+export interface ClientListResult {
+  clients: {
+    added_unix: number;
+    anchor: {
+      kind: "hash" | "signer";
+      value: string;
+      [k: string]: unknown;
+    };
+    name: string;
+    [k: string]: unknown;
+  }[];
+  enrolled: boolean;
+  error?: string;
+  ok: boolean;
+  type: "client_list_result";
+  [k: string]: unknown;
+}
 
-export type ClientListResult = z.infer<typeof ClientListResultSchema>;
+export const ClientListResultSchema = z.fromJSONSchema({
+  "additionalProperties": true,
+  "properties": {
+    "clients": {
+      "items": {
+        "additionalProperties": true,
+        "properties": {
+          "added_unix": { "minimum": 0, "type": "integer" },
+          "anchor": {
+            "type": "object",
+            "properties": {
+              "kind": { "type": "string", "enum": ["hash", "signer"] },
+              "value": { "type": "string", "minLength": 1 },
+            },
+            "required": ["kind", "value"],
+            "additionalProperties": true,
+          },
+          "name": { "type": "string" },
+        },
+        "required": ["name", "anchor", "added_unix"],
+        "type": "object",
+      },
+      "type": "array",
+    },
+    "enrolled": { "type": "boolean" },
+    "error": { "type": "string" },
+    "ok": { "type": "boolean" },
+    "type": { "const": "client_list_result", "type": "string" },
+  },
+  "required": ["type", "ok", "enrolled", "clients"],
+  "type": "object",
+}) as z.ZodType<ClientListResult>;
 
-export const ClientRevokeResultWireSchema = z
-  .object({
-    "error": z.union([z.string(), z.null()]).optional(),
-    "ok": z.boolean(),
-    "type": z.literal("client_revoke_result"),
-  })
-  .strict();
+export const ClientRevokeResultWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "error": { "type": ["string", "null"] },
+    "ok": { "type": "boolean" },
+    "type": { "const": "client_revoke_result", "type": "string" },
+  },
+  "required": ["type", "ok"],
+  "type": "object",
+});
 
-export const ClientRevokeResultSchema = z
-  .object({
-    "error": z.string().optional(),
-    "ok": z.boolean(),
-    "type": z.literal("client_revoke_result"),
-  })
-  .catchall(z.unknown());
+export interface ClientRevokeResult {
+  error?: string;
+  ok: boolean;
+  type: "client_revoke_result";
+  [k: string]: unknown;
+}
 
-export type ClientRevokeResult = z.infer<typeof ClientRevokeResultSchema>;
+export const ClientRevokeResultSchema = z.fromJSONSchema({
+  "additionalProperties": true,
+  "properties": {
+    "error": { "type": "string" },
+    "ok": { "type": "boolean" },
+    "type": { "const": "client_revoke_result", "type": "string" },
+  },
+  "required": ["type", "ok"],
+  "type": "object",
+}) as z.ZodType<ClientRevokeResult>;
 
-export const KillStatusResultWireSchema = z
-  .object({
-    "error": z.union([z.string(), z.null()]).optional(),
-    "killed": z.union([z.boolean(), z.null()]).optional(),
-    "ok": z.boolean(),
-    "type": z.literal("kill_status_result"),
-  })
-  .strict();
+export const KillStatusResultWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "error": { "type": ["string", "null"] },
+    "killed": { "type": ["boolean", "null"] },
+    "ok": { "type": "boolean" },
+    "type": { "const": "kill_status_result", "type": "string" },
+  },
+  "required": ["type", "ok"],
+  "type": "object",
+});
 
-export const KillStatusResultSchema = z
-  .object({
-    "error": z.string().optional(),
-    "killed": z.boolean().optional(),
-    "ok": z.boolean(),
-    "type": z.literal("kill_status_result"),
-  })
-  .catchall(z.unknown());
+export interface KillStatusResult {
+  error?: string;
+  killed?: boolean;
+  ok: boolean;
+  type: "kill_status_result";
+  [k: string]: unknown;
+}
 
-export type KillStatusResult = z.infer<typeof KillStatusResultSchema>;
+export const KillStatusResultSchema = z.fromJSONSchema({
+  "additionalProperties": true,
+  "properties": {
+    "error": { "type": "string" },
+    "killed": { "type": "boolean" },
+    "ok": { "type": "boolean" },
+    "type": { "const": "kill_status_result", "type": "string" },
+  },
+  "required": ["type", "ok"],
+  "type": "object",
+}) as z.ZodType<KillStatusResult>;
 
-export const RegistrationStatusResultWireSchema = z
-  .object({
-    "browsers": z.union([z.array(RegistrationRowWireSchema), z.null()]).optional(),
-    "error": z.union([z.string(), z.null()]).optional(),
-    "ok": z.boolean(),
-    "type": z.literal("registration_status_result"),
-  })
-  .strict();
+export const RegistrationStatusResultWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "browsers": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "browser": { "type": "string" },
+          "detected": { "type": "boolean" },
+          "location": { "type": "string" },
+          "state": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": { "kind": { "const": "missing", "type": "string" } },
+                "required": ["kind"],
+                "type": "object",
+              },
+              {
+                "additionalProperties": false,
+                "properties": { "kind": { "const": "ok", "type": "string" } },
+                "required": ["kind"],
+                "type": "object",
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "detail": { "type": "string" },
+                  "kind": { "const": "stale", "type": "string" },
+                },
+                "required": ["kind", "detail"],
+                "type": "object",
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "detail": { "type": "string" },
+                  "kind": { "const": "foreign", "type": "string" },
+                },
+                "required": ["kind", "detail"],
+                "type": "object",
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "detail": { "type": "string" },
+                  "kind": { "const": "unreadable", "type": "string" },
+                },
+                "required": ["kind", "detail"],
+                "type": "object",
+              },
+            ],
+          },
+        },
+        "required": ["browser", "detected", "state", "location"],
+        "type": "object",
+      },
+      "type": ["array", "null"],
+    },
+    "error": { "type": ["string", "null"] },
+    "ok": { "type": "boolean" },
+    "type": { "const": "registration_status_result", "type": "string" },
+  },
+  "required": ["type", "ok"],
+  "type": "object",
+});
 
-export const RegistrationStatusResultSchema = z.discriminatedUnion("ok", [
-  z
-    .object({
-      "browsers": z.array(RegistrationRowSchema),
-      "error": z.undefined().optional(),
-      "ok": z.literal(true),
-      "type": z.literal("registration_status_result"),
-    })
-    .catchall(z.unknown()),
-  z
-    .object({
-      "browsers": z.undefined().optional(),
-      "error": z.string(),
-      "ok": z.literal(false),
-      "type": z.literal("registration_status_result"),
-    })
-    .catchall(z.unknown()),
-]);
+export type RegistrationStatusResult =
+  | {
+      browsers: {
+        browser: string;
+        detected: boolean;
+        location: string;
+        state:
+          | {
+              kind: "missing";
+              [k: string]: unknown;
+            }
+          | {
+              kind: "ok";
+              [k: string]: unknown;
+            }
+          | {
+              detail: string;
+              kind: "stale";
+              [k: string]: unknown;
+            }
+          | {
+              detail: string;
+              kind: "foreign";
+              [k: string]: unknown;
+            }
+          | {
+              detail: string;
+              kind: "unreadable";
+              [k: string]: unknown;
+            };
+        [k: string]: unknown;
+      }[];
+      error?: never;
+      ok: true;
+      type: "registration_status_result";
+      [k: string]: unknown;
+    }
+  | {
+      browsers?: never;
+      error: string;
+      ok: false;
+      type: "registration_status_result";
+      [k: string]: unknown;
+    };
 
-export type RegistrationStatusResult = z.infer<typeof RegistrationStatusResultSchema>;
+export const RegistrationStatusResultSchema = z.fromJSONSchema({
+  "anyOf": [
+    {
+      "additionalProperties": true,
+      "properties": {
+        "browsers": {
+          "items": {
+            "additionalProperties": true,
+            "properties": {
+              "browser": { "type": "string" },
+              "detected": { "type": "boolean" },
+              "location": { "type": "string" },
+              "state": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "properties": { "kind": { "const": "missing", "type": "string" } },
+                    "required": ["kind"],
+                    "type": "object",
+                  },
+                  {
+                    "additionalProperties": true,
+                    "properties": { "kind": { "const": "ok", "type": "string" } },
+                    "required": ["kind"],
+                    "type": "object",
+                  },
+                  {
+                    "additionalProperties": true,
+                    "properties": {
+                      "detail": { "type": "string" },
+                      "kind": { "const": "stale", "type": "string" },
+                    },
+                    "required": ["kind", "detail"],
+                    "type": "object",
+                  },
+                  {
+                    "additionalProperties": true,
+                    "properties": {
+                      "detail": { "type": "string" },
+                      "kind": { "const": "foreign", "type": "string" },
+                    },
+                    "required": ["kind", "detail"],
+                    "type": "object",
+                  },
+                  {
+                    "additionalProperties": true,
+                    "properties": {
+                      "detail": { "type": "string" },
+                      "kind": { "const": "unreadable", "type": "string" },
+                    },
+                    "required": ["kind", "detail"],
+                    "type": "object",
+                  },
+                ],
+              },
+            },
+            "required": ["browser", "detected", "state", "location"],
+            "type": "object",
+          },
+          "type": "array",
+        },
+        "error": false,
+        "ok": { "type": "boolean", "const": true },
+        "type": { "const": "registration_status_result", "type": "string" },
+      },
+      "required": ["type", "ok", "browsers"],
+      "type": "object",
+    },
+    {
+      "additionalProperties": true,
+      "properties": {
+        "browsers": false,
+        "error": { "type": "string" },
+        "ok": { "type": "boolean", "const": false },
+        "type": { "const": "registration_status_result", "type": "string" },
+      },
+      "required": ["type", "ok", "error"],
+      "type": "object",
+    },
+  ],
+}) as z.ZodType<RegistrationStatusResult>;
 
-export const AuditReadResultWireSchema = z
-  .object({
-    "entries": z.union([z.array(AuditTrailEntryWireSchema), z.null()]).optional(),
-    "error": z.union([z.string(), z.null()]).optional(),
-    "ok": z.boolean(),
-    "older": z.union([z.number().int().gte(0), z.null()]).optional(),
-    "path": z.union([z.string(), z.null()]).optional(),
-    "type": z.literal("audit_read_result"),
-  })
-  .strict();
+export const AuditReadResultWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "entries": {
+      "items": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "entry": { "const": "record", "type": "string" },
+              "fields": { "type": "string" },
+              "kind": { "type": "string" },
+              "ts_ms": { "maximum": 9007199254740991, "minimum": 0, "type": "integer" },
+            },
+            "required": ["entry", "ts_ms", "kind", "fields"],
+            "type": "object",
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "entry": { "const": "unrecognized", "type": "string" },
+              "text": { "type": "string" },
+            },
+            "required": ["entry", "text"],
+            "type": "object",
+          },
+        ],
+      },
+      "type": ["array", "null"],
+    },
+    "error": { "type": ["string", "null"] },
+    "ok": { "type": "boolean" },
+    "older": { "minimum": 0, "type": ["integer", "null"] },
+    "path": { "type": ["string", "null"] },
+    "type": { "const": "audit_read_result", "type": "string" },
+  },
+  "required": ["type", "ok"],
+  "type": "object",
+});
 
-export const AuditReadResultSchema = z.discriminatedUnion("ok", [
-  z
-    .object({
-      "entries": z.array(AuditTrailEntrySchema),
-      "error": z.undefined().optional(),
-      "ok": z.literal(true),
-      "older": z.number().int().gte(0),
-      "path": z.string(),
-      "type": z.literal("audit_read_result"),
-    })
-    .catchall(z.unknown()),
-  z
-    .object({
-      "entries": z.undefined().optional(),
-      "error": z.string(),
-      "ok": z.literal(false),
-      "older": z.undefined().optional(),
-      "path": z.undefined().optional(),
-      "type": z.literal("audit_read_result"),
-    })
-    .catchall(z.unknown()),
-]);
+export type AuditReadResult =
+  | {
+      entries: (
+        | {
+            entry: "record";
+            fields: string;
+            kind: string;
+            ts_ms: number;
+            [k: string]: unknown;
+          }
+        | {
+            entry: "unrecognized";
+            text: string;
+            [k: string]: unknown;
+          }
+      )[];
+      error?: never;
+      ok: true;
+      older: number;
+      path: string;
+      type: "audit_read_result";
+      [k: string]: unknown;
+    }
+  | {
+      entries?: never;
+      error: string;
+      ok: false;
+      older?: never;
+      path?: never;
+      type: "audit_read_result";
+      [k: string]: unknown;
+    };
 
-export type AuditReadResult = z.infer<typeof AuditReadResultSchema>;
+export const AuditReadResultSchema = z.fromJSONSchema({
+  "anyOf": [
+    {
+      "additionalProperties": true,
+      "properties": {
+        "entries": {
+          "items": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "properties": {
+                  "entry": { "const": "record", "type": "string" },
+                  "fields": { "type": "string" },
+                  "kind": { "type": "string" },
+                  "ts_ms": { "maximum": 9007199254740991, "minimum": 0, "type": "integer" },
+                },
+                "required": ["entry", "ts_ms", "kind", "fields"],
+                "type": "object",
+              },
+              {
+                "additionalProperties": true,
+                "properties": {
+                  "entry": { "const": "unrecognized", "type": "string" },
+                  "text": { "type": "string" },
+                },
+                "required": ["entry", "text"],
+                "type": "object",
+              },
+            ],
+          },
+          "type": "array",
+        },
+        "error": false,
+        "ok": { "type": "boolean", "const": true },
+        "older": { "minimum": 0, "type": "integer" },
+        "path": { "type": "string" },
+        "type": { "const": "audit_read_result", "type": "string" },
+      },
+      "required": ["type", "ok", "entries", "older", "path"],
+      "type": "object",
+    },
+    {
+      "additionalProperties": true,
+      "properties": {
+        "entries": false,
+        "error": { "type": "string" },
+        "ok": { "type": "boolean", "const": false },
+        "older": false,
+        "path": false,
+        "type": { "const": "audit_read_result", "type": "string" },
+      },
+      "required": ["type", "ok", "error"],
+      "type": "object",
+    },
+  ],
+}) as z.ZodType<AuditReadResult>;
 
-export const DoctorReportResultWireSchema = z
-  .object({
-    "error": z.union([z.string(), z.null()]).optional(),
-    "ok": z.boolean(),
-    "report": z.union([HealthReportWireSchema, z.null()]).optional(),
-    "type": z.literal("doctor_report_result"),
-  })
-  .strict();
+export const DoctorReportResultWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "error": { "type": ["string", "null"] },
+    "ok": { "type": "boolean" },
+    "report": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "healthy": { "type": "boolean" },
+            "host_key": { "type": "string" },
+            "kill_switch": {
+              "additionalProperties": false,
+              "properties": {
+                "details": { "items": { "type": "string" }, "type": "array" },
+                "value": { "type": "string" },
+              },
+              "required": ["value", "details"],
+              "type": "object",
+            },
+            "lock_file": {
+              "additionalProperties": false,
+              "properties": {
+                "details": { "items": { "type": "string" }, "type": "array" },
+                "value": { "type": "string" },
+              },
+              "required": ["value", "details"],
+              "type": "object",
+            },
+            "mcp_server": {
+              "additionalProperties": false,
+              "properties": {
+                "details": { "items": { "type": "string" }, "type": "array" },
+                "value": { "type": "string" },
+              },
+              "required": ["value", "details"],
+              "type": "object",
+            },
+            "platform": { "type": "string" },
+            "policy_baseline": {
+              "additionalProperties": false,
+              "properties": {
+                "details": { "items": { "type": "string" }, "type": "array" },
+                "value": { "type": "string" },
+              },
+              "required": ["value", "details"],
+              "type": "object",
+            },
+            "summary": { "type": "string" },
+            "version": { "type": "string" },
+          },
+          "required": [
+            "version",
+            "platform",
+            "lock_file",
+            "mcp_server",
+            "kill_switch",
+            "policy_baseline",
+            "host_key",
+            "summary",
+            "healthy",
+          ],
+          "type": "object",
+        },
+        { "type": "null" },
+      ],
+    },
+    "type": { "const": "doctor_report_result", "type": "string" },
+  },
+  "required": ["type", "ok"],
+  "type": "object",
+});
 
-export const DoctorReportResultSchema = z.discriminatedUnion("ok", [
-  z
-    .object({
-      "error": z.undefined().optional(),
-      "ok": z.literal(true),
-      "report": HealthReportSchema,
-      "type": z.literal("doctor_report_result"),
-    })
-    .catchall(z.unknown()),
-  z
-    .object({
-      "error": z.string(),
-      "ok": z.literal(false),
-      "report": z.undefined().optional(),
-      "type": z.literal("doctor_report_result"),
-    })
-    .catchall(z.unknown()),
-]);
+export type DoctorReportResult =
+  | {
+      error?: never;
+      ok: true;
+      report: {
+        healthy: boolean;
+        host_key: string;
+        kill_switch: {
+          details: string[];
+          value: string;
+          [k: string]: unknown;
+        };
+        lock_file: {
+          details: string[];
+          value: string;
+          [k: string]: unknown;
+        };
+        mcp_server: {
+          details: string[];
+          value: string;
+          [k: string]: unknown;
+        };
+        platform: string;
+        policy_baseline: {
+          details: string[];
+          value: string;
+          [k: string]: unknown;
+        };
+        summary: string;
+        version: string;
+        [k: string]: unknown;
+      };
+      type: "doctor_report_result";
+      [k: string]: unknown;
+    }
+  | {
+      error: string;
+      ok: false;
+      report?: never;
+      type: "doctor_report_result";
+      [k: string]: unknown;
+    };
 
-export type DoctorReportResult = z.infer<typeof DoctorReportResultSchema>;
+export const DoctorReportResultSchema = z.fromJSONSchema({
+  "anyOf": [
+    {
+      "additionalProperties": true,
+      "properties": {
+        "error": false,
+        "ok": { "type": "boolean", "const": true },
+        "report": {
+          "additionalProperties": true,
+          "properties": {
+            "healthy": { "type": "boolean" },
+            "host_key": { "type": "string" },
+            "kill_switch": {
+              "additionalProperties": true,
+              "properties": {
+                "details": { "items": { "type": "string" }, "type": "array" },
+                "value": { "type": "string" },
+              },
+              "required": ["value", "details"],
+              "type": "object",
+            },
+            "lock_file": {
+              "additionalProperties": true,
+              "properties": {
+                "details": { "items": { "type": "string" }, "type": "array" },
+                "value": { "type": "string" },
+              },
+              "required": ["value", "details"],
+              "type": "object",
+            },
+            "mcp_server": {
+              "additionalProperties": true,
+              "properties": {
+                "details": { "items": { "type": "string" }, "type": "array" },
+                "value": { "type": "string" },
+              },
+              "required": ["value", "details"],
+              "type": "object",
+            },
+            "platform": { "type": "string" },
+            "policy_baseline": {
+              "additionalProperties": true,
+              "properties": {
+                "details": { "items": { "type": "string" }, "type": "array" },
+                "value": { "type": "string" },
+              },
+              "required": ["value", "details"],
+              "type": "object",
+            },
+            "summary": { "type": "string" },
+            "version": { "type": "string" },
+          },
+          "required": [
+            "version",
+            "platform",
+            "lock_file",
+            "mcp_server",
+            "kill_switch",
+            "policy_baseline",
+            "host_key",
+            "summary",
+            "healthy",
+          ],
+          "type": "object",
+        },
+        "type": { "const": "doctor_report_result", "type": "string" },
+      },
+      "required": ["type", "ok", "report"],
+      "type": "object",
+    },
+    {
+      "additionalProperties": true,
+      "properties": {
+        "error": { "type": "string" },
+        "ok": { "type": "boolean", "const": false },
+        "report": false,
+        "type": { "const": "doctor_report_result", "type": "string" },
+      },
+      "required": ["type", "ok", "error"],
+      "type": "object",
+    },
+  ],
+}) as z.ZodType<DoctorReportResult>;
 
-export const PolicyCurrentWireSchema = z
-  .object({
-    "baseline": z.union([z.string(), z.null()]).optional(),
-    "error": z.union([z.string(), z.null()]).optional(),
-    "ok": z.boolean(),
-    "overlay": z
-      .union([
-        z
-          .object({
-            "cdpMode": z.union([z.boolean(), z.null()]).optional(),
-            "clickToastTimeoutMs": z.union([z.number().int().gte(0), z.null()]).optional(),
-            "confirmGraceMs": z.union([z.number().int().gte(0), z.null()]).optional(),
-            "confirmHighRiskClick": z.union([z.boolean(), z.null()]).optional(),
-            "confirmPageEval": z.union([z.boolean(), z.null()]).optional(),
-            "confirmTabClose": z.union([z.boolean(), z.null()]).optional(),
-            "disabledTools": z.union([z.array(z.string()), z.null()]).optional(),
-            "evalMask": z.union([z.boolean(), z.null()]).optional(),
-            "evalToastTimeoutMs": z.union([z.number().int().gte(0), z.null()]).optional(),
-            "fileUploadEnabled": z.union([z.boolean(), z.null()]).optional(),
-            "handleDialogEnabled": z.union([z.boolean(), z.null()]).optional(),
-            "hostReverifyMs": z.union([z.number().int().gte(0), z.null()]).optional(),
-            "pageEvalEnabled": z.union([z.boolean(), z.null()]).optional(),
-            "presenceConfirm": z.union([z.boolean(), z.null()]).optional(),
-            "warnPreciseSnapshot": z.union([z.boolean(), z.null()]).optional(),
-          })
-          .strict(),
-        z.null(),
-      ])
-      .optional(),
-    "sig": z.union([z.string(), z.null()]).optional(),
-    "type": z.literal("policy_current"),
-  })
-  .strict();
+export const PolicyCurrentWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "baseline": { "type": ["string", "null"] },
+    "error": { "type": ["string", "null"] },
+    "ok": { "type": "boolean" },
+    "overlay": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "cdpMode": { "type": ["boolean", "null"] },
+            "clickToastTimeoutMs": { "minimum": 0, "type": ["integer", "null"] },
+            "confirmGraceMs": { "minimum": 0, "type": ["integer", "null"] },
+            "confirmHighRiskClick": { "type": ["boolean", "null"] },
+            "confirmPageEval": { "type": ["boolean", "null"] },
+            "confirmTabClose": { "type": ["boolean", "null"] },
+            "disabledTools": { "items": { "type": "string" }, "type": ["array", "null"] },
+            "evalMask": { "type": ["boolean", "null"] },
+            "evalToastTimeoutMs": { "minimum": 0, "type": ["integer", "null"] },
+            "fileUploadEnabled": { "type": ["boolean", "null"] },
+            "handleDialogEnabled": { "type": ["boolean", "null"] },
+            "hostReverifyMs": { "minimum": 0, "type": ["integer", "null"] },
+            "pageEvalEnabled": { "type": ["boolean", "null"] },
+            "presenceConfirm": { "type": ["boolean", "null"] },
+            "warnPreciseSnapshot": { "type": ["boolean", "null"] },
+          },
+          "type": "object",
+        },
+        { "type": "null" },
+      ],
+    },
+    "sig": { "type": ["string", "null"] },
+    "type": { "const": "policy_current", "type": "string" },
+  },
+  "required": ["type", "ok"],
+  "type": "object",
+});
 
-export const PolicyCurrentFrameSchema = z.discriminatedUnion("ok", [
-  z
-    .object({
-      "baseline": z.string().min(1),
-      "error": z.undefined().optional(),
-      "ok": z.literal(true),
-      "overlay": PolicyOverlaySchema.optional(),
-      "sig": z.string().min(1).optional(),
-      "type": z.literal("policy_current"),
-    })
-    .catchall(z.unknown()),
-  z
-    .object({
-      "baseline": z.undefined().optional(),
-      "error": z.string(),
-      "ok": z.literal(false),
-      "overlay": z.undefined().optional(),
-      "sig": z.undefined().optional(),
-      "type": z.literal("policy_current"),
-    })
-    .catchall(z.unknown()),
-]);
+export type PolicyCurrentFrame =
+  | {
+      baseline: string;
+      error?: never;
+      ok: true;
+      overlay?: {
+        cdpMode?: boolean;
+        fileUploadEnabled?: boolean;
+        handleDialogEnabled?: boolean;
+        pageEvalEnabled?: boolean;
+        confirmHighRiskClick?: boolean;
+        confirmPageEval?: boolean;
+        presenceConfirm?: boolean;
+        confirmTabClose?: boolean;
+        warnPreciseSnapshot?: boolean;
+        evalMask?: boolean;
+        hostReverifyMs?: number;
+        confirmGraceMs?: number;
+        clickToastTimeoutMs?: number;
+        evalToastTimeoutMs?: number;
+        /**
+         * @maxItems 256
+         */
+        disabledTools?: string[];
+      };
+      sig?: string;
+      type: "policy_current";
+      [k: string]: unknown;
+    }
+  | {
+      baseline?: never;
+      error: string;
+      ok: false;
+      overlay?: never;
+      sig?: never;
+      type: "policy_current";
+      [k: string]: unknown;
+    };
 
-export type PolicyCurrentFrame = z.infer<typeof PolicyCurrentFrameSchema>;
+export const PolicyCurrentFrameSchema = z.fromJSONSchema({
+  "anyOf": [
+    {
+      "additionalProperties": true,
+      "properties": {
+        "baseline": { "type": "string", "minLength": 1 },
+        "error": false,
+        "ok": { "type": "boolean", "const": true },
+        "overlay": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cdpMode": { "type": "boolean" },
+            "fileUploadEnabled": { "type": "boolean" },
+            "handleDialogEnabled": { "type": "boolean" },
+            "pageEvalEnabled": { "type": "boolean" },
+            "confirmHighRiskClick": { "type": "boolean" },
+            "confirmPageEval": { "type": "boolean" },
+            "presenceConfirm": { "type": "boolean" },
+            "confirmTabClose": { "type": "boolean" },
+            "warnPreciseSnapshot": { "type": "boolean" },
+            "evalMask": { "type": "boolean" },
+            "hostReverifyMs": { "type": "integer", "minimum": 0 },
+            "confirmGraceMs": { "type": "integer", "minimum": 0 },
+            "clickToastTimeoutMs": { "type": "integer", "minimum": 0 },
+            "evalToastTimeoutMs": { "type": "integer", "minimum": 0 },
+            "disabledTools": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "maxItems": 256,
+            },
+          },
+          "required": [],
+        },
+        "sig": { "type": "string", "minLength": 1 },
+        "type": { "const": "policy_current", "type": "string" },
+      },
+      "required": ["type", "ok", "baseline"],
+      "type": "object",
+    },
+    {
+      "additionalProperties": true,
+      "properties": {
+        "baseline": false,
+        "error": { "type": "string" },
+        "ok": { "type": "boolean", "const": false },
+        "overlay": false,
+        "sig": false,
+        "type": { "const": "policy_current", "type": "string" },
+      },
+      "required": ["type", "ok", "error"],
+      "type": "object",
+    },
+  ],
+}) as z.ZodType<PolicyCurrentFrame>;
 
-export const PolicyRestrictResultWireSchema = z
-  .object({
-    "error": z.union([z.string(), z.null()]).optional(),
-    "ok": z.boolean(),
-    "type": z.literal("policy_restrict_result"),
-  })
-  .strict();
+export const PolicyRestrictResultWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "error": { "type": ["string", "null"] },
+    "ok": { "type": "boolean" },
+    "type": { "const": "policy_restrict_result", "type": "string" },
+  },
+  "required": ["type", "ok"],
+  "type": "object",
+});
 
-export const PolicyRestrictResultSchema = z.discriminatedUnion("ok", [
-  z
-    .object({
-      "error": z.undefined().optional(),
-      "ok": z.literal(true),
-      "type": z.literal("policy_restrict_result"),
-    })
-    .catchall(z.unknown()),
-  z
-    .object({
-      "error": z.string(),
-      "ok": z.literal(false),
-      "type": z.literal("policy_restrict_result"),
-    })
-    .catchall(z.unknown()),
-]);
+export type PolicyRestrictResult =
+  | {
+      error?: never;
+      ok: true;
+      type: "policy_restrict_result";
+      [k: string]: unknown;
+    }
+  | {
+      error: string;
+      ok: false;
+      type: "policy_restrict_result";
+      [k: string]: unknown;
+    };
 
-export type PolicyRestrictResult = z.infer<typeof PolicyRestrictResultSchema>;
+export const PolicyRestrictResultSchema = z.fromJSONSchema({
+  "anyOf": [
+    {
+      "additionalProperties": true,
+      "properties": {
+        "error": false,
+        "ok": { "type": "boolean", "const": true },
+        "type": { "const": "policy_restrict_result", "type": "string" },
+      },
+      "required": ["type", "ok"],
+      "type": "object",
+    },
+    {
+      "additionalProperties": true,
+      "properties": {
+        "error": { "type": "string" },
+        "ok": { "type": "boolean", "const": false },
+        "type": { "const": "policy_restrict_result", "type": "string" },
+      },
+      "required": ["type", "ok", "error"],
+      "type": "object",
+    },
+  ],
+}) as z.ZodType<PolicyRestrictResult>;
 
-export const LangCurrentWireSchema = z
-  .object({
-    "seq": z.number().int().gte(0),
-    "type": z.literal("lang_current"),
-    "value": z.string(),
-  })
-  .strict();
+export const LangCurrentWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "seq": { "minimum": 0, "type": "integer" },
+    "type": { "const": "lang_current", "type": "string" },
+    "value": { "type": "string" },
+  },
+  "required": ["type", "value", "seq"],
+  "type": "object",
+});
 
-export const LangCurrentFrameSchema = z
-  .object({
-    "seq": z.number().int().gte(0),
-    "type": z.literal("lang_current"),
-    "value": z.string(),
-  })
-  .catchall(z.unknown());
+export interface LangCurrentFrame {
+  seq: number;
+  type: "lang_current";
+  value: string;
+  [k: string]: unknown;
+}
 
-export type LangCurrentFrame = z.infer<typeof LangCurrentFrameSchema>;
+export const LangCurrentFrameSchema = z.fromJSONSchema({
+  "additionalProperties": true,
+  "properties": {
+    "seq": { "minimum": 0, "type": "integer" },
+    "type": { "const": "lang_current", "type": "string" },
+    "value": { "type": "string" },
+  },
+  "required": ["type", "value", "seq"],
+  "type": "object",
+}) as z.ZodType<LangCurrentFrame>;
 
-export const EnrollOptionsWireSchema = z
-  .object({
-    "challenge": z.string(),
-    "exclude_credential_ids": z.array(z.string()),
-    "nonce": z.string(),
-    "type": z.literal("enroll_options"),
-    "user_id": z.string(),
-    "user_name": z.string(),
-  })
-  .strict();
+export const EnrollOptionsWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "challenge": { "type": "string" },
+    "exclude_credential_ids": { "items": { "type": "string" }, "type": "array" },
+    "nonce": { "type": "string" },
+    "type": { "const": "enroll_options", "type": "string" },
+    "user_id": { "type": "string" },
+    "user_name": { "type": "string" },
+  },
+  "required": ["type", "challenge", "nonce", "user_id", "user_name", "exclude_credential_ids"],
+  "type": "object",
+});
 
-export const EnrollOptionsFrameSchema = z
-  .object({
-    "challenge": z.string().min(1),
-    "exclude_credential_ids": z.array(z.string()),
-    "nonce": z.string(),
-    "type": z.literal("enroll_options"),
-    "user_id": z.string(),
-    "user_name": z.string(),
-  })
-  .catchall(z.unknown());
+export interface EnrollOptionsFrame {
+  challenge: string;
+  exclude_credential_ids: string[];
+  nonce: string;
+  type: "enroll_options";
+  user_id: string;
+  user_name: string;
+  [k: string]: unknown;
+}
 
-export type EnrollOptionsFrame = z.infer<typeof EnrollOptionsFrameSchema>;
+export const EnrollOptionsFrameSchema = z.fromJSONSchema({
+  "additionalProperties": true,
+  "properties": {
+    "challenge": { "type": "string", "minLength": 1 },
+    "exclude_credential_ids": { "items": { "type": "string" }, "type": "array" },
+    "nonce": { "type": "string" },
+    "type": { "const": "enroll_options", "type": "string" },
+    "user_id": { "type": "string" },
+    "user_name": { "type": "string" },
+  },
+  "required": ["type", "challenge", "nonce", "user_id", "user_name", "exclude_credential_ids"],
+  "type": "object",
+}) as z.ZodType<EnrollOptionsFrame>;
 
-export const EnrollResultWireSchema = z
-  .object({
-    "credential_id": z.union([z.string(), z.null()]).optional(),
-    "ok": z.boolean(),
-    "reason": z.union([z.string(), z.null()]).optional(),
-    "type": z.literal("enroll_result"),
-  })
-  .strict();
+export const EnrollResultWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "credential_id": { "type": ["string", "null"] },
+    "ok": { "type": "boolean" },
+    "reason": { "type": ["string", "null"] },
+    "type": { "const": "enroll_result", "type": "string" },
+  },
+  "required": ["type", "ok"],
+  "type": "object",
+});
 
-export const EnrollResultFrameSchema = z.discriminatedUnion("ok", [
-  z
-    .object({
-      "credential_id": z.string().min(1),
-      "ok": z.literal(true),
-      "reason": z.undefined().optional(),
-      "type": z.literal("enroll_result"),
-    })
-    .catchall(z.unknown()),
-  z
-    .object({
-      "credential_id": z.undefined().optional(),
-      "ok": z.literal(false),
-      "reason": z.string(),
-      "type": z.literal("enroll_result"),
-    })
-    .catchall(z.unknown()),
-]);
+export type EnrollResultFrame =
+  | {
+      credential_id: string;
+      ok: true;
+      reason?: never;
+      type: "enroll_result";
+      [k: string]: unknown;
+    }
+  | {
+      credential_id?: never;
+      ok: false;
+      reason: string;
+      type: "enroll_result";
+      [k: string]: unknown;
+    };
 
-export type EnrollResultFrame = z.infer<typeof EnrollResultFrameSchema>;
+export const EnrollResultFrameSchema = z.fromJSONSchema({
+  "anyOf": [
+    {
+      "additionalProperties": true,
+      "properties": {
+        "credential_id": { "type": "string", "minLength": 1 },
+        "ok": { "type": "boolean", "const": true },
+        "reason": false,
+        "type": { "const": "enroll_result", "type": "string" },
+      },
+      "required": ["type", "ok", "credential_id"],
+      "type": "object",
+    },
+    {
+      "additionalProperties": true,
+      "properties": {
+        "credential_id": false,
+        "ok": { "type": "boolean", "const": false },
+        "reason": { "type": "string" },
+        "type": { "const": "enroll_result", "type": "string" },
+      },
+      "required": ["type", "ok", "reason"],
+      "type": "object",
+    },
+  ],
+}) as z.ZodType<EnrollResultFrame>;
 
-export const PresenceRequestWireSchema = z
-  .object({
-    "action": z.string(),
-    "allowed_credential_ids": z.array(z.string()),
-    "challenge": z.string(),
-    "nonce": z.string(),
-    "type": z.literal("presence_request"),
-  })
-  .strict();
+export const PresenceRequestWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "action": { "type": "string" },
+    "allowed_credential_ids": { "items": { "type": "string" }, "type": "array" },
+    "challenge": { "type": "string" },
+    "nonce": { "type": "string" },
+    "type": { "const": "presence_request", "type": "string" },
+  },
+  "required": ["type", "challenge", "nonce", "action", "allowed_credential_ids"],
+  "type": "object",
+});
 
-export const PresenceRequestFrameSchema = z
-  .object({
-    "action": z.string().min(1),
-    "allowed_credential_ids": z.array(z.string()),
-    "challenge": z.string().min(1),
-    "nonce": z.string(),
-    "type": z.literal("presence_request"),
-  })
-  .catchall(z.unknown());
+export interface PresenceRequestFrame {
+  action: string;
+  allowed_credential_ids: string[];
+  challenge: string;
+  nonce: string;
+  type: "presence_request";
+  [k: string]: unknown;
+}
 
-export type PresenceRequestFrame = z.infer<typeof PresenceRequestFrameSchema>;
+export const PresenceRequestFrameSchema = z.fromJSONSchema({
+  "additionalProperties": true,
+  "properties": {
+    "action": { "type": "string", "minLength": 1 },
+    "allowed_credential_ids": { "items": { "type": "string" }, "type": "array" },
+    "challenge": { "type": "string", "minLength": 1 },
+    "nonce": { "type": "string" },
+    "type": { "const": "presence_request", "type": "string" },
+  },
+  "required": ["type", "challenge", "nonce", "action", "allowed_credential_ids"],
+  "type": "object",
+}) as z.ZodType<PresenceRequestFrame>;
 
-export const PresenceResultWireSchema = z
-  .object({
-    "ok": z.boolean(),
-    "reason": z.union([z.string(), z.null()]).optional(),
-    "type": z.literal("presence_result"),
-  })
-  .strict();
+export const PresenceResultWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "ok": { "type": "boolean" },
+    "reason": { "type": ["string", "null"] },
+    "type": { "const": "presence_result", "type": "string" },
+  },
+  "required": ["type", "ok"],
+  "type": "object",
+});
 
-export const PresenceResultFrameSchema = z.discriminatedUnion("ok", [
-  z
-    .object({
-      "ok": z.literal(true),
-      "reason": z.undefined().optional(),
-      "type": z.literal("presence_result"),
-    })
-    .catchall(z.unknown()),
-  z
-    .object({ "ok": z.literal(false), "reason": z.string(), "type": z.literal("presence_result") })
-    .catchall(z.unknown()),
-]);
+export type PresenceResultFrame =
+  | {
+      ok: true;
+      reason?: never;
+      type: "presence_result";
+      [k: string]: unknown;
+    }
+  | {
+      ok: false;
+      reason: string;
+      type: "presence_result";
+      [k: string]: unknown;
+    };
 
-export type PresenceResultFrame = z.infer<typeof PresenceResultFrameSchema>;
+export const PresenceResultFrameSchema = z.fromJSONSchema({
+  "anyOf": [
+    {
+      "additionalProperties": true,
+      "properties": {
+        "ok": { "type": "boolean", "const": true },
+        "reason": false,
+        "type": { "const": "presence_result", "type": "string" },
+      },
+      "required": ["type", "ok"],
+      "type": "object",
+    },
+    {
+      "additionalProperties": true,
+      "properties": {
+        "ok": { "type": "boolean", "const": false },
+        "reason": { "type": "string" },
+        "type": { "const": "presence_result", "type": "string" },
+      },
+      "required": ["type", "ok", "reason"],
+      "type": "object",
+    },
+  ],
+}) as z.ZodType<PresenceResultFrame>;
 
-export const BrowserRevokeResultWireSchema = z
-  .object({
-    "ok": z.boolean(),
-    "reason": z.union([z.string(), z.null()]).optional(),
-    "type": z.literal("browser_revoke_result"),
-  })
-  .strict();
+export const BrowserRevokeResultWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "ok": { "type": "boolean" },
+    "reason": { "type": ["string", "null"] },
+    "type": { "const": "browser_revoke_result", "type": "string" },
+  },
+  "required": ["type", "ok"],
+  "type": "object",
+});
 
-export const BrowserRevokeResultFrameSchema = z.discriminatedUnion("ok", [
-  z
-    .object({
-      "ok": z.literal(true),
-      "reason": z.undefined().optional(),
-      "type": z.literal("browser_revoke_result"),
-    })
-    .catchall(z.unknown()),
-  z
-    .object({
-      "ok": z.literal(false),
-      "reason": z.string(),
-      "type": z.literal("browser_revoke_result"),
-    })
-    .catchall(z.unknown()),
-]);
+export type BrowserRevokeResultFrame =
+  | {
+      ok: true;
+      reason?: never;
+      type: "browser_revoke_result";
+      [k: string]: unknown;
+    }
+  | {
+      ok: false;
+      reason: string;
+      type: "browser_revoke_result";
+      [k: string]: unknown;
+    };
 
-export type BrowserRevokeResultFrame = z.infer<typeof BrowserRevokeResultFrameSchema>;
+export const BrowserRevokeResultFrameSchema = z.fromJSONSchema({
+  "anyOf": [
+    {
+      "additionalProperties": true,
+      "properties": {
+        "ok": { "type": "boolean", "const": true },
+        "reason": false,
+        "type": { "const": "browser_revoke_result", "type": "string" },
+      },
+      "required": ["type", "ok"],
+      "type": "object",
+    },
+    {
+      "additionalProperties": true,
+      "properties": {
+        "ok": { "type": "boolean", "const": false },
+        "reason": { "type": "string" },
+        "type": { "const": "browser_revoke_result", "type": "string" },
+      },
+      "required": ["type", "ok", "reason"],
+      "type": "object",
+    },
+  ],
+}) as z.ZodType<BrowserRevokeResultFrame>;
 
 // Which control-frame tags have a generated reader above, and which are bare classification tags.
 // scripts/check-envelope.ts holds the extension's inbound classifiers to these.
@@ -645,173 +1795,361 @@ export const BARE_TAG_FRAMES = {
 } as const;
 
 // The extension->host writer frames (the extension constructs these; the enforcing reader is the Rust
-// serde parser). Emitted for their inferred types: constructor sites claim conformance with `satisfies`,
-// so a drifted field or tag is a compile error. Never used as runtime parsers.
-export const EnclaveChallengeWireSchema = z
-  .object({
-    "context": z.union([z.string(), z.null()]).optional(),
-    "nonce": z.string(),
-    "type": z.literal("enclave_challenge"),
-  })
-  .strict();
+// serde parser). Emitted for their types: constructor sites claim conformance with `satisfies`, so a
+// drifted field or tag is a compile error. Never used as runtime parsers.
+export interface EnclaveChallengeWire {
+  context?: string | null;
+  nonce: string;
+  type: "enclave_challenge";
+}
 
-export type EnclaveChallengeWire = z.infer<typeof EnclaveChallengeWireSchema>;
+export const EnclaveChallengeWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "context": { "type": ["string", "null"] },
+    "nonce": { "type": "string" },
+    "type": { "const": "enclave_challenge", "type": "string" },
+  },
+  "required": ["type", "nonce"],
+  "type": "object",
+}) as z.ZodType<EnclaveChallengeWire>;
 
-export const EnclaveRevokeWireSchema = z.object({ "type": z.literal("enclave_revoke") }).strict();
+export interface EnclaveRevokeWire {
+  type: "enclave_revoke";
+}
 
-export type EnclaveRevokeWire = z.infer<typeof EnclaveRevokeWireSchema>;
+export const EnclaveRevokeWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": { "type": { "const": "enclave_revoke", "type": "string" } },
+  "required": ["type"],
+  "type": "object",
+}) as z.ZodType<EnclaveRevokeWire>;
 
-export const ClientListWireSchema = z.object({ "type": z.literal("client_list") }).strict();
+export interface ClientListWire {
+  type: "client_list";
+}
 
-export type ClientListWire = z.infer<typeof ClientListWireSchema>;
+export const ClientListWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": { "type": { "const": "client_list", "type": "string" } },
+  "required": ["type"],
+  "type": "object",
+}) as z.ZodType<ClientListWire>;
 
-export const ClientRevokeWireSchema = z
-  .object({ "name": z.string(), "type": z.literal("client_revoke") })
-  .strict();
+export interface ClientRevokeWire {
+  name: string;
+  type: "client_revoke";
+}
 
-export type ClientRevokeWire = z.infer<typeof ClientRevokeWireSchema>;
+export const ClientRevokeWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "name": { "type": "string" },
+    "type": { "const": "client_revoke", "type": "string" },
+  },
+  "required": ["type", "name"],
+  "type": "object",
+}) as z.ZodType<ClientRevokeWire>;
 
-export const KillStatusWireSchema = z.object({ "type": z.literal("kill_status") }).strict();
+export interface KillStatusWire {
+  type: "kill_status";
+}
 
-export type KillStatusWire = z.infer<typeof KillStatusWireSchema>;
+export const KillStatusWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": { "type": { "const": "kill_status", "type": "string" } },
+  "required": ["type"],
+  "type": "object",
+}) as z.ZodType<KillStatusWire>;
 
-export const KillEngageWireSchema = z.object({ "type": z.literal("kill_engage") }).strict();
+export interface KillEngageWire {
+  type: "kill_engage";
+}
 
-export type KillEngageWire = z.infer<typeof KillEngageWireSchema>;
+export const KillEngageWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": { "type": { "const": "kill_engage", "type": "string" } },
+  "required": ["type"],
+  "type": "object",
+}) as z.ZodType<KillEngageWire>;
 
-export const KillReleaseWireSchema = z.object({ "type": z.literal("kill_release") }).strict();
+export interface KillReleaseWire {
+  type: "kill_release";
+}
 
-export type KillReleaseWire = z.infer<typeof KillReleaseWireSchema>;
+export const KillReleaseWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": { "type": { "const": "kill_release", "type": "string" } },
+  "required": ["type"],
+  "type": "object",
+}) as z.ZodType<KillReleaseWire>;
 
-export const AuditEventWireSchema = z
-  .object({
-    "cid": z.union([z.string(), z.null()]).optional(),
-    "detail": z.union([z.string(), z.null()]).optional(),
-    "kind": z.string(),
-    "name": z.union([z.string(), z.null()]).optional(),
-    "outcome": z.union([z.string(), z.null()]).optional(),
-    "tool": z.union([z.string(), z.null()]).optional(),
-    "type": z.literal("audit_event"),
-  })
-  .strict();
+export interface AuditEventWire {
+  cid?: string | null;
+  detail?: string | null;
+  kind: string;
+  name?: string | null;
+  outcome?: string | null;
+  tool?: string | null;
+  type: "audit_event";
+}
 
-export type AuditEventWire = z.infer<typeof AuditEventWireSchema>;
+export const AuditEventWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "cid": { "type": ["string", "null"] },
+    "detail": { "type": ["string", "null"] },
+    "kind": { "type": "string" },
+    "name": { "type": ["string", "null"] },
+    "outcome": { "type": ["string", "null"] },
+    "tool": { "type": ["string", "null"] },
+    "type": { "const": "audit_event", "type": "string" },
+  },
+  "required": ["type", "kind"],
+  "type": "object",
+}) as z.ZodType<AuditEventWire>;
 
-export const AuditReadWireSchema = z
-  .object({
-    "limit": z.union([z.number().int().gte(1).lte(1000), z.null()]).optional(),
-    "type": z.literal("audit_read"),
-  })
-  .strict();
+export interface AuditReadWire {
+  limit?: number | null;
+  type: "audit_read";
+}
 
-export type AuditReadWire = z.infer<typeof AuditReadWireSchema>;
+export const AuditReadWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "limit": { "maximum": 1000, "minimum": 1, "type": ["integer", "null"] },
+    "type": { "const": "audit_read", "type": "string" },
+  },
+  "required": ["type"],
+  "type": "object",
+}) as z.ZodType<AuditReadWire>;
 
-export const DoctorReportWireSchema = z.object({ "type": z.literal("doctor_report") }).strict();
+export interface DoctorReportWire {
+  type: "doctor_report";
+}
 
-export type DoctorReportWire = z.infer<typeof DoctorReportWireSchema>;
+export const DoctorReportWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": { "type": { "const": "doctor_report", "type": "string" } },
+  "required": ["type"],
+  "type": "object",
+}) as z.ZodType<DoctorReportWire>;
 
-export const RegistrationStatusWireSchema = z
-  .object({ "type": z.literal("registration_status") })
-  .strict();
+export interface RegistrationStatusWire {
+  type: "registration_status";
+}
 
-export type RegistrationStatusWire = z.infer<typeof RegistrationStatusWireSchema>;
+export const RegistrationStatusWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": { "type": { "const": "registration_status", "type": "string" } },
+  "required": ["type"],
+  "type": "object",
+}) as z.ZodType<RegistrationStatusWire>;
 
-export const RegistrationRepairWireSchema = z
-  .object({
-    "browsers": z
-      .union([
-        z.array(z.enum(["chrome", "chromium", "brave", "edge", "vivaldi", "opera"])).min(1),
-        z.null(),
-      ])
-      .optional(),
-    "type": z.literal("registration_repair"),
-  })
-  .strict();
+export interface RegistrationRepairWire {
+  /**
+   * @minItems 1
+   */
+  browsers?: ("chrome" | "chromium" | "brave" | "edge" | "vivaldi" | "opera")[] | null;
+  type: "registration_repair";
+}
 
-export type RegistrationRepairWire = z.infer<typeof RegistrationRepairWireSchema>;
+export const RegistrationRepairWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "browsers": {
+      "items": {
+        "enum": ["chrome", "chromium", "brave", "edge", "vivaldi", "opera"],
+        "type": "string",
+      },
+      "minItems": 1,
+      "type": ["array", "null"],
+    },
+    "type": { "const": "registration_repair", "type": "string" },
+  },
+  "required": ["type"],
+  "type": "object",
+}) as z.ZodType<RegistrationRepairWire>;
 
-export const PolicyGetWireSchema = z.object({ "type": z.literal("policy_get") }).strict();
+export interface PolicyGetWire {
+  type: "policy_get";
+}
 
-export type PolicyGetWire = z.infer<typeof PolicyGetWireSchema>;
+export const PolicyGetWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": { "type": { "const": "policy_get", "type": "string" } },
+  "required": ["type"],
+  "type": "object",
+}) as z.ZodType<PolicyGetWire>;
 
-export const PolicyRestrictWireSchema = z
-  .object({
-    "overlay": z
-      .object({
-        "cdpMode": z.union([z.boolean(), z.null()]).optional(),
-        "clickToastTimeoutMs": z.union([z.number().int().gte(0), z.null()]).optional(),
-        "confirmGraceMs": z.union([z.number().int().gte(0), z.null()]).optional(),
-        "confirmHighRiskClick": z.union([z.boolean(), z.null()]).optional(),
-        "confirmPageEval": z.union([z.boolean(), z.null()]).optional(),
-        "confirmTabClose": z.union([z.boolean(), z.null()]).optional(),
-        "disabledTools": z.union([z.array(z.string()), z.null()]).optional(),
-        "evalMask": z.union([z.boolean(), z.null()]).optional(),
-        "evalToastTimeoutMs": z.union([z.number().int().gte(0), z.null()]).optional(),
-        "fileUploadEnabled": z.union([z.boolean(), z.null()]).optional(),
-        "handleDialogEnabled": z.union([z.boolean(), z.null()]).optional(),
-        "hostReverifyMs": z.union([z.number().int().gte(0), z.null()]).optional(),
-        "pageEvalEnabled": z.union([z.boolean(), z.null()]).optional(),
-        "presenceConfirm": z.union([z.boolean(), z.null()]).optional(),
-        "warnPreciseSnapshot": z.union([z.boolean(), z.null()]).optional(),
-      })
-      .strict(),
-    "type": z.literal("policy_restrict"),
-  })
-  .strict();
+export interface PolicyRestrictWire {
+  overlay: {
+    cdpMode?: boolean | null;
+    clickToastTimeoutMs?: number | null;
+    confirmGraceMs?: number | null;
+    confirmHighRiskClick?: boolean | null;
+    confirmPageEval?: boolean | null;
+    confirmTabClose?: boolean | null;
+    disabledTools?: string[] | null;
+    evalMask?: boolean | null;
+    evalToastTimeoutMs?: number | null;
+    fileUploadEnabled?: boolean | null;
+    handleDialogEnabled?: boolean | null;
+    hostReverifyMs?: number | null;
+    pageEvalEnabled?: boolean | null;
+    presenceConfirm?: boolean | null;
+    warnPreciseSnapshot?: boolean | null;
+  };
+  type: "policy_restrict";
+}
 
-export type PolicyRestrictWire = z.infer<typeof PolicyRestrictWireSchema>;
+export const PolicyRestrictWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "overlay": {
+      "additionalProperties": false,
+      "properties": {
+        "cdpMode": { "type": ["boolean", "null"] },
+        "clickToastTimeoutMs": { "minimum": 0, "type": ["integer", "null"] },
+        "confirmGraceMs": { "minimum": 0, "type": ["integer", "null"] },
+        "confirmHighRiskClick": { "type": ["boolean", "null"] },
+        "confirmPageEval": { "type": ["boolean", "null"] },
+        "confirmTabClose": { "type": ["boolean", "null"] },
+        "disabledTools": { "items": { "type": "string" }, "type": ["array", "null"] },
+        "evalMask": { "type": ["boolean", "null"] },
+        "evalToastTimeoutMs": { "minimum": 0, "type": ["integer", "null"] },
+        "fileUploadEnabled": { "type": ["boolean", "null"] },
+        "handleDialogEnabled": { "type": ["boolean", "null"] },
+        "hostReverifyMs": { "minimum": 0, "type": ["integer", "null"] },
+        "pageEvalEnabled": { "type": ["boolean", "null"] },
+        "presenceConfirm": { "type": ["boolean", "null"] },
+        "warnPreciseSnapshot": { "type": ["boolean", "null"] },
+      },
+      "type": "object",
+    },
+    "type": { "const": "policy_restrict", "type": "string" },
+  },
+  "required": ["type", "overlay"],
+  "type": "object",
+}) as z.ZodType<PolicyRestrictWire>;
 
-export const LangSetWireSchema = z
-  .object({ "type": z.literal("lang_set"), "value": z.string() })
-  .strict();
+export interface LangSetWire {
+  type: "lang_set";
+  value: string;
+}
 
-export type LangSetWire = z.infer<typeof LangSetWireSchema>;
+export const LangSetWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "type": { "const": "lang_set", "type": "string" },
+    "value": { "type": "string" },
+  },
+  "required": ["type", "value"],
+  "type": "object",
+}) as z.ZodType<LangSetWire>;
 
-export const LangGetWireSchema = z.object({ "type": z.literal("lang_get") }).strict();
+export interface LangGetWire {
+  type: "lang_get";
+}
 
-export type LangGetWire = z.infer<typeof LangGetWireSchema>;
+export const LangGetWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": { "type": { "const": "lang_get", "type": "string" } },
+  "required": ["type"],
+  "type": "object",
+}) as z.ZodType<LangGetWire>;
 
-export const EnrollBeginWireSchema = z.object({ "type": z.literal("enroll_begin") }).strict();
+export interface EnrollBeginWire {
+  type: "enroll_begin";
+}
 
-export type EnrollBeginWire = z.infer<typeof EnrollBeginWireSchema>;
+export const EnrollBeginWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": { "type": { "const": "enroll_begin", "type": "string" } },
+  "required": ["type"],
+  "type": "object",
+}) as z.ZodType<EnrollBeginWire>;
 
-export const EnrollFinishWireSchema = z
-  .object({
-    "attestation_object": z.string(),
-    "client_data_json": z.string(),
-    "type": z.literal("enroll_finish"),
-  })
-  .strict();
+export interface EnrollFinishWire {
+  attestation_object: string;
+  client_data_json: string;
+  type: "enroll_finish";
+}
 
-export type EnrollFinishWire = z.infer<typeof EnrollFinishWireSchema>;
+export const EnrollFinishWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "attestation_object": { "type": "string" },
+    "client_data_json": { "type": "string" },
+    "type": { "const": "enroll_finish", "type": "string" },
+  },
+  "required": ["type", "attestation_object", "client_data_json"],
+  "type": "object",
+}) as z.ZodType<EnrollFinishWire>;
 
-export const PresenceBeginWireSchema = z
-  .object({ "action": z.string(), "origin": z.string(), "type": z.literal("presence_begin") })
-  .strict();
+export interface PresenceBeginWire {
+  action: string;
+  origin: string;
+  type: "presence_begin";
+}
 
-export type PresenceBeginWire = z.infer<typeof PresenceBeginWireSchema>;
+export const PresenceBeginWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "action": { "type": "string" },
+    "origin": { "type": "string" },
+    "type": { "const": "presence_begin", "type": "string" },
+  },
+  "required": ["type", "action", "origin"],
+  "type": "object",
+}) as z.ZodType<PresenceBeginWire>;
 
-export const PresenceAssertWireSchema = z
-  .object({
-    "authenticator_data": z.string(),
-    "client_data_json": z.string(),
-    "credential_id": z.string(),
-    "signature": z.string(),
-    "type": z.literal("presence_assert"),
-  })
-  .strict();
+export interface PresenceAssertWire {
+  authenticator_data: string;
+  client_data_json: string;
+  credential_id: string;
+  signature: string;
+  type: "presence_assert";
+}
 
-export type PresenceAssertWire = z.infer<typeof PresenceAssertWireSchema>;
+export const PresenceAssertWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "authenticator_data": { "type": "string" },
+    "client_data_json": { "type": "string" },
+    "credential_id": { "type": "string" },
+    "signature": { "type": "string" },
+    "type": { "const": "presence_assert", "type": "string" },
+  },
+  "required": ["type", "credential_id", "authenticator_data", "client_data_json", "signature"],
+  "type": "object",
+}) as z.ZodType<PresenceAssertWire>;
 
-export const PresenceConfirmWireSchema = z
-  .object({ "nonce": z.string(), "type": z.literal("presence_confirm") })
-  .strict();
+export interface PresenceConfirmWire {
+  nonce: string;
+  type: "presence_confirm";
+}
 
-export type PresenceConfirmWire = z.infer<typeof PresenceConfirmWireSchema>;
+export const PresenceConfirmWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": {
+    "nonce": { "type": "string" },
+    "type": { "const": "presence_confirm", "type": "string" },
+  },
+  "required": ["type", "nonce"],
+  "type": "object",
+}) as z.ZodType<PresenceConfirmWire>;
 
-export const BrowserRevokeWireSchema = z.object({ "type": z.literal("browser_revoke") }).strict();
+export interface BrowserRevokeWire {
+  type: "browser_revoke";
+}
 
-export type BrowserRevokeWire = z.infer<typeof BrowserRevokeWireSchema>;
+export const BrowserRevokeWireSchema = z.fromJSONSchema({
+  "additionalProperties": false,
+  "properties": { "type": { "const": "browser_revoke", "type": "string" } },
+  "required": ["type"],
+  "type": "object",
+}) as z.ZodType<BrowserRevokeWire>;
 
 // Which extension->host frames have a generated writer schema above.
 export const GENERATED_WRITER_FRAMES = {

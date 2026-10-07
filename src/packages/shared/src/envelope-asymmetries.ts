@@ -24,13 +24,13 @@ export type Change =
   /** serde's adjacently tagged enum (one object variant per `kind` const, all with the same `value` shape)
    * spelled as one object with `kind: z.enum([...])`. */
   | { change: "tag-union-as-enum-object" }
-  /** The node is replaced by a schema another generated module already owns; the generator cross-checks an
-   * object node's field inventory and field types against that schema. */
+  /** The node is replaced by the schema another generated module owns, inlined; the generator cross-checks the
+   * Rust node's field inventory and field types against it and holds the owning module's export equal to it. */
   | { change: "generated-schema"; symbol: string; from: string }
   /** A whole frame (the `$` path) whose boolean `discriminant` selects which Option fields a host-emitted frame
-   * carries: the generator emits one arm per value as a `z.discriminatedUnion`, each arm requiring its
-   * `required` fields and refusing its `forbidden` ones. Applied after the field-level changes, so an arm
-   * inherits them. */
+   * carries: the generator emits one arm per value, each arm requiring its `required` fields and refusing its
+   * `forbidden` ones (a `false` schema, so a present value fails and absence passes). Applied after the
+   * field-level changes, so an arm inherits them. */
   | {
       change: "ok-split";
       discriminant: string;
@@ -77,7 +77,7 @@ export const READER_RULES = [
     rule: "safe-integers",
     direction: "narrow",
     reason:
-      "Every integer is a JS-safe integer (z.number().int()): above 2^53 - 1 a JS number cannot represent " +
+      "Every integer is a JS-safe integer (zod's reading of `integer`): above 2^53 - 1 a JS number cannot represent " +
       "every value, so two consecutive host u64 values could read equal here.",
   },
 ] as const satisfies readonly { rule: string; direction: AsymmetryDirection; reason: string }[];
