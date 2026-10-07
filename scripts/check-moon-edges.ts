@@ -94,10 +94,13 @@ const asWord = (text: string): Word => {
 };
 
 // A backslash quotes the next character, so `in\stall` is `install` and `\*` is no glob, while `\\*` is a
-// backslash and a glob. Inside double quotes only `\`, `"`, `$`, and a backquote can be quoted that way.
+// backslash and a glob. Inside double quotes only `\`, `"`, `$`, and a backquote can be quoted that way. A
+// brace the shell reads opens an expansion whose forms the rules do not read (`{a,b}`, `{1..9..2}`, `{x..Z}`),
+// so it makes the word non-literal; the parser keeps it inside the literal.
 function literal(raw: string, quoted: boolean): Word {
   let text = "";
   let globPrefix: string | null = null;
+  let literal = true;
   for (let i = 0; i < raw.length; i++) {
     const c = raw[i] as string;
     const next = raw[i + 1];
@@ -107,9 +110,10 @@ function literal(raw: string, quoted: boolean): Word {
       continue;
     }
     if (!quoted && globPrefix === null && GLOB_CHAR.test(c)) globPrefix = text;
+    if (!quoted && c === "{") literal = false;
     text += c;
   }
-  return { text, globPrefix, literal: true };
+  return { text, globPrefix, literal };
 }
 
 // bun's global options may or may not take a value (`--config` accepts an omitted one), so no table of them is
@@ -169,8 +173,11 @@ function render(part: Sh.Node, quoted: boolean): Word {
   }
 }
 
-const wordOf = (w: Sh.Word): Word =>
-  w.Parts.map((part) => render(part, false)).reduce(
+// A data word (a heredoc's body or delimiter, a here-string, a descriptor) reads as quoted text: bash expands
+// no brace and matches no glob there. Its backslashes follow double quotes' rule, which a heredoc body and a
+// here-string each bend a little; the text reaches only a finding's message.
+const wordOf = (w: Sh.Word, quoted = false): Word =>
+  w.Parts.map((part) => render(part, quoted)).reduce(
     (acc, part) => ({
       text: acc.text + part.text,
       globPrefix: acc.globPrefix ?? (part.globPrefix === null ? null : acc.text + part.globPrefix),
@@ -205,7 +212,7 @@ function parseCommands(task: Task): Commands {
       case "CallExpr": {
         const { Args, Assigns } = node as Sh.CallExpr;
         commands.push({
-          words: unalias(Args.map(wordOf)),
+          words: unalias(Args.map((arg) => wordOf(arg))),
           assigns: Assigns.flatMap((a) => (a.Name === null ? [] : [a.Name.Value])),
         });
         break;
@@ -213,9 +220,11 @@ function parseCommands(task: Task): Commands {
       case "DeclClause":
         commands.push({ words: [asWord((node as Sh.DeclClause).Variant.Value)], assigns: [] });
         break;
-      case "Word":
-        (isData.has(node.Pos().Offset()) ? data : words).push(wordOf(node as Sh.Word));
+      case "Word": {
+        const quoted = isData.has(node.Pos().Offset());
+        (quoted ? data : words).push(wordOf(node as Sh.Word, quoted));
         break;
+      }
       default: {
         const keyword = keywordOf(node);
         if (keyword !== undefined) commands.push({ words: [asWord(keyword)], assigns: [] });
@@ -285,15 +294,15 @@ const buildGlobs = (globs: Record<string, unknown> | null | undefined): string[]
 
 // A declared input is workspace-relative in the resolved graph, so it counts for every task. A command word is
 // relative to the task's cwd, so it counts only when that is the workspace root, and only as a relative path:
-// `/build/x` is a filesystem path, `build` alone is a task or script name. What a script opens is not in the
-// graph, so a read the task does not declare stays invisible here.
+// `/build/x` is a filesystem path, and a word with no slash (`build` alone) is a task or script name. What a
+// script opens is not in the graph, so a read the task does not declare stays invisible here.
 const namedBuildPaths = (project: string, task: Task, { words }: Commands): string[] => {
   const atRoot = project === ROOT_PROJECT || task.options?.runFromWorkspaceRoot === true;
   const named = atRoot
     ? words
         .filter((w) => w.globPrefix === null)
         .map((w) => w.text)
-        .filter((text) => posix.normalize(text).startsWith(`${BUILD_DIR}/`))
+        .filter((text) => text.includes("/"))
     : [];
   const inputs = Object.keys(task.inputFiles ?? {});
   return [...new Set([...named, ...inputs].map(normalized))].filter((path) =>

@@ -33,6 +33,8 @@ const graph: TaskGraph = {
         { target: "root:overrides-env" },
         { target: "root:negates-a-command" },
         { target: "root:expands-a-word" },
+        { target: "root:expands-braces" },
+        { target: "root:quotes-braces" },
       ],
     },
     ci: { command: "noop", deps: [{ target: "root:gate" }, { target: "root:check-yaml" }] },
@@ -232,6 +234,20 @@ const graph: TaskGraph = {
       deps: [],
       env: { RUSTUP_AUTO_INSTALL: "0" },
     },
+    // A brace the shell reads opens an expansion the rules do not read, in a redirect and a range too.
+    "expands-braces": {
+      command: "bun",
+      script:
+        "bun in{stall,fo} fixture-package\nbun scripts/read.ts build/x{1..2}/index.json\nbun scripts/read.ts >&build/y{1..2}\nbun {x..Z} fixture-tool",
+      deps: [],
+    },
+    // A backslash-quoted brace, a heredoc's body, and its delimiter are text bash expands no brace in.
+    "quotes-braces": {
+      command: "bun",
+      script:
+        "bun scripts/read.ts in\\{stall,fo\\}\nbun scripts/read.ts <<E{O,O}F\nin{stall,fo}\nE{O,O}F",
+      deps: [],
+    },
     "quotes-a-star-before-a-glob": {
       command: "bun",
       script: 'bun scripts/read.ts "foo*"/../build/x*',
@@ -302,6 +318,12 @@ describe("auditGraph", () => {
         "root:expands-a-word: the word $((...)) inside root:gate is not literal (the rules judge only what they can read)",
         `root:expands-a-word: the word \${X} inside root:gate is not literal (the rules judge only what they can read)`,
         "root:expands-a-word: the word ($(bunx fixture-tool)) inside root:gate is not literal (the rules judge only what they can read)",
+        "root:expands-braces: the word in{stall,fo} inside root:gate is not literal (the rules judge only what they can read)",
+        "root:expands-braces: the word build/x{1..2}/index.json inside root:gate is not literal (the rules judge only what they can read)",
+        "root:expands-braces: names the glob build/x{1..2}/index.json; a reader under build/ declares the file or directory it reads",
+        "root:expands-braces: the word build/y{1..2} inside root:gate is not literal (the rules judge only what they can read)",
+        "root:expands-braces: names the glob build/y{1..2}; a reader under build/ declares the file or directory it reads",
+        "root:expands-braces: the word {x..Z} inside root:gate is not literal (the rules judge only what they can read)",
         "root:overrides-env: runs (( inside root:gate (not bun or a cargo toolchain verb)",
         "root:names-an-astral-glob: names the glob \u{1F4C1}\u{1F4C1}/../build/*; a reader under build/ declares the file or directory it reads",
         "root:quotes-a-star-before-a-glob: names the glob foo*/../build/x*; a reader under build/ declares the file or directory it reads",
@@ -346,11 +368,21 @@ describe("auditGraph", () => {
           deps: [{ target: "root:writes-build" }],
         },
         "lists-build": { command: "bun", args: ["scripts/ls.ts", "build/"], deps: [] },
+        "lists-dot-build": { command: "bun", args: ["scripts/ls.ts", "build/."], deps: [] },
+        "lists-parent-of-part": {
+          command: "bun",
+          args: ["scripts/ls.ts", "build/part/.."],
+          deps: [],
+        },
       },
     };
     expect(auditGraph(whole)).toEqual([
       "root:lists-build: names build without depending on root:writes-build, which writes build",
       "root:lists-build: names build without depending on root:writes-part, which writes build/part",
+      "root:lists-dot-build: names build without depending on root:writes-build, which writes build",
+      "root:lists-dot-build: names build without depending on root:writes-part, which writes build/part",
+      "root:lists-parent-of-part: names build without depending on root:writes-build, which writes build",
+      "root:lists-parent-of-part: names build without depending on root:writes-part, which writes build/part",
     ]);
   });
 
