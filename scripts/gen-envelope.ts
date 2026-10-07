@@ -271,8 +271,8 @@ const SUPPORTED_TYPES = new Set([
 ]);
 
 export function prepare(node: unknown, path: string): unknown {
-  // The boolean schema `true` and the empty schema {} both mean "accept anything"; canonicalize to {} (emitted
-  // as z.unknown()). `false` (accept nothing) and any other non-object form have no faithful emission.
+  // The boolean schema `true` and the empty schema {} both mean "accept anything"; canonicalize to {} (read as
+  // unknown). `false` (accept nothing) and any other non-object form are outside the Rust input this admits.
   if (node === true) return {};
   if (!isObject(node)) {
     throw new Error(`gen-envelope: unsupported schema form at ${path}: ${show(node)}`);
@@ -660,104 +660,6 @@ export function applyAsymmetries(
     );
   }
   return { schema, replacements };
-}
-
-// ---- the emitter -----------------------------------------------------------------
-
-// Emit Zod source for one prepared (and possibly asymmetry-transformed) node. Total over the subset prepare and
-// applyAsymmetries produce: anything else is a bug upstream, so it throws rather than guesses. `override` lets
-// a caller substitute a named schema for a specific node (matched by identity) instead of inlining it.
-function emitZod(node: unknown, override?: (node: unknown) => string | undefined): string {
-  const custom = override?.(node);
-  if (custom !== undefined) return custom;
-  if (!isObject(node)) {
-    throw new Error(`gen-envelope: emitter reached an unprepared node: ${show(node)}`);
-  }
-  if (Array.isArray(node.anyOf)) {
-    // A non-empty, pure combinator; a one-branch union is the branch itself.
-    if (node.anyOf.length === 1) return emitZod(node.anyOf[0], override);
-    const branches = node.anyOf.map((branch) => emitZod(branch, override));
-    return `z.union([${branches.join(", ")}])`;
-  }
-  if ("const" in node) return `z.literal(${JSON.stringify(node.const)})`;
-  if (Array.isArray(node.enum)) {
-    return `z.enum([${node.enum.map((v) => JSON.stringify(v)).join(", ")}])`;
-  }
-  if (Array.isArray(node.type)) {
-    // serde's Option null-arm and friends: one branch per type, each keeping the node's other keywords
-    // (numeric ones and items, per G5 placement; the null branch ignores them - none constrains null).
-    const branches = node.type.map((type) => emitZod({ ...node, type }, override));
-    return `z.union([${branches.join(", ")}])`;
-  }
-  switch (node.type) {
-    case "object": {
-      // additionalProperties: false is guaranteed by G1: .strict() is its faithful spelling, and a reader under
-      // the loose-frames rule carries $loose instead. prepare always materializes `properties`.
-      const required = new Set(Array.isArray(node.required) ? node.required : []);
-      const fields = Object.entries(node.properties as JsonObject).map(([key, sub]) => {
-        const value = emitZod(sub, override);
-        return `${JSON.stringify(key)}: ${required.has(key) ? value : `${value}.optional()`}`;
-      });
-      const object = fields.length === 0 ? "z.object({})" : `z.object({ ${fields.join(", ")} })`;
-      return `${object}.strict()`;
-    }
-    case "array": {
-      const array = `z.array(${emitZod(node.items, override)})`;
-      return typeof node.minItems === "number" ? `${array}.min(${node.minItems})` : array;
-    }
-    case "integer":
-    case "number": {
-      // z.number().int() is a JS-safe integer, the safe-integers rule of the asymmetry table.
-      let out = node.type === "integer" ? "z.number().int()" : "z.number()";
-      if (typeof node.minimum === "number") out += `.gte(${JSON.stringify(node.minimum)})`;
-      if (typeof node.maximum === "number") out += `.lte(${JSON.stringify(node.maximum)})`;
-      return out;
-    }
-    case "string": {
-      let out = "z.string()";
-      if (typeof node.minLength === "number") out += `.min(${node.minLength})`;
-      if (typeof node.maxLength === "number") out += `.max(${node.maxLength})`;
-      if (typeof node.pattern === "string")
-        out += `.regex(/${node.pattern.replaceAll("/", "\\/")}/)`;
-      return out;
-    }
-    case "boolean":
-      return "z.boolean()";
-    case "null":
-      return "z.null()";
-    case undefined: {
-      // The only typeless survivor of prepare is the empty any-schema: unknown, not any, so a consumer must
-      // narrow the payload before using it (same instance set).
-      if (Object.keys(node).length > 0) {
-        throw new Error(`gen-envelope: emitter reached an unprepared node: ${show(node)}`);
-      }
-      return "z.unknown()";
-    }
-    default:
-      throw new Error(`gen-envelope: emitter has no form for type ${show(node.type)}`);
-  }
-}
-
-function count(haystack: string, needle: string): number {
-  return haystack.split(needle).length - 1;
-}
-
-// Emit one prepared schema as Zod source, then re-assert G1 on the OUTPUT: every emitted z.object( must be
-// closed by a .strict() or, under the loose-frames rule, by .catchall(z.unknown()).
-export function convert(
-  schema: unknown,
-  name: string,
-  parserOverride?: (node: unknown) => string | undefined,
-): string {
-  const code = emitZod(schema, parserOverride);
-  const objects = count(code, "z.object(");
-  const closed = count(code, ".strict()") + count(code, ".catchall(z.unknown())");
-  if (objects !== closed) {
-    throw new Error(
-      `gen-envelope: ${name}: emitted ${objects} z.object( but ${closed} strict/loose closings (G1)`,
-    );
-  }
-  return code;
 }
 
 // ---- the frame plan (G7) ---------------------------------------------------------

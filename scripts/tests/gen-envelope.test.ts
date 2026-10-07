@@ -1,11 +1,11 @@
-// The fail-closed generation rules (G1-G7, A1-A2) of scripts/gen-envelope.ts,
-// exercised against inputs that would otherwise turn into WEAKER Zod
-// validators than the Rust contract: objects without an explicit type,
-// unconstrained arrays, keywords the generator does not model, undiscriminated
-// oneOf, unresolved $refs, an unplanned Rust frame, an asymmetry entry on a
-// node it cannot apply to. Every one of these must abort generation, never
-// emit. The happy paths mirror the real schemars output shapes, and the
-// emitted source spellings are pinned so the generated file stays stable.
+// The fail-closed generation rules (G1-G7, A1-A3) of scripts/gen-envelope.ts,
+// exercised against inputs that would otherwise turn into WEAKER validators
+// than the Rust contract: objects without an explicit type, unconstrained
+// arrays, keywords the generator does not admit, undiscriminated oneOf,
+// unresolved $refs, an unplanned Rust frame, an asymmetry entry on a node it
+// cannot apply to. Every one of these must abort generation, never emit. The
+// happy paths mirror the real schemars output shapes, and the prepared JSON
+// Schema is pinned where prepare rewrites it.
 
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
@@ -13,7 +13,6 @@ import {
   applyAsymmetries,
   assertFramePlan,
   assertGeneratedMatches,
-  convert,
   prepare,
   splitFlattenedCommand,
   splitTaggedUnionSchema,
@@ -111,7 +110,6 @@ describe("prepare aborts on anything that would convert weaker (G1/G3/G4/G5)", (
   test("serde's Option<Vec<_>> null-arm beside an array is inert and allowed", () => {
     const optionVec = { type: ["array", "null"], items: { type: "string" } };
     expect(prepare(optionVec, "$")).toEqual(optionVec);
-    expect(convert(prepare(optionVec, "$"), "t")).toBe("z.union([z.array(z.string()), z.null()])");
   });
 
   test("G5: keywords the generator does not model", () => {
@@ -197,76 +195,6 @@ describe("prepare aborts on anything that would convert weaker (G1/G3/G4/G5)", (
   });
 });
 
-describe("convert re-asserts strictness on the emitted source", () => {
-  test("every z.object( carries .strict(), including nested ones", () => {
-    const nested = strictObject({ inner: strictObject({ a: { type: "string" } }, ["a"]) }, [
-      "inner",
-    ]);
-    const code = convert(prepare(nested, "$"), "nested");
-    expect(code).toContain(".strict()");
-    expect(code.split("z.object(").length).toBe(code.split(".strict()").length);
-  });
-
-  test("the emitted validator rejects unknown and missing fields at runtime", async () => {
-    const code = convert(prepare(strictObject({ a: { type: "string" } }, ["a"]), "$"), "t");
-    const { z } = await import("zod");
-    // Test-only evaluation of our own just-generated source.
-    const schema = new Function("z", `return ${code};`)(z);
-    expect(schema.safeParse({ a: "x" }).success).toBe(true);
-    expect(schema.safeParse({ a: "x", b: 1 }).success).toBe(false);
-    expect(schema.safeParse({}).success).toBe(false);
-    expect(schema.safeParse({ a: 7 }).success).toBe(false);
-  });
-});
-
-describe("the emitted source spellings are pinned (keeps the generated file stable)", () => {
-  test("objects: quoted keys, .optional() on non-required fields, .strict()", () => {
-    const schema = strictObject(
-      {
-        id: { type: "integer", format: "uint64", minimum: 0 },
-        error: { type: ["string", "null"] },
-        kind: { type: "string", const: "hash" },
-        ok: { type: "boolean" },
-      },
-      ["id", "kind"],
-    );
-    expect(convert(prepare(schema, "$"), "t")).toBe(
-      'z.object({ "id": z.number().int().gte(0), "error": z.union([z.string(), z.null()]).optional(), ' +
-        '"kind": z.literal("hash"), "ok": z.boolean().optional() }).strict()',
-    );
-  });
-
-  test("arrays, unions, bounds, the empty object and the any-schema (unknown, so consumers narrow)", () => {
-    expect(convert(prepare({ type: "array", items: strictObject({}, []) }, "$"), "t")).toBe(
-      "z.array(z.object({}).strict())",
-    );
-    // A length floor survives, on the array arm alone of an Option<Vec<_>>.
-    expect(
-      convert(
-        prepare({ type: ["array", "null"], items: { type: "string" }, minItems: 1 }, "$"),
-        "t",
-      ),
-    ).toBe("z.union([z.array(z.string()).min(1), z.null()])");
-    // A one-branch union is the branch itself.
-    expect(convert(prepare({ anyOf: [{ type: "string" }] }, "$"), "t")).toBe("z.string()");
-    expect(convert(prepare({ anyOf: [{ type: "string" }, { type: "null" }] }, "$"), "t")).toBe(
-      "z.union([z.string(), z.null()])",
-    );
-    expect(convert(prepare({}, "$"), "t")).toBe("z.unknown()");
-  });
-
-  test("the override substitutes a named schema for the matched node", () => {
-    const prepared = prepare(
-      strictObject({ entry: strictObject({ b: { type: "string" } }, ["b"]) }, ["entry"]),
-      "$",
-    ) as { properties: Record<string, unknown> };
-    const entry = prepared.properties.entry;
-    expect(convert(prepared, "t", (node) => (node === entry ? "NamedSchema" : undefined))).toBe(
-      'z.object({ "entry": NamedSchema }).strict()',
-    );
-  });
-});
-
 // G6: the request's flattened command. The fixture is the exact shape schemars emits for
 // `#[serde(flatten)] command: BridgeCommand` (parent properties, a oneOf of adjacently tagged
 // branches, unevaluatedProperties: false); serde's other enum shapes must not be read as one.
@@ -314,11 +242,18 @@ describe("splitFlattenedCommand (G6)", () => {
     });
     expect([...commands.keys()]).toEqual(["tab_list", "tab_focus"]);
     expect(commands.get("tab_focus")).toEqual(tabFocusArgs);
-    // The envelope then converts exactly as the untyped request always did.
-    expect(convert(prepare(envelope, "$"), "BridgeReqWireSchema")).toBe(
-      'z.object({ "args": z.unknown(), "browser": z.union([z.string(), z.null()]).optional(), ' +
-        '"id": z.number().int().gte(0), "op": z.string() }).strict()',
-    );
+    // The envelope then prepares exactly as the untyped request always did.
+    expect(prepare(envelope, "$")).toEqual({
+      type: "object",
+      properties: {
+        args: {},
+        browser: { type: ["string", "null"] },
+        id: { type: "integer", minimum: 0 },
+        op: { type: "string" },
+      },
+      required: ["id", "args", "op"],
+      additionalProperties: false,
+    });
   });
 
   test("refuses a request that is not a flattened tagged union", () => {
@@ -380,10 +315,9 @@ describe("splitFlattenedCommand (G6)", () => {
 });
 
 describe("prepare models string enums (G5 placement)", () => {
-  test("a string enum survives and emits z.enum; anything else is refused", () => {
+  test("a string enum survives; anything else is refused", () => {
     const kind = { type: "string", enum: ["hash", "label"] };
     expect(prepare(kind, "$")).toEqual(kind);
-    expect(convert(prepare(kind, "$"), "t")).toBe('z.enum(["hash", "label"])');
     for (const bad of [
       { type: "string", enum: [] },
       { type: "string", enum: ["a", "a"] },
