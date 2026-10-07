@@ -106,6 +106,7 @@ CI 在此之上还会运行更多: macOS 和 Windows 的 rust 矩阵、覆盖率
 ```sh
 bun install
 moon run gen                             # the TS side of the Rust contract: a core test, the tsc run, and the extension build read it; the moon tasks build it themselves
+bun run --cwd src/apps/extension wxt prepare   # the WXT tsconfig and module types the extension's tsc reads; moon's extension:prepare
 cargo build --release
 cargo nextest run
 cargo fmt --check && cargo clippy --all-targets -- -D warnings
@@ -126,7 +127,7 @@ bun run --cwd src/apps/extension build
 | 开发循环 | `dev`、`dev-web`、`extension:dev` |
 | Rust | `core:fmt-check` (= `core:fmt-check-workspace` + `core:fmt-check-fuzz`)、`core:lint` (= `core:lint-workspace` + `core:lint-fuzz`)、`test-rust` (= `core:test` + `core:test-doc` + `core:test-loom`, 后者是在核心的 `loom` 特性下对中介 (broker) 引用计数做模型检查)、`doc`、`build-release`、`build-repro`、`typos`、`machete`、`audit` |
 | 模糊测试工作区 | `fuzz-seeds`、`fuzz-smoke`、`check-fuzz-smoke`、`test-fuzz` (该工作区的 clippy 与 fmt 检查分别由 `core:lint-fuzz` 与 `core:fmt-check-fuzz` 执行) |
-| TypeScript | `typecheck`、`test-ts` (= `shared:test` + `extension:test` + `check-harness-driver`)、`lint-ts`、`check-ts`、`fmt-ts`、`fmt-check-ts`、`extension:build`、`web:build` |
+| TypeScript | `typecheck`、`test-ts` (= `shared:test` + `extension:test` + `check-harness-driver`)、`lint-ts`、`check-ts`、`fmt-ts`、`fmt-check-ts`、`extension:prepare`、`extension:build`、`web:build` |
 | 契约代码生成 | `gen` (= `gen-shared` = `gen-ops` + `gen-envelope`)、`gen-icons`、`gen-architecture-map`、`check-envelope`、`check-gen-isolation` |
 | 协议测试套件 | `test-e2e`、`test-adversarial`、`test-chaos`、`check-uv` |
 | 互操作测试套件 | `test-interop` (官方 MCP SDK v2 客户端对发布二进制的测试)、`harness-smoke` (真实的客户端程序 (harness) CLI, 隔离的配置目录; 旧时代打开方式的金丝雀测试) |

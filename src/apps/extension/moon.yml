@@ -28,13 +28,21 @@ fileGroups:
     - '/bun.lock'
 
 tasks:
+  prepare:
+    # WXT's codegen (.wxt/tsconfig.json, the #i18n module types) loads wxt.config.ts, which imports the generated
+    # identity module, so it runs after gen-shared and never from an install hook: installing dependencies must
+    # not depend on a build output. The tasks whose tsc or vitest read .wxt depend on this one.
+    description: 'Generate the WXT tsconfig and module types (.wxt/) from wxt.config.ts'
+    deps: ['root:gen-shared']
+    command: 'bun run wxt prepare'
+
   build:
     # package.json build: gen-icons then wxt build. The icon generator reads
     # assets/icon/*.svg and lives in scripts/ (gen-icons.ts + its imports);
     # the whole scripts/ tree is declared so a new helper import there can
     # never be an undeclared input.
     description: 'Build the extension bundle (src/ -> build/extension/; generates icons first)'
-    deps: ['root:gen-shared']
+    deps: ['~:prepare']
     command: 'bun run build'
     inputs:
       - '**/*'
@@ -51,13 +59,13 @@ tasks:
 
   dev:
     description: 'WXT dev mode: rebuild on change'
-    deps: ['root:gen-shared']
+    deps: ['~:prepare']
     command: 'bun run dev'
     preset: 'server'
 
   test:
     description: "Unit-test the extension's shared modules (vitest + fakeBrowser; no real browser)"
-    deps: ['root:gen-shared']
+    deps: ['~:prepare']
     command: 'bun run test'
     inputs:
       - '**/*'
@@ -69,7 +77,7 @@ tasks:
 
   typecheck:
     description: "Type-check the extension (tsc against the WXT-generated tsconfig)"
-    deps: ['root:gen-shared']
+    deps: ['~:prepare']
     command: 'bun run typecheck'
 
   lint:

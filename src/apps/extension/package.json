@@ -9,8 +9,7 @@
     "build": "bun ../../../scripts/gen-icons.ts && wxt build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "postinstall": "wxt prepare"
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@chromium-bridge/shared": "workspace:*",

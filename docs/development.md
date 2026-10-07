@@ -106,6 +106,7 @@ The repo-wide verbs cover every language at once: `moon run lint` is clippy plus
 ```sh
 bun install
 moon run gen                             # the TS side of the Rust contract: a core test, the tsc run, and the extension build read it; the moon tasks build it themselves
+bun run --cwd src/apps/extension wxt prepare   # the WXT tsconfig and module types the extension's tsc reads; moon's extension:prepare
 cargo build --release
 cargo nextest run
 cargo fmt --check && cargo clippy --all-targets -- -D warnings
@@ -126,7 +127,7 @@ The full task menu, by area:
 | Dev loops | `dev`, `dev-web`, `extension:dev` |
 | Rust | `core:fmt-check` (= `core:fmt-check-workspace` + `core:fmt-check-fuzz`), `core:lint` (= `core:lint-workspace` + `core:lint-fuzz`), `test-rust` (= `core:test` + `core:test-doc` + `core:test-loom`, the broker ref-count model check under the core's `loom` feature), `doc`, `build-release`, `build-repro`, `typos`, `machete`, `audit` |
 | Fuzz workspace | `fuzz-seeds`, `fuzz-smoke`, `check-fuzz-smoke`, `test-fuzz` (clippy and fmt over it are `core:lint-fuzz` and `core:fmt-check-fuzz`) |
-| TypeScript | `typecheck`, `test-ts` (= `shared:test` + `extension:test` + `check-harness-driver`), `lint-ts`, `check-ts`, `fmt-ts`, `fmt-check-ts`, `extension:build`, `web:build` |
+| TypeScript | `typecheck`, `test-ts` (= `shared:test` + `extension:test` + `check-harness-driver`), `lint-ts`, `check-ts`, `fmt-ts`, `fmt-check-ts`, `extension:prepare`, `extension:build`, `web:build` |
 | Contract codegen | `gen` (= `gen-shared` = `gen-ops` + `gen-envelope`), `gen-icons`, `gen-architecture-map`, `check-envelope`, `check-gen-isolation` |
 | Protocol suites | `test-e2e`, `test-adversarial`, `test-chaos`, `check-uv` |
 | Interop suites | `test-interop` (official MCP SDK v2 client against the release binary), `harness-smoke` (real harness CLIs, isolated config dirs; the legacy-era opening-method canary) |

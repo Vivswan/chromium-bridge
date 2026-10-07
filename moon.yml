@@ -245,12 +245,13 @@ tasks:
 
   typecheck:
     # The extension's tsconfig extends the gitignored .wxt/tsconfig.json and its i18n module types against the
-    # generated #i18n key structure, so tsc needs them regenerated first; no earlier gate step does that.
+    # generated #i18n key structure, so extension:prepare (which itself follows gen-shared) runs first.
     description: 'Type-check every TS project (extension, tests, scripts, src/packages/shared); regenerates the WXT types first'
-    deps: ['~:gen-shared']
+    deps:
+      - '~:gen-shared'
+      - 'extension:prepare'
     script: |
       set -e
-      bun run --cwd src/apps/extension wxt prepare
       bun run tsc -p src/apps/extension
       bun run tsc -p tests/browser
       bun run tsc -p tests/interop
