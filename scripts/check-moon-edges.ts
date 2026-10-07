@@ -79,6 +79,8 @@ const RANK: Record<Reading, number> = { literal: 0, expansion: 1, opaque: 2 };
 const worst = (a: Reading, b: Reading): Reading => (RANK[a] >= RANK[b] ? a : b);
 interface Word {
   text: string;
+  /** The text as bash matches it: a quoted or escaped pattern or brace character is plain text, shown as `_`. */
+  pattern: string;
   globPrefix: string | null;
   reading: Reading;
 }
@@ -101,11 +103,17 @@ interface Commands {
 }
 
 const GLOB_CHAR = /[*?[{]/;
+const maskQuotedSyntax = (quoted: string): string => quoted.replace(/[*?[{},]/g, "_");
 
 /** A word moon passes as one argument, or one of its own globs: no shell reads it, so a backslash is itself. */
 const asWord = (text: string): Word => {
   const at = text.search(GLOB_CHAR);
-  return { text, globPrefix: at === -1 ? null : text.slice(0, at), reading: "literal" };
+  return {
+    text,
+    pattern: text,
+    globPrefix: at === -1 ? null : text.slice(0, at),
+    reading: "literal",
+  };
 };
 
 // A backslash quotes the next character, so `in\stall` is `install` and `\*` is no glob, while `\\*` is a
@@ -114,6 +122,7 @@ const asWord = (text: string): Word => {
 // so it makes the word non-literal; the parser keeps it inside the literal.
 function literal(raw: string, quoted: boolean): Word {
   let text = "";
+  let pattern = "";
   let globPrefix: string | null = null;
   let reading: Reading = "literal";
   for (let i = 0; i < raw.length; i++) {
@@ -121,14 +130,16 @@ function literal(raw: string, quoted: boolean): Word {
     const next = raw[i + 1];
     if (c === "\\" && next !== undefined && (!quoted || '\\"$`'.includes(next))) {
       text += next;
+      pattern += maskQuotedSyntax(next);
       i++;
       continue;
     }
     if (!quoted && globPrefix === null && GLOB_CHAR.test(c)) globPrefix = text;
     if (!quoted && c === "{") reading = "expansion";
     text += c;
+    pattern += quoted ? maskQuotedSyntax(c) : c;
   }
-  return { text, globPrefix, reading };
+  return { text, pattern, globPrefix, reading };
 }
 
 // bun's global options may or may not take a value (`--config` accepts an omitted one), so no table of them is
@@ -193,7 +204,12 @@ const namesFile = (redirect: Sh.Redirect): boolean => !NOT_A_FILE.has(redirect.O
 // value is not the auditor's to guess. A substitution's commands are walked as their own, so the word that
 // holds one is a marker.
 /** An expansion's marker stands for a value the rules do not read. */
-const marker = (text: string): Word => ({ text, globPrefix: null, reading: "expansion" });
+const marker = (text: string): Word => ({
+  text,
+  pattern: maskQuotedSyntax(text),
+  globPrefix: null,
+  reading: "expansion",
+});
 
 function render(part: Sh.Node, quoted: boolean): Word {
   switch (syntax.NodeType(part)) {
@@ -202,8 +218,10 @@ function render(part: Sh.Node, quoted: boolean): Word {
     // ANSI-C quoting (`$'...'`) decodes escapes the rules do not read, so `$'in\x73tall'` is not `install` here.
     case "SglQuoted": {
       const { Dollar, Value } = part as Sh.SglQuoted;
+      const text = Dollar ? `$'${Value}'` : Value;
       return {
-        text: Dollar ? `$'${Value}'` : Value,
+        text,
+        pattern: maskQuotedSyntax(text),
         globPrefix: null,
         reading: Dollar ? "expansion" : "literal",
       };
@@ -212,6 +230,7 @@ function render(part: Sh.Node, quoted: boolean): Word {
       const parts = (part as Sh.DblQuoted).Parts.map((p) => render(p, true));
       return {
         text: parts.map((p) => p.text).join(""),
+        pattern: parts.map((p) => p.pattern).join(""),
         globPrefix: null,
         reading: parts.map((p) => p.reading).reduce(worst, "literal"),
       };
@@ -243,10 +262,11 @@ const wordOf = (w: Sh.Word, quoted = false): Word =>
   w.Parts.map((part) => render(part, quoted)).reduce(
     (acc, part) => ({
       text: acc.text + part.text,
+      pattern: acc.pattern + part.pattern,
       globPrefix: acc.globPrefix ?? (part.globPrefix === null ? null : acc.text + part.globPrefix),
       reading: worst(acc.reading, part.reading),
     }),
-    { text: "", globPrefix: null, reading: "literal" },
+    { text: "", pattern: "", globPrefix: null, reading: "literal" },
   );
 
 // The parser reads the script as bash, so a comment and a line continuation are not words, and a command
@@ -356,18 +376,13 @@ const normalized = (path: string): string => posix.normalize(path).replace(/\/$/
 // Only plain paths are judged, and a glob under build/ on either side is a finding: the repository's artifacts
 // are directories, and matching a reader's glob against a writer's is a semantics this rule does not take on.
 const underBuild = (globPrefix: string): boolean => under(BUILD_DIR, posix.normalize(globPrefix));
-// A `..` behind the first pattern segment climbs out of whatever that segment matched (`tmp*/../build/x` reads
-// build/x), so the prefix says nothing about what the path names; a `..` before the pattern normalizes with it.
-// A pattern segment may expand to `..` as well, and which ones is bash's to know (`.[.]`, `.[[:punct:]]`), so
-// every dot-led pattern segment is refused, a `tmp*/.cache*/x` behind a pattern included. A brace may spell
-// `..` as a component of an alternative (`{a,..}`, `{scripts/..,other}`), which the component regex reads over
-// the whole tail since an alternative may span slashes; a range (`{1..3}`) spells no component. The braces
-// package was tried for this and reads an escaped `$` or a lone `[` before a brace as its own syntax, unlike
-// bash, so the words it misreads stay out of its hands.
+// A dot-led pattern segment may expand to `..` (`.[.]`, `.[[:punct:]]` in a bash without globskipdots), and a
+// brace alternative may spell it across slashes (`{scripts/..,other}`). The word's pattern is read, not its
+// text: a quoted or escaped `{a,..}` is one directory to bash, while a quoted `..` is still the parent.
 const PARENT_COMPONENT = /(^|[/{,])\.\.($|[/,}])/;
 const climbsOutOfGlob = (w: Word): boolean => {
   if (w.globPrefix === null) return false;
-  const tail = w.text.split("/").slice(w.globPrefix.split("/").length - 1);
+  const tail = w.pattern.split("/").slice(w.globPrefix.split("/").length - 1);
   return (
     PARENT_COMPONENT.test(tail.join("/")) ||
     tail.some((segment) => segment.startsWith(".") && GLOB_CHAR.test(segment))

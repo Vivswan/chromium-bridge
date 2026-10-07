@@ -253,7 +253,7 @@ const graph: TaskGraph = {
     },
     // A `..`, a dot-led pattern a bash without globskipdots may expand to `..`, or a brace alternative spelling
     // it, behind the first pattern segment climbs out of whatever that segment matched; one before it
-    // normalizes, `..x` is a name, and a quoted brace is text.
+    // normalizes, `..x` is a name, a quoted or escaped brace is text, and a quoted `..` is still the parent.
     "climbs-out-of-a-glob": {
       command: "bun",
       script: [
@@ -268,6 +268,9 @@ const graph: TaskGraph = {
         "bun scripts/read.ts tmp*/'{.,.}.'/y",
         'bun scripts/read.ts tmp*/\\"/{a,..}/build/extension/manifest.json',
         "bun scripts/read.ts tmp*/\\[/{a,..}/build/extension/manifest.json",
+        "bun scripts/read.ts tmp*/'{a,..}'/y",
+        "bun scripts/read.ts tmp*/\\{a,..\\}/y",
+        "bun scripts/read.ts tmp*/{a,'..'}/build/extension/manifest.json",
       ].join("\n"),
       deps: [],
     },
@@ -427,8 +430,10 @@ describe("auditGraph", () => {
         "root:climbs-out-of-a-glob: the path tmp*/{a,..}/build/extension/{1..1001}.json climbs out of a globbed segment, so the auditor cannot tell what it names",
         'root:climbs-out-of-a-glob: the path tmp*/"/{a,..}/build/extension/manifest.json climbs out of a globbed segment, so the auditor cannot tell what it names',
         "root:climbs-out-of-a-glob: the path tmp*/[/{a,..}/build/extension/manifest.json climbs out of a globbed segment, so the auditor cannot tell what it names",
+        "root:climbs-out-of-a-glob: the path tmp*/{a,..}/build/extension/manifest.json climbs out of a globbed segment, so the auditor cannot tell what it names",
         'root:climbs-out-of-a-glob: the command word tmp*/"/{a,..}/build/extension/manifest.json is not literal, so the auditor cannot tell what runs',
         "root:climbs-out-of-a-glob: the command word tmp*/[/{a,..}/build/extension/manifest.json is not literal, so the auditor cannot tell what runs",
+        "root:climbs-out-of-a-glob: the command word tmp*/{a,..}/build/extension/manifest.json is not literal, so the auditor cannot tell what runs",
         "root:reads-dotted-glob: declares the glob input ./build/web/**/*; a reader under build/ declares the file or directory it reads",
         "root:reads-glob-build: declares the glob input build/web-pdf/**/*; a reader under build/ declares the file or directory it reads",
         "root:writes-glob: declares the glob output build/report-*/**/*; a writer under build/ declares the directory it writes",
