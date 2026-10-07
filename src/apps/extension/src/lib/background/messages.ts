@@ -113,7 +113,7 @@ const HANDLERS: { [K in RuntimeMsgType]: Handler<K> } = {
   set_kill: engageKill,
   kill_release: () => beginAct({ type: "kill_release" }),
   get_audit: async () => ({ ok: true, entries: await readRing() }),
-  get_host_audit: requestHostAudit,
+  get_host_audit: (msg) => requestHostAudit(msg.limit ?? undefined),
   // Re-derives the pending mirror through the one serialized store path: live
   // requests are rewritten, never deleted; with none, the ghost goes and the
   // badge clears.

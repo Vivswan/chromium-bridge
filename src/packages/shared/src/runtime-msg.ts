@@ -6,6 +6,7 @@
 
 import { z } from "zod";
 import {
+  AuditReadWireSchema,
   AuditTrailEntrySchema,
   EnrollOptionsFrameSchema,
   HealthReportSchema,
@@ -288,10 +289,14 @@ export const RUNTIME_CONTRACT = contract({
     res: z.object({ ok: z.literal(true), entries: z.array(AuditEntrySchema) }),
   },
   // The host's durable trail (its audit_read_result): the newest records `chromium-bridge audit` prints,
-  // newest first, with the count of older lines left out and the live file for the CLI's empty state.
+  // newest first, with the count of older lines left out and the live file for the CLI's empty state. `limit`
+  // is `--limit <n>`, bounded here by the frame's own schema so an over-cap read is refused before the wire.
   get_host_audit: {
     gate: "extension-page",
-    req: z.strictObject({ type: z.literal("get_host_audit") }),
+    req: z.strictObject({
+      type: z.literal("get_host_audit"),
+      limit: AuditReadWireSchema.shape.limit,
+    }),
     res: z.object({
       ok: z.literal(true),
       entries: z.array(AuditTrailEntrySchema),

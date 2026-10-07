@@ -34,7 +34,7 @@
 | `chromium-bridge lang [show \| set <value>]` | display language | Reads or sets the display language the options page shows; `lang` alone is `show`. |
 | `chromium-bridge --help` | help | Usage information. |
 
-The options page offers the same actions. Terminal-only by design: `uninstall` (below), and the `--system` and `--manifest-dir` repair forms. The page's audit view is the default page alone; a longer trail is `audit --limit <n>`. The site allowlist, allow-all, and tab grouping stay on the page. They are browser-local extension storage (see the [privacy policy](./privacy-policy.md)), which no subcommand reads or writes.
+The options page offers the same actions. Terminal-only by design: `uninstall` (below), and the `--system` and `--manifest-dir` repair forms. The page's audit view widens with Show older up to the frame's cap; the whole trail is `audit --limit <n>`. The site allowlist, allow-all, and tab grouping stay on the page. They are browser-local extension storage (see the [privacy policy](./privacy-policy.md)), which no subcommand reads or writes.
 
 ## doctor / status (read-only self-check)
 
@@ -292,7 +292,7 @@ $ chromium-bridge audit --limit 20
 
 A record the reader cannot parse is shown as `UNRECOGNIZED RECORD` and counted, never guessed at; a `dropped=n` field marks records lost to a failed write (a full disk, for example). Recording never blocks or fails an operation: the trail observes decisions, it does not gate them.
 
-The options page reads the same trail: its Recent activity section lists the host trail (the default page above, the host's own words per line) beside this browser's ring of local decisions.
+The options page reads the same trail: its Recent activity section lists the host trail (the default page above, widened by Show older up to the frame's cap, the host's own words per line) beside this browser's ring of local decisions.
 
 Error codes and the error taxonomy are in [architecture.md section 11.1](./architecture.md#111-error-taxonomy-error_specs).
 

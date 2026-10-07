@@ -139,17 +139,28 @@ describe("registration status and repair (one shared slot)", () => {
 });
 
 describe("host audit trail", () => {
-  test("posts a limitless audit_read (the CLI's default page) and resolves with the host's page", async () => {
-    const p = requestHostAudit();
-    expect(posted).toEqual([{ type: "audit_read" }]);
-    handleHostAdminFrame(trailResult);
-    await expect(p).resolves.toEqual({
-      ok: true,
-      entries: TRAIL,
-      older: 1,
-      path: "/run/user/1000/chromium-bridge/audit.log",
-    });
-  });
+  // A limitless read is the CLI's default page; a named limit is `audit --limit <n>` on the frame.
+  test.each([
+    { name: "limitless", request: () => requestHostAudit(), frame: { type: "audit_read" } },
+    {
+      name: "limit 600",
+      request: () => requestHostAudit(600),
+      frame: { type: "audit_read", limit: 600 },
+    },
+  ])(
+    "a $name read posts its frame and resolves with the host's page",
+    async ({ request, frame }) => {
+      const p = request();
+      expect(posted).toEqual([frame]);
+      handleHostAdminFrame(trailResult);
+      await expect(p).resolves.toEqual({
+        ok: true,
+        entries: TRAIL,
+        older: 1,
+        path: "/run/user/1000/chromium-bridge/audit.log",
+      });
+    },
+  );
 
   test("an unreadable trail is the host's error text, and a page beside an error is refused", async () => {
     const unreadable = requestHostAudit();
