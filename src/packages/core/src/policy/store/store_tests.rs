@@ -3,7 +3,8 @@ use std::fs;
 use super::*;
 use crate::audit::Surface;
 use crate::enclave::{policy_message, EnrollmentKey, KeyStore};
-use crate::policy::{Grant, Ms, RollbackPlan};
+use crate::policy::plan::decode_entry_doc;
+use crate::policy::{Grant, HistoryEntryRef, Ms, RollbackPlan};
 use crate::presence::{PresenceAttestation, PresenceError, PresencePath};
 use p256::ecdsa::signature::Verifier as _;
 use p256::ecdsa::{Signature, VerifyingKey};
@@ -936,6 +937,98 @@ fn a_relaxing_rollback_over_a_store_that_moved_since_its_plan_is_a_conflict() {
     );
     assert_eq!(store_now(), before, "nothing was signed or written");
     assert_eq!(before.1, 2);
+}
+
+/// The lock discipline `rollback_inputs` states, pinned from the writer's side.
+#[test]
+fn a_rollback_plan_reads_the_ring_and_the_store_in_one_write_generation() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let _dir = scratch_runtime_dir();
+    enroll_host_key();
+    sign(
+        PolicyValues {
+            cdp_mode: true,
+            ..PolicyValues::default()
+        },
+        vec![PolicyField::CdpMode],
+    );
+    sign(
+        PolicyValues {
+            page_eval_enabled: true,
+            ..PolicyValues::default()
+        },
+        vec![PolicyField::CdpMode, PolicyField::PageEvalEnabled],
+    );
+    // The ring holds revision 1's record as its oldest row, then a filler that brings it to within a few bytes
+    // of its cap, so the next push evicts the oldest row.
+    let oldest = ipc::with_runtime_lock(|lock| {
+        let mut history = PolicyHistory::load()?.unwrap();
+        let oldest = history.entries[0].clone();
+        let cap = <PolicyHistory as Record>::MAX_BYTES;
+        let mut filler_len = cap;
+        loop {
+            history.entries.truncate(1);
+            history.entries.push(PolicyHistoryEntry {
+                baseline_b64: "A".repeat(filler_len),
+                sig_b64: None,
+                key_id: None,
+                overlay: None,
+                superseded_unix: 1,
+            });
+            if history.encode().is_ok() {
+                break;
+            }
+            filler_len -= 64;
+        }
+        history.write(lock)?;
+        Ok(oldest)
+    })
+    .unwrap();
+    let oldest_id = oldest.id();
+    assert_eq!(decode_entry_doc(&oldest.baseline_b64).unwrap().revision, 1);
+
+    let (tx, rx) = mpsc::channel();
+    let plan = ipc::with_runtime_lock(|lock| {
+        let id = oldest_id.clone();
+        let plan = std::thread::spawn(move || {
+            let outcome = crate::policy::rollback_inputs(1, Some(HistoryEntryRef { id }))
+                .map(|inputs| inputs.plan());
+            tx.send(outcome).unwrap();
+        });
+        restrict_locked(
+            lock,
+            PolicyOverlay {
+                page_eval_enabled: Some(false),
+                ..PolicyOverlay::default()
+            },
+            None,
+        )
+        .unwrap();
+        let inside_the_hold = rx.recv_timeout(Duration::from_millis(500));
+        assert!(
+            matches!(inside_the_hold, Err(mpsc::RecvTimeoutError::Timeout)),
+            "the plan read without the runtime lock: {inside_the_hold:?}"
+        );
+        Ok(plan)
+    })
+    .unwrap();
+    let outcome = rx.recv().unwrap();
+    plan.join().unwrap();
+
+    assert_eq!(
+        outcome,
+        Err(
+            "the policy history no longer holds that record; refresh it and choose again"
+                .to_string()
+        )
+    );
+    let ring = PolicyHistory::load().unwrap().unwrap();
+    assert!(ring.entries.iter().all(|e| e.id() != oldest_id));
+    let (effective, revision, _) = store_now();
+    assert_eq!(revision, 2);
+    assert!(!effective.cdp_mode && !effective.page_eval_enabled);
 }
 
 #[test]

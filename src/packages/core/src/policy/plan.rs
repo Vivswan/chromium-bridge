@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::audit::{AuditKind, AuditRecord, Surface};
 use crate::enclave::base64_decode;
+use crate::ipc;
 use crate::presence::PresenceError;
 use crate::runtime_record::RuntimeRecord as _;
 
@@ -214,7 +215,7 @@ pub fn wire_names(fields: &[PolicyField]) -> String {
 /// arm of the plan is a diff against that read, so each arm's write holds to it ([`super::restrict_planned`],
 /// [`super::PreparedGrant::planned_over`], [`super::confirm_unmoved`]) and refuses a store that moved since.
 pub struct RollbackInputs {
-    /// The target revision's effective policy, re-derived from the history.
+    /// The target revision's effective policy, re-derived from the ring as it stood at the same read as `over`.
     pub target: PolicyValues,
     /// The current effective policy.
     pub current: PolicyValues,
@@ -240,13 +241,22 @@ pub struct HistoryEntryRef {
     pub id: String,
 }
 
-/// The disk reads behind a rollback, output-free so every surface shares one path and one set of refusals.
+/// The disk read behind a rollback, output-free so every surface shares one path and one set of refusals.
 /// `entry` names the listed row (the page); without it, `revision` alone must name one state (the CLI).
+///
+/// The ring and the store are one read under the runtime lock, since every writer lands the store and pushes
+/// the record it superseded inside one hold. Read apart, a restriction between them could evict the chosen row
+/// and leave its state paired with the store that evicted it, which the write's conflict check accepts.
 pub fn rollback_inputs(
     revision: u64,
     entry: Option<HistoryEntryRef>,
 ) -> Result<RollbackInputs, String> {
-    let history = match PolicyHistory::load() {
+    let (history, store) =
+        match ipc::with_runtime_lock(|_lock| Ok((PolicyHistory::load(), PolicyStore::load()))) {
+            Ok(read) => read,
+            Err(e) => return Err(format!("the policy store is unreadable ({e}); refusing")),
+        };
+    let history = match history {
         Ok(Some(h)) => h,
         Ok(None) => return Err("there is no policy history on this machine.".to_string()),
         Err(e) => return Err(format!("the policy history is unreadable ({e}).")),
@@ -255,7 +265,7 @@ pub fn rollback_inputs(
         Some(entry) => find_history_entry(&history, revision, entry)?,
         None => find_history_effective(&history, revision)?,
     };
-    let (current, baseline, over) = match PolicyStore::load() {
+    let (current, baseline, over) = match store {
         Ok(Some(store)) => match (store.effective(), store.baseline_doc()) {
             (Ok(effective), Ok(doc)) => (effective, doc.values(), store.observation()),
             (Err(e), _) | (_, Err(e)) => {
