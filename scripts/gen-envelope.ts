@@ -5,65 +5,75 @@
 // fields required, no defaults), and beside each reader base the ENFORCED validator, which is that base plus
 // exactly the asymmetries declared in src/packages/shared/src/envelope-asymmetries.ts. The extension runs the
 // enforced validators; the bases exist so the asymmetry gate (scripts/check-envelope.ts) can prove each entry.
+// Every validator is the Zod source json-schema-to-zod writes from its JSON Schema and every exported type is
+// json-schema-to-typescript's reading of the same schema; scripts/gen-schema.ts holds the emitted validator to
+// the schema rules R1-R4 before the file is written.
 //
-//   `moon run gen`   -> cargo example emit_envelope_schema (gen-only `envelope-schema` feature) -> prepare ->
-//                       applyAsymmetries (readers only) -> emitZod -> write
+//   `moon run gen`   -> cargo example emit_envelope_schema (gen-only `envelope-schema` feature) -> dereference
+//                       -> prepare -> applyAsymmetries (readers only) -> gen-schema (rules, type, Zod source)
+//                       -> write
 //   check-gen in CI  -> regenerates and fails on a stale diff
 //
-// Fail-closed generation rules; a violation aborts, because shipping a weaker parser than the Rust contract is
-// never an option. The error messages cite them by number.
-//   G1  every object declares type: "object" + additionalProperties: false, and the emitted source closes every
-//       z.object( with .strict() (or, on a reader under the loose-frames rule, .catchall(z.unknown())) - neither
-//       a Rust type losing deny_unknown_fields nor an emitter bug slips through
+// Fail-closed rules over the Rust input; a violation aborts, because shipping a weaker parser than the Rust
+// contract is never an option. The error messages cite them by number.
+//   G1  every object declares type: "object" + additionalProperties: false: an object claim is stated, never
+//       inferred, and a Rust type losing deny_unknown_fields fails here (the library's reading is then held
+//       closed by R1)
 //   G2  `default` is stripped: serde fills defaults on the Rust READ side; a .default() would hand consumers
 //       values the frame never carried (required-ness is unchanged: schemars already leaves defaulted fields optional)
 //   G3  oneOf only as a discriminated union (the same required const tag in every branch, values distinct), then
-//       emitted as a plain z.union: the mutual exclusivity needs no extra runtime check
-//   G4  every $ref inlined before emission; the emitter does not resolve them
-//   G5  every keyword and type on the supported list below, in a position the emitter models; an unmodeled
-//       keyword would have to be silently dropped, so it aborts until support lands here AND in the adversarial
-//       tests. The empty schema {} is the contract's own free-form claim (BridgeResp.data, and the request
-//       envelope's args once G6 has split the command off), emitted as z.unknown() so consumers must narrow
+//       rewritten to anyOf: the mutual exclusivity needs no exclusive-union check at runtime
+//   G4  every internal $ref dereferenced (json-schema-ref-parser) before emission, an external one left in
+//       place for prepare to refuse; nothing downstream resolves one
+//   G5  every keyword and type on the supported list below, in a position the library enforces (the keyword
+//       census in scripts/tests/gen-schema.test.ts says which it reads); an unlisted keyword aborts until
+//       support lands in that census AND in the adversarial tests. The empty schema {} is the contract's own
+//       free-form claim (BridgeResp.data, and the request envelope's args once G6 has split the command off),
+//       read as unknown so consumers must narrow
 //   G6  the request's command (serde `#[serde(flatten)]` of the adjacently tagged BridgeCommand) arrives as the
 //       envelope's own properties beside a `oneOf` of {op, args} branches under `unevaluatedProperties: false`.
 //       splitFlattenedCommand hands it back as the envelope (op: string, args: any) plus one args schema per op:
-//       the envelope base stays a strict object, and the per-op schemas go to scripts/gen-ops.ts
+//       the envelope base stays a strict object, and the per-op schemas are scripts/gen-ops.ts's
 //   G7  every variant of every Rust control-frame enum is planned exactly once below (a reader, a writer, or a
 //       bare classification tag), so an added or renamed variant fails generation until the plan says how the
 //       extension covers it
 //   A1  an asymmetry entry names a path the prepared Rust schema has, and its node is in the shape the change
 //       expects (a `string` change on a plain string, a `string-arm` on a number, ...); a stale or misplaced
 //       entry aborts instead of sitting inert
-//   A2  a `generated-schema` entry replacing an object node is cross-checked against the schema it names: same
-//       field inventory, same base type per field, and strict where the Rust node refuses unknown fields (two
-//       Rust emitters, held equal here)
+//   A2  a `generated-schema` entry puts the schema another generated module exports in place of a node, imported
+//       by name; the imported schema is cross-checked against the Rust node it stands in for (same field
+//       inventory, same base type per field, strict where the Rust node refuses unknown fields), two Rust
+//       emitters held to each other
 //   A3  an `ok-split` entry (at `$`) names a required boolean discriminant and one arm per value; each arm's
-//       required and forbidden fields exist on the frame, and the reader is emitted as a z.discriminatedUnion
-//       whose arms require and refuse exactly those fields, so a frame the typed producer cannot emit (ok with
-//       an error, a refusal without its reason) fails the reader rather than a consumer's re-check
-//   A4  every faithful base and writer schema the file exports is held to Zod's own reading of the prepared
-//       node it came from (z.fromJSONSchema): both serialize to the same JSON Schema, so a keyword this
-//       emitter stops modeling, or a claim it adds that the node does not carry, is a diff against the library
+//       required and forbidden fields exist on the frame, and the reader is a union whose arms require and
+//       refuse exactly those fields, so a frame the typed producer cannot emit (ok with an error, a refusal
+//       without its reason) fails the reader rather than a consumer's re-check
 
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import $RefParser from "@apidevtools/json-schema-ref-parser";
+import { walk } from "neotraverse";
 import { z } from "zod";
 import {
   ASYMMETRIES,
   type Asymmetry,
   type Change,
 } from "../src/packages/shared/src/envelope-asymmetries";
-
-type JsonObject = Record<string, unknown>;
-
-function isObject(v: unknown): v is JsonObject {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
-
-function show(v: unknown): string {
-  return JSON.stringify(v) ?? String(v);
-}
+import {
+  assertDiscriminated,
+  assertSchemaRules,
+  emitFromRust,
+  type ImportedSchema,
+  importedNode,
+  importedOf,
+  importsOf,
+  isObject,
+  type JsonObject,
+  schemaSource,
+  show,
+  typeSource,
+} from "./gen-schema";
 
 // Keys that annotate a schema without constraining instances; stripped before emission (schemars puts a field's
 // doc comment here).
@@ -76,45 +86,37 @@ export const ANNOTATION_KEYS = new Set([
   "examples",
 ]);
 
-// The subset of those that are also harmless BESIDE a $ref: $id and $schema are excluded because they alter
-// $ref resolution (base URI / dialect).
-const REF_SIBLING_ANNOTATION_KEYS = new Set(["$comment", "title", "description", "examples"]);
+const REF_SIBLING_KEYS = new Set(["description"]);
 
-// Inline every internal $ref against the root's $defs (G4).
-function deref(node: unknown, defs: JsonObject): unknown {
-  if (Array.isArray(node)) return node.map((item) => deref(item, defs));
-  if (!isObject(node)) return node;
-  const ref = node.$ref;
-  if (typeof ref === "string") {
-    const name = ref.match(/^#\/\$defs\/(.+)$/)?.[1];
-    if (name === undefined || !(name in defs)) {
-      throw new Error(`gen-envelope: unresolvable $ref ${ref} (G4)`);
+/** G4: the dereference merges a $ref's siblings over the target, the sibling winning (description is the one
+ * key schemars puts beside a $ref). The library resolves a $ref in any object of the document, keyword or
+ * not, so the walk is over every object, not over the schema keywords. */
+export function assertRefSiblings(schema: JsonObject): void {
+  walk(schema, (context, node: unknown) => {
+    if (!isObject(node) || typeof node.$ref !== "string") return;
+    const extra = Object.keys(node).filter((key) => key !== "$ref" && !REF_SIBLING_KEYS.has(key));
+    if (extra.length > 0) {
+      throw new Error(
+        `gen-envelope: $ref ${node.$ref} at #/${context.path.join("/")} carries ${extra.join(", ")}; ` +
+          `the dereference would merge them over the target, so only ${[...REF_SIBLING_KEYS].join(", ")} ` +
+          "may sit beside a $ref (G4)",
+      );
     }
-    // A $ref node's constraint siblings would be lost by a plain inline of the target; neither derivation
-    // emits that form, so refuse it rather than silently merging. Pure-annotation siblings constrain nothing.
-    for (const key of Object.keys(node)) {
-      if (key !== "$ref" && !REF_SIBLING_ANNOTATION_KEYS.has(key)) {
-        throw new Error(
-          `gen-envelope: $ref with constraint siblings is not supported: ${ref} (G4)`,
-        );
-      }
-    }
-    return deref(defs[name], defs);
-  }
-  const out: JsonObject = {};
-  for (const [key, value] of Object.entries(node)) {
-    out[key] = deref(value, defs);
-  }
-  return out;
+  });
 }
 
-/** Split an internally-tagged (serde `tag = "type"`) enum schema into one subschema per tag, with $defs
- * indirection inlined first. Refuses anything that is not exactly the shape schemars emits for such an enum: a
- * top-level oneOf whose every branch is an object schema carrying a unique string `type` const. */
-export function splitTaggedUnionSchema(schema: unknown): Map<string, unknown> {
+/** Split an internally-tagged (serde `tag = "type"`) enum schema into one subschema per tag, every internal
+ * $ref dereferenced first (G4). Refuses anything that is not exactly the shape schemars emits for such an
+ * enum: a top-level oneOf whose every branch is an object schema carrying a unique string `type` const. */
+export async function splitTaggedUnionSchema(schema: unknown): Promise<Map<string, unknown>> {
   if (!isObject(schema)) throw new Error("gen-envelope: split expected a schema object");
-  const defs = isObject(schema.$defs) ? schema.$defs : {};
-  const inlined = deref({ ...schema, $defs: undefined }, defs) as JsonObject;
+  assertRefSiblings(schema);
+  // dereference rewrites its argument in place; the Rust output is read once per group, so a copy keeps the
+  // caller's object as it was.
+  const inlined = (await $RefParser.dereference(structuredClone(schema) as never, {
+    resolve: { external: false },
+  })) as JsonObject;
+  delete inlined.$defs;
   const variants = inlined.oneOf;
   if (!Array.isArray(variants)) throw new Error("gen-envelope: split expected a top-level oneOf");
   const out = new Map<string, unknown>();
@@ -138,27 +140,13 @@ export function splitTaggedUnionSchema(schema: unknown): Map<string, unknown> {
 // G3: accept the branch list only if some property is a required string const in every branch with all values
 // distinct; the union is then discriminated and oneOf/anyOf coincide. Returns the discriminating property.
 export function assertDiscriminatedUnion(branches: unknown[], path: string): string {
-  const first = branches[0];
-  if (branches.length === 0 || !isObject(first) || !isObject(first.properties)) {
-    throw new Error(`gen-envelope: oneOf at ${path} has no object branches (G3)`);
-  }
-  outer: for (const candidate of Object.keys(first.properties)) {
-    const seen = new Set<string>();
-    for (const branch of branches) {
-      if (!isObject(branch) || branch.type !== "object" || !isObject(branch.properties)) {
-        throw new Error(`gen-envelope: oneOf at ${path} has a non-object branch (G3)`);
-      }
-      const tagNode = branch.properties[candidate];
-      const tag = isObject(tagNode) ? tagNode.const : undefined;
-      const required = Array.isArray(branch.required) ? branch.required : [];
-      if (typeof tag !== "string" || seen.has(tag) || !required.includes(candidate)) {
-        continue outer;
-      }
-      seen.add(tag);
-    }
-    return candidate; // discriminates every branch
-  }
-  throw new Error(`gen-envelope: oneOf at ${path} is not a discriminated union (G3)`);
+  return assertDiscriminated(
+    branches,
+    (why) => {
+      throw new Error(`gen-envelope: oneOf at ${path} ${why} (G3)`);
+    },
+    "string",
+  );
 }
 
 /** The request's flattened command, split back into the two things the rest of the pipeline models (G6). */
@@ -260,8 +248,8 @@ const SUPPORTED_TYPES = new Set([
 ]);
 
 export function prepare(node: unknown, path: string): unknown {
-  // The boolean schema `true` and the empty schema {} both mean "accept anything"; canonicalize to {} (emitted
-  // as z.unknown()). `false` (accept nothing) and any other non-object form have no faithful emission.
+  // The boolean schema `true` and the empty schema {} both mean "accept anything"; canonicalize to {} (read as
+  // unknown). `false` (accept nothing) and any other non-object form are outside the Rust input this admits.
   if (node === true) return {};
   if (!isObject(node)) {
     throw new Error(`gen-envelope: unsupported schema form at ${path}: ${show(node)}`);
@@ -288,13 +276,20 @@ export function prepare(node: unknown, path: string): unknown {
     }
   }
 
-  // G5 placement: format is modeled only as schemars' integer-width claim and the numeric bounds only as
-  // z.number() bounds, so both may sit only on a numeric node (JSON Schema scopes them per instance type: the
-  // Option null-arm beside a numeric type is inert and stays allowed, but a string arm would give `format` a
-  // string-format meaning - uuid, email, ... - that this emitter does not model).
+  // G5 placement: `format` is schemars' integer-width annotation (uint64, int32, ...), inert beside the
+  // safe-integers rule and unread by zod, so it is stripped from an integer node and refused anywhere else (on a
+  // string it would name a string format - uuid, email - and on a plain number an integer claim, neither of
+  // which the reader would enforce). The numeric bounds may sit only on a numeric node (JSON Schema scopes
+  // them per instance type: the Option null-arm beside a numeric type is inert and stays allowed).
+  if ("format" in out) {
+    if (!types.includes("integer") || !types.every((t) => t === "integer" || t === "null")) {
+      throw new Error(`gen-envelope: "format" at ${path} sits on a non-integer node (G5)`);
+    }
+    delete out.format;
+  }
   const numeric = types.includes("integer") || types.includes("number");
   const numericOrNull = numeric && types.every((t) => t !== "string" && t !== "boolean");
-  for (const key of ["format", "minimum", "maximum"] as const) {
+  for (const key of ["minimum", "maximum"] as const) {
     if (key in out && !numericOrNull) {
       throw new Error(`gen-envelope: "${key}" at ${path} sits on a non-numeric node (G5)`);
     }
@@ -411,26 +406,20 @@ export function prepare(node: unknown, path: string): unknown {
 
 // ---- the asymmetry pass (readers only) -----------------------------------------
 //
-// Node forms only this pass introduces (never read from the Rust schema; prepare refuses them there):
+// The pass writes plain JSON Schema, so its output is the library's input as it stands. Forms only it
+// introduces (never read from the Rust schema; prepare refuses them there):
 //   minLength / maxLength / pattern on a string node   -> the `string` change
-//   $loose: true on an object node                     -> the loose-frames rule, emitted as .catchall(z.unknown())
-//   { $generated: symbol, $from: module }              -> the `generated-schema` change, emitted as the symbol
-
-const LOOSE = "$loose";
-const GENERATED = "$generated";
-const GENERATED_FROM = "$from";
-/** An ok-split's union node: the discriminant key; emitted as z.discriminatedUnion over `anyOf`. */
-const DISCRIMINANT = "$discriminant";
-/** A field an ok-split arm forbids: emitted as z.undefined(), so a present value (null included) fails the arm. */
-const FORBIDDEN = "$forbidden";
+//   additionalProperties: true on an object node       -> the loose-frames rule
+//   another module's exported schema, imported, in place of a node -> the `generated-schema` change
+//   a `false` property schema                          -> a field an ok-split arm forbids: a present value (null
+//                                                         included) fails the arm, absence passes
 
 /** A `generated-schema` replacement the pass performed, kept for the A2 cross-check in main. */
 export interface GeneratedReplacement {
   path: string;
-  symbol: string;
-  from: string;
-  /** The prepared Rust node the symbol stands in for: its own null arm dropped when it was an optional
-   * property, its children as prepared. */
+  imported: ImportedSchema;
+  /** The prepared Rust node the imported schema stands in for: its own null arm dropped when it was an
+   * optional property, its children as prepared. */
   rust: unknown;
 }
 
@@ -457,6 +446,9 @@ function dropNullArm(node: JsonObject): JsonObject {
   return node;
 }
 
+/** The exported type of a generated validator: its export name minus `Schema`. */
+const typeOf = (schemaName: string) => schemaName.replace(/Schema$/, "");
+
 function applyChange(node: JsonObject, change: Change, path: string): JsonObject {
   const refuse = (expected: string): never => {
     throw new Error(
@@ -464,6 +456,9 @@ function applyChange(node: JsonObject, change: Change, path: string): JsonObject
         "asymmetry cannot apply (A1)",
     );
   };
+  if (importedOf(node) !== undefined) {
+    throw new Error(`gen-envelope: ${path} already stands for an imported schema (A1)`);
+  }
   switch (change.change) {
     case "string": {
       if (node.type !== "string" || Object.keys(node).length !== 1) refuse("a plain string node");
@@ -512,7 +507,11 @@ function applyChange(node: JsonObject, change: Change, path: string): JsonObject
       };
     }
     case "generated-schema":
-      return { [GENERATED]: change.symbol, [GENERATED_FROM]: change.from };
+      return importedNode({
+        from: change.from,
+        symbol: change.symbol,
+        type: typeOf(change.symbol),
+      });
     case "ok-split":
       // Exhaustiveness only: the pass applies an ok-split after the field changes (applyOkSplit), never here.
       throw new Error(`gen-envelope: ${path}: an ok-split is applied after the field changes (A3)`);
@@ -556,11 +555,11 @@ function applyOkSplit(
       if (!Object.hasOwn(props, field)) refuse(`forbidden field ${field} is not on the frame`);
       if (armRequired.has(field))
         refuse(`${field} is both required and forbidden on the ok: ${arm.when} arm`);
-      armProps[field] = { [FORBIDDEN]: true };
+      armProps[field] = false;
     }
     return { ...node, properties: armProps, required: [...armRequired] };
   });
-  return { [DISCRIMINANT]: change.discriminant, anyOf: arms };
+  return { anyOf: arms };
 }
 
 /** Apply the reader rules and this kind's asymmetry entries to a prepared schema (A1). `loose` is the
@@ -588,17 +587,14 @@ export function applyAsymmetries(
       }
       for (const change of entry.changes) {
         if (change.change === "ok-split") continue;
-        if (GENERATED in out) {
-          throw new Error(`gen-envelope: ${path} is already a generated-schema replacement (A1)`);
-        }
         const rust = out;
         out = applyChange(out, change, path);
-        if (change.change === "generated-schema") {
-          replacements.push({ path, symbol: change.symbol, from: change.from, rust });
-        }
+        const imported = importedOf(out);
+        if (imported !== undefined) replacements.push({ path, imported, rust });
       }
     }
-    if (GENERATED in out) return out;
+    // An imported schema is its module's to walk: strict and complete as that module wrote it.
+    if (importedOf(out) !== undefined) return out;
     if (isObject(out.properties)) {
       const required = new Set(Array.isArray(out.required) ? out.required : []);
       const props: JsonObject = {};
@@ -607,7 +603,7 @@ export function applyAsymmetries(
         props[name] = visit(field, `${path}.properties.${name}`);
       }
       out = { ...out, properties: props };
-      if (loose) out = { ...out, [LOOSE]: true };
+      if (loose) out = { ...out, additionalProperties: true };
     }
     if (isObject(out.items)) out = { ...out, items: visit(out.items, `${path}.items`) };
     if (Array.isArray(out.anyOf)) {
@@ -627,113 +623,6 @@ export function applyAsymmetries(
     );
   }
   return { schema, replacements };
-}
-
-// ---- the emitter -----------------------------------------------------------------
-
-// Emit Zod source for one prepared (and possibly asymmetry-transformed) node. Total over the subset prepare and
-// applyAsymmetries produce: anything else is a bug upstream, so it throws rather than guesses. `override` lets
-// a caller substitute a named schema for a specific node (matched by identity) instead of inlining it.
-function emitZod(node: unknown, override?: (node: unknown) => string | undefined): string {
-  const custom = override?.(node);
-  if (custom !== undefined) return custom;
-  if (!isObject(node)) {
-    throw new Error(`gen-envelope: emitter reached an unprepared node: ${show(node)}`);
-  }
-  if (typeof node[GENERATED] === "string") return node[GENERATED];
-  if (node[FORBIDDEN] === true) return "z.undefined()";
-  if (typeof node[DISCRIMINANT] === "string" && Array.isArray(node.anyOf)) {
-    const arms = node.anyOf.map((arm) => emitZod(arm, override));
-    return `z.discriminatedUnion(${JSON.stringify(node[DISCRIMINANT])}, [${arms.join(", ")}])`;
-  }
-  if (Array.isArray(node.anyOf)) {
-    // A non-empty, pure combinator; a one-branch union is the branch itself.
-    if (node.anyOf.length === 1) return emitZod(node.anyOf[0], override);
-    const branches = node.anyOf.map((branch) => emitZod(branch, override));
-    return `z.union([${branches.join(", ")}])`;
-  }
-  if ("const" in node) return `z.literal(${JSON.stringify(node.const)})`;
-  if (Array.isArray(node.enum)) {
-    return `z.enum([${node.enum.map((v) => JSON.stringify(v)).join(", ")}])`;
-  }
-  if (Array.isArray(node.type)) {
-    // serde's Option null-arm and friends: one branch per type, each keeping the node's other keywords
-    // (numeric ones and items, per G5 placement; the null branch ignores them - none constrains null).
-    const branches = node.type.map((type) => emitZod({ ...node, type }, override));
-    return `z.union([${branches.join(", ")}])`;
-  }
-  switch (node.type) {
-    case "object": {
-      // additionalProperties: false is guaranteed by G1: .strict() is its faithful spelling, and a reader under
-      // the loose-frames rule carries $loose instead. prepare always materializes `properties`.
-      const required = new Set(Array.isArray(node.required) ? node.required : []);
-      const fields = Object.entries(node.properties as JsonObject).map(([key, sub]) => {
-        const value = emitZod(sub, override);
-        return `${JSON.stringify(key)}: ${required.has(key) ? value : `${value}.optional()`}`;
-      });
-      const object = fields.length === 0 ? "z.object({})" : `z.object({ ${fields.join(", ")} })`;
-      return node[LOOSE] === true ? `${object}.catchall(z.unknown())` : `${object}.strict()`;
-    }
-    case "array": {
-      const array = `z.array(${emitZod(node.items, override)})`;
-      return typeof node.minItems === "number" ? `${array}.min(${node.minItems})` : array;
-    }
-    case "integer":
-    case "number": {
-      // schemars' integer-width formats: `integer` is already .int(); the int64 format on a plain number carries
-      // the same integer claim. Other formats (uint64, double, ...) add nothing beyond the type and the explicit
-      // bounds. z.number().int() is a JS-safe integer, the safe-integers rule of the asymmetry table.
-      let out =
-        node.type === "integer" || node.format === "int64" ? "z.number().int()" : "z.number()";
-      if (typeof node.minimum === "number") out += `.gte(${JSON.stringify(node.minimum)})`;
-      if (typeof node.maximum === "number") out += `.lte(${JSON.stringify(node.maximum)})`;
-      return out;
-    }
-    case "string": {
-      let out = "z.string()";
-      if (typeof node.minLength === "number") out += `.min(${node.minLength})`;
-      if (typeof node.maxLength === "number") out += `.max(${node.maxLength})`;
-      if (typeof node.pattern === "string")
-        out += `.regex(/${node.pattern.replaceAll("/", "\\/")}/)`;
-      return out;
-    }
-    case "boolean":
-      return "z.boolean()";
-    case "null":
-      return "z.null()";
-    case undefined: {
-      // The only typeless survivor of prepare is the empty any-schema: unknown, not any, so a consumer must
-      // narrow the payload before using it (same instance set).
-      if (Object.keys(node).length > 0) {
-        throw new Error(`gen-envelope: emitter reached an unprepared node: ${show(node)}`);
-      }
-      return "z.unknown()";
-    }
-    default:
-      throw new Error(`gen-envelope: emitter has no form for type ${show(node.type)}`);
-  }
-}
-
-function count(haystack: string, needle: string): number {
-  return haystack.split(needle).length - 1;
-}
-
-// Emit one prepared schema as Zod source, then re-assert G1 on the OUTPUT: every emitted z.object( must be
-// closed by a .strict() or, under the loose-frames rule, by .catchall(z.unknown()).
-export function convert(
-  schema: unknown,
-  name: string,
-  parserOverride?: (node: unknown) => string | undefined,
-): string {
-  const code = emitZod(schema, parserOverride);
-  const objects = count(code, "z.object(");
-  const closed = count(code, ".strict()") + count(code, ".catchall(z.unknown())");
-  if (objects !== closed) {
-    throw new Error(
-      `gen-envelope: ${name}: emitted ${objects} z.object( but ${closed} strict/loose closings (G1)`,
-    );
-  }
-  return code;
 }
 
 // ---- the frame plan (G7) ---------------------------------------------------------
@@ -897,7 +786,7 @@ export function assertFramePlan(group: Group, variants: Map<string, unknown>): v
   }
 }
 
-// ---- A2: the generated-schema cross-check -------------------------------------------
+// ---- A2: the imported schema against the Rust node it stands in for ----------------------
 
 const nonNullType = (node: unknown): string | undefined => {
   if (!isObject(node)) return undefined;
@@ -905,29 +794,28 @@ const nonNullType = (node: unknown): string | undefined => {
   return types.filter((t) => t !== "null" && t !== undefined).join("|") || undefined;
 };
 
-/** Hold a generated schema to the Rust object node it replaces: same field names, same base type per field
- * (the null arm aside; the asymmetry table owns that), and strict where the Rust node refuses unknown fields
- * (the loose-frames rule never reaches a replaced node, so a loose replacement would be a silent widening).
+/** Hold an imported schema to the Rust object node it stands in for: same field names, same base type per
+ * field (the null arm aside; the asymmetry table owns that), and strict where the Rust node refuses unknown
+ * fields (the loose-frames rule never reaches a replaced node, so a loose import would be a silent widening).
  * Skipped for the any-schema (nothing to hold). */
 export function assertGeneratedMatches(
   replacement: GeneratedReplacement,
   generated: z.ZodType,
 ): void {
-  const rust = replacement.rust;
+  const { rust, path, imported } = replacement;
   if (!isObject(rust) || !isObject(rust.properties)) return;
   const derived = z.toJSONSchema(generated) as JsonObject;
   const derivedProps = isObject(derived.properties) ? derived.properties : {};
   if (rust.additionalProperties === false && derived.additionalProperties !== false) {
     throw new Error(
-      `gen-envelope: ${replacement.path}: ${replacement.symbol} admits unknown fields where the Rust node ` +
-        "refuses them (A2)",
+      `gen-envelope: ${path}: ${imported.symbol} admits unknown fields where the Rust node refuses them (A2)`,
     );
   }
   const rustKeys = Object.keys(rust.properties).sort();
   const derivedKeys = Object.keys(derivedProps).sort();
   if (rustKeys.join() !== derivedKeys.join()) {
     throw new Error(
-      `gen-envelope: ${replacement.path}: ${replacement.symbol} has fields [${derivedKeys.join(", ")}] ` +
+      `gen-envelope: ${path}: ${imported.symbol} has fields [${derivedKeys.join(", ")}] ` +
         `but the Rust node has [${rustKeys.join(", ")}] (A2)`,
     );
   }
@@ -936,35 +824,9 @@ export function assertGeneratedMatches(
     const got = nonNullType(derivedProps[key]);
     if (want !== got) {
       throw new Error(
-        `gen-envelope: ${replacement.path}.${key}: ${replacement.symbol} says ${got} but the Rust node ` +
-          `says ${want} (A2)`,
+        `gen-envelope: ${path}.${key}: ${imported.symbol} says ${got} but the Rust node says ${want} (A2)`,
       );
     }
-  }
-}
-
-// ---- A4: the library's reading of each faithful schema ---------------------------------
-
-/** Hold an exported schema to Zod's own reading of the prepared node it was emitted from: the two readings
- * must serialize to the same JSON Schema of their INPUT (the output schema of a stripping object also says
- * additionalProperties: false, so only the input side tells strict from strip). The enforced readers carry
- * this pass's own node forms ($loose, $generated, $discriminant, $forbidden), which the library does not
- * read, so the oracle covers the faithful bases and the writer schemas. */
-export function assertLibraryReadingMatches(
-  name: string,
-  prepared: unknown,
-  emitted: z.ZodType,
-): void {
-  const library = z.toJSONSchema(
-    z.fromJSONSchema(prepared as Parameters<typeof z.fromJSONSchema>[0]),
-    { io: "input" },
-  );
-  const ours = z.toJSONSchema(emitted, { io: "input" });
-  if (!Bun.deepEquals(library, ours, true)) {
-    throw new Error(
-      `gen-envelope: ${name}: the emitted schema reads as ${show(ours)} but zod reads the Rust node as ` +
-        `${show(library)} (A4)`,
-    );
   }
 }
 
@@ -974,25 +836,7 @@ async function main(): Promise<void> {
   const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
   // The Rust core is the source: run its envelope-schema emitter.
-  const emitted = Bun.spawnSync(
-    [
-      "cargo",
-      "run",
-      "--frozen",
-      "-q",
-      "-p",
-      "chromium-bridge-core",
-      "--features",
-      "envelope-schema",
-      "--example",
-      "emit_envelope_schema",
-    ],
-    { cwd: root, stderr: "inherit" },
-  );
-  if (!emitted.success) {
-    throw new Error(`gen-envelope: cargo emit failed with status ${emitted.exitCode}`);
-  }
-  const fromRust = JSON.parse(emitted.stdout.toString()) as {
+  const fromRust = emitFromRust(root, "emit_envelope_schema", "envelope-schema") as {
     request: unknown;
     response: unknown;
     signal: unknown;
@@ -1003,52 +847,66 @@ async function main(): Promise<void> {
   };
 
   const variants = {
-    enclave: splitTaggedUnionSchema(fromRust.enclave),
-    admin: splitTaggedUnionSchema(fromRust.admin),
-    policy: splitTaggedUnionSchema(fromRust.policy),
-    webauthn: splitTaggedUnionSchema(fromRust.webauthn),
+    enclave: await splitTaggedUnionSchema(fromRust.enclave),
+    admin: await splitTaggedUnionSchema(fromRust.admin),
+    policy: await splitTaggedUnionSchema(fromRust.policy),
+    webauthn: await splitTaggedUnionSchema(fromRust.webauthn),
   };
   for (const group of GROUPS) assertFramePlan(group, variants[group]);
-  const signals = splitTaggedUnionSchema(fromRust.signal);
+  const signals = await splitTaggedUnionSchema(fromRust.signal);
   assertSignalPlan(signals);
 
   function preparedFrame(group: Group, tag: string): unknown {
     return prepare(variants[group].get(tag), `$.${group}.${tag}`);
   }
 
-  const imports = new Map<string, Set<string>>();
+  // G6: the typed command is split off; its per-op args schemas are scripts/gen-ops.ts's, and the request's
+  // args node is OpArgsSchema imported from there (the asymmetry table's generated-schema entry).
+  const { envelope: requestEnvelope } = splitFlattenedCommand(fromRust.request, "$.request");
+
   const replacements: GeneratedReplacement[] = [];
   function enforced(kind: string, prepared: unknown, loose: boolean): unknown {
     const pass = applyAsymmetries(prepared, kind, ASYMMETRIES[kind] ?? {}, loose);
-    for (const r of pass.replacements) {
-      replacements.push(r);
-      const symbols = imports.get(r.from) ?? new Set<string>();
-      symbols.add(r.symbol);
-      imports.set(r.from, symbols);
-    }
+    replacements.push(...pass.replacements);
     return pass.schema;
   }
   const kindsWithEntries = new Set(Object.keys(ASYMMETRIES));
 
-  const pieces: string[] = [];
-  const typeOf = (schemaName: string) => schemaName.replace(/Schema$/, "");
-  /** Every faithful base and writer schema with the prepared node it was emitted from, for A4; the export
-   * line and the registration are one operation so no emission site can skip the oracle. */
-  const faithful = new Map<string, unknown>();
-  const exportFaithful = (
-    name: string,
-    node: unknown,
-    override?: (node: unknown) => string | undefined,
-  ): string => {
-    faithful.set(name, node);
-    return `export const ${name} = ${convert(node, name, override)};`;
-  };
+  // The validators the generated-schema entries import, read from the generated tree gen-ops.ts wrote just
+  // before this script runs: the emitted source is evaluated against them for the rules, and A2 holds each to
+  // the Rust node it stands in for.
+  const owners = new Map<string, z.ZodType>();
+  async function owner(imported: ImportedSchema): Promise<z.ZodType> {
+    const key = `${imported.from}#${imported.symbol}`;
+    const known = owners.get(key);
+    if (known !== undefined) return known;
+    const module = (await import(join(root, "src/packages/shared/src", imported.from))) as Record<
+      string,
+      unknown
+    >;
+    const schema = module[imported.symbol];
+    if (!(schema instanceof z.ZodType)) {
+      throw new Error(
+        `gen-envelope: ${imported.from} exports no Zod schema named ${imported.symbol} (A2)`,
+      );
+    }
+    owners.set(key, schema);
+    return schema;
+  }
 
-  // G6: the typed command is split off; its per-op args schemas reach the extension through scripts/gen-ops.ts.
-  const request = prepare(
-    splitFlattenedCommand(fromRust.request, "$.request").envelope,
-    "$.request",
-  );
+  const pieces: string[] = [];
+  /** One exported validator: the schema rules over the emitted validator first, then the exported type (the
+   * enforced readers and the writers have one; the faithful bases are the gate's and have none), then the
+   * schema itself. `loose` is the loose-frames rule, true only for an enforced control-frame reader. */
+  async function exportSchema(name: string, node: unknown, loose: boolean, type?: string) {
+    const imports: Record<string, z.ZodType> = {};
+    for (const imported of importsOf(node)) imports[imported.symbol] = await owner(imported);
+    assertSchemaRules(name, node, loose, imports);
+    if (type !== undefined) pieces.push(await typeSource(type, node), "");
+    pieces.push(schemaSource(name, type, node), "");
+  }
+
+  const request = prepare(requestEnvelope, "$.request");
   const response = prepare(fromRust.response, "$.response");
   kindsWithEntries.delete("request");
   kindsWithEntries.delete("response");
@@ -1056,18 +914,20 @@ async function main(): Promise<void> {
   pieces.push(
     "// The request envelope (BridgeReq) and the response envelope (BridgeResp): the faithful bases, then the",
     "// enforced validators the extension runs (the base plus the asymmetry table; strict like the host).",
-    exportFaithful("BridgeReqWireSchema", request),
-    "",
-    exportFaithful("BridgeRespWireSchema", response),
-    "",
-    `export const BridgeReqSchema = ${convert(enforced("request", request, false), "BridgeReqSchema")};`,
-    "",
-    "export type BridgeReqEnvelope = z.infer<typeof BridgeReqSchema>;",
-    "",
-    `export const BridgeRespSchema = ${convert(enforced("response", response, false), "BridgeRespSchema")};`,
-    "",
-    "export type BridgeResp = z.infer<typeof BridgeRespSchema>;",
-    "",
+  );
+  await exportSchema("BridgeReqWireSchema", request, false);
+  await exportSchema("BridgeRespWireSchema", response, false);
+  await exportSchema(
+    "BridgeReqSchema",
+    enforced("request", request, false),
+    false,
+    "BridgeReqEnvelope",
+  );
+  await exportSchema(
+    "BridgeRespSchema",
+    enforced("response", response, false),
+    false,
+    "BridgeResp",
   );
 
   pieces.push(
@@ -1077,21 +937,14 @@ async function main(): Promise<void> {
   for (const [tag, names] of Object.entries(SIGNAL_FRAMES)) {
     kindsWithEntries.delete(tag);
     const base = prepare(signals.get(tag), `$.signal.${tag}`);
-    pieces.push(
-      exportFaithful(names.wire, base),
-      "",
-      `export const ${names.enforced} = ${convert(enforced(tag, base, false), names.enforced)};`,
-      "",
-      `export type ${typeOf(names.enforced)} = z.infer<typeof ${names.enforced}>;`,
-      "",
-    );
+    await exportSchema(names.wire, base, false);
+    await exportSchema(names.enforced, enforced(tag, base, false), false, typeOf(names.enforced));
   }
 
   // Types embedded in a reader's field (an array's items, or an object field itself), emitted as their own
-  // exports (base and enforced) so a consumer can name the type; the embedding readers reference them by
-  // name (the override substitutes the identical node). An ok-split reader carries the field on one arm
-  // only, so the search walks the arms; on the base an Option field is a union with null, so the object
-  // arm is picked out of it.
+  // exports (base and enforced) so a consumer can name the type; the embedding readers carry the same node
+  // inline. An ok-split reader carries the field on one arm only, so the search walks the arms; on the base
+  // an Option field is a union with null, so the object arm is picked out of it.
   const EMBEDDED_TYPES = [
     {
       group: "admin",
@@ -1149,27 +1002,20 @@ async function main(): Promise<void> {
   };
   const preparedBases = new Map<string, unknown>();
   const enforcedReaders = new Map<string, unknown>();
-  const namedNodes = new Map<unknown, string>();
   for (const item of EMBEDDED_TYPES) {
     const base = preparedFrame(item.group, item.tag);
     const reader = enforced(item.tag, base, true);
     preparedBases.set(item.tag, base);
     enforcedReaders.set(item.tag, reader);
-    const wireNode = embeddedNode(base, item.field, item.tag);
-    const enforcedNode = embeddedNode(reader, item.field, item.tag);
-    namedNodes.set(wireNode, item.wire);
-    namedNodes.set(enforcedNode, item.enforced);
-    pieces.push(
-      `// ${item.doc}`,
-      exportFaithful(item.wire, wireNode),
-      "",
-      `export const ${item.enforced} = ${convert(enforcedNode, item.enforced)};`,
-      "",
-      `export type ${typeOf(item.enforced)} = z.infer<typeof ${item.enforced}>;`,
-      "",
+    pieces.push(`// ${item.doc}`);
+    await exportSchema(item.wire, embeddedNode(base, item.field, item.tag), false);
+    await exportSchema(
+      item.enforced,
+      embeddedNode(reader, item.field, item.tag),
+      true,
+      typeOf(item.enforced),
     );
   }
-  const byName = (node: unknown): string | undefined => namedNodes.get(node);
 
   pieces.push(
     "// The host->extension control frames: the faithful base, then the enforced reader (the base plus the",
@@ -1180,14 +1026,8 @@ async function main(): Promise<void> {
       kindsWithEntries.delete(tag);
       const base = preparedBases.get(tag) ?? preparedFrame(group, tag);
       const reader = enforcedReaders.get(tag) ?? enforced(tag, base, true);
-      pieces.push(
-        exportFaithful(names.wire, base, byName),
-        "",
-        `export const ${names.enforced} = ${convert(reader, names.enforced, byName)};`,
-        "",
-        `export type ${typeOf(names.enforced)} = z.infer<typeof ${names.enforced}>;`,
-        "",
-      );
+      await exportSchema(names.wire, base, false);
+      await exportSchema(names.enforced, reader, true, typeOf(names.enforced));
     }
   }
   if (kindsWithEntries.size > 0) {
@@ -1197,20 +1037,33 @@ async function main(): Promise<void> {
     );
   }
 
-  // A2: every generated-schema replacement against the module it names (imported from the generated tree
-  // gen-ops.ts wrote just before this script runs).
+  // A2: every imported schema against the Rust node it stands in for.
   for (const replacement of replacements) {
-    const module = (await import(
-      join(root, "src/packages/shared/src", replacement.from)
-    )) as Record<string, unknown>;
-    const generated = module[replacement.symbol];
-    if (!(generated instanceof z.ZodType)) {
+    assertGeneratedMatches(replacement, await owner(replacement.imported));
+  }
+
+  // The import lines: one per owner module, the validator and its type. A symbol two modules export under one
+  // name cannot share the module scope.
+  const bySymbol = new Map<string, ImportedSchema>();
+  for (const { imported } of replacements) {
+    const prior = bySymbol.get(imported.symbol);
+    if (prior !== undefined && prior.from !== imported.from) {
       throw new Error(
-        `gen-envelope: ${replacement.from} exports no Zod schema named ${replacement.symbol} (A2)`,
+        `gen-envelope: ${imported.symbol} is imported from both ${prior.from} and ${imported.from} (A2)`,
       );
     }
-    assertGeneratedMatches(replacement, generated);
+    bySymbol.set(imported.symbol, imported);
   }
+  const byModule = new Map<string, ImportedSchema[]>();
+  for (const imported of bySymbol.values()) {
+    byModule.set(imported.from, [...(byModule.get(imported.from) ?? []), imported]);
+  }
+  const importLines = [...byModule.keys()].sort().map((from) => {
+    const names = (byModule.get(from) ?? [])
+      .flatMap((imported) => [imported.symbol, `type ${imported.type}`])
+      .sort();
+    return `import { ${names.join(", ")} } from ${JSON.stringify(from)};`;
+  });
 
   const manifest = (table: Record<Group, Readonly<Record<string, unknown>> | readonly string[]>) =>
     GROUPS.map((group) => {
@@ -1233,17 +1086,12 @@ async function main(): Promise<void> {
 
   pieces.push(
     "// The extension->host writer frames (the extension constructs these; the enforcing reader is the Rust",
-    "// serde parser). Emitted for their inferred types: constructor sites claim conformance with `satisfies`,",
-    "// so a drifted field or tag is a compile error. Never used as runtime parsers.",
+    "// serde parser). Emitted for their types: constructor sites claim conformance with `satisfies`, so a",
+    "// drifted field or tag is a compile error. Never used as runtime parsers.",
   );
   for (const group of GROUPS) {
     for (const [tag, name] of Object.entries(WRITER_FRAMES[group])) {
-      pieces.push(
-        exportFaithful(name, preparedFrame(group, tag)),
-        "",
-        `export type ${typeOf(name)} = z.infer<typeof ${name}>;`,
-        "",
-      );
+      await exportSchema(name, preparedFrame(group, tag), false, typeOf(name));
     }
   }
 
@@ -1253,10 +1101,6 @@ async function main(): Promise<void> {
     ...manifest(WRITER_FRAMES),
     "} as const;",
   );
-
-  const importLines = [...imports.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([from, symbols]) => `import { ${[...symbols].sort().join(", ")} } from "${from}";`);
 
   const out = `// GENERATED from the Rust core wire types (src/packages/core/src/protocol.rs and
 // protocol/control.rs; AdminControl embeds allowlist::ClientEntry, PolicyControl embeds
@@ -1268,8 +1112,11 @@ async function main(): Promise<void> {
 // (*WireSchema: strict objects, required fields required, no defaults; rules G1-G7 in scripts/gen-envelope.ts)
 // and the ENFORCED validator the extension runs, which is the base plus exactly the asymmetry table
 // (direction and reason per entry in envelope-asymmetries.ts; proved per entry by scripts/check-envelope.ts,
-// \`moon run check-envelope\`). The extension->host writer schemas exist for their inferred types only
-// (constructor-site \`satisfies\`); the enforcing reader for those frames is the Rust serde parser.
+// \`moon run check-envelope\`). Each validator is the Zod source json-schema-to-zod wrote from the Rust JSON
+// Schema and each type is json-schema-to-typescript's reading of the same schema. The request's \`args\` and
+// policy_current's \`overlay\` are the schemas ops.gen.ts and policy.gen.ts export, imported. The
+// extension->host writer schemas exist for their types only (constructor-site \`satisfies\`); the enforcing
+// reader for those frames is the Rust serde parser.
 
 import { z } from "zod";
 ${importLines.join("\n")}
@@ -1277,18 +1124,7 @@ ${importLines.join("\n")}
 ${pieces.join("\n")}
 `;
 
-  const outPath = join(root, "src/packages/shared/src/envelope.gen.ts");
-  writeFileSync(outPath, out);
-
-  // A4 reads the schemas back from the written module, so it judges the file as the extension will import it.
-  const generated = (await import(outPath)) as Record<string, unknown>;
-  for (const [name, node] of faithful) {
-    const emitted = generated[name];
-    if (!(emitted instanceof z.ZodType)) {
-      throw new Error(`gen-envelope: the written module exports no Zod schema named ${name} (A4)`);
-    }
-    assertLibraryReadingMatches(name, node, emitted);
-  }
+  writeFileSync(join(root, "src/packages/shared/src/envelope.gen.ts"), out);
   console.log("generated src/packages/shared/src/envelope.gen.ts from the Rust wire types");
 }
 

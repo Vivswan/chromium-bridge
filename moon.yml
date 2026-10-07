@@ -420,7 +420,7 @@ tasks:
       set -e
       bun scripts/gen-ops.ts
       bun scripts/gen-envelope.ts
-      bun run biome format --write \
+      bun run biome check --write \
         src/packages/shared/src/ops.gen.ts \
         src/packages/shared/src/identity.gen.ts \
         src/packages/shared/src/errors.gen.ts \
@@ -449,7 +449,7 @@ tasks:
     script: |
       set -e
       bun scripts/check-gen.ts
-      bun test scripts/tests/check-gen.test.ts scripts/tests/gen-envelope.test.ts
+      bun test scripts/tests/check-gen.test.ts scripts/tests/gen-envelope.test.ts scripts/tests/gen-schema.test.ts
     env:
       RUSTUP_AUTO_INSTALL: '0'
     options:

@@ -517,8 +517,8 @@ panic 訊息預設輸出到 stdout, 會損毀 NM 訊框與 MCP NDJSON。緩解: 
 
 | 層 | 擁有者 | 內容 |
 |-------|-------|---------------|
-| 忠實基底, 每個信封與主機->擴充功能訊框各一 | `scripts/gen-envelope.ts` (規則 G1-G7、A1-A3; 寧可中止產生, 也不輸出任何比 Rust 解析器更弱的東西) | 嚴格物件, 必要欄位必填, 不發明預設值 |
-| 強制驗證器, 擴充功能實際執行的那個 | `src/packages/shared/src/envelope-asymmetries.ts` | 基底加上恰好表中的那些項目, 每項帶方向與理由; 由一個具型別裁決建構的訊框 (`policy_current`、`enroll_result`、`presence_result`) 在這裡宣告其 ok 分支, 並輸出為可辨識聯集, 所以混合其分支的訊框會讓讀取器失敗 |
+| 忠實基底, 每個信封與主機->擴充功能訊框各一 | `scripts/gen-envelope.ts` (對 Rust 輸入的規則 G1-G7、A1-A3; 寧可中止產生, 也不輸出任何比 Rust 解析器更弱的東西) 與 `scripts/gen-schema.ts` (每個驗證器都是 json-schema-to-zod 從其 schema 寫出的 Zod 原始碼, 每個型別都是 json-schema-to-typescript 對同一 schema 的讀取, 輸出的驗證器在寫入檔案前須符合規則 R1-R4) | 嚴格物件, 必要欄位必填, 不發明預設值 |
+| 強制驗證器, 擴充功能實際執行的那個 | `src/packages/shared/src/envelope-asymmetries.ts` | 基底加上恰好表中的那些項目, 每項帶方向與理由; 由一個具型別裁決建構的訊框 (`policy_current`、`enroll_result`、`presence_result`) 在這裡宣告其 ok 分支, 並輸出為其各分支的聯集, 所以混合其分支的訊框會讓讀取器失敗; 請求的 `args` 與 `policy_current` 的 `overlay` 就是從 `ops.gen.ts` 與 `policy.gen.ts` 匯入的 schema |
 | 擴充功能->主機訊框的寫入端 schema | `scripts/gen-envelope.ts` | 建構處以 `satisfies` 對照的型別; 強制執行的讀取器是 Rust serde 解析器 |
 | 閘門 (`moon run check-envelope`) | `scripts/check-envelope.ts` | 用兩個驗證器證明每個項目的探測, 把入站分類器約束在讀取器計畫內, 拒絕任何讀取器上手寫的精煉 |
 | 產生基底的行為測試 | `src/packages/shared/tests/envelope.gen.test.ts` | 未知欄位、缺少必要欄位、型別混淆、巢狀多餘欄位 |

@@ -2,8 +2,9 @@
 // args.rs) by scripts/gen-ops.ts - DO NOT EDIT. Edit the catalogue, then run
 // `moon run gen`.
 //
-// The tool catalogue, TS side. The per-op Zod validators derive from the same Rust args structs the Rust reader
-// parses, and BridgeCommand is INFERRED from them, so the compile-time types and the runtime checks cannot drift.
+// The tool catalogue, TS side. Each per-op validator is the Zod source json-schema-to-zod wrote from the one JSON
+// Schema the Rust args struct emitted, its type json-schema-to-typescript's reading of the same schema, and
+// BridgeCommand is built from them, so the compile-time types and the runtime checks have a single source.
 
 import { z } from "zod";
 import type { PolicyFieldName, PolicyValues } from "./policy.gen";
@@ -254,36 +255,141 @@ export const TOOL_GRANTS = {
   page_upload: ["fileUploadEnabled"],
 } as const satisfies Readonly<Record<OpName, readonly BooleanPolicyField[]>>;
 
+// Each tool's args as the extension receives them: the type and, below, the validator, both read from the
+// same JSON Schema the Rust args struct emitted.
+export type ListBrowsersArgs = Record<string, never>;
+
+export type TabListArgs = Record<string, never>;
+
+export interface TabFocusArgs {
+  tabId: number;
+}
+
+export interface TabOpenArgs {
+  url: string;
+}
+
+export interface TabCloseArgs {
+  tabId: number;
+}
+
+export type PageSnapshotArgs = Record<string, never>;
+
+export interface PageClickArgs {
+  ref?: string;
+  selector?: string;
+}
+
+export interface PageFillArgs {
+  ref?: string;
+  selector?: string;
+  value: string;
+}
+
+export type PageTextArgs = Record<string, never>;
+
+export type PageScreenshotArgs = Record<string, never>;
+
+export interface PageScrollArgs {
+  direction?: string;
+  pixels?: number;
+}
+
+export interface PageWaitForArgs {
+  nav?: boolean;
+  selector?: string;
+  text?: string;
+  timeoutMs?: number;
+}
+
+export interface PageEvalArgs {
+  code: string;
+}
+
+export interface PageSnapshotPreciseArgs {
+  frameId?: string;
+}
+
+export interface CookieGetArgs {
+  domain?: string;
+  name?: string;
+  url?: string;
+}
+
+export interface StorageGetArgs {
+  key?: string;
+  type?: string;
+}
+
+export interface PageNavigateArgs {
+  url: string;
+}
+
+export type PageBackArgs = Record<string, never>;
+
+export type PageForwardArgs = Record<string, never>;
+
+export type PageReloadArgs = Record<string, never>;
+
+export interface PagePressArgs {
+  keys: string;
+}
+
+export interface PageHoverArgs {
+  ref?: string;
+  selector?: string;
+}
+
+export interface PageSelectArgs {
+  ref?: string;
+  selector?: string;
+  value: string;
+}
+
+export interface ConsoleGetArgs {
+  limit?: number;
+}
+
+export interface PageHandleDialogArgs {
+  action: string;
+  promptText?: string;
+}
+
+export interface PageUploadArgs {
+  path: string;
+  selector: string;
+}
+
 // The extension parses an inbound request's args against its op's validator before dispatching, fail closed.
 export const OP_ARG_SCHEMAS = {
-  list_browsers: z.object({}).strict(),
-  tab_list: z.object({}).strict(),
+  list_browsers: z.object({}).strict() as z.ZodType<ListBrowsersArgs>,
+  tab_list: z.object({}).strict() as z.ZodType<TabListArgs>,
   tab_focus: z
     .object({ "tabId": z.number().int().gte(-9007199254740991).lte(9007199254740991) })
-    .strict(),
-  tab_open: z.object({ "url": z.string() }).strict(),
+    .strict() as z.ZodType<TabFocusArgs>,
+  tab_open: z.object({ "url": z.string() }).strict() as z.ZodType<TabOpenArgs>,
   tab_close: z
     .object({ "tabId": z.number().int().gte(-9007199254740991).lte(9007199254740991) })
-    .strict(),
-  page_snapshot: z.object({}).strict(),
+    .strict() as z.ZodType<TabCloseArgs>,
+  page_snapshot: z.object({}).strict() as z.ZodType<PageSnapshotArgs>,
   page_click: z
     .object({ "ref": z.string().optional(), "selector": z.string().optional() })
-    .strict(),
+    .strict() as z.ZodType<PageClickArgs>,
   page_fill: z
     .object({
       "ref": z.string().optional(),
       "selector": z.string().optional(),
       "value": z.string(),
     })
-    .strict(),
-  page_text: z.object({}).strict(),
-  page_screenshot: z.object({}).strict(),
+    .strict() as z.ZodType<PageFillArgs>,
+  page_text: z.object({}).strict() as z.ZodType<PageTextArgs>,
+  page_screenshot: z.object({}).strict() as z.ZodType<PageScreenshotArgs>,
   page_scroll: z
     .object({
       "direction": z.string().optional(),
       "pixels": z.number().int().gte(-9007199254740991).lte(9007199254740991).optional(),
     })
-    .strict(),
+    .strict() as z.ZodType<PageScrollArgs>,
   page_wait_for: z
     .object({
       "nav": z.boolean().optional(),
@@ -291,39 +397,45 @@ export const OP_ARG_SCHEMAS = {
       "text": z.string().optional(),
       "timeoutMs": z.number().int().gte(-9007199254740991).lte(9007199254740991).optional(),
     })
-    .strict(),
-  page_eval: z.object({ "code": z.string() }).strict(),
-  page_snapshot_precise: z.object({ "frameId": z.string().optional() }).strict(),
+    .strict() as z.ZodType<PageWaitForArgs>,
+  page_eval: z.object({ "code": z.string() }).strict() as z.ZodType<PageEvalArgs>,
+  page_snapshot_precise: z
+    .object({ "frameId": z.string().optional() })
+    .strict() as z.ZodType<PageSnapshotPreciseArgs>,
   cookie_get: z
     .object({
       "domain": z.string().optional(),
       "name": z.string().optional(),
       "url": z.string().optional(),
     })
-    .strict(),
-  storage_get: z.object({ "key": z.string().optional(), "type": z.string().optional() }).strict(),
-  page_navigate: z.object({ "url": z.string() }).strict(),
-  page_back: z.object({}).strict(),
-  page_forward: z.object({}).strict(),
-  page_reload: z.object({}).strict(),
-  page_press: z.object({ "keys": z.string() }).strict(),
+    .strict() as z.ZodType<CookieGetArgs>,
+  storage_get: z
+    .object({ "key": z.string().optional(), "type": z.string().optional() })
+    .strict() as z.ZodType<StorageGetArgs>,
+  page_navigate: z.object({ "url": z.string() }).strict() as z.ZodType<PageNavigateArgs>,
+  page_back: z.object({}).strict() as z.ZodType<PageBackArgs>,
+  page_forward: z.object({}).strict() as z.ZodType<PageForwardArgs>,
+  page_reload: z.object({}).strict() as z.ZodType<PageReloadArgs>,
+  page_press: z.object({ "keys": z.string() }).strict() as z.ZodType<PagePressArgs>,
   page_hover: z
     .object({ "ref": z.string().optional(), "selector": z.string().optional() })
-    .strict(),
+    .strict() as z.ZodType<PageHoverArgs>,
   page_select: z
     .object({
       "ref": z.string().optional(),
       "selector": z.string().optional(),
       "value": z.string(),
     })
-    .strict(),
+    .strict() as z.ZodType<PageSelectArgs>,
   console_get: z
     .object({ "limit": z.number().int().gte(-9007199254740991).lte(9007199254740991).optional() })
-    .strict(),
+    .strict() as z.ZodType<ConsoleGetArgs>,
   page_handle_dialog: z
     .object({ "action": z.string(), "promptText": z.string().optional() })
-    .strict(),
-  page_upload: z.object({ "path": z.string(), "selector": z.string() }).strict(),
+    .strict() as z.ZodType<PageHandleDialogArgs>,
+  page_upload: z
+    .object({ "path": z.string(), "selector": z.string() })
+    .strict() as z.ZodType<PageUploadArgs>,
 } as const satisfies Readonly<Record<OpName, z.ZodType>>;
 
 // Discriminated on `op`, so a consumer narrows the args to exactly the fields that tool accepts. envelope.ts
@@ -333,30 +445,52 @@ export type BridgeCommand = {
 }[OpName];
 
 // Every tool's args props, all optional; the per-op validators enforce required-ness.
+export interface OpArgs {
+  tabId?: number;
+  url?: string;
+  ref?: string;
+  selector?: string;
+  value?: string;
+  direction?: string;
+  pixels?: number;
+  nav?: boolean;
+  text?: string;
+  timeoutMs?: number;
+  code?: string;
+  frameId?: string;
+  domain?: string;
+  name?: string;
+  key?: string;
+  type?: string;
+  keys?: string;
+  limit?: number;
+  action?: string;
+  promptText?: string;
+  path?: string;
+}
+
 export const OpArgsSchema = z
   .object({
-    tabId: z.number().int().gte(-9007199254740991).lte(9007199254740991).optional(),
-    url: z.string().optional(),
-    ref: z.string().optional(),
-    selector: z.string().optional(),
-    value: z.string().optional(),
-    direction: z.string().optional(),
-    pixels: z.number().int().gte(-9007199254740991).lte(9007199254740991).optional(),
-    nav: z.boolean().optional(),
-    text: z.string().optional(),
-    timeoutMs: z.number().int().gte(-9007199254740991).lte(9007199254740991).optional(),
-    code: z.string().optional(),
-    frameId: z.string().optional(),
-    domain: z.string().optional(),
-    name: z.string().optional(),
-    key: z.string().optional(),
-    type: z.string().optional(),
-    keys: z.string().optional(),
-    limit: z.number().int().gte(-9007199254740991).lte(9007199254740991).optional(),
-    action: z.string().optional(),
-    promptText: z.string().optional(),
-    path: z.string().optional(),
+    "tabId": z.number().int().gte(-9007199254740991).lte(9007199254740991).optional(),
+    "url": z.string().optional(),
+    "ref": z.string().optional(),
+    "selector": z.string().optional(),
+    "value": z.string().optional(),
+    "direction": z.string().optional(),
+    "pixels": z.number().int().gte(-9007199254740991).lte(9007199254740991).optional(),
+    "nav": z.boolean().optional(),
+    "text": z.string().optional(),
+    "timeoutMs": z.number().int().gte(-9007199254740991).lte(9007199254740991).optional(),
+    "code": z.string().optional(),
+    "frameId": z.string().optional(),
+    "domain": z.string().optional(),
+    "name": z.string().optional(),
+    "key": z.string().optional(),
+    "type": z.string().optional(),
+    "keys": z.string().optional(),
+    "limit": z.number().int().gte(-9007199254740991).lte(9007199254740991).optional(),
+    "action": z.string().optional(),
+    "promptText": z.string().optional(),
+    "path": z.string().optional(),
   })
-  .strict();
-
-export type OpArgs = z.infer<typeof OpArgsSchema>;
+  .strict() as z.ZodType<OpArgs>;

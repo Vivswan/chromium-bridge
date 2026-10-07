@@ -19,18 +19,18 @@ export type AsymmetryDirection = "widen" | "narrow";
 export type Change =
   /** Constraints on a string node (the Rust side has a plain String). */
   | { change: "string"; minLength?: number; maxLength?: number; pattern?: string }
-  /** A string arm beside a numeric node: `z.union([<node>, z.string()])`. */
+  /** A string arm beside a numeric node: a union of the node and a plain string. */
   | { change: "string-arm" }
   /** serde's adjacently tagged enum (one object variant per `kind` const, all with the same `value` shape)
-   * spelled as one object with `kind: z.enum([...])`. */
+   * spelled as one object whose `kind` is an enum of the tags. */
   | { change: "tag-union-as-enum-object" }
-  /** The node is replaced by a schema another generated module already owns; the generator cross-checks an
-   * object node's field inventory and field types against that schema. */
+  /** The node is the schema another generated module exports, imported by name (`symbol` from `from`; its type
+   * is the symbol minus `Schema`); the generator holds the Rust node's field inventory and field types to it. */
   | { change: "generated-schema"; symbol: string; from: string }
   /** A whole frame (the `$` path) whose boolean `discriminant` selects which Option fields a host-emitted frame
-   * carries: the generator emits one arm per value as a `z.discriminatedUnion`, each arm requiring its
-   * `required` fields and refusing its `forbidden` ones. Applied after the field-level changes, so an arm
-   * inherits them. */
+   * carries: the generator emits one arm per value, each arm requiring its `required` fields and refusing its
+   * `forbidden` ones (a `false` schema, so a present value fails and absence passes). Applied after the
+   * field-level changes, so an arm inherits them. */
   | {
       change: "ok-split";
       discriminant: string;
@@ -77,7 +77,7 @@ export const READER_RULES = [
     rule: "safe-integers",
     direction: "narrow",
     reason:
-      "Every integer is a JS-safe integer (z.number().int()): above 2^53 - 1 a JS number cannot represent " +
+      "Every integer is a JS-safe integer (zod's reading of `integer`): above 2^53 - 1 a JS number cannot represent " +
       "every value, so two consecutive host u64 values could read equal here.",
   },
 ] as const satisfies readonly { rule: string; direction: AsymmetryDirection; reason: string }[];

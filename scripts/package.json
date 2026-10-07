@@ -8,11 +8,17 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@apidevtools/json-schema-ref-parser": "14.2.1",
     "@babel/parser": "^7.29.8",
     "@resvg/resvg-js": "^2.6.2",
     "@types/bun": "^1.4.0",
     "@types/mvdan-sh": "0.10.9",
+    "change-case": "^5.4.4",
+    "json-schema-to-typescript": "^15.0.4",
+    "json-schema-to-zod": "2.8.1",
+    "json-schema-traverse": "1.0.0",
     "mvdan-sh": "0.10.1",
+    "neotraverse": "1.0.1",
     "oxc-parser": "^0.152.0",
     "remark-parse": "^11.0.0",
     "unified": "^11.0.5",

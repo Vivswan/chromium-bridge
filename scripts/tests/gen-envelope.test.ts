@@ -1,11 +1,11 @@
-// The fail-closed generation rules (G1-G7, A1-A2) of scripts/gen-envelope.ts,
-// exercised against inputs that would otherwise turn into WEAKER Zod
-// validators than the Rust contract: objects without an explicit type,
-// unconstrained arrays, keywords the generator does not model, undiscriminated
-// oneOf, unresolved $refs, an unplanned Rust frame, an asymmetry entry on a
-// node it cannot apply to. Every one of these must abort generation, never
-// emit. The happy paths mirror the real schemars output shapes, and the
-// emitted source spellings are pinned so the generated file stays stable.
+// The fail-closed generation rules (G1-G7, A1-A3) of scripts/gen-envelope.ts,
+// exercised against inputs that would otherwise turn into WEAKER validators
+// than the Rust contract: objects without an explicit type, unconstrained
+// arrays, keywords the generator does not admit, undiscriminated oneOf,
+// unresolved $refs, an unplanned Rust frame, an asymmetry entry on a node it
+// cannot apply to. Every one of these must abort generation, never emit. The
+// happy paths mirror the real schemars output shapes, and the prepared JSON
+// Schema is pinned where prepare rewrites it.
 
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
@@ -13,12 +13,11 @@ import {
   applyAsymmetries,
   assertFramePlan,
   assertGeneratedMatches,
-  assertLibraryReadingMatches,
-  convert,
   prepare,
   splitFlattenedCommand,
   splitTaggedUnionSchema,
 } from "../gen-envelope";
+import { emittedValidator, importedNode } from "../gen-schema";
 
 const strictObject = (properties: Record<string, unknown>, required: string[]) => ({
   type: "object",
@@ -33,7 +32,10 @@ describe("prepare accepts the shapes schemars actually emits", () => {
       { id: { type: "integer", format: "uint64", minimum: 0 }, op: { type: "string" } },
       ["id", "op"],
     );
-    expect(prepare(schema, "$")).toEqual(schema);
+    // schemars' integer-width format is stripped: inert beside the safe-integers rule, unread by zod.
+    expect(prepare(schema, "$")).toEqual(
+      strictObject({ id: { type: "integer", minimum: 0 }, op: { type: "string" } }, ["id", "op"]),
+    );
   });
 
   test("annotations and defaults are stripped; a FIELD named like one is not", () => {
@@ -109,7 +111,6 @@ describe("prepare aborts on anything that would convert weaker (G1/G3/G4/G5)", (
   test("serde's Option<Vec<_>> null-arm beside an array is inert and allowed", () => {
     const optionVec = { type: ["array", "null"], items: { type: "string" } };
     expect(prepare(optionVec, "$")).toEqual(optionVec);
-    expect(convert(prepare(optionVec, "$"), "t")).toBe("z.union([z.array(z.string()), z.null()])");
   });
 
   test("G5: keywords the generator does not model", () => {
@@ -161,10 +162,12 @@ describe("prepare aborts on anything that would convert weaker (G1/G3/G4/G5)", (
   });
 
   test("G5: keywords in positions the emitter does not model", () => {
-    // format and bounds constrain only numeric nodes; const only strings.
+    // format belongs to an integer node only (a string format, or an integer claim on a plain number, would go
+    // unenforced); bounds constrain only numeric nodes; const only strings.
     expect(() => prepare({ type: "string", format: "uuid" }, "$")).toThrow("G5");
-    // A string arm beside a numeric one would still give format a
-    // string-format meaning the emitter does not model.
+    expect(() => prepare({ type: "number", format: "int64" }, "$")).toThrow("G5");
+    // A string arm beside the integer arm would give format a string-format meaning.
+    expect(() => prepare({ type: ["integer", "string"], format: "uuid" }, "$")).toThrow("G5");
     expect(() => prepare({ type: ["string", "number"], format: "uuid" }, "$")).toThrow("G5");
     expect(() => prepare({ type: "string", minimum: 1 }, "$")).toThrow("G5");
     expect(() => prepare({ type: "integer", minimum: "0" }, "$")).toThrow("G5");
@@ -183,86 +186,12 @@ describe("prepare aborts on anything that would convert weaker (G1/G3/G4/G5)", (
     // The Option null-arm beside a numeric type is inert and stays allowed.
     expect(prepare({ type: ["integer", "null"], format: "int64" }, "$")).toEqual({
       type: ["integer", "null"],
-      format: "int64",
     });
   });
 
   test("required naming a field that does not exist", () => {
     expect(() => prepare(strictObject({ a: { type: "string" } }, ["a", "ghost"]), "$")).toThrow(
       "non-property",
-    );
-  });
-});
-
-describe("convert re-asserts strictness on the emitted source", () => {
-  test("every z.object( carries .strict(), including nested ones", () => {
-    const nested = strictObject({ inner: strictObject({ a: { type: "string" } }, ["a"]) }, [
-      "inner",
-    ]);
-    const code = convert(prepare(nested, "$"), "nested");
-    expect(code).toContain(".strict()");
-    expect(code.split("z.object(").length).toBe(code.split(".strict()").length);
-  });
-
-  test("the emitted validator rejects unknown and missing fields at runtime", async () => {
-    const code = convert(prepare(strictObject({ a: { type: "string" } }, ["a"]), "$"), "t");
-    const { z } = await import("zod");
-    // Test-only evaluation of our own just-generated source.
-    const schema = new Function("z", `return ${code};`)(z);
-    expect(schema.safeParse({ a: "x" }).success).toBe(true);
-    expect(schema.safeParse({ a: "x", b: 1 }).success).toBe(false);
-    expect(schema.safeParse({}).success).toBe(false);
-    expect(schema.safeParse({ a: 7 }).success).toBe(false);
-  });
-});
-
-describe("the emitted source spellings are pinned (keeps the generated file stable)", () => {
-  test("objects: quoted keys, .optional() on non-required fields, .strict()", () => {
-    const schema = strictObject(
-      {
-        id: { type: "integer", format: "uint64", minimum: 0 },
-        error: { type: ["string", "null"] },
-        kind: { type: "string", const: "hash" },
-        ok: { type: "boolean" },
-      },
-      ["id", "kind"],
-    );
-    expect(convert(prepare(schema, "$"), "t")).toBe(
-      'z.object({ "id": z.number().int().gte(0), "error": z.union([z.string(), z.null()]).optional(), ' +
-        '"kind": z.literal("hash"), "ok": z.boolean().optional() }).strict()',
-    );
-  });
-
-  test("arrays, unions, bounds, the empty object and the any-schema (unknown, so consumers narrow)", () => {
-    expect(convert(prepare({ type: "array", items: strictObject({}, []) }, "$"), "t")).toBe(
-      "z.array(z.object({}).strict())",
-    );
-    // A length floor survives, on the array arm alone of an Option<Vec<_>>.
-    expect(
-      convert(
-        prepare({ type: ["array", "null"], items: { type: "string" }, minItems: 1 }, "$"),
-        "t",
-      ),
-    ).toBe("z.union([z.array(z.string()).min(1), z.null()])");
-    // A one-branch union is the branch itself.
-    expect(convert(prepare({ anyOf: [{ type: "string" }] }, "$"), "t")).toBe("z.string()");
-    expect(convert(prepare({ anyOf: [{ type: "string" }, { type: "null" }] }, "$"), "t")).toBe(
-      "z.union([z.string(), z.null()])",
-    );
-    expect(convert(prepare({ type: "number", format: "int64", maximum: 10 }, "$"), "t")).toBe(
-      "z.number().int().lte(10)",
-    );
-    expect(convert(prepare({}, "$"), "t")).toBe("z.unknown()");
-  });
-
-  test("the override substitutes a named schema for the matched node", () => {
-    const prepared = prepare(
-      strictObject({ entry: strictObject({ b: { type: "string" } }, ["b"]) }, ["entry"]),
-      "$",
-    ) as { properties: Record<string, unknown> };
-    const entry = prepared.properties.entry;
-    expect(convert(prepared, "t", (node) => (node === entry ? "NamedSchema" : undefined))).toBe(
-      'z.object({ "entry": NamedSchema }).strict()',
     );
   });
 });
@@ -314,11 +243,18 @@ describe("splitFlattenedCommand (G6)", () => {
     });
     expect([...commands.keys()]).toEqual(["tab_list", "tab_focus"]);
     expect(commands.get("tab_focus")).toEqual(tabFocusArgs);
-    // The envelope then converts exactly as the untyped request always did.
-    expect(convert(prepare(envelope, "$"), "BridgeReqWireSchema")).toBe(
-      'z.object({ "args": z.unknown(), "browser": z.union([z.string(), z.null()]).optional(), ' +
-        '"id": z.number().int().gte(0), "op": z.string() }).strict()',
-    );
+    // The envelope then prepares exactly as the untyped request always did.
+    expect(prepare(envelope, "$")).toEqual({
+      type: "object",
+      properties: {
+        args: {},
+        browser: { type: ["string", "null"] },
+        id: { type: "integer", minimum: 0 },
+        op: { type: "string" },
+      },
+      required: ["id", "args", "op"],
+      additionalProperties: false,
+    });
   });
 
   test("refuses a request that is not a flattened tagged union", () => {
@@ -380,10 +316,9 @@ describe("splitFlattenedCommand (G6)", () => {
 });
 
 describe("prepare models string enums (G5 placement)", () => {
-  test("a string enum survives and emits z.enum; anything else is refused", () => {
+  test("a string enum survives; anything else is refused", () => {
     const kind = { type: "string", enum: ["hash", "label"] };
     expect(prepare(kind, "$")).toEqual(kind);
-    expect(convert(prepare(kind, "$"), "t")).toBe('z.enum(["hash", "label"])');
     for (const bad of [
       { type: "string", enum: [] },
       { type: "string", enum: ["a", "a"] },
@@ -399,11 +334,13 @@ describe("prepare models string enums (G5 placement)", () => {
 // The asymmetry pass: the table's changes applied at their paths, the reader rules everywhere, and every way
 // an entry can fail to apply (A1). The fixtures are the prepared shapes the Rust readers have today.
 describe("applyAsymmetries", () => {
+  // A control frame as prepare leaves it: a required integer, two Option strings, a tagged union, and an
+  // Option object (serde's Option<Struct>: an anyOf with a null branch).
   const reader = strictObject(
     {
-      id: { type: "integer", format: "uint64", minimum: 0 },
+      id: { type: "integer", minimum: 0 },
       error: { type: ["string", "null"] },
-      label: { type: "string" },
+      label: { type: ["string", "null"] },
       anchor: {
         anyOf: [
           strictObject({ kind: { type: "string", const: "hash" }, value: { type: "string" } }, [
@@ -426,21 +363,48 @@ describe("applyAsymmetries", () => {
     ({ direction: "narrow", reason: "r", changes, probes: {} }) as Parameters<
       typeof applyAsymmetries
     >[2][string];
+  const loose = (properties: Record<string, unknown>, required: string[]) => ({
+    ...strictObject(properties, required),
+    additionalProperties: true,
+  });
+  const reads = (schema: unknown) => emittedValidator(schema);
 
-  test("the reader rules: null arms dropped everywhere, objects loose on a control frame only", () => {
-    const loose = applyAsymmetries(reader, "t", {}, true).schema;
-    expect(convert(loose, "t")).toBe(
-      'z.object({ "id": z.number().int().gte(0), "error": z.string().optional(), "label": z.string().optional(), ' +
-        '"anchor": z.union([z.object({ "kind": z.literal("hash"), "value": z.string() }).catchall(z.unknown()), ' +
-        'z.object({ "kind": z.literal("label"), "value": z.string() }).catchall(z.unknown())]), ' +
-        '"overlay": z.object({ "cdpMode": z.boolean().optional() }).catchall(z.unknown()).optional() }).catchall(z.unknown())',
+  test("the reader rules: null arms dropped on every Option, objects loose on a control frame only", () => {
+    const control = applyAsymmetries(reader, "t", {}, true).schema;
+    expect(control).toEqual(
+      loose(
+        {
+          id: { type: "integer", minimum: 0 },
+          error: { type: "string" },
+          label: { type: "string" },
+          anchor: {
+            anyOf: [
+              loose({ kind: { type: "string", const: "hash" }, value: { type: "string" } }, [
+                "kind",
+                "value",
+              ]),
+              loose({ kind: { type: "string", const: "label" }, value: { type: "string" } }, [
+                "kind",
+                "value",
+              ]),
+            ],
+          },
+          overlay: loose({ cdpMode: { type: "boolean" } }, []),
+        },
+        ["id", "anchor"],
+      ),
     );
-    const strict = applyAsymmetries(reader, "t", {}, false).schema;
-    expect(convert(strict, "t")).toContain('"error": z.string().optional()');
-    expect(convert(strict, "t")).not.toContain("catchall");
+    const envelope = applyAsymmetries(reader, "t", {}, false).schema as {
+      properties: Record<string, unknown>;
+      additionalProperties: unknown;
+    };
+    expect(envelope.additionalProperties).toBe(false);
+    expect(envelope.properties.error).toEqual({ type: "string" });
+    expect(JSON.stringify(envelope)).not.toContain('"additionalProperties":true');
   });
 
-  test("the changes, each at its path, and the emitted spellings", () => {
+  test("the changes, each at its path, as plain JSON Schema; another module's schema stands in as an import", () => {
+    const overlay = { from: "./policy.gen", symbol: "OverlaySchema", type: "Overlay" };
     const { schema, replacements } = applyAsymmetries(
       reader,
       "t",
@@ -457,18 +421,30 @@ describe("applyAsymmetries", () => {
       },
       true,
     );
-    expect(convert(schema, "t")).toBe(
-      'z.object({ "id": z.union([z.number().int().gte(0), z.string()]), "error": z.string().optional(), ' +
-        '"label": z.string().min(1).max(32).regex(/^[a-z\\/]+$/).optional(), ' +
-        '"anchor": z.object({ "kind": z.enum(["hash", "label"]), "value": z.string().min(1) }).catchall(z.unknown()), ' +
-        '"overlay": OverlaySchema.optional() }).catchall(z.unknown())',
+    expect(schema).toEqual(
+      loose(
+        {
+          id: { anyOf: [{ type: "integer", minimum: 0 }, { type: "string" }] },
+          error: { type: "string" },
+          label: { type: "string", minLength: 1, maxLength: 32, pattern: "^[a-z/]+$" },
+          anchor: loose(
+            {
+              kind: { type: "string", enum: ["hash", "label"] },
+              value: { type: "string", minLength: 1 },
+            },
+            ["kind", "value"],
+          ),
+          // An import: the loose-frames rule has nothing to reach, the owner's strictness is its own.
+          overlay: importedNode(overlay),
+        },
+        ["id", "anchor"],
+      ),
     );
     // The replacement keeps the Rust node (post null-arm drop) for the A2 cross-check.
     expect(replacements).toEqual([
       {
         path: "$.properties.overlay",
-        symbol: "OverlaySchema",
-        from: "./policy.gen",
+        imported: overlay,
         rust: strictObject({ cdpMode: { type: ["boolean", "null"] } }, []),
       },
     ]);
@@ -504,7 +480,7 @@ describe("applyAsymmetries", () => {
           { change: "string" },
         ]),
       },
-      "already a generated-schema replacement",
+      "already stands for an imported schema",
     ],
   ];
   test.each(refused)("%s is refused", (_, entries, message) => {
@@ -513,7 +489,7 @@ describe("applyAsymmetries", () => {
     ).toThrow(message);
   });
 
-  test("an ok-split emits a discriminated union whose arms require and refuse exactly the declared fields (A3)", () => {
+  test("an ok-split is a union whose arms require and refuse exactly the declared fields (A3)", () => {
     // The field-level change (min 1 on label) is applied before the split, so both arms inherit it.
     const verdict = strictObject(
       {
@@ -536,11 +512,29 @@ describe("applyAsymmetries", () => {
       },
       true,
     );
-    expect(convert(schema, "t")).toBe(
-      'z.discriminatedUnion("ok", [' +
-        'z.object({ "ok": z.literal(true), "label": z.string().min(1), "error": z.undefined().optional() }).catchall(z.unknown()), ' +
-        'z.object({ "ok": z.literal(false), "label": z.undefined().optional(), "error": z.string() }).catchall(z.unknown())])',
-    );
+    expect(schema).toEqual({
+      anyOf: [
+        loose(
+          {
+            ok: { type: "boolean", const: true },
+            label: { type: "string", minLength: 1 },
+            error: false,
+          },
+          ["ok", "label"],
+        ),
+        loose({ ok: { type: "boolean", const: false }, label: false, error: { type: "string" } }, [
+          "ok",
+          "error",
+        ]),
+      ],
+    });
+    // The library reads a forbidden field as "absent or nothing": a present value, null included, fails the arm.
+    const reading = reads(schema);
+    expect(reading.safeParse({ ok: true, label: "x" }).success).toBe(true);
+    expect(reading.safeParse({ ok: false, error: "e", extra: 1 }).success).toBe(true);
+    expect(reading.safeParse({ ok: true }).success).toBe(false);
+    expect(reading.safeParse({ ok: true, label: "x", error: "e" }).success).toBe(false);
+    expect(reading.safeParse({ ok: false, error: "e", label: null }).success).toBe(false);
     for (const [why, arms] of [
       ["one arm only", [{ when: true, required: [], forbidden: [] }]],
       [
@@ -560,8 +554,8 @@ describe("applyAsymmetries", () => {
     ] as const) {
       expect(() => applyAsymmetries(verdict, "t", { $: split(arms) }, true), why).toThrow("(A3)");
     }
-    // Paired with a generated-schema replacement the frame has no arms to split, and the replacement's early
-    // return would otherwise skip the split and every refusal above.
+    // Paired with a generated-schema replacement the frame has no arms to split, and the import's early return
+    // would otherwise skip the split and every refusal above.
     expect(() =>
       applyAsymmetries(
         verdict,
@@ -623,20 +617,25 @@ describe("applyAsymmetries", () => {
       ),
     ).toThrow("one content field with one schema");
   });
+
   test("a required nullable property and nullable array items keep null; only an optional property drops it", () => {
-    const reader = {
-      type: "object",
-      additionalProperties: false,
-      properties: {
+    const reader = strictObject(
+      {
         values: { type: "array", items: { type: ["string", "null"] } },
         label: { type: ["string", "null"] },
         note: { type: ["string", "null"] },
       },
-      required: ["values", "label"],
-    };
-    expect(convert(applyAsymmetries(reader, "t", {}, false).schema, "t")).toBe(
-      'z.object({ "values": z.array(z.union([z.string(), z.null()])), "label": z.union([z.string(), z.null()]), ' +
-        '"note": z.string().optional() }).strict()',
+      ["values", "label"],
+    );
+    expect(applyAsymmetries(reader, "t", {}, false).schema).toEqual(
+      strictObject(
+        {
+          values: { type: "array", items: { type: ["string", "null"] } },
+          label: { type: ["string", "null"] },
+          note: { type: "string" },
+        },
+        ["values", "label"],
+      ),
     );
   });
 });
@@ -676,8 +675,7 @@ describe("assertFramePlan (G7)", () => {
 describe("assertGeneratedMatches (A2)", () => {
   const replacement = (rust: unknown) => ({
     path: "$.properties.overlay",
-    symbol: "S",
-    from: "./x",
+    imported: { from: "./x", symbol: "S", type: "S" },
     rust,
   });
   const rustOverlay = {
@@ -714,53 +712,15 @@ describe("assertGeneratedMatches (A2)", () => {
       additionalProperties: false,
       properties: { cdpMode: { type: ["boolean", "null"] } },
     };
-    const replacement = { path: "$.properties.overlay", symbol: "S", from: "./x", rust };
     expect(() =>
-      assertGeneratedMatches(replacement, z.strictObject({ cdpMode: z.boolean().optional() })),
+      assertGeneratedMatches(
+        replacement(rust),
+        z.strictObject({ cdpMode: z.boolean().optional() }),
+      ),
     ).not.toThrow();
     expect(() =>
-      assertGeneratedMatches(replacement, z.looseObject({ cdpMode: z.boolean().optional() })),
+      assertGeneratedMatches(replacement(rust), z.looseObject({ cdpMode: z.boolean().optional() })),
     ).toThrow("admits unknown fields where the Rust node refuses them");
-  });
-});
-
-// The hand emitter and z.fromJSONSchema are two readings of one node; the oracle holds the emitted schema to
-// the library's, so an integer claim the emitter drops (or invents) is a diff, not a quietly weaker parser.
-describe("assertLibraryReadingMatches (A4)", () => {
-  const node = strictObject(
-    {
-      id: { type: "integer", format: "uint64", minimum: 0 },
-      name: { type: ["string", "null"] },
-      tags: { type: "array", items: { type: "string", enum: ["a", "b"] } },
-    },
-    ["id", "tags"],
-  );
-  test("the pinned emission agrees with the library; one that loses the integer claim or the strict closing is refused", () => {
-    const agreeing = z
-      .object({
-        id: z.number().int().gte(0),
-        name: z.union([z.string(), z.null()]).optional(),
-        tags: z.array(z.enum(["a", "b"])),
-      })
-      .strict();
-    expect(() => assertLibraryReadingMatches("X", node, agreeing)).not.toThrow();
-    const widened = z
-      .object({
-        id: z.number().gte(0),
-        name: z.union([z.string(), z.null()]).optional(),
-        tags: z.array(z.enum(["a", "b"])),
-      })
-      .strict();
-    expect(() => assertLibraryReadingMatches("X", node, widened)).toThrow(
-      /^gen-envelope: X: .*\(A4\)$/,
-    );
-    // A stripping object describes the same OUTPUT as a strict one; the oracle reads the input side.
-    const stripping = z.object({
-      id: z.number().int().gte(0),
-      name: z.union([z.string(), z.null()]).optional(),
-      tags: z.array(z.enum(["a", "b"])),
-    });
-    expect(() => assertLibraryReadingMatches("X", node, stripping)).toThrow(/\(A4\)$/);
   });
 });
 
@@ -775,32 +735,61 @@ describe("splitTaggedUnionSchema", () => {
     properties: { type: { type: "string", const: "b" } },
     required: ["type"],
   };
-  const defs = { X: { type: "string" } };
+  const defs = { X: { type: "string", minLength: 5 } };
   const withX = (x: unknown) => ({
     oneOf: [{ ...variantA, properties: { ...variantA.properties, x } }, variantB],
     $defs: defs,
   });
-  const partX = (schema: unknown) =>
-    (splitTaggedUnionSchema(schema).get("a") as { properties: { x: unknown } }).properties.x;
+  const partX = async (schema: unknown) =>
+    ((await splitTaggedUnionSchema(schema)).get("a") as { properties: { x: unknown } }).properties
+      .x;
 
-  test("splits per tag and inlines $defs indirection (an annotation beside the $ref is dropped)", () => {
-    const parts = splitTaggedUnionSchema({ oneOf: [variantA, variantB], $defs: defs });
+  test("splits per tag and dereferences the $defs indirection; a description beside the $ref rides into the target", async () => {
+    const parts = await splitTaggedUnionSchema({ oneOf: [variantA, variantB], $defs: defs });
     expect([...parts.keys()]).toEqual(["a", "b"]);
-    expect(partX({ oneOf: [variantA, variantB], $defs: defs })).toEqual({ type: "string" });
-    expect(partX(withX({ $ref: "#/$defs/X", description: "doc" }))).toEqual({ type: "string" });
+    expect(await partX({ oneOf: [variantA, variantB], $defs: defs })).toEqual(defs.X);
+    expect(await partX(withX({ $ref: "#/$defs/X", description: "doc" }))).toEqual({
+      description: "doc",
+      ...defs.X,
+    });
   });
 
-  test("refuses non-unions, tagless variants, duplicate tags, and a $ref with constraint siblings", () => {
-    expect(() => splitTaggedUnionSchema({ type: "object" })).toThrow("oneOf");
-    expect(() => splitTaggedUnionSchema({ oneOf: [{ type: "object", properties: {} }] })).toThrow(
-      "type",
+  // The dereference library merges a $ref's siblings into the target with the sibling winning, so a constraint
+  // beside a $ref would silently rewrite the referenced schema: a sibling minLength: 1 over the target's
+  // minLength: 5 admits "a", a sibling type over the target's type replaces it.
+  test("G4: a $ref with a constraint sibling is refused before dereferencing, wherever the document holds it", async () => {
+    await expect(
+      splitTaggedUnionSchema(withX({ $ref: "#/$defs/X", minLength: 1 })),
+    ).rejects.toThrow("(G4)");
+    await expect(
+      splitTaggedUnionSchema(withX({ $ref: "#/$defs/X", type: "integer" })),
+    ).rejects.toThrow("(G4)");
+    // Under a keyword no schema walk knows (a 2020-12 container), reached through a plain $ref: the
+    // dereference still resolves and merges it, so the check must see every object of the document.
+    await expect(
+      splitTaggedUnionSchema({
+        ...withX({ $ref: "#/$defs/Y/prefixItems/0" }),
+        $defs: {
+          ...defs,
+          Y: { type: "array", prefixItems: [{ $ref: "#/$defs/X", minLength: 1 }] },
+        },
+      }),
+    ).rejects.toThrow("(G4)");
+  });
+
+  test("refuses non-unions, tagless variants, duplicate tags, and an unresolvable $ref; an external $ref stays for prepare to refuse", async () => {
+    await expect(splitTaggedUnionSchema({ type: "object" })).rejects.toThrow("oneOf");
+    await expect(
+      splitTaggedUnionSchema({ oneOf: [{ type: "object", properties: {} }] }),
+    ).rejects.toThrow("type");
+    await expect(splitTaggedUnionSchema({ oneOf: [variantB, variantB] })).rejects.toThrow(
+      "duplicate",
     );
-    expect(() => splitTaggedUnionSchema({ oneOf: [variantB, variantB] })).toThrow("duplicate");
-    expect(() => splitTaggedUnionSchema(withX({ $ref: "#/$defs/X", minLength: 1 }))).toThrow(
-      "siblings",
+    await expect(splitTaggedUnionSchema(withX({ $ref: "#/$defs/Missing" }))).rejects.toThrow(
+      "Missing",
     );
-    expect(() => splitTaggedUnionSchema(withX({ $ref: "#/$defs/Missing" }))).toThrow(
-      "unresolvable",
-    );
+    const external = await partX(withX({ $ref: "other.json#/X" }));
+    expect(external).toEqual({ $ref: "other.json#/X" });
+    expect(() => prepare(external, "$")).toThrow("G4");
   });
 });

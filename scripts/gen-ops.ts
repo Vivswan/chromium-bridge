@@ -11,8 +11,21 @@ import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { pascalCase } from "change-case";
 import { z } from "zod";
-import { convert, prepare } from "./gen-envelope";
+import { prepare } from "./gen-envelope";
+import {
+  assertSchemaRules,
+  emitFromRust,
+  type JsonObject,
+  opArgsSchema,
+  policyDocSchema,
+  policyOverlaySchema,
+  policyValuesSchema,
+  schemaExpression,
+  schemaSource,
+  typeSource,
+} from "./gen-schema";
 
 interface ContractTool {
   name: string;
@@ -66,15 +79,7 @@ interface Contract {
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-// `-q` keeps cargo's own output off the pipe; a compile error still lands on stderr and fails loudly here.
-const emitted = Bun.spawnSync(
-  ["cargo", "run", "--frozen", "-q", "-p", "chromium-bridge-core", "--example", "emit_contract"],
-  { cwd: root, stderr: "inherit" },
-);
-if (!emitted.success) {
-  throw new Error(`gen-ops: cargo emit_contract failed with status ${emitted.exitCode}`);
-}
-const contract = JSON.parse(emitted.stdout.toString()) as Contract;
+const contract = emitFromRust(root, "emit_contract") as Contract;
 
 // Bare when a valid JS identifier, quoted otherwise: Biome's quoteProperties "as-needed" would reformat anything else.
 const emitKey = (key: string): string =>
@@ -104,43 +109,27 @@ const meta = contract.tools
   .join("\n");
 
 // Each tool's args schema goes through the envelope generator's fail-closed rules (scripts/gen-envelope.ts), so a
-// struct the rules cannot model faithfully aborts generation here too.
-const preparedArgs = new Map<string, Record<string, unknown>>();
+// struct the rules cannot model faithfully aborts generation here too; the emitted validator of each is then
+// held to the schema rules (scripts/gen-schema.ts) before anything is written.
+const preparedArgs = new Map<string, JsonObject>();
 for (const t of contract.tools) {
   const prepared = prepare(t.argsSchema, `$.tools.${t.name}.args`);
   if (typeof prepared !== "object" || prepared === null || Array.isArray(prepared)) {
     throw new Error(`gen-ops: ${t.name} args schema did not prepare to an object schema`);
   }
-  preparedArgs.set(t.name, prepared as Record<string, unknown>);
+  assertSchemaRules(`${t.name} args`, prepared, false);
+  preparedArgs.set(t.name, prepared as JsonObject);
 }
-const preparedArgsOf = (t: ContractTool): Record<string, unknown> => {
-  const prepared = preparedArgs.get(t.name);
-  if (prepared === undefined) throw new Error(`gen-ops: no prepared args for ${t.name}`);
-  return prepared;
-};
-
-const argSchemas = contract.tools
-  .map((t) => `  ${emitKey(t.name)}: ${convert(preparedArgsOf(t), `${t.name} args`)},`)
+const argsTypeName = (op: string) => `${pascalCase(op)}Args`;
+const argsTypes = (
+  await Promise.all([...preparedArgs].map(([op, schema]) => typeSource(argsTypeName(op), schema)))
+).join("\n\n");
+const argSchemas = [...preparedArgs]
+  .map(([op, schema]) => `  ${emitKey(op)}: ${schemaExpression(argsTypeName(op), schema)},`)
   .join("\n");
 
-// A prop declared by two tools must agree on its schema, otherwise the OpArgs union is ill-formed.
-const unionProps = new Map<string, unknown>();
-for (const t of contract.tools) {
-  const props = preparedArgsOf(t).properties as Record<string, unknown>;
-  for (const [k, prop] of Object.entries(props)) {
-    const prior = unionProps.get(k);
-    if (prior !== undefined && JSON.stringify(prior) !== JSON.stringify(prop)) {
-      throw new Error(
-        `gen-ops: conflicting schemas for arg ${JSON.stringify(k)}: ` +
-          `${JSON.stringify(prior)} vs ${JSON.stringify(prop)}`,
-      );
-    }
-    unionProps.set(k, prop);
-  }
-}
-const opArgsFields = [...unionProps.entries()]
-  .map(([k, prop]) => `  ${emitKey(k)}: ${convert(prop, `OpArgs.${k}`)}.optional(),`)
-  .join("\n");
+const opArgs = opArgsSchema(preparedArgs);
+assertSchemaRules("OpArgs", opArgs, false);
 
 // Emitted with a compile-time pin against the policy contract, so a grant can only ever name a boolean policy field.
 const grants = contract.tools
@@ -151,8 +140,9 @@ const opsOut = `// GENERATED from the Rust core (src/packages/core/src/tools/cat
 // args.rs) by scripts/gen-ops.ts - DO NOT EDIT. Edit the catalogue, then run
 // \`moon run gen\`.
 //
-// The tool catalogue, TS side. The per-op Zod validators derive from the same Rust args structs the Rust reader
-// parses, and BridgeCommand is INFERRED from them, so the compile-time types and the runtime checks cannot drift.
+// The tool catalogue, TS side. Each per-op validator is the Zod source json-schema-to-zod wrote from the one JSON
+// Schema the Rust args struct emitted, its type json-schema-to-typescript's reading of the same schema, and
+// BridgeCommand is built from them, so the compile-time types and the runtime checks have a single source.
 
 import { z } from "zod";
 import type { PolicyFieldName, PolicyValues } from "./policy.gen";
@@ -198,6 +188,10 @@ export const TOOL_GRANTS = {
 ${grants}
 } as const satisfies Readonly<Record<OpName, readonly BooleanPolicyField[]>>;
 
+// Each tool's args as the extension receives them: the type and, below, the validator, both read from the
+// same JSON Schema the Rust args struct emitted.
+${argsTypes}
+
 // The extension parses an inbound request's args against its op's validator before dispatching, fail closed.
 export const OP_ARG_SCHEMAS = {
 ${argSchemas}
@@ -210,13 +204,9 @@ export type BridgeCommand = {
 }[OpName];
 
 // Every tool's args props, all optional; the per-op validators enforce required-ness.
-export const OpArgsSchema = z
-  .object({
-${opArgsFields}
-  })
-  .strict();
+${await typeSource("OpArgs", opArgs)}
 
-export type OpArgs = z.infer<typeof OpArgsSchema>;
+${schemaSource("OpArgsSchema", "OpArgs", opArgs)}
 `;
 
 writeFileSync(join(root, "src/packages/shared/src/ops.gen.ts"), opsOut);
@@ -545,25 +535,7 @@ interface EnclaveContract {
   };
 }
 
-const enclaveEmitted = Bun.spawnSync(
-  [
-    "cargo",
-    "run",
-    "--frozen",
-    "-q",
-    "-p",
-    "chromium-bridge-core",
-    "--example",
-    "emit_enclave_contract",
-  ],
-  { cwd: root, stderr: "inherit" },
-);
-if (!enclaveEmitted.success) {
-  throw new Error(
-    `gen-ops: cargo emit_enclave_contract failed with status ${enclaveEmitted.exitCode}`,
-  );
-}
-const enclave = JSON.parse(enclaveEmitted.stdout.toString()) as EnclaveContract;
+const enclave = emitFromRust(root, "emit_enclave_contract") as EnclaveContract;
 
 // Structural sanity only; anything malformed would generate a silently weaker verifier, so generation fails.
 if (
@@ -796,25 +768,7 @@ interface PolicyContract {
   docDefaults: { v: number; revision: number; touched: unknown[] };
 }
 
-const policyEmitted = Bun.spawnSync(
-  [
-    "cargo",
-    "run",
-    "--frozen",
-    "-q",
-    "-p",
-    "chromium-bridge-core",
-    "--example",
-    "emit_policy_contract",
-  ],
-  { cwd: root, stderr: "inherit" },
-);
-if (!policyEmitted.success) {
-  throw new Error(
-    `gen-ops: cargo emit_policy_contract failed with status ${policyEmitted.exitCode}`,
-  );
-}
-const policy = JSON.parse(policyEmitted.stdout.toString()) as PolicyContract;
+const policy = emitFromRust(root, "emit_policy_contract") as PolicyContract;
 
 // Structural sanity only; anything malformed would generate a silently weaker validator, so generation fails.
 if (
@@ -883,27 +837,32 @@ if (policy.docDefaults.v !== policy.docVersion) {
   throw new Error("gen-ops: the default policy document disagrees with docVersion");
 }
 
-// The emitted default must already inhabit the field's Zod shape, or the validator would reject the defaults.
-const policyZodType = (field: PolicyContractField): string => {
+// The emitted default must already inhabit the field's kind, or the validator would reject the defaults.
+for (const field of policy.fields) {
   const dflt = policy.defaults[field.name];
-  switch (field.kind) {
-    case "bool":
-      if (typeof dflt !== "boolean") {
-        throw new Error(`gen-ops: policy field ${field.name} has a non-boolean default`);
-      }
-      return "z.boolean()";
-    case "ms":
-      if (!Number.isInteger(dflt) || (dflt as number) < 0) {
-        throw new Error(`gen-ops: policy field ${field.name} has a non-integer default`);
-      }
-      return "z.int().nonnegative()";
-    case "toolSet":
-      if (!Array.isArray(dflt) || !dflt.every((t) => typeof t === "string")) {
-        throw new Error(`gen-ops: policy field ${field.name} has a non-string-array default`);
-      }
-      return `z.array(z.string().min(1).max(${policy.disabledToolNameMaxBytes})).max(${policy.disabledToolsMaxEntries})`;
+  const fits =
+    field.kind === "bool"
+      ? typeof dflt === "boolean"
+      : field.kind === "ms"
+        ? Number.isInteger(dflt) && (dflt as number) >= 0
+        : Array.isArray(dflt) && dflt.every((t) => typeof t === "string");
+  if (!fits) {
+    throw new Error(
+      `gen-ops: policy field ${field.name} has a default outside its ${field.kind} kind`,
+    );
   }
-};
+}
+
+const policyValues = policyValuesSchema(policy);
+const policyDoc = policyDocSchema(policy);
+const policyOverlay = policyOverlaySchema(policy);
+for (const [name, schema] of [
+  ["PolicyValues", policyValues],
+  ["PolicyDoc", policyDoc],
+  ["PolicyOverlay", policyOverlay],
+] as const) {
+  assertSchemaRules(name, schema, false);
+}
 
 const policyDefaultsJson = JSON.stringify(policy.defaults);
 if (!/^[\x20-\x7e]*$/.test(policyDefaultsJson)) {
@@ -923,12 +882,6 @@ const policyFieldKindCases = (kind: PolicyKindTag): string =>
     .join("\n");
 const policyDirectionItems = policy.fields
   .map((f) => `  ${emitKey(f.name)}: ${JSON.stringify(f.direction)},`)
-  .join("\n");
-const policyValueFields = policy.fields
-  .map((f) => `  ${emitKey(f.name)}: ${policyZodType(f)},`)
-  .join("\n");
-const policyOverlayFields = policy.fields
-  .map((f) => `  ${emitKey(f.name)}: ${policyZodType(f)}.optional(),`)
   .join("\n");
 const policyDefaultItems = policy.fields
   .map((f) => `  ${emitKey(f.name)}: ${JSON.stringify(policy.defaults[f.name])},`)
@@ -961,8 +914,8 @@ export const POLICY_REVISION_MAX = ${policy.revisionMax};
 export const DISABLED_TOOLS_MAX_ENTRIES = ${policy.disabledToolsMaxEntries};
 export const DISABLED_TOOL_NAME_MAX_BYTES = ${policy.disabledToolNameMaxBytes};
 
-// In the catalogue's declaration order. touched entries ride z.enum over this list, so a touched set cannot smuggle
-// a field the catalogue does not own.
+// In the catalogue's declaration order. PolicyDocSchema's touched entries are an enum over the same names, so a
+// touched set cannot smuggle a field the catalogue does not own.
 export const POLICY_FIELDS = [
   ${policyFieldNameItems},
 ] as const;
@@ -1028,31 +981,23 @@ ${policyDirectionItems}
 
 // The field values without the document's scoping fields (Rust PolicyValues): what comparisons and the effective
 // policy work in.
-export const PolicyValuesSchema = z.strictObject({
-${policyValueFields}
-});
+${await typeSource("PolicyValues", policyValues)}
 
-export type PolicyValues = z.infer<typeof PolicyValuesSchema>;
+${schemaSource("PolicyValuesSchema", "PolicyValues", policyValues)}
 
 // The signed policy document (Rust PolicyDoc), strict-parsed only AFTER the signature verifies. \`touched\` sits
-// inside the signed bytes so a fresh signature warrants relaxation on exactly those fields, never the document at large.
-export const PolicyDocSchema = z.strictObject({
-  v: z.literal(${policy.docVersion}),
-  revision: z.int().nonnegative().max(POLICY_REVISION_MAX),
-  touched: z.array(z.enum(POLICY_FIELDS)),
-${policyValueFields}
-});
+// inside the signed bytes so a fresh signature warrants relaxation on exactly those fields, never the document at
+// large. The revision's bound is POLICY_REVISION_MAX, the millisecond fields' the JS-safe integer.
+${await typeSource("PolicyDoc", policyDoc)}
 
-export type PolicyDoc = z.infer<typeof PolicyDocSchema>;
+${schemaSource("PolicyDocSchema", "PolicyDoc", policyDoc)}
 
 // The unsigned restriction overlay (Rust PolicyOverlay), every field optional under the document's bounds. Strict,
 // unlike the loose control-frame wrappers: an overlay field the catalogue does not own fails the whole frame parse.
 // Whether a parsed overlay actually RESTRICTS is the consumer's direction check, never this shape's.
-export const PolicyOverlaySchema = z.strictObject({
-${policyOverlayFields}
-});
+${await typeSource("PolicyOverlay", policyOverlay)}
 
-export type PolicyOverlay = z.infer<typeof PolicyOverlaySchema>;
+${schemaSource("PolicyOverlaySchema", "PolicyOverlay", policyOverlay)}
 
 // Deep-frozen: the pre-cutover posture hands this instance out as the effective policy, so a caller mutating its
 // "copy" must throw instead of rewriting the defaults for everyone after it.
