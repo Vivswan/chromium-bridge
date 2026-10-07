@@ -7,7 +7,7 @@
 //   emit_policy_contract   -> policy.ts
 
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pascalCase } from "change-case";
@@ -78,6 +78,8 @@ interface Contract {
 }
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+// Recreated from empty: a module the Rust source no longer defines must not survive from an earlier build.
+rmSync(generatedDir, { recursive: true, force: true });
 mkdirSync(generatedDir, { recursive: true });
 
 const contract = emitFromRust(root, "emit_contract") as Contract;

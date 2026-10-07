@@ -7,11 +7,18 @@
 import { createHash } from "node:crypto";
 import { PINNED_EXTENSION_ID } from "@chromium-bridge/shared/generated/identity";
 import { describe, expect, test } from "vitest";
+import type { UserManifestFn } from "wxt";
 import { MANIFEST_PERMISSIONS } from "@/lib/shared/manifest-surface";
 import wxtConfig from "../../wxt.config";
 
-// The manifest is declared as a plain object in wxt.config.ts.
-const manifest = wxtConfig.manifest as Record<string, unknown>;
+// wxt.config.ts declares the manifest as a function (it reads the generated key when the manifest is produced),
+// called here as WXT calls it for a production build.
+const manifest = (await (wxtConfig.manifest as UserManifestFn)({
+  mode: "production",
+  command: "build",
+  browser: "chrome",
+  manifestVersion: 3,
+})) as Record<string, unknown>;
 
 describe("generated manifest security surface", () => {
   test("the pinned key derives exactly the pinned extension ID", () => {

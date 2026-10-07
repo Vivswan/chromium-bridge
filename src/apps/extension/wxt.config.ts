@@ -1,7 +1,6 @@
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "wxt";
-import { EXTENSION_MANIFEST_KEY } from "../../packages/shared/generated/identity";
 import { MANIFEST_PERMISSIONS, MINIMUM_CHROME_VERSION } from "./src/lib/shared/manifest-surface";
 
 // The pinned manifest `key` comes from the Rust core's identity constants
@@ -11,7 +10,10 @@ import { MANIFEST_PERMISSIONS, MINIMUM_CHROME_VERSION } from "./src/lib/shared/m
 // extension is distributed as load-unpacked, not through a store): a build
 // without it would get a path-derived ID and be rejected by the host.
 // scripts/check-extension-id.ts verifies the BUILT manifest keeps this key
-// and the permission surface.
+// and the permission surface. The generated module is a build output, so it
+// is read when the manifest is produced, not when this config loads: tools
+// that load the config on a bare install (the fleet's dead-code gate) see no
+// build output.
 
 export default defineConfig({
   srcDir: "src",
@@ -73,24 +75,27 @@ export default defineConfig({
       }
     },
   },
-  manifest: {
-    name: "Chromium Bridge",
-    // The Chrome-resolved description reads from _locales; the in-extension
-    // UI additionally honors the user's chosen display language (lib/i18n).
-    default_locale: "en",
-    description: "__MSG_extDescription__",
-    key: EXTENSION_MANIFEST_KEY,
-    minimum_chrome_version: MINIMUM_CHROME_VERSION,
-    permissions: [...MANIFEST_PERMISSIONS],
-    host_permissions: [],
-    optional_host_permissions: ["<all_urls>"],
-    action: {
-      default_title: "Chromium Bridge",
-    },
-    icons: {
-      "16": "icons/icon16.png",
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png",
-    },
+  manifest: async () => {
+    const { EXTENSION_MANIFEST_KEY } = await import("../../packages/shared/generated/identity");
+    return {
+      name: "Chromium Bridge",
+      // The Chrome-resolved description reads from _locales; the in-extension
+      // UI additionally honors the user's chosen display language (lib/i18n).
+      default_locale: "en",
+      description: "__MSG_extDescription__",
+      key: EXTENSION_MANIFEST_KEY,
+      minimum_chrome_version: MINIMUM_CHROME_VERSION,
+      permissions: [...MANIFEST_PERMISSIONS],
+      host_permissions: [],
+      optional_host_permissions: ["<all_urls>"],
+      action: {
+        default_title: "Chromium Bridge",
+      },
+      icons: {
+        "16": "icons/icon16.png",
+        "48": "icons/icon48.png",
+        "128": "icons/icon128.png",
+      },
+    };
   },
 });

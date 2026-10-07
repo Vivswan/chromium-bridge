@@ -82,6 +82,7 @@ tasks:
 
   lint:
     description: "Biome lint for the extension workspace"
+    deps: ['root:gen-shared']
     command: 'bun run biome lint $projectSource'
     inputs:
       - '**/*'

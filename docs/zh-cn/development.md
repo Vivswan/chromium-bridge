@@ -133,7 +133,7 @@ bun run --cwd src/apps/extension build
 | 互操作测试套件 | `test-interop` (官方 MCP SDK v2 客户端对发布二进制的测试)、`harness-smoke` (真实的客户端程序 (harness) CLI, 隔离的配置目录; 旧时代打开方式的金丝雀测试) |
 | 浏览器测试套件 | `test-browser`、`test-integration` (只用隔离的 Chrome; 从不进入 `ci`) |
 | 版本管理 | `check-version`、`check-extension-id`、`check-refresh-lockfiles` |
-| 仓库卫生 (`hygiene` 的依赖) | `check-version`、`check-extension-id`、`check-toolchain`、`check-pins`、`check-hasher`、`check-moon-edges`、`check-ignored`、`check-cjk`、`check-typography`、`check-fuzz-smoke`、`check-harness-driver`、`check-docs-literals`、`check-docs-policy`、`check-planning-refs`、`check-compose`、`check-ci-scripts`、`check-docs-probe`、`check-architecture`、`check-docs-locales` |
+| 仓库卫生 (`hygiene` 的依赖) | `check-version`、`check-extension-id`、`check-toolchain`、`check-pins`、`check-hasher`、`check-moon-edges`、`check-ignored`、`check-install-hooks`、`check-cjk`、`check-typography`、`check-fuzz-smoke`、`check-harness-driver`、`check-docs-literals`、`check-docs-policy`、`check-planning-refs`、`check-compose`、`check-ci-scripts`、`check-docs-probe`、`check-architecture`、`check-docs-locales` |
 | 工作流 | `check-yaml`、`check-actions` |
 
 `check-docs-probe` 让英文文档的每个段落和列表项都保持在 70 词以内, 并让它们点名的每条路径都真实存在。翻译页面 (位于 `zh-cn` 或 `zh-tw` 文档树下, 或根目录的 `README.<locale>.md`) 只探测路径和链接: 按空白切分的词数读不懂 CJK, 所以由英文页面承担词数上限, 而 `check-docs-locales` 让翻译树与它逐文件镜像。

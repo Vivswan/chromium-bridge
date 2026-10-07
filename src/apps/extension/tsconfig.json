@@ -1,18 +1,35 @@
 {
-  "extends": "./.wxt/tsconfig.json",
+  // WXT writes the tsconfig it wants extended into .wxt/ (`wxt prepare`), a build output; a tsconfig that
+  // extends it fails to load until the output exists, and tools that read this file before any task has run
+  // (the fleet's knip gate runs on a bare install) saw no path aliases and reported the whole tree unused.
+  // The options WXT generates are repeated here, so this file loads on its own; .wxt/ contributes only the
+  // generated type declarations, included by name because tsc's globs skip dot-directories.
   "compilerOptions": {
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "target": "ESNext",
+    "module": "Preserve",
+    "moduleDetection": "force",
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
     "strict": true,
+    "skipLibCheck": true,
+    "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
     "noUnusedLocals": true,
     "forceConsistentCasingInFileNames": true,
     "jsx": "react-jsx",
-    // The generated .wxt/tsconfig.json sets noEmit, but the root typecheck
-    // task runs bare `tsc -p` and tsc keeps compiling after a missing
-    // extends target (TS5083); repeat noEmit here so that run cannot emit.
-    "noEmit": true,
     // jest-dom v7's default types entry is jest-only (requires @types/jest);
     // vitest needs the /vitest entry, matching tests/setup.ts.
-    "types": ["chrome", "vitest/globals", "@testing-library/jest-dom/vitest"]
+    "types": ["chrome", "vitest/globals", "@testing-library/jest-dom/vitest"],
+    // WXT's `@/` alias for src/ and the #i18n module @wxt-dev/i18n generates into .wxt/.
+    "paths": {
+      "@/*": ["./src/*"],
+      "#i18n": ["./.wxt/i18n/index.ts"]
+    }
   },
-  "exclude": ["node_modules", "dist"]
+  "include": ["**/*", ".wxt/wxt.d.ts"],
+  "exclude": ["node_modules", "dist", "../../../build/extension"]
 }

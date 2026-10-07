@@ -47,6 +47,7 @@ tasks:
     description: "Biome lint for the shared package"
     # Same invocation shape as the repo-wide gate (`bun run biome lint .` from
     # the root), scoped to this project so config resolution is identical.
+    deps: ['root:gen-shared']
     command: 'bun run biome lint $projectSource'
     inputs:
       - '**/*'

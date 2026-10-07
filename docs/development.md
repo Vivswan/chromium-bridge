@@ -133,7 +133,7 @@ The full task menu, by area:
 | Interop suites | `test-interop` (official MCP SDK v2 client against the release binary), `harness-smoke` (real harness CLIs, isolated config dirs; the legacy-era opening-method canary) |
 | Browser suites | `test-browser`, `test-integration` (isolated Chrome only; never in `ci`) |
 | Versioning | `check-version`, `check-extension-id`, `check-refresh-lockfiles` |
-| Repo hygiene (the `hygiene` deps) | `check-version`, `check-extension-id`, `check-toolchain`, `check-pins`, `check-hasher`, `check-moon-edges`, `check-ignored`, `check-cjk`, `check-typography`, `check-fuzz-smoke`, `check-harness-driver`, `check-docs-literals`, `check-docs-policy`, `check-planning-refs`, `check-compose`, `check-ci-scripts`, `check-docs-probe`, `check-architecture`, `check-docs-locales` |
+| Repo hygiene (the `hygiene` deps) | `check-version`, `check-extension-id`, `check-toolchain`, `check-pins`, `check-hasher`, `check-moon-edges`, `check-ignored`, `check-install-hooks`, `check-cjk`, `check-typography`, `check-fuzz-smoke`, `check-harness-driver`, `check-docs-literals`, `check-docs-policy`, `check-planning-refs`, `check-compose`, `check-ci-scripts`, `check-docs-probe`, `check-architecture`, `check-docs-locales` |
 | Workflows | `check-yaml`, `check-actions` |
 
 `check-docs-probe` holds every paragraph and list item of the English docs under 70 words and every path they name real. A translated page (under the `zh-cn` or `zh-tw` docs tree, or the root `README.<locale>.md`) is probed for paths and links only: a whitespace word count does not read CJK, so the English page carries the cap and `check-docs-locales` keeps the translated tree mirroring it file-for-file.

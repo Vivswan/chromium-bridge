@@ -181,6 +181,7 @@ tasks:
 
   fix:
     description: 'Auto-fix everything: Biome lint+format fixes, then cargo fmt (root + fuzz workspaces)'
+    deps: ['~:gen-shared']
     script: 'bun run biome check --write . && cargo fmt && cargo fmt --manifest-path src/packages/core/fuzz/Cargo.toml'
     options:
       mutex: 'generated-contract'
@@ -194,8 +195,11 @@ tasks:
       - 'core:lint'
       - '~:lint-ts'
 
+  # Biome's project-domain rules index the generated modules for type inference even though .gitignore keeps
+  # them out of diagnostics and formatting, so the lint runs read them; the format-only tasks do not.
   lint-ts:
     description: 'Lint TS/JS/JSON (Biome; what `bun run lint` delegates to)'
+    deps: ['~:gen-shared']
     command: 'bun run biome lint .'
     inputs: ['**/*', '!**/node_modules/**']
     options:
@@ -203,6 +207,7 @@ tasks:
 
   check-ts:
     description: 'Lint + format-check all TS/JS/JSON, warnings fail (biome ci; what `bun run check` delegates to)'
+    deps: ['~:gen-shared']
     command: 'bun run biome ci . --error-on-warnings'
     inputs: ['**/*', '!**/node_modules/**']
     options:
@@ -510,6 +515,7 @@ tasks:
       - '~:check-hasher'
       - '~:check-moon-edges'
       - '~:check-ignored'
+      - '~:check-install-hooks'
       - '~:check-cjk'
       - '~:check-typography'
       - '~:check-fuzz-smoke'
@@ -590,6 +596,13 @@ tasks:
       set -e
       bun scripts/check-ignored.ts
       bun test scripts/tests/check-ignored.test.ts scripts/tests/lib.test.ts
+
+  check-install-hooks:
+    description: 'No workspace package.json declares a script bun runs at install time (preinstall, install, postinstall, prepare): bun install must never depend on a build output'
+    script: |
+      set -e
+      bun scripts/check-install-hooks.ts
+      bun test scripts/tests/check-install-hooks.test.ts
 
   check-yaml:
     # The managed ci.yml's yamllint job installs its own, unpinned, version (a template-sync decision), so
