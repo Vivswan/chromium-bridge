@@ -76,7 +76,7 @@ tasks:
       - '/src/apps/web/src/styles/landing.css'
 
   typecheck:
-    description: "Type-check the extension (tsc against the WXT-generated tsconfig)"
+    description: "Type-check the extension (tsc with the WXT-generated type declarations under .wxt/)"
     deps: ['~:prepare']
     command: 'bun run typecheck'
 

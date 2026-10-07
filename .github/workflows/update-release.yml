@@ -60,6 +60,8 @@ jobs:
           # Pin to the tag release-please just published: this run's own sha
           # IS that commit today, but the tag is what users verify against.
           ref: ${{ inputs.tag }}
+          # Full history: this job runs moon, whose changed-files query reads a base ref.
+          fetch-depth: 0
       - uses: ./.github/actions/setup-moon
         with:
           cargo: "true"

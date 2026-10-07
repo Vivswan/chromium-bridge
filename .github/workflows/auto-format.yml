@@ -24,10 +24,13 @@ jobs:
       contents: write
       pull-requests: write
     steps:
+      # Full history on a job that runs moon: on a pull request moon's changed-files query reads the base
+      # branch, which a depth-1 checkout lacks.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.ref }}
           persist-credentials: false
+          fetch-depth: 0
 
       - uses: ./.github/actions/setup-moon
         with:
