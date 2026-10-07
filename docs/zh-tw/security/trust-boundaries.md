@@ -65,12 +65,12 @@ Chrome 依主機資訊清單產生主機, 清單中的 `allowed_origins` 固定�
 | 家族 | 來自擴充功能 | 來自主機 |
 | --- | --- | --- |
 | 主機金鑰 | `enclave_challenge`、`enclave_revoke` | `enclave_proof`、`enclave_error` (沒有金鑰時為 `not_enrolled`)、`enclave_revoked` |
-| 用戶端管理 | `client_list`、`client_revoke` | `client_list_result`、`client_revoke_result` |
+| 用戶端管理 | `client_list`、`client_revoke`、`client_pair` | `client_list_result`、`client_revoke_result`、`client_pair_result`; `client_pair` 先開啟在場交換 |
 | 緊急開關 | `kill_status`、`kill_engage`、`kill_release` | `kill_status_result` |
 | WebAuthn | `enroll_begin`、`enroll_finish`、`presence_begin`、`presence_assert`、`presence_confirm`、`browser_revoke` | `enroll_options`、`enroll_result`、`presence_request`、`presence_result`、`browser_revoke_result` |
 | 註冊 | `registration_status`、`registration_repair` | `registration_status_result` |
 | 健康報告 | `doctor_report` | `doctor_report_result` |
-| 策略與語言 | `policy_get`、`policy_restrict`、`lang_get`、`lang_set` | `policy_current`、`policy_restrict_result`、`lang_current` |
+| 策略與語言 | `policy_get`、`policy_restrict`、`policy_set`、`policy_history`、`policy_rollback`、`lang_get`、`lang_set` | `policy_current`、`policy_restrict_result`、`policy_set_result`、`policy_history_result`、`policy_rollback_result`、`lang_current`; `policy_set` 與放寬的 `policy_rollback` 先開啟在場交換 |
 | 稽核 | `audit_event` (射後不理)、`audit_read` | `audit_read_result` |
 
 - **`audit_event`** 受種類允許清單約束 (只允許擴充功能所擁有的確認與登記種類), 而且由主機自行蓋上介面標記, 所以瀏覽器那一側無法把主機側事件偽造進稽核日誌。
