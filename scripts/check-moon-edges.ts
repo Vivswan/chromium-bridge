@@ -159,13 +159,14 @@ const LAUNCHERS = new Set([
   "xargs",
 ]);
 // What a command runs is read from literal words only: a command word the rules cannot read (`$'bun\x78'`,
-// `$(echo bun)`, `$X` after a launcher) is refused in every task, and after a launcher every word may be the
-// command.
+// `$(echo bun)`, `$X` after a launcher) is refused in every task, and after a launcher, or after bun, whose
+// subcommand slot is the alias slot, every word may be the command. An opaque word has its own rule.
 const unreadCommandWords = (words: Word[]): Word[] => {
   const [first, ...rest] = words;
   if (first === undefined) return [];
-  const candidates = LAUNCHERS.has(posix.basename(first.text)) ? [first, ...rest] : [first];
-  return candidates.filter((w) => w.reading !== "literal");
+  const name = posix.basename(first.text);
+  const candidates = LAUNCHERS.has(name) || name === "bun" ? [first, ...rest] : [first];
+  return candidates.filter((w) => w.reading === "expansion");
 };
 const runsBunx = (words: Word[]): boolean => {
   const [first, ...rest] = words.map((w) => w.text);
@@ -191,6 +192,9 @@ const namesFile = (redirect: Sh.Redirect): boolean => !NOT_A_FILE.has(redirect.O
 // A variable is kept by name in braces: moon has already substituted its own tokens, and a shell variable's
 // value is not the auditor's to guess. A substitution's commands are walked as their own, so the word that
 // holds one is a marker.
+/** An expansion's marker stands for a value the rules do not read. */
+const marker = (text: string): Word => ({ text, globPrefix: null, reading: "expansion" });
+
 function render(part: Sh.Node, quoted: boolean): Word {
   switch (syntax.NodeType(part)) {
     case "Lit":
@@ -213,26 +217,22 @@ function render(part: Sh.Node, quoted: boolean): Word {
       };
     }
     case "ParamExp":
-      return {
-        text: `\${${(part as Sh.ParamExp).Param?.Value ?? ""}}`,
-        globPrefix: null,
-        reading: "expansion",
-      };
+      return marker(`\${${(part as Sh.ParamExp).Param?.Value ?? ""}}`);
     // The parser keeps an extglob's pattern as text, so a substitution inside it is unread.
     case "ExtGlob":
       return {
-        text: `(${(part as Sh.ExtGlob).Pattern?.Value ?? ""})`,
+        ...marker(`(${(part as Sh.ExtGlob).Pattern?.Value ?? ""})`),
         globPrefix: quoted ? null : "",
         reading: "opaque",
       };
     case "CmdSubst":
-      return { text: "$(...)", globPrefix: null, reading: "expansion" };
+      return marker("$(...)");
     case "ProcSubst":
-      return { text: "<(...)", globPrefix: null, reading: "expansion" };
+      return marker("<(...)");
     case "ArithmExp":
-      return { text: "$((...))", globPrefix: null, reading: "expansion" };
+      return marker("$((...))");
     default:
-      return { text: `<${syntax.NodeType(part)}>`, globPrefix: null, reading: "expansion" };
+      return marker(`<${syntax.NodeType(part)}>`);
   }
 }
 
@@ -361,7 +361,9 @@ const underBuild = (globPrefix: string): boolean => under(BUILD_DIR, posix.norma
 // A pattern segment may expand to `..` as well, and which ones is bash's to know (`.[.]`, `.[[:punct:]]`), so
 // every dot-led pattern segment is refused, a `tmp*/.cache*/x` behind a pattern included. A brace may spell
 // `..` as a component of an alternative (`{a,..}`, `{scripts/..,other}`), which the component regex reads over
-// the whole tail since an alternative may span slashes; a range (`{1..3}`) spells no component.
+// the whole tail since an alternative may span slashes; a range (`{1..3}`) spells no component. The braces
+// package was tried for this and reads an escaped `$` or a lone `[` before a brace as its own syntax, unlike
+// bash, so the words it misreads stay out of its hands.
 const PARENT_COMPONENT = /(^|[/{,])\.\.($|[/,}])/;
 const climbsOutOfGlob = (w: Word): boolean => {
   if (w.globPrefix === null) return false;
@@ -491,8 +493,14 @@ export function auditGraph(graph: TaskGraph): string[] {
     const task = graph[project]?.[id];
     if (task === undefined) continue;
     const parsed = commandsOf.get(target) ?? { commands: [], words: [], data: [] };
-    // An opaque word is refused by its own rule in every task, so the gate reads the expansions only.
-    for (const w of [...parsed.words, ...parsed.data].filter((w) => w.reading === "expansion")) {
+    // An opaque word and an unread command word are refused by their own rules in every task, so the gate reads
+    // the other expansions only, and judges a command by its name only when it can read that name.
+    const unread = new Set(
+      parsed.commands.flatMap(({ words }) => unreadCommandWords(words)).map((w) => w.text),
+    );
+    for (const w of [...parsed.words, ...parsed.data].filter(
+      (w) => w.reading === "expansion" && !unread.has(w.text),
+    )) {
       findings.push(
         `${target}: the word ${w.text} inside ${GATE} is not literal (the rules judge only what they can read)`,
       );
@@ -503,6 +511,7 @@ export function auditGraph(graph: TaskGraph): string[] {
           `${target}: ${name} is assigned inside ${GATE} (the rules read the task's env, not its script's)`,
         );
       }
+      if (words[0] === undefined || words[0].reading !== "literal") continue;
       const [word, ...rest] = words.map((w) => w.text);
       if (word === undefined) continue;
       const installer = word === "bun" ? rest.find((w) => BUN_INSTALLERS.has(w)) : undefined;

@@ -37,6 +37,7 @@ const graph: TaskGraph = {
         { target: "root:quotes-braces" },
         { target: "root:launches-inside-the-gate" },
         { target: "root:quotes-ansi-c" },
+        { target: "root:expands-the-command-inside-the-gate" },
       ],
     },
     ci: { command: "noop", deps: [{ target: "root:gate" }, { target: "root:check-yaml" }] },
@@ -252,7 +253,7 @@ const graph: TaskGraph = {
     },
     // A `..`, a dot-led pattern a bash without globskipdots may expand to `..`, or a brace alternative spelling
     // it, behind the first pattern segment climbs out of whatever that segment matched; one before it
-    // normalizes, and `..x` is a name.
+    // normalizes, `..x` is a name, and a quoted brace is text.
     "climbs-out-of-a-glob": {
       command: "bun",
       script: [
@@ -261,7 +262,12 @@ const graph: TaskGraph = {
         "bun scripts/read.ts scripts*/.[[:punct:]]/build/extension/manifest.json",
         "bun scripts/read.ts {a,..}/build/extension/manifest.json",
         "bun scripts/read.ts {scripts/..,other}/build/extension/manifest.json",
+        "bun scripts/read.ts tmp*/{a,..}/build/extension/{1..1001}.json",
         "bun scripts/read.ts tmp*/..x/y",
+        "bun scripts/read.ts tmp*/\\{.,.\\}./y",
+        "bun scripts/read.ts tmp*/'{.,.}.'/y",
+        'bun scripts/read.ts tmp*/\\"/{a,..}/build/extension/manifest.json',
+        "bun scripts/read.ts tmp*/\\[/{a,..}/build/extension/manifest.json",
       ].join("\n"),
       deps: [],
     },
@@ -324,12 +330,16 @@ const graph: TaskGraph = {
       args: ["run", "bunx", "fixture-tool"],
       deps: [],
     },
-    // What runs is read from a literal command word only; after a launcher every word may be the command.
+    // What runs is read from a literal command word only; after a launcher, or after bun, whose subcommand slot
+    // is the alias slot, every word may be the command.
     "expands-the-command": {
       command: "$'bun\\x78'",
       script: "$'bun\\x78' fixture-tool\n$(echo bun) x fixture-tool\nenv $X fixture-tool",
       deps: [],
     },
+    "expands-bun-subcommand": { command: "bun", script: "bun $X fixture-tool", deps: [] },
+    // Inside the gate the command-word finding is the one finding for the word.
+    "expands-the-command-inside-the-gate": { command: "$X", script: "$X fixture-tool", deps: [] },
   },
   extension: {
     build: {
@@ -386,9 +396,6 @@ describe("auditGraph", () => {
         "root:overrides-env: runs export inside root:gate (not bun or a cargo toolchain verb)",
         "root:overrides-env: runs for inside root:gate (not bun or a cargo toolchain verb)",
         "root:negates-a-command: runs ! inside root:gate (not bun or a cargo toolchain verb)",
-        "root:expands-a-word: the word $((...)) inside root:gate is not literal (the rules judge only what they can read)",
-        "root:expands-a-word: the word $((...)) inside root:gate is not literal (the rules judge only what they can read)",
-        `root:expands-a-word: the word \${X} inside root:gate is not literal (the rules judge only what they can read)`,
         "root:expands-a-word: the word ($(bunx fixture-tool)) holds an extglob pattern the parser keeps as text, so a command inside it is unread",
         "root:extglobs-outside-the-gate: the word ($(bunx fixture-tool)) holds an extglob pattern the parser keeps as text, so a command inside it is unread",
         "root:launches-bunx: runs bunx (bun's global cache stands in for a missing package)",
@@ -400,17 +407,15 @@ describe("auditGraph", () => {
         "root:times-bunx-by-path: runs bunx (bun's global cache stands in for a missing package)",
         "root:aliases-bunx-at-a-path: runs bunx (bun's global cache stands in for a missing package)",
         "root:launches-inside-the-gate: runs env inside root:gate (not bun or a cargo toolchain verb)",
-        "root:quotes-ansi-c: the word $'in\\x73tall' inside root:gate is not literal (the rules judge only what they can read)",
         "root:runs-bunx-through-bun-run: runs bunx (bun's global cache stands in for a missing package)",
         "root:expands-the-command: the command word $'bun\\x78' is not literal, so the auditor cannot tell what runs",
         "root:expands-the-command: the command word $(...) is not literal, so the auditor cannot tell what runs",
         `root:expands-the-command: the command word \${X} is not literal, so the auditor cannot tell what runs`,
-        "root:expands-braces: the word in{stall,it} inside root:gate is not literal (the rules judge only what they can read)",
-        "root:expands-braces: the word build/x{1..2}/index.json inside root:gate is not literal (the rules judge only what they can read)",
+        `root:expands-bun-subcommand: the command word \${X} is not literal, so the auditor cannot tell what runs`,
+        `root:expands-the-command-inside-the-gate: the command word \${X} is not literal, so the auditor cannot tell what runs`,
         "root:expands-braces: names the glob build/x{1..2}/index.json; a reader under build/ declares the file or directory it reads",
         "root:expands-braces: the word build/y{1..2} inside root:gate is not literal (the rules judge only what they can read)",
         "root:expands-braces: names the glob build/y{1..2}; a reader under build/ declares the file or directory it reads",
-        "root:expands-braces: the word {x..Z} inside root:gate is not literal (the rules judge only what they can read)",
         "root:overrides-env: runs (( inside root:gate (not bun or a cargo toolchain verb)",
         "root:names-an-astral-glob: names the glob \u{1F4C1}\u{1F4C1}/../build/*; a reader under build/ declares the file or directory it reads",
         "root:quotes-a-star-before-a-glob: names the glob foo*/../build/x*; a reader under build/ declares the file or directory it reads",
@@ -419,6 +424,11 @@ describe("auditGraph", () => {
         "root:climbs-out-of-a-glob: the path scripts*/.[[:punct:]]/build/extension/manifest.json climbs out of a globbed segment, so the auditor cannot tell what it names",
         "root:climbs-out-of-a-glob: the path {a,..}/build/extension/manifest.json climbs out of a globbed segment, so the auditor cannot tell what it names",
         "root:climbs-out-of-a-glob: the path {scripts/..,other}/build/extension/manifest.json climbs out of a globbed segment, so the auditor cannot tell what it names",
+        "root:climbs-out-of-a-glob: the path tmp*/{a,..}/build/extension/{1..1001}.json climbs out of a globbed segment, so the auditor cannot tell what it names",
+        'root:climbs-out-of-a-glob: the path tmp*/"/{a,..}/build/extension/manifest.json climbs out of a globbed segment, so the auditor cannot tell what it names',
+        "root:climbs-out-of-a-glob: the path tmp*/[/{a,..}/build/extension/manifest.json climbs out of a globbed segment, so the auditor cannot tell what it names",
+        'root:climbs-out-of-a-glob: the command word tmp*/"/{a,..}/build/extension/manifest.json is not literal, so the auditor cannot tell what runs',
+        "root:climbs-out-of-a-glob: the command word tmp*/[/{a,..}/build/extension/manifest.json is not literal, so the auditor cannot tell what runs",
         "root:reads-dotted-glob: declares the glob input ./build/web/**/*; a reader under build/ declares the file or directory it reads",
         "root:reads-glob-build: declares the glob input build/web-pdf/**/*; a reader under build/ declares the file or directory it reads",
         "root:writes-glob: declares the glob output build/report-*/**/*; a writer under build/ declares the directory it writes",
@@ -438,6 +448,18 @@ describe("auditGraph", () => {
         "root:sneaky-cwd-x: runs bunx inside root:gate (not bun or a cargo toolchain verb)",
         "root:sneaky-x: runs bunx (bun's global cache stands in for a missing package)",
         "root:sneaky-x: runs bunx inside root:gate (not bun or a cargo toolchain verb)",
+        "root:climbs-out-of-a-glob: the command word tmp*/{a,..}/build/extension/{1..1001}.json is not literal, so the auditor cannot tell what runs",
+        "root:climbs-out-of-a-glob: the command word {a,..}/build/extension/manifest.json is not literal, so the auditor cannot tell what runs",
+        "root:climbs-out-of-a-glob: the command word {scripts/..,other}/build/extension/manifest.json is not literal, so the auditor cannot tell what runs",
+        "root:expands-a-word: the command word $((...)) is not literal, so the auditor cannot tell what runs",
+        `root:expands-a-word: the command word \${X} is not literal, so the auditor cannot tell what runs`,
+        "root:expands-braces: the command word build/x{1..2}/index.json is not literal, so the auditor cannot tell what runs",
+        "root:expands-braces: the command word in{stall,it} is not literal, so the auditor cannot tell what runs",
+        "root:expands-braces: the command word {x..Z} is not literal, so the auditor cannot tell what runs",
+        `root:names-paths-outside-commands: the command word \${f} is not literal, so the auditor cannot tell what runs`,
+        "root:process-substitutes-bunx: the command word <(...) is not literal, so the auditor cannot tell what runs",
+        "root:quotes-ansi-c: the command word $'in\\x73tall' is not literal, so the auditor cannot tell what runs",
+        "root:substitutes-bunx: the command word $(...) is not literal, so the auditor cannot tell what runs",
         "root:unfetched: cargo doc inside root:gate without --frozen",
         "root:vanished: reachable from root:gate but not in the graph",
       ].sort(),
