@@ -55,7 +55,7 @@ Pre-1.0 ([Cargo.toml](./Cargo.toml)): the protocol layers are covered by end-to-
 
 The CLI needs nothing beyond the binary itself, on desktops, headless machines, and CI alike. The steps in full, with the install channels and what each does for you, are in [the quickstart](./docs/quickstart.md); the short form:
 
-1. Install from the [latest release](https://github.com/Vivswan/chromium-bridge/releases/latest): the `.pkg`, the `.msi`, the `.deb`, Homebrew, or the archive. To verify a download first, the commands are in [SECURITY.md](./.github/SECURITY.md#release-artifact-integrity).
+1. Install from the [latest release](https://github.com/Vivswan/chromium-bridge/releases/latest): the `.pkg`, the `.msi`, the `.deb`, Homebrew (once [the tap](./docs/release.md#homebrew-tap) exists), or the archive. To verify a download first, the commands are in [SECURITY.md](./.github/SECURITY.md#release-artifact-integrity).
 
 2. Register the binary with your browsers, unless the installer did (the `.pkg`, the `.msi`, and Homebrew do). Registration is idempotent, so the same command is the fresh install, the repair, and the re-register after moving the binary:
 
@@ -90,7 +90,7 @@ Grouped from the single source of truth, the Rust tool catalogue ([`src/packages
 | Tabs | `tab_list`, `tab_focus`, `tab_open`; `tab_close` confirms | low to high |
 | Navigate | `page_navigate`, `page_back`, `page_forward`, `page_reload` | low to medium |
 | Inspect a page | `page_snapshot`, `page_snapshot_precise`, `page_text`, `page_screenshot`, `console_get` | low to medium |
-| Drive a page | `page_click`, `page_fill`, `page_press`, `page_select`, `page_hover`, `page_scroll`, `page_wait_for`, `page_handle_dialog`; submit clicks, key presses, and selects confirm, and dialog handling is off by default | low to high |
+| Drive a page | `page_click`, `page_fill`, `page_press`, `page_select`, `page_hover`, `page_scroll`, `page_wait_for`, `page_handle_dialog`; submit and link clicks, key presses, and selects confirm, and dialog handling is off by default | low to high |
 | Run code and upload | `page_eval` (off by default; every call confirms, showing the full code), `page_upload` (off by default; every call confirms with the path) | critical |
 | Read credentials | `cookie_get` (including `httpOnly`, allowlisted hosts only), `storage_get` (same-origin); read-only, always masked | high |
 

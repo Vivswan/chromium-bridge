@@ -55,7 +55,7 @@ chromium-bridge 操作的是一個真實、已通過身分驗證的瀏覽器。�
 
 CLI 除了執行檔本身之外不需要任何東西, 在桌面、無頭機器與 CI 上都一樣。完整步驟, 包括各個安裝管道以及每個管道為你做了什麼, 寫在[快速入門](./docs/zh-tw/quickstart.md); 以下是簡短版:
 
-1. 從[最新發行版](https://github.com/Vivswan/chromium-bridge/releases/latest)安裝: `.pkg`、`.msi`、`.deb`、Homebrew, 或壓縮檔。若要先驗證下載的檔案, 命令寫在 [SECURITY.md](./.github/SECURITY.md#release-artifact-integrity)。
+1. 從[最新發行版](https://github.com/Vivswan/chromium-bridge/releases/latest)安裝: `.pkg`、`.msi`、`.deb`、Homebrew (待 [tap](./docs/zh-tw/release.md#homebrew-tap) 建立後), 或壓縮檔。若要先驗證下載的檔案, 命令寫在 [SECURITY.md](./.github/SECURITY.md#release-artifact-integrity)。
 
 2. 將執行檔註冊到你的瀏覽器, 除非安裝程式已經做了 (`.pkg`、`.msi` 與 Homebrew 會做)。註冊是冪等的, 所以同一個命令既是全新安裝, 也是修復, 也是搬移執行檔後的重新註冊:
 
@@ -90,7 +90,7 @@ CLI 除了執行檔本身之外不需要任何東西, 在桌面、無頭機器�
 | 分頁 | `tab_list`、`tab_focus`、`tab_open`; `tab_close` 需確認 | 低至高 |
 | 導覽 | `page_navigate`、`page_back`、`page_forward`、`page_reload` | 低至中 |
 | 檢視頁面 | `page_snapshot`、`page_snapshot_precise`、`page_text`、`page_screenshot`、`console_get` | 低至中 |
-| 操作頁面 | `page_click`、`page_fill`、`page_press`、`page_select`、`page_hover`、`page_scroll`、`page_wait_for`、`page_handle_dialog`; 送出表單的點擊、按鍵與選取需確認, 對話方塊處理預設關閉 | 低至高 |
+| 操作頁面 | `page_click`、`page_fill`、`page_press`、`page_select`、`page_hover`、`page_scroll`、`page_wait_for`、`page_handle_dialog`; 送出表單與連結的點擊、按鍵與選取需確認, 對話方塊處理預設關閉 | 低至高 |
 | 執行程式碼與上傳 | `page_eval` (預設關閉; 每次呼叫都要確認, 並顯示完整程式碼)、`page_upload` (預設關閉; 每次呼叫都會連同路徑一起確認) | 嚴重 |
 | 讀取憑證 | `cookie_get` (包含 `httpOnly`, 僅限已列入允許清單的主機)、`storage_get` (同源); 唯讀, 一律遮罩 | 高 |
 

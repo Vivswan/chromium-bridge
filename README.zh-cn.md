@@ -55,7 +55,7 @@ chromium-bridge 操作的是一个真实的、已通过身份验证的浏览器�
 
 CLI 除了二进制本身不需要任何东西, 在桌面机、无头机器和 CI 上都一样。完整步骤, 连同各个安装渠道以及每种渠道替你做了什么, 见[快速入门](./docs/zh-cn/quickstart.md); 简版如下:
 
-1. 从[最新发布](https://github.com/Vivswan/chromium-bridge/releases/latest)安装: `.pkg`、`.msi`、`.deb`、Homebrew 或压缩包。要先校验下载文件, 相关命令见 [SECURITY.md](./.github/SECURITY.md#release-artifact-integrity)。
+1. 从[最新发布](https://github.com/Vivswan/chromium-bridge/releases/latest)安装: `.pkg`、`.msi`、`.deb`、Homebrew (待 [tap](./docs/zh-cn/release.md#homebrew-tap) 就绪后) 或压缩包。要先校验下载文件, 相关命令见 [SECURITY.md](./.github/SECURITY.md#release-artifact-integrity)。
 
 2. 把二进制注册到你的浏览器, 除非安装程序已经做了 (`.pkg`、`.msi` 和 Homebrew 会做)。注册是幂等的, 所以同一条命令既是全新安装, 也是修复, 也是移动二进制后的重新注册:
 
@@ -90,7 +90,7 @@ CLI 除了二进制本身不需要任何东西, 在桌面机、无头机器和 C
 | 标签页 | `tab_list`、`tab_focus`、`tab_open`; `tab_close` 需确认 | 低到高 |
 | 导航 | `page_navigate`、`page_back`、`page_forward`、`page_reload` | 低到中 |
 | 查看页面 | `page_snapshot`、`page_snapshot_precise`、`page_text`、`page_screenshot`、`console_get` | 低到中 |
-| 操作页面 | `page_click`、`page_fill`、`page_press`、`page_select`、`page_hover`、`page_scroll`、`page_wait_for`、`page_handle_dialog`; 提交点击、按键和选择需确认, 对话框处理默认关闭 | 低到高 |
+| 操作页面 | `page_click`、`page_fill`、`page_press`、`page_select`、`page_hover`、`page_scroll`、`page_wait_for`、`page_handle_dialog`; 提交与链接点击、按键和选择需确认, 对话框处理默认关闭 | 低到高 |
 | 运行代码与上传 | `page_eval` (默认关闭; 每次调用都需确认并显示完整代码)、`page_upload` (默认关闭; 每次调用都带路径确认) | 严重 |
 | 读取凭据 | `cookie_get` (含 `httpOnly`, 仅限已列入白名单的主机)、`storage_get` (同源); 只读, 始终脱敏 | 高 |
 
