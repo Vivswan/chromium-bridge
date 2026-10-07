@@ -65,7 +65,7 @@ interface Structure {
   readonly fences: number;
   /** Header and body rows; the delimiter row is syntax, not a row. */
   readonly tableRows: number;
-  /** Every inline code span, in order of appearance, its line breaks read as spaces; its other whitespace is content. */
+  /** Every inline code span, in order of appearance, its line breaks read as spaces; every other character, a boundary space included, is content. */
   readonly inlineCode: readonly string[];
 }
 
@@ -88,7 +88,7 @@ function structureOf(file: string): Structure {
       return "";
     },
     codespan: (content) => {
-      inlineCode.push(content.replace(/\n/g, " ").trim());
+      inlineCode.push(content.replace(/\n/g, " "));
       return "";
     },
   });

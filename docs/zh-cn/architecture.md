@@ -323,7 +323,7 @@ Broker accepts -> session re-attaches that label (generation-guarded:
   as Disconnected)
 ```
 
-同标识的接入总是获胜, 并关闭它所取代的连接。当一个浏览器同时让扩展的两个 worker 生命存活时, 两者大约每 2 s 轮流占据该槽位, 每一次重拨都关闭另一方, 直到其中一个生命结束。
+同标识的接入总是获胜, 并关闭它所取代的连接。当一个浏览器同时保有扩展的两个 worker 实例时, 两者大约每 2 s 轮流占据该槽位, 每一次重拨都关闭另一方, 直到其中一个实例结束。
 
 ### 5.3 第二个 MCP 客户端接入
 
