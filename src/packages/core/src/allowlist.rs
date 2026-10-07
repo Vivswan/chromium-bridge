@@ -377,7 +377,7 @@ pub fn run_list_clients() -> i32 {
     let trust = match TrustState::current() {
         Ok(trust) => trust,
         Err(e) => {
-            eprintln!("list-clients: could not read the trust record: {e}");
+            eprintln!("list-clients: {}", crate::trust::unreadable_sentence(&e));
             eprintln!("(treating the trust state as suspect; fail closed)");
             return 1;
         }

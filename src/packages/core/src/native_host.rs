@@ -113,7 +113,7 @@ fn admin_client_list() -> AdminControl {
             ok: false,
             enrolled: false,
             clients: Vec::new(),
-            error: Some(format!("trust record unreadable: {e}")),
+            error: Some(crate::trust::unreadable_sentence(&e)),
         },
     }
 }

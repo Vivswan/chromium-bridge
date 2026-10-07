@@ -317,6 +317,12 @@ pub enum Posture {
     Trusted { name: String },
 }
 
+/// The words every listing surface refuses with when the record cannot be read: `list-clients` prints them,
+/// the `client_list` frame carries them to the options page. Spelled here alone so the two cannot drift.
+pub fn unreadable_sentence(e: &io::Error) -> String {
+    format!("trust record unreadable: {e}")
+}
+
 /// A snapshot of the record as read, the only input an enforcement decision takes. Derefs to the record for
 /// its fields and is never written back.
 #[derive(Debug, Clone, PartialEq, Eq)]
