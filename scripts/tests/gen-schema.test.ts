@@ -160,6 +160,17 @@ describe("every keyword the generators admit is read by the library", () => {
   });
 });
 
+// The keyword census above compares standalone null arms; this is the required-property case. A converter that
+// made every required string nullable passes every census case and R1-R4 and fails only here.
+test("a property without a null arm refuses null; the null arm admits it", () => {
+  const reader = z.fromJSONSchema(
+    strict({ a: { type: "string" }, b: { type: ["string", "null"] } }, ["a", "b"]) as never,
+  );
+  expect(reader.safeParse({ a: "x", b: null }).success).toBe(true);
+  expect(reader.safeParse({ a: null, b: null }).success).toBe(false);
+  expect(reader.safeParse({ b: null }).success).toBe(false);
+});
+
 // The per-op arg types are named by change-case; a library that split snake_case differently (a kept
 // underscore, a lowercased second word) would rename 26 exported types.
 test("every op's args type is its snake_case name in PascalCase plus Args", () => {
