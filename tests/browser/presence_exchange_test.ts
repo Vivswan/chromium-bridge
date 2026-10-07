@@ -292,16 +292,30 @@ async function waitForAuditRecord(
 }
 
 /** Mint the host key into the isolated runtime dir's file store. `pair` reads its confirmation phrase from a
- * terminal and refuses a pipe, so it runs on a pseudo-terminal from Python's stdlib pty module (BSD `script`
- * refuses a non-terminal stdin, which is what a test runner has); the phrase is typed once the prompt shows.
+ * terminal and refuses a pipe, so it runs on a pseudo-terminal from Python's stdlib pty module under uv, the
+ * interpreter the protocol suites run (BSD `script` refuses a non-terminal stdin, which is what a test runner
+ * has); the phrase is typed once the prompt shows.
  * The transcript travels with any failure. */
 function pairHostKey(env: Record<string, string>): Promise<string> {
   const pty = "import os, pty, sys; sys.exit(os.waitstatus_to_exitcode(pty.spawn(sys.argv[1:])))";
   return new Promise((resolve, reject) => {
-    const child = spawn("python3", ["-c", pty, BIN, "pair", "--file-store"], {
-      env,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    // The host sees the throwaway HOME; uv (and the proto shim that may front it) keep their tools, interpreter,
+    // and cache where the developer's already are, so the run installs nothing into the throwaway dir.
+    const home = os.homedir();
+    const child = spawn(
+      "uv",
+      ["run", "--no-project", "--isolated", "python", "-c", pty, BIN, "pair", "--file-store"],
+      {
+        env: {
+          ...env,
+          PROTO_HOME: process.env.PROTO_HOME ?? path.join(home, ".proto"),
+          UV_CACHE_DIR: process.env.UV_CACHE_DIR ?? path.join(home, ".cache", "uv"),
+          UV_PYTHON_INSTALL_DIR:
+            process.env.UV_PYTHON_INSTALL_DIR ?? path.join(home, ".local", "share", "uv", "python"),
+        },
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
     let transcript = "";
     let typed = false;
     const timer = setTimeout(() => {
