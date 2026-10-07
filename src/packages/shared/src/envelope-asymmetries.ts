@@ -19,10 +19,10 @@ export type AsymmetryDirection = "widen" | "narrow";
 export type Change =
   /** Constraints on a string node (the Rust side has a plain String). */
   | { change: "string"; minLength?: number; maxLength?: number; pattern?: string }
-  /** A string arm beside a numeric node: `z.union([<node>, z.string()])`. */
+  /** A string arm beside a numeric node: a union of the node and a plain string. */
   | { change: "string-arm" }
   /** serde's adjacently tagged enum (one object variant per `kind` const, all with the same `value` shape)
-   * spelled as one object with `kind: z.enum([...])`. */
+   * spelled as one object whose `kind` is an enum of the tags. */
   | { change: "tag-union-as-enum-object" }
   /** The node is replaced by the schema another generated module owns, inlined; the generator cross-checks the
    * Rust node's field inventory and field types against it and holds the owning module's export equal to it. */

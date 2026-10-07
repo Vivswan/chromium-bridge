@@ -11,13 +11,14 @@ import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { pascalCase } from "change-case";
 import { z } from "zod";
 import { prepare } from "./gen-envelope";
 import {
   assertSchemaRules,
+  emitFromRust,
   type JsonObject,
   opArgsSchema,
-  pascal,
   policyDocSchema,
   policyOverlaySchema,
   policyValuesSchema,
@@ -78,15 +79,7 @@ interface Contract {
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-// `-q` keeps cargo's own output off the pipe; a compile error still lands on stderr and fails loudly here.
-const emitted = Bun.spawnSync(
-  ["cargo", "run", "--frozen", "-q", "-p", "chromium-bridge-core", "--example", "emit_contract"],
-  { cwd: root, stderr: "inherit" },
-);
-if (!emitted.success) {
-  throw new Error(`gen-ops: cargo emit_contract failed with status ${emitted.exitCode}`);
-}
-const contract = JSON.parse(emitted.stdout.toString()) as Contract;
+const contract = emitFromRust(root, "emit_contract") as Contract;
 
 // Bare when a valid JS identifier, quoted otherwise: Biome's quoteProperties "as-needed" would reformat anything else.
 const emitKey = (key: string): string =>
@@ -127,7 +120,7 @@ for (const t of contract.tools) {
   assertSchemaRules(`${t.name} args`, prepared, false);
   preparedArgs.set(t.name, prepared as JsonObject);
 }
-const argsTypeName = (op: string) => `${pascal(op)}Args`;
+const argsTypeName = (op: string) => `${pascalCase(op)}Args`;
 const argsTypes = (
   await Promise.all([...preparedArgs].map(([op, schema]) => typeSource(argsTypeName(op), schema)))
 ).join("\n\n");
@@ -542,25 +535,7 @@ interface EnclaveContract {
   };
 }
 
-const enclaveEmitted = Bun.spawnSync(
-  [
-    "cargo",
-    "run",
-    "--frozen",
-    "-q",
-    "-p",
-    "chromium-bridge-core",
-    "--example",
-    "emit_enclave_contract",
-  ],
-  { cwd: root, stderr: "inherit" },
-);
-if (!enclaveEmitted.success) {
-  throw new Error(
-    `gen-ops: cargo emit_enclave_contract failed with status ${enclaveEmitted.exitCode}`,
-  );
-}
-const enclave = JSON.parse(enclaveEmitted.stdout.toString()) as EnclaveContract;
+const enclave = emitFromRust(root, "emit_enclave_contract") as EnclaveContract;
 
 // Structural sanity only; anything malformed would generate a silently weaker verifier, so generation fails.
 if (
@@ -793,25 +768,7 @@ interface PolicyContract {
   docDefaults: { v: number; revision: number; touched: unknown[] };
 }
 
-const policyEmitted = Bun.spawnSync(
-  [
-    "cargo",
-    "run",
-    "--frozen",
-    "-q",
-    "-p",
-    "chromium-bridge-core",
-    "--example",
-    "emit_policy_contract",
-  ],
-  { cwd: root, stderr: "inherit" },
-);
-if (!policyEmitted.success) {
-  throw new Error(
-    `gen-ops: cargo emit_policy_contract failed with status ${policyEmitted.exitCode}`,
-  );
-}
-const policy = JSON.parse(policyEmitted.stdout.toString()) as PolicyContract;
+const policy = emitFromRust(root, "emit_policy_contract") as PolicyContract;
 
 // Structural sanity only; anything malformed would generate a silently weaker validator, so generation fails.
 if (

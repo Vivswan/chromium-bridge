@@ -144,8 +144,9 @@ export function assertSchemaRules(name: string, schema: unknown, loose: boolean)
   assertReadingRules(name, libraryReading(schema), loose);
 }
 
-/** Whether two schemas read the same to the library: the cross-module equality that replaces identity (a
- * node inlined into one generated module against the schema another generated module exports). */
+/** Whether a schema inlined into one generated module reads the same to the library as the schema another
+ * generated module exports: the equality A2 (scripts/gen-envelope.ts) holds the two to, so the request's args
+ * and the policy overlay accept exactly what OpArgsSchema and PolicyOverlaySchema accept. */
 export function readsEqual(schema: unknown, exported: z.ZodType): boolean {
   const theirs = z.toJSONSchema(exported, { io: "input" }) as JsonObject;
   delete theirs.$schema;
@@ -286,10 +287,25 @@ export async function typeSource(type: string, schema: unknown): Promise<string>
   return source.trim();
 }
 
-/** `snake_case` to `PascalCase`, for a type named after an op or a tag. */
-export function pascal(name: string): string {
-  return name
-    .split("_")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join("");
+/** Run one of the core's gen-only emitter examples and parse what it prints. `-q` keeps cargo's own output
+ * off the pipe; a compile error still lands on stderr and fails loudly here. */
+export function emitFromRust(root: string, example: string, features?: string): unknown {
+  const emitted = Bun.spawnSync(
+    [
+      "cargo",
+      "run",
+      "--frozen",
+      "-q",
+      "-p",
+      "chromium-bridge-core",
+      ...(features === undefined ? [] : ["--features", features]),
+      "--example",
+      example,
+    ],
+    { cwd: root, stderr: "inherit" },
+  );
+  if (!emitted.success) {
+    throw new Error(`gen-schema: cargo ${example} failed with status ${emitted.exitCode}`);
+  }
+  return JSON.parse(emitted.stdout.toString());
 }

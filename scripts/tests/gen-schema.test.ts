@@ -1,11 +1,14 @@
 // The rules scripts/gen-schema.ts holds every emitted validator to (R1-R4), each shown firing on the schema
 // it exists to refuse; the external facts the emission leans on (which keywords zod's fromJSONSchema reads,
-// what json-schema-to-typescript makes of the node shapes the generators produce); and the cross-module
-// equality that replaces identity. The library's reading is the artifact under test, so every case goes
+// what json-schema-to-typescript makes of the node shapes the generators produce, how change-case names a
+// type after an op); and the equality A2 holds an inlined schema and its owner module to. The library's
+// reading is the artifact under test, so every case goes
 // through the real library, never a hand-built reading, except R3, which guards the library itself.
 
 import { describe, expect, test } from "bun:test";
+import { pascalCase } from "change-case";
 import { z } from "zod";
+import { OP_NAMES } from "../../src/packages/shared/src/ops.gen";
 import {
   assertReadingRules,
   assertSchemaRules,
@@ -157,6 +160,40 @@ describe("every keyword the generators admit is read by the library", () => {
   });
 });
 
+// The per-op arg types are named by change-case; a library that split snake_case differently (a kept
+// underscore, a lowercased second word) would rename 26 exported types.
+test("every op's args type is its snake_case name in PascalCase plus Args", () => {
+  const expected: Record<string, string> = {
+    list_browsers: "ListBrowsersArgs",
+    tab_list: "TabListArgs",
+    tab_focus: "TabFocusArgs",
+    tab_open: "TabOpenArgs",
+    tab_close: "TabCloseArgs",
+    page_snapshot: "PageSnapshotArgs",
+    page_click: "PageClickArgs",
+    page_fill: "PageFillArgs",
+    page_text: "PageTextArgs",
+    page_screenshot: "PageScreenshotArgs",
+    page_scroll: "PageScrollArgs",
+    page_wait_for: "PageWaitForArgs",
+    page_eval: "PageEvalArgs",
+    page_snapshot_precise: "PageSnapshotPreciseArgs",
+    cookie_get: "CookieGetArgs",
+    storage_get: "StorageGetArgs",
+    page_navigate: "PageNavigateArgs",
+    page_back: "PageBackArgs",
+    page_forward: "PageForwardArgs",
+    page_reload: "PageReloadArgs",
+    page_press: "PagePressArgs",
+    page_hover: "PageHoverArgs",
+    page_select: "PageSelectArgs",
+    console_get: "ConsoleGetArgs",
+    page_handle_dialog: "PageHandleDialogArgs",
+    page_upload: "PageUploadArgs",
+  };
+  expect(Object.fromEntries(OP_NAMES.map((op) => [op, `${pascalCase(op)}Args`]))).toEqual(expected);
+});
+
 describe("the emitted source", () => {
   // The type reader's choices the exported types depend on: an empty strict object is Record<string, never>
   // (never `{}`), a false property is `never`, the any-schema is `unknown`, a loose object carries the index
@@ -205,7 +242,7 @@ describe("the OpArgs bag", () => {
   });
 });
 
-describe("readsEqual, the cross-module equality that replaces identity", () => {
+describe("readsEqual, the equality an inlined schema and its owner module are held to", () => {
   const node = strict({ a: { type: "string", minLength: 1 }, n: { type: "integer", minimum: 0 } }, [
     "a",
   ]);

@@ -13,6 +13,7 @@
     "@types/bun": "^1.4.0",
     "@types/mvdan-sh": "0.10.9",
     "mvdan-sh": "0.10.1",
+    "change-case": "^5.4.4",
     "json-schema-to-typescript": "^15.0.4",
     "oxc-parser": "^0.152.0",
     "remark-parse": "^11.0.0",

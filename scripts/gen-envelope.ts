@@ -58,23 +58,17 @@ import {
 } from "../src/packages/shared/src/envelope-asymmetries";
 import {
   assertSchemaRules,
+  emitFromRust,
+  isObject,
+  type JsonObject,
   opArgsSchema,
   type PolicyShape,
   policyOverlaySchema,
   readsEqual,
   schemaSource,
+  show,
   typeSource,
 } from "./gen-schema";
-
-type JsonObject = Record<string, unknown>;
-
-function isObject(v: unknown): v is JsonObject {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
-
-function show(v: unknown): string {
-  return JSON.stringify(v) ?? String(v);
-}
 
 // Keys that annotate a schema without constraining instances; stripped before emission (schemars puts a field's
 // doc comment here).
@@ -870,29 +864,6 @@ export function assertGeneratedMatches(
 }
 
 // ---- main ----------------------------------------------------------------------------
-
-/** Run one of the core's gen-only emitter examples and parse what it prints. `-q` keeps cargo's own output
- * off the pipe; a compile error still lands on stderr and fails loudly here. */
-function emitFromRust(root: string, example: string, features?: string): unknown {
-  const emitted = Bun.spawnSync(
-    [
-      "cargo",
-      "run",
-      "--frozen",
-      "-q",
-      "-p",
-      "chromium-bridge-core",
-      ...(features === undefined ? [] : ["--features", features]),
-      "--example",
-      example,
-    ],
-    { cwd: root, stderr: "inherit" },
-  );
-  if (!emitted.success) {
-    throw new Error(`gen-envelope: cargo ${example} failed with status ${emitted.exitCode}`);
-  }
-  return JSON.parse(emitted.stdout.toString());
-}
 
 async function main(): Promise<void> {
   const root = join(dirname(fileURLToPath(import.meta.url)), "..");
