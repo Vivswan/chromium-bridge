@@ -409,6 +409,8 @@ flowchart LR
 
 只有在没有任何已登记凭据能够作答时, 才接受来自确认窗口的 `presence_confirm`, 因此已登记的浏览器绝不会被降级为一次点击。
 
+交换对每一次拒绝的应答, 无论在 `presence_result` 还是 `enroll_result` 上, 都带有一个来自 `src/packages/core/src/webauthn/refusal.rs` 中 `RefusalCode` 名册的代码, 它是在场拒绝原因的唯一清单。`moon run gen` 把它生成为 `refusals.ts`, 而 `src/apps/extension/src/lib/refusals.ts` 以它为键为每个代码配一句话, 所以主机新增的代码在那里是类型错误, 直到它的句子落地。
+
 验证测试: [webauthn/tests.rs](../../src/packages/core/src/webauthn/tests.rs), [exchange.test.ts](../../src/apps/extension/tests/webauthn/exchange.test.ts), [ceremony.test.ts](../../src/apps/extension/tests/webauthn/ceremony.test.ts), [webauthn_test.ts](../../tests/browser/webauthn_test.ts)。
 
 ### 6.3 紧急开关
@@ -507,6 +509,8 @@ panic 消息默认输出到 stdout, 会破坏 NM 帧与 MCP NDJSON。缓解: rel
 - **审计转发白名单** (`src/packages/core/src/audit.rs` 中的 `EXTENSION_AUDIT_KINDS`): 主机通过 `audit_event` 控制帧接受的、由扩展拥有的审计种类 (`extension_kind` 由同一列表派生), 生成到 `audit.ts`。扩展的转发集合及其审计环词汇表中被转发的前缀都建立在生成的常量之上, 因此转发边界的两侧不可能分叉。
 - **身份** (`src/packages/core/src/identity.rs`): Native Messaging 主机 id 与固定的扩展清单密钥, 生成到 `identity.ts`。扩展导入 `NATIVE_HOST_ID` 用于 `connectNative`, 导入 `EXTENSION_MANIFEST_KEY` 用于构建出的清单, 导入由该密钥派生的 `PINNED_EXTENSION_ID` 用于启动自检。注册引擎直接消费这些常量, 因此不存在可能漂移的安装程序副本。
 - **身份门禁**: 生成 TS 时会从密钥重新推导出 id (`scripts/gen-ops.ts` 在不匹配时失败), `scripts/check-extension-id.ts` (`moon run check-extension-id`, `moon run ci` 的一部分) 验证构建出的清单以及唯一定义点规则。
+- **拒绝名册** (`src/packages/core/src/webauthn/refusal.rs` 中的 `RefusalCode`): 生成到 `refusals.ts`; [第 6.2 节](#62-基于-webauthn-的用户在场) 拥有它枚举了什么以及谁消费它这一事实。
+- **主机常量** (密钥标签、锁文件名、客户端名与日志环境变量、审计默认条数, 以及浏览器键, 每一个都是拥有它的 Rust 模块中的常量): 生成到 `host.ts`, `scripts/check-docs-literals.ts` 以它约束文档, 所以常量重命名会让文档门禁失败, 而不是让某一页悄悄出错。
 - **主机密钥签名契约** (`src/packages/core/src/enclave/`: `challenge.rs` 定义域字符串与字段边界, `pubkey.rs` 与 `mod.rs` 定义密钥与签名的字节长度以及 `enclave_error` 原因码): 由核心的 `emit_enclave_contract` 示例生成到 `enclave.ts` (常量加上 `EnclaveReasonCode` 联合类型, 扩展的登记状态机对其做穷举分类) 与 `enclave-fixture.ts`。
 - 夹具文件保存黄金向量: 由 Rust 构建的消息字节, 配上确定性的软件 P256 证明, 由 `src/apps/extension/tests/background/enclave-golden.test.ts` 通过扩展的 WebCrypto 校验器回放, 从而把签名消息的编码本身跨语言固定下来。夹具的签名密钥是公开的测试数据, 在两侧都被列入主机身份的拒绝名单 (核心中的 `ensure_not_fixture_key`, 扩展配对校验器与已存固定值校验器中的 `ENCLAVE_FIXTURE_KEY_ID`)。
 - **策略文档与方向** (`src/packages/core/src/policy/`): 主机持有的 `PolicyDoc`、十五个策略字段 (四项能力授予、确认策略、`disabledTools`、确认超时)、它们的默认拒绝值、逐字段的宽松方向表、`relaxes`/`restricts` 比较, 以及签名存储和 `set_signed`/`restrict` 写入接缝。
@@ -549,7 +553,7 @@ MCP 服务器 (`src/packages/core/src/error.rs` 中的 `CallError::code()`) 是�
 
 主机持有安全策略: 四项能力授予、确认策略、`disabledTools` 与确认超时。
 
-主机在 `runtime_dir()/policy.json` 中最多持久化一个签名的基线加一个未签名的限制覆盖层。状态通过七个增量的、由主机处理的控制帧 (`protocol/control.rs` 中的 `PolicyControl`) 传递, 其分类与终结方式与主机密钥帧和管理帧完全一致: 由主机应答, 从不转发给 MCP 服务器, 当服务器链路试图注入时直接丢弃。
+主机在运行时目录下的 `policy.json` 中最多持久化一个签名的基线加一个未签名的限制覆盖层; 该目录由 `src/packages/core/src/ipc/runtime_dir.rs` 中的 `RuntimeDir` 解析。状态通过七个增量的、由主机处理的控制帧 (`protocol/control.rs` 中的 `PolicyControl`) 传递, 其分类与终结方式与主机密钥帧和管理帧完全一致: 由主机应答, 从不转发给 MCP 服务器, 当服务器链路试图注入时直接丢弃。
 
 ```mermaid
 flowchart LR
@@ -583,7 +587,7 @@ flowchart LR
   - `ok: true` 携带精确的签名基线字节 (base64, 使签名产物逐字节地经过 JSON 跳转而不变)、可选的签名, 以及可选的覆盖层。
   - `ok: false` 携带 `error` (指明存储缺失、损坏或不可读, 或 `policy_get` 格式错误), 绝不携带基线, 因此扩展失败即关闭, 而不是信任无人担保的字节。
 - `policy_restrict { overlay }` (扩展 -> 主机) 与 `policy_restrict_result { ok, error? }` (主机 -> 扩展): 选项页的策略编辑器通过未签名的限制接缝收紧有效策略, 该接缝拒绝任何放宽; 应用成功的限制之后会跟一个携带已写入状态的 `policy_current`, 因此结果帧只携带裁决。放宽仍然是签名写入 (`chromium-bridge policy set`)。
-- `lang_get {}` / `lang_set { value }` (扩展 -> 主机) 与 `lang_current { value, seq }` (主机 -> 扩展): 共享的 `uiLanguage` 偏好 (`runtime_dir()/lang.json`), 刻意置于签名策略文档之外 - 不签名、不棘轮、无法影响任何安全决策 - 并以序号做回声抑制。
+- `lang_get {}` / `lang_set { value }` (扩展 -> 主机) 与 `lang_current { value, seq }` (主机 -> 扩展): 共享的 `uiLanguage` 偏好 (同一运行时目录中的 `lang.json`), 刻意置于签名策略文档之外 - 不签名、不棘轮、无法影响任何安全决策 - 并以序号做回声抑制。
 
 执行契约在设计上就是不对称的: 授予能力的策略携带主机密钥对精确字节的签名, 并且在写入时消耗了一次在场证明; 而只移除能力的策略则作为未签名的覆盖层自由传递。同用户进程能对主机密钥做什么, 是[信任边界台账](./security/trust-boundaries.md#边界-3-chrome---原生消息主机-native-messaging-帧格式)点名的残余风险。
 

@@ -59,12 +59,6 @@ chromium-bridge doctor    # or: chromium-bridge status
 | 旧扩展, 新主机 | 旧扩展丢弃它不认识的 `policy_current` 推送 (有测试固定此行为), 保留本地设置; 新主机仍在分发时应用自己的策略, 所以合并后的执行力度绝不会比旧扩展单独执行时更宽松。 |
 | 新扩展, 没有选项页帧的主机 | 选项页会按需发送 `registration_status`、`registration_repair`、`policy_restrict`、`audit_read` 和 `doctor_report`, 所以「绝不先开口」规则不覆盖它们: 中介的严格解析会拆掉浏览器这一侧的连接。在首次发布前这是可接受的, 因为没有任何已发布的主机缺少这些帧; 日后要覆盖它, 需要推迟的握手宣告主机的控制帧, 并让扩展据此决定是否发送。 |
 
-## 没有 Secure Enclave 的 Mac 无法登记
-
-- **你看到:** `chromium-bridge pair` 在 T2 之前的 Intel Mac 上拒绝执行。
-- **含义:** 每个授予和策略签名都依赖 Secure Enclave 密钥, 而那种硬件无法持有它, 并且 `requireEnrollment` 退出选项已被移除。桥接在那里保持阻塞, 这是有意为之, 且没有恢复路径。
-- **怎么做:** 使用 Apple Silicon 或 T2 Mac, 或者使用不要求登记的 Linux 或 Windows。
-
 ## 在 WSL 下运行
 
 Chrome、它启动的原生消息主机和 MCP 服务器必须属于同一个操作系统。根据 Chrome 运行在哪里来选择模式。
