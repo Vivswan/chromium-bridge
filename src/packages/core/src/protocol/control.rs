@@ -727,7 +727,7 @@ pub enum PolicyControl {
         error: Option<String>,
     },
     /// Extension -> host: re-derive `revision`'s effective policy as a fresh write; `entry` names the listed
-    /// row where the revision appears more than once.
+    /// record where `revision` alone is ambiguous (`policy/plan.rs` find_history_effective says when).
     PolicyRollback {
         revision: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -798,8 +798,8 @@ pub struct PolicyHistoryRow {
     pub superseded_unix: u64,
 }
 
-impl PolicyHistoryRow {
-    pub fn from_report(entry: &crate::policy::PolicyHistoryEntryReport) -> Self {
+impl From<&crate::policy::PolicyHistoryEntryReport> for PolicyHistoryRow {
+    fn from(entry: &crate::policy::PolicyHistoryEntryReport) -> Self {
         PolicyHistoryRow {
             id: entry.id.clone(),
             revision: entry.revision,

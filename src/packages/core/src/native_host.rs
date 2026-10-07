@@ -259,13 +259,9 @@ fn restrict_replies(overlay: crate::policy::PolicyOverlay, lane: WriteLane) -> V
 /// row; an unreadable ring is the error alone.
 fn policy_history_reply() -> PolicyControl {
     match crate::policy::gather_history_report() {
-        Ok(report) => HistoryReport::Entries(
-            report
-                .entries
-                .iter()
-                .map(PolicyHistoryRow::from_report)
-                .collect(),
-        ),
+        Ok(report) => {
+            HistoryReport::Entries(report.entries.iter().map(PolicyHistoryRow::from).collect())
+        }
         Err(error) => HistoryReport::Unavailable { error },
     }
     .into_frame()

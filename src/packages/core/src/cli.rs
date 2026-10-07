@@ -366,7 +366,7 @@ pub enum PolicyCommand {
         /// The history revision to re-derive
         #[arg(long, value_name = "N")]
         revision: u64,
-        /// The record to restore where the revision appears more than once: the `entry` id `policy history` lists
+        /// The record to restore where `--revision` alone is ambiguous: the `entry` id `policy history` lists
         #[arg(long, value_name = "ID")]
         entry: Option<String>,
         /// The post-write status report on stdout, or the versioned error object on refusal

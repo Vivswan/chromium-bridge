@@ -370,10 +370,9 @@ function HistoryBlock({
 }
 
 /** One ring entry as the page renders it, decided once where the wire row enters: a readable revision with its
- * roll-back, or a damaged entry that offers none. The record's content identity is what the roll-back names:
- * one revision appears once per restriction made while it was current, so the revision alone would not do.
- * Two identical records (one restriction repeated within a second) share an id and a state, so the row key adds
- * the occurrence. */
+ * roll-back, or a damaged entry that offers none. The roll-back names the record's content identity, since a
+ * revision alone can be ambiguous (policy/plan.rs find_history_effective says when). Two identical records (one
+ * restriction repeated within a second) share an id and a state, so the row key adds the occurrence. */
 type HistoryEntry = { id: string; key: string; supersededAt: string } & (
   | { kind: "revision"; revision: number; signed: boolean; overlayActive: boolean }
   | { kind: "damaged" }

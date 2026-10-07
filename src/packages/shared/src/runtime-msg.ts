@@ -420,8 +420,8 @@ export const RUNTIME_CONTRACT = contract({
     req: z.strictObject({ type: z.literal("grant_policy"), overlay: PolicyOverlaySchema }),
     res: TapRequired,
   },
-  // The page names the row it listed by the record's content identity, since one revision appears once per
-  // restriction made while it was current; the host refuses a record the ring no longer holds.
+  // The page names the row it listed by the record's content identity (policy/plan.rs find_history_effective
+  // says when a revision alone is ambiguous); the host refuses a record the ring no longer holds.
   rollback_policy: {
     gate: "extension-page",
     req: z.strictObject({

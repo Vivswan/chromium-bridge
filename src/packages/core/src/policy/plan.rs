@@ -195,9 +195,8 @@ impl RollbackInputs {
 }
 
 /// One ring entry as a rollback names it: the record's content identity ([`super::PolicyHistoryEntry::id`]), the `id`
-/// the history report lists beside each row. A revision can appear several times (every restriction while it
-/// was current pushed an entry at the unchanged revision), so a surface names the row the user saw, on the page
-/// by its button and on the CLI by `--entry`; a revision alone is refused where it is ambiguous.
+/// the history report lists beside each row, for the case [`find_history_effective`] refuses as ambiguous; the
+/// page names it by its button, the CLI by `--entry`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
