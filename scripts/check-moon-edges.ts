@@ -61,11 +61,15 @@ export const TOOLCHAIN_CARGO_VERBS = new Set([
 // A script word as the shell reads it. A glob keeps the text before its first live pattern character, which
 // is all the build/ rule may judge: a quoted `*` earlier in the word is text, not where the pattern starts. A
 // word with an expansion in it is not literal: its text is a marker, and the gate's rule refuses what it
-// cannot read.
+// cannot read. An extglob is opaque besides: the parser keeps its pattern as text, so a command inside it is
+// unread anywhere, and every task refuses it.
+type Reading = "literal" | "expansion" | "opaque";
+const RANK: Record<Reading, number> = { literal: 0, expansion: 1, opaque: 2 };
+const worst = (a: Reading, b: Reading): Reading => (RANK[a] >= RANK[b] ? a : b);
 interface Word {
   text: string;
   globPrefix: string | null;
-  literal: boolean;
+  reading: Reading;
 }
 
 // What the gate's rule judges: a simple command's words after the assignments before its name, with those
@@ -90,7 +94,7 @@ const GLOB_CHAR = /[*?[{]/;
 /** A word moon passes as one argument, or one of its own globs: no shell reads it, so a backslash is itself. */
 const asWord = (text: string): Word => {
   const at = text.search(GLOB_CHAR);
-  return { text, globPrefix: at === -1 ? null : text.slice(0, at), literal: true };
+  return { text, globPrefix: at === -1 ? null : text.slice(0, at), reading: "literal" };
 };
 
 // A backslash quotes the next character, so `in\stall` is `install` and `\*` is no glob, while `\\*` is a
@@ -100,7 +104,7 @@ const asWord = (text: string): Word => {
 function literal(raw: string, quoted: boolean): Word {
   let text = "";
   let globPrefix: string | null = null;
-  let literal = true;
+  let reading: Reading = "literal";
   for (let i = 0; i < raw.length; i++) {
     const c = raw[i] as string;
     const next = raw[i + 1];
@@ -110,10 +114,10 @@ function literal(raw: string, quoted: boolean): Word {
       continue;
     }
     if (!quoted && globPrefix === null && GLOB_CHAR.test(c)) globPrefix = text;
-    if (!quoted && c === "{") literal = false;
+    if (!quoted && c === "{") reading = "expansion";
     text += c;
   }
-  return { text, globPrefix, literal };
+  return { text, globPrefix, reading };
 }
 
 // bun's global options may or may not take a value (`--config` accepts an omitted one), so no table of them is
@@ -121,6 +125,32 @@ function literal(raw: string, quoted: boolean): Word {
 const unalias = (words: Word[]): Word[] => {
   const x = words[0]?.text === "bun" ? words.findIndex((w) => w.text === "x") : -1;
   return x === -1 ? words : [asWord("bunx"), ...words.slice(x + 1)];
+};
+
+// A launcher runs one of its arguments as a command, and which one depends on options this rule does not model
+// (`env -i X=1`, `nice -n 5`, `exec -a name`, `env -u bun`), so, as with bun's own options, the bunx rule reads
+// every word after the launcher: a bunx, or a bun with an x after it. Every name is its basename, so
+// `/usr/bin/env` is env and `/opt/homebrew/bin/bunx` is bunx, and a bun by path, which unalias leaves as the
+// gate's rules refuse it, has its x read here; bare `time` is a keyword the parser opens itself. The gate's
+// rules see the launcher as the command, and refuse it by name.
+const LAUNCHERS = new Set([
+  "builtin",
+  "command",
+  "env",
+  "exec",
+  "nice",
+  "nohup",
+  "time",
+  "timeout",
+  "xargs",
+]);
+const runsBunx = (words: Word[]): boolean => {
+  const [first, ...rest] = words.map((w) => posix.basename(w.text));
+  if (first === "bunx") return true;
+  if (first === "bun") return rest.includes("x");
+  if (first === undefined || !LAUNCHERS.has(first)) return false;
+  const bun = rest.indexOf("bun");
+  return rest.includes("bunx") || (bun !== -1 && rest.includes("x", bun + 1));
 };
 
 const { syntax } = sh;
@@ -144,32 +174,36 @@ function render(part: Sh.Node, quoted: boolean): Word {
     case "Lit":
       return literal((part as Sh.Lit).Value, quoted);
     case "SglQuoted":
-      return { text: (part as Sh.SglQuoted).Value, globPrefix: null, literal: true };
+      return { text: (part as Sh.SglQuoted).Value, globPrefix: null, reading: "literal" };
     case "DblQuoted": {
       const parts = (part as Sh.DblQuoted).Parts.map((p) => render(p, true));
       return {
         text: parts.map((p) => p.text).join(""),
         globPrefix: null,
-        literal: parts.every((p) => p.literal),
+        reading: parts.map((p) => p.reading).reduce(worst, "literal"),
       };
     }
     case "ParamExp":
-      return { text: `\${${(part as Sh.ParamExp).Param.Value}}`, globPrefix: null, literal: false };
+      return {
+        text: `\${${(part as Sh.ParamExp).Param.Value}}`,
+        globPrefix: null,
+        reading: "expansion",
+      };
     // The parser keeps an extglob's pattern as text, so a substitution inside it is unread.
     case "ExtGlob":
       return {
         text: `(${(part as Sh.ExtGlob).Pattern.Value})`,
         globPrefix: quoted ? null : "",
-        literal: false,
+        reading: "opaque",
       };
     case "CmdSubst":
-      return { text: "$(...)", globPrefix: null, literal: false };
+      return { text: "$(...)", globPrefix: null, reading: "expansion" };
     case "ProcSubst":
-      return { text: "<(...)", globPrefix: null, literal: false };
+      return { text: "<(...)", globPrefix: null, reading: "expansion" };
     case "ArithmExp":
-      return { text: "$((...))", globPrefix: null, literal: false };
+      return { text: "$((...))", globPrefix: null, reading: "expansion" };
     default:
-      return { text: `<${syntax.NodeType(part)}>`, globPrefix: null, literal: false };
+      return { text: `<${syntax.NodeType(part)}>`, globPrefix: null, reading: "expansion" };
   }
 }
 
@@ -181,9 +215,9 @@ const wordOf = (w: Sh.Word, quoted = false): Word =>
     (acc, part) => ({
       text: acc.text + part.text,
       globPrefix: acc.globPrefix ?? (part.globPrefix === null ? null : acc.text + part.globPrefix),
-      literal: acc.literal && part.literal,
+      reading: worst(acc.reading, part.reading),
     }),
-    { text: "", globPrefix: null, literal: true },
+    { text: "", globPrefix: null, reading: "literal" },
   );
 
 // The parser reads the script as bash, so a comment and a line continuation are not words, and a command
@@ -344,8 +378,13 @@ export function auditGraph(graph: TaskGraph): string[] {
       const target = `${project}:${id}`;
       const parsed = commandsOf.get(target) ?? { commands: [], words: [], data: [] };
       const { commands, words } = parsed;
-      if (commands.some(({ words: [w] }) => w?.text === "bunx")) {
+      if (commands.some(({ words }) => runsBunx(words))) {
         findings.push(`${target}: runs bunx (bun's global cache stands in for a missing package)`);
+      }
+      for (const w of [...words, ...parsed.data].filter((w) => w.reading === "opaque")) {
+        findings.push(
+          `${target}: the word ${w.text} holds an extglob pattern the parser keeps as text, so a command inside it is unread`,
+        );
       }
       const atRoot = project === ROOT_PROJECT || task.options?.runFromWorkspaceRoot === true;
       for (const w of atRoot ? words : []) {
@@ -393,7 +432,7 @@ export function auditGraph(graph: TaskGraph): string[] {
     const task = graph[project]?.[id];
     if (task === undefined) continue;
     const parsed = commandsOf.get(target) ?? { commands: [], words: [], data: [] };
-    for (const w of [...parsed.words, ...parsed.data].filter((w) => !w.literal)) {
+    for (const w of [...parsed.words, ...parsed.data].filter((w) => w.reading !== "literal")) {
       findings.push(
         `${target}: the word ${w.text} inside ${GATE} is not literal (the rules judge only what they can read)`,
       );

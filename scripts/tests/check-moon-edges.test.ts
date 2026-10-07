@@ -35,6 +35,7 @@ const graph: TaskGraph = {
         { target: "root:expands-a-word" },
         { target: "root:expands-braces" },
         { target: "root:quotes-braces" },
+        { target: "root:launches-inside-the-gate" },
       ],
     },
     ci: { command: "noop", deps: [{ target: "root:gate" }, { target: "root:check-yaml" }] },
@@ -238,14 +239,14 @@ const graph: TaskGraph = {
     "expands-braces": {
       command: "bun",
       script:
-        "bun in{stall,fo} fixture-package\nbun scripts/read.ts build/x{1..2}/index.json\nbun scripts/read.ts >&build/y{1..2}\nbun {x..Z} fixture-tool",
+        "bun in{stall,it} fixture-package\nbun scripts/read.ts build/x{1..2}/index.json\nbun scripts/read.ts >&build/y{1..2}\nbun {x..Z} fixture-tool",
       deps: [],
     },
     // A backslash-quoted brace, a heredoc's body, and its delimiter are text bash expands no brace in.
     "quotes-braces": {
       command: "bun",
       script:
-        "bun scripts/read.ts in\\{stall,fo\\}\nbun scripts/read.ts <<E{O,O}F\nin{stall,fo}\nE{O,O}F",
+        "bun scripts/read.ts in\\{stall,it\\}\nbun scripts/read.ts <<E{O,O}F\nin{stall,it}\nE{O,O}F",
       deps: [],
     },
     "quotes-a-star-before-a-glob": {
@@ -258,6 +259,42 @@ const graph: TaskGraph = {
       script: "bun scripts/a.ts <(bunx fixture-tool)",
       deps: [],
     },
+    // The parser keeps an extglob's pattern as text, so the substitution inside it is unread outside the gate too.
+    "extglobs-outside-the-gate": {
+      command: "bun",
+      script: "bun test @($(bunx fixture-tool))",
+      deps: [],
+    },
+    // A launcher runs one of its arguments; which one depends on its options, and `bun` may be one of them.
+    "launches-bunx": { command: "command", script: "command bunx fixture-tool", deps: [] },
+    "launches-aliased-bunx": { command: "env", script: "env -i X=1 bun x fixture-tool", deps: [] },
+    "launches-bunx-past-a-bun-option": {
+      command: "env",
+      script: "env -u bun bunx fixture-tool",
+      deps: [],
+    },
+    "launches-bunx-by-path": {
+      command: "/usr/bin/env",
+      script: "/usr/bin/env bunx fixture-tool",
+      deps: [],
+    },
+    "times-out-bunx": { command: "timeout", script: "timeout 30s bun x fixture-tool", deps: [] },
+    "launches-bunx-at-a-path": {
+      command: "env",
+      script: "env /opt/homebrew/bin/bunx fixture-tool",
+      deps: [],
+    },
+    "times-bunx-by-path": {
+      command: "/usr/bin/time",
+      script: "/usr/bin/time -p bunx fixture-tool",
+      deps: [],
+    },
+    "aliases-bunx-at-a-path": {
+      command: "/opt/homebrew/bin/bun",
+      args: ["x", "fixture-tool"],
+      deps: [],
+    },
+    "launches-inside-the-gate": { command: "env", script: "env bun test", deps: [] },
   },
   extension: {
     build: {
@@ -318,7 +355,18 @@ describe("auditGraph", () => {
         "root:expands-a-word: the word $((...)) inside root:gate is not literal (the rules judge only what they can read)",
         `root:expands-a-word: the word \${X} inside root:gate is not literal (the rules judge only what they can read)`,
         "root:expands-a-word: the word ($(bunx fixture-tool)) inside root:gate is not literal (the rules judge only what they can read)",
-        "root:expands-braces: the word in{stall,fo} inside root:gate is not literal (the rules judge only what they can read)",
+        "root:expands-a-word: the word ($(bunx fixture-tool)) holds an extglob pattern the parser keeps as text, so a command inside it is unread",
+        "root:extglobs-outside-the-gate: the word ($(bunx fixture-tool)) holds an extglob pattern the parser keeps as text, so a command inside it is unread",
+        "root:launches-bunx: runs bunx (bun's global cache stands in for a missing package)",
+        "root:launches-aliased-bunx: runs bunx (bun's global cache stands in for a missing package)",
+        "root:launches-bunx-past-a-bun-option: runs bunx (bun's global cache stands in for a missing package)",
+        "root:launches-bunx-by-path: runs bunx (bun's global cache stands in for a missing package)",
+        "root:times-out-bunx: runs bunx (bun's global cache stands in for a missing package)",
+        "root:launches-bunx-at-a-path: runs bunx (bun's global cache stands in for a missing package)",
+        "root:times-bunx-by-path: runs bunx (bun's global cache stands in for a missing package)",
+        "root:aliases-bunx-at-a-path: runs bunx (bun's global cache stands in for a missing package)",
+        "root:launches-inside-the-gate: runs env inside root:gate (not bun or a cargo toolchain verb)",
+        "root:expands-braces: the word in{stall,it} inside root:gate is not literal (the rules judge only what they can read)",
         "root:expands-braces: the word build/x{1..2}/index.json inside root:gate is not literal (the rules judge only what they can read)",
         "root:expands-braces: names the glob build/x{1..2}/index.json; a reader under build/ declares the file or directory it reads",
         "root:expands-braces: the word build/y{1..2} inside root:gate is not literal (the rules judge only what they can read)",
