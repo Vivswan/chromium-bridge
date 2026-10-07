@@ -244,16 +244,17 @@ async function main(): Promise<void> {
 
     // The two host-admin panels render their render path with no native host behind them: the registration
     // panel shows the worker's not-connected refusal (never an empty healthy table), and the policy editor the
-    // pre-cutover state with no field controls (nothing is editable before a host policy applies).
+    // pre-cutover state: the deny-baseline note beside live controls, since every edit before a baseline exists
+    // is a grant that signs the first one (the host refuses it with its own words when no host is up).
     const freshText = await bodyText();
     check(
       freshText.includes(REGISTRATION_REFUSAL.en),
       "registration panel renders the not-connected refusal with no host",
     );
     check(
-      (await page.$$('#policy button[role="switch"]')).length === 0 &&
+      (await page.$$('#policy button[role="switch"]')).length > 0 &&
         freshText.includes("built-in deny baseline"),
-      "policy editor renders the pre-cutover state with no field controls",
+      "policy editor renders the pre-cutover note beside the deny baseline's controls",
     );
 
     // The picker names each language in that language, in every locale.
