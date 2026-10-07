@@ -38,52 +38,42 @@ use base64::Engine as _;
 /// Byte length of a signature on the wire: raw IEEE P1363 `r || s`, the form WebCrypto verifies directly.
 pub const SIG_LEN: usize = 64;
 
-/// Standard-alphabet base64 with padding (RFC 4648): the one engine behind
-/// every base64 field this crate hands the extension (proof frames, the
-/// signed policy baseline), so the two sides can never pick different
-/// alphabets.
+/// The one engine behind every base64 field handed to the extension (proof frames, the signed policy
+/// baseline), so the two sides can never pick different alphabets.
 pub fn base64_encode(bytes: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
-/// The exact inverse of [`base64_encode`], accepting only what it emits. The
-/// STANDARD engine requires canonical padding and refuses nonzero trailing
-/// bits (`Zh==`), so every byte string has exactly one accepted spelling and
-/// a signed document cannot be re-spelled without failing to decode.
+/// Accepts only what [`base64_encode`] emits: the STANDARD engine refuses missing padding and nonzero
+/// trailing bits (`Zh==`), so a signed document has exactly one spelling (policy/store.rs relies on this).
 pub fn base64_decode(input: &str) -> Result<Vec<u8>, base64::DecodeError> {
     base64::engine::general_purpose::STANDARD.decode(input)
 }
 
-/// Prefix of the host key's credential-store entry name; the runtime directory's digest is the suffix
-/// (`store.rs`). Stable across processes: the `pair` CLI writes under it and the browser-spawned
-/// `--native-host` process reads it back. Versioned so a future algorithm change can write under a new
-/// prefix without colliding with the old entries.
+/// Prefix of the credential-store entry name; store.rs appends the runtime directory's digest. Versioned so
+/// an algorithm change writes under a new prefix instead of colliding with old entries.
 pub const KEY_LABEL: &str = "com.vivswan.chromium-bridge.enclave.signing.v1";
 
-/// The PUBLIC test-vector scalar behind the golden fixture
-/// (`examples/emit_enclave_contract.rs` -> generated/enclave-fixture.ts): a fixed,
-/// deliberately well-known P-256 private key, so fixture regeneration is
-/// deterministic. Because the scalar is public, anyone can sign fresh
-/// challenges with it - it protects nothing and must NEVER be accepted as an
-/// enrollment identity. [`ensure_not_fixture_key`] enforces that on the host
-/// side, and the extension refuses it in its pairing verifier and stored-pin
-/// validators (`ENCLAVE_FIXTURE_KEY_ID` in generated/enclave.ts).
+/// The PUBLIC scalar the golden fixture is signed with (`examples/emit_enclave_contract.rs`), well-known so
+/// regeneration is deterministic. Anyone can sign with it, so it is never an enrollment identity:
+///
+/// ```text
+/// host side      -> [`ensure_not_fixture_key`] refuses it when a handle is built
+/// extension side -> `ENCLAVE_FIXTURE_KEY_ID` in the generated enclave module refuses it at pairing and on
+///                   the stored pin
+/// ```
 pub const FIXTURE_KEY_BYTES: [u8; 32] = [
     0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
     0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
 ];
 
-/// Fingerprint (lowercase-hex SHA-256 of the X9.63 public point) of
-/// [`FIXTURE_KEY_BYTES`]' public half: the deny-listed identity. Pinned to
-/// the scalar by `fixture_key_is_pinned_and_refused` below and re-derived at
-/// generation time by the fixture emitter, which fails on a mismatch.
+/// Lowercase-hex SHA-256 of [`FIXTURE_KEY_BYTES`]' X9.63 point: the deny-listed identity. Derived only at
+/// fixture generation, so `fixture_key_is_pinned_and_refused` holds the pin when nobody runs gen.
 pub const FIXTURE_KEY_ID: &str = "4269889431e3131966fcaf6a457141943ed2c35b5b917ae62cb339546f523551";
 
-/// Fail closed when `public` is the golden-fixture key. Called when an [`EnrollmentKey`] is constructed, so a
-/// planted file record carrying the fixture scalar yields no handle and signs nothing. A SUBSTITUTED host
-/// binary skips this check; the load-bearing deny-list against that adversary is the extension's
-/// (`ENCLAVE_FIXTURE_KEY_ID`). The fingerprint is public data, so this comparison carries no timing
-/// sensitivity.
+/// A substituted host binary skips this check, so the load-bearing deny-list is the extension's
+/// (`ENCLAVE_FIXTURE_KEY_ID`); this one keeps a planted file record from ever becoming a handle. The
+/// fingerprint is public, so the compare needs no constant time.
 pub fn ensure_not_fixture_key(public: &EnclavePublicKey) -> Result<(), EnclaveError> {
     if public.fingerprint_hex() == FIXTURE_KEY_ID {
         return Err(EnclaveError::KeyInvalid(
@@ -93,8 +83,6 @@ pub fn ensure_not_fixture_key(public: &EnclavePublicKey) -> Result<(), EnclaveEr
     Ok(())
 }
 
-/// Typed failures for the host key operations. The native host maps
-/// these to the stable `enclave_error.reason` codes via [`reason_code`].
 #[derive(Debug, thiserror::Error)]
 pub enum EnclaveError {
     #[error("no host key found - run `chromium-bridge pair` first")]
@@ -110,11 +98,8 @@ pub enum EnclaveError {
     Signing(String),
 }
 
-/// Stable machine-readable reason for an `enclave_error` frame. The extension
-/// matches on these; keep them append-only. A new variant fails this
-/// exhaustive match at compile time; keeping its code in [`REASON_CODES`]
-/// (and the sample list beside it) is enforced at TEST time by
-/// `reason_codes_are_exactly_the_emitted_set`.
+/// The extension branches on these strings, so the set is append-only;
+/// `reason_codes_are_exactly_the_emitted_set` ties it to [`REASON_CODES`].
 pub fn reason_code(e: &EnclaveError) -> &'static str {
     match e {
         EnclaveError::NotEnrolled => "not_enrolled",
@@ -125,11 +110,7 @@ pub fn reason_code(e: &EnclaveError) -> &'static str {
     }
 }
 
-/// The closed set of `enclave_error.reason` codes [`reason_code`] can emit,
-/// in [`EnclaveError`] variant order. This is the wire vocabulary the
-/// extension branches on (its compromise latch fires on a subset), so it is
-/// emitted to the TS side as a union (generated/enclave.ts, `moon run gen`);
-/// `reason_codes_are_exactly_the_emitted_set` pins it to [`reason_code`].
+/// The closed set [`reason_code`] emits, in variant order; `moon run gen` emits it to the TS side as a union.
 pub const REASON_CODES: [&str; 5] = [
     "not_enrolled",
     "invalid_challenge",

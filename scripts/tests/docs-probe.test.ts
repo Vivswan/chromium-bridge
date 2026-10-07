@@ -154,11 +154,10 @@ describe("a locale page skips the word cap and keeps its path and link findings"
   });
 });
 
-// A built icon or a tool cache exists after a build and not on a fresh clone, so a page naming one
-// got a different verdict in two worktrees of the same commit (one had built the extension, one had
-// not). A path git ignores is not a repository file wherever the probe runs, built or fresh, and a
-// directory token keeps its slash so a `build/` rule still matches it. The scratch repository's git
-// runs with GIT_* scrubbed, so this file can run inside the pre-commit hook.
+// A page naming a built icon got two verdicts in two worktrees of one commit (one had built the extension,
+// one had not). A path git ignores is not a repository file wherever the probe runs; a directory token keeps
+// its slash so a `build/` rule still matches it. The scratch git runs with GIT_* scrubbed, so this file can
+// run inside the pre-commit hook.
 describe("a path or link target that git ignores is not part of the repository", () => {
   const states: ReadonlyArray<readonly [state: string, files: Record<string, string>]> = [
     ["built: the artifact exists", { "build/out.png": "" }],

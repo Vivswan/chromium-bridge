@@ -1,6 +1,3 @@
-//! Linux mechanisms: image identity as the SHA256 of `/proc/<pid>/exe` (the
-//! kernel's magic symlink to the executable inode), and peer credentials via
-//! `SO_PEERCRED`.
 #![expect(
     unsafe_code,
     reason = "audited FFI quarantine: the SO_PEERCRED getsockopt call, behind a safe wrapper"
@@ -12,24 +9,18 @@ use std::path::PathBuf;
 use super::super::identity::{ClientIdentity, HashDigest};
 use super::super::socket::BridgeStream;
 
-/// Error message for an unmeasurable self identity, used by
-/// [`super::super::attest`].
 pub(crate) const OWN_IDENTITY_ERROR: &str = "cannot hash own executable";
 
-/// This process's own executable identity: the SHA256 of its on-disk image.
 pub(crate) fn own_identity() -> io::Result<HashDigest> {
     pid_identity(std::process::id())
 }
 
-/// The peer's running-image identity, measured the same way as
-/// [`own_identity`].
 pub(crate) fn peer_identity(stream: &BridgeStream) -> io::Result<HashDigest> {
     pid_identity(super::super::peercred::peer_pid(stream)?)
 }
 
-/// The full client identity of an arbitrary process named by pid. Linux code signing is not part of the
-/// base system, so the anchor is always the hash and `signer` is always `None`. Carries the same pid-reuse
-/// race as [`pid_identity`].
+/// Linux code signing is not part of the base system, so the anchor is the hash and `signer` is always
+/// `None`.
 pub(crate) fn pid_client_identity(pid: u32) -> io::Result<ClientIdentity> {
     Ok(ClientIdentity {
         hash: pid_identity(pid)?,
@@ -37,14 +28,13 @@ pub(crate) fn pid_client_identity(pid: u32) -> io::Result<ClientIdentity> {
     })
 }
 
-/// The running-image identity of a process named by pid: the SHA256 of `/proc/<pid>/exe`, the kernel's
-/// magic symlink to the executable inode, which follows to the real backing file even after the path was
-/// replaced. The pid-resolution race is noted on [`super::super::peercred::peer_pid`].
+/// `/proc/<pid>/exe` is the kernel's magic symlink to the executable inode, so it follows to the real backing
+/// file even after the path was replaced. The pid-resolution race is noted on
+/// [`super::super::peercred::peer_pid`].
 pub(crate) fn pid_identity(pid: u32) -> io::Result<HashDigest> {
     HashDigest::of_file(&PathBuf::from(format!("/proc/{pid}/exe")))
 }
 
-/// Peer credentials of a connected Unix-domain socket via `SO_PEERCRED`.
 pub(crate) fn peer_uid(fd: libc::c_int) -> io::Result<u32> {
     Ok(peer_ucred(fd)?.uid)
 }

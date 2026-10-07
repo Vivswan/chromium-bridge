@@ -1,11 +1,14 @@
-//! The credential-store seam: one entry per runtime directory, named [`super::KEY_LABEL`] plus a digest of the
-//! directory's path, through `keyring`. The store is per OS user while everything else here is per runtime
-//! directory, so the digest keeps two directories (the protocol suites' isolated ones beside the real one)
-//! from sharing an entry, and the name is derivable again after the directory itself is gone (a Linux session
-//! runtime directory is cleared at logout), so nothing has to remember it.
+//! The credential-store seam, through `keyring`: one entry per runtime directory, named [`super::KEY_LABEL`]
+//! plus a digest of the directory's path. The store is per OS user while everything else here is per runtime
+//! directory, and the name must be derivable after the directory is gone (a Linux session runtime directory
+//! is cleared at logout), so nothing has to remember it.
 //!
-//! Compiled against the real store only outside test builds, so no test can reach the developer's Keychain. A
-//! test build holds nothing and refuses every write, and tests mint into the file record explicitly.
+//! ```text
+//! two directories (a protocol suite's beside the real one) -> two entries, never one shared
+//! a test build                                             -> compiled against no store: holds nothing and
+//!                                                             refuses every write, so no test reaches the
+//!                                                             developer's Keychain
+//! ```
 
 use p256::elliptic_curve::zeroize::Zeroizing;
 
@@ -63,7 +66,6 @@ mod real {
     }
 }
 
-/// Write the scalar, replacing any entry already under the name.
 pub(super) fn set(scalar: &[u8]) -> Result<(), EnclaveError> {
     #[cfg(not(test))]
     {

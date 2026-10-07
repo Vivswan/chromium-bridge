@@ -1,19 +1,15 @@
-//! WebAuthn user presence: the host-side verifier for the assertions the extension makes with the
-//! browser's platform authenticator (Touch ID, Windows Hello, a FIDO2 key). Every capability-granting act
-//! needs a signature only a human gesture can produce; the extension is the WebAuthn client and this module
-//! is the relying party, verifying against the credential public key recorded at enrollment.
+//! WebAuthn user presence: the host is the relying party, the extension is the client, and every
+//! capability-granting act needs a signature only a human gesture can produce.
 //!
 //! ```text
 //! host    statement (domain || browser label || action || nonce) -> challenge = sha256(statement)
-//! ext     navigator.credentials.get({ challenge, rpId: <extension id> })   <- the human gesture
-//! host    verify_assertion: rpIdHash, UP flag, signCount, clientDataJSON, ECDSA P-256 over
-//!         authenticatorData || sha256(clientDataJSON)
+//! ext     navigator.credentials.get({ challenge })                 <- the human gesture
+//! host    verify_assertion against the key recorded at enrollment
 //! ```
 //!
-//! `chrome-extension://<id>` is a valid WebAuthn origin whose RP ID is the extension id, so the only RP this
-//! host ever serves is [`RpId::pinned`]. Attestation is never trusted: registration accepts `fmt: "none"`
-//! only and takes the credential key from `attestedCredentialData`. Every refusal is a named variant. The
-//! enrollments live in the trust record (store.rs); the request/answer exchange is [`crate::presence::request`].
+//! The only RP this host serves is [`RpId::pinned`] (`chrome-extension://<id>`: Chromium rewrites an
+//! extension's rp.id claim to its origin). Attestation is never trusted (registration.rs). Enrollments live
+//! in the trust record (store.rs); the request/answer exchange is [`crate::presence::request`].
 
 mod authenticator_data;
 mod base64url;

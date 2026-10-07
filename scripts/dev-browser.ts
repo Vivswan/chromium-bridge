@@ -1,35 +1,21 @@
 #!/usr/bin/env bun
-// Dev browser lane for `moon run dev` (spawned by scripts/dev.ts): this
-// process OWNS the throwaway dev browser through web-ext-run - the same
-// launcher WXT would use - so a browser the developer quits or that crashes
-// relaunches from web-ext-run's own registerCleanup callback. No ps polling,
-// no command-line fingerprint, no parent-chain walk, no stdin key injection
-// into WXT.
+// The dev browser lane `moon run dev` spawns from scripts/dev.ts. This process owns the throwaway browser
+// through web-ext-run, the launcher WXT would use, so a browser the developer quits or that crashes
+// relaunches from web-ext-run's own cleanup callback. WXT builds, serves, and reloads the extension over
+// its dev-server websocket from inside the loaded extension (webExt.disabled in
+// src/apps/extension/wxt.config.ts), so nothing here reloads.
 //
-// WXT builds, serves, and reloads the extension but no longer opens the
-// browser (webExt.disabled in src/apps/extension/wxt.config.ts). Its file-save
-// reload runs over WXT's dev-server websocket from inside the loaded
-// extension, independent of who launched Chrome, so nothing here drives
-// reloads (noReload).
-//
-// Isolation (the browser-safety red line): this config sets NO chromiumProfile
-// and NO keepProfileChanges, so web-ext-run hands Chrome a FRESH temporary
-// --user-data-dir on every (re)launch - the dev browser can never open a real
-// profile. assertFreshTempProfile fails closed if a future edit regresses
-// that. Load path: branded Chrome 137+ dropped --load-extension, so
-// web-ext-run loads the unpacked build over CDP behind
-// --enable-unsafe-extension-debugging; we keep that path (target "chromium",
-// no profile/user-data-dir args).
+// Browser-safety red line: no chromiumProfile and no keepProfileChanges, so web-ext-run hands Chrome a
+// FRESH temporary --user-data-dir on every launch. Branded Chrome 137+ dropped --load-extension, so
+// web-ext-run loads the unpacked build over CDP behind --enable-unsafe-extension-debugging.
 
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { PINNED_EXTENSION_ID } from "../src/packages/shared/generated/identity";
 import { repoRoot } from "./lib.ts";
 
-// WXT's serve (dev) mode writes to <outDir>/<target>-dev - the `-dev` suffix
-// distinguishes it from the production `chrome-mv3` build, and only this dev
-// output carries WXT's dev-server reload client. wxt.config.ts sets
-// outDir=build/extension, target chrome-mv3, so the dev browser must load this.
+// WXT's serve mode writes <outDir>/<target>-dev (wxt.config.ts: outDir build/extension, target chrome-mv3),
+// and only that output carries the dev-server reload client.
 const extensionOut = join(repoRoot, "build/extension/chrome-mv3-dev");
 
 type DevBrowserConfig = {
@@ -51,11 +37,9 @@ const devBrowserConfig = (): DevBrowserConfig => ({
   // extension-only dev, or when astro falls back off 4321, the tab just misses
   // it - it is a convenience, not something dev correctness depends on.
   startUrl: ["http://localhost:4321/chromium-bridge/"],
-  // Pin our toolbar icon (untracked pref; verified it survives Chrome's
-  // preference rewrite). extensions.ui.developer_mode is TRACKED (hash-guarded)
-  // and cannot be preseeded - dev needs it only for the chrome://extensions UI
-  // toggle, which the CDP load path does not require. The devtools entry
-  // mirrors WXT's default (silences a devtools self-XSS sync warning).
+  // extensions.pinned_extensions is untracked, so a preseed survives Chrome's preference rewrite;
+  // extensions.ui.developer_mode is hash-guarded and cannot be, and the CDP load path does not need it. The
+  // devtools entry mirrors WXT's default and silences a self-XSS sync warning.
   chromiumPref: {
     "extensions.pinned_extensions": [PINNED_EXTENSION_ID],
     devtools: {
@@ -66,12 +50,11 @@ const devBrowserConfig = (): DevBrowserConfig => ({
     },
   },
   args: ["--unsafely-disable-devtools-self-xss-warnings"],
-  // Honor CHROME_BIN so a developer can pin the dev browser to an isolated
-  // Chrome for Testing (the repo's browser-safety convention); unset falls
-  // back to web-ext-run's own chrome-launcher detection, unchanged from before.
+  // CHROME_BIN pins the dev browser to an isolated Chrome for Testing; unset falls back to web-ext-run's
+  // chrome-launcher detection.
   chromiumBinary: process.env.CHROME_BIN || undefined,
   noReload: true, // WXT reloads over its websocket; web-ext must not watch/reload
-  noInput: true, // non-interactive: no web-ext stdin/keypress handling
+  noInput: true,
 });
 
 // FAIL CLOSED: the dev browser must never reuse or persist a real profile. The
@@ -97,13 +80,9 @@ let shuttingDown = false;
 const startedAt = Date.now();
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Wait for WXT's fresh, SETTLED build. No browser is spawned here, so a slow or
-// mid-write build costs nothing but time - ALL the waiting/retrying happens
-// BEFORE any browser exists. "Fresh": the manifest's mtime is at or after this
-// lane's start, so a chrome-mv3-dev/ left by a PREVIOUS session is ignored
-// (WXT wipes and rebuilds it at startup). "Settled": it is parseable and has
-// been unchanged for a moment, so we never hand web-ext-run a directory WXT is
-// still writing. Returns false on timeout or shutdown.
+// Nothing is spawned until WXT's build is fresh AND settled, so waiting costs only time.
+//   manifest mtime >= this lane's start    -> fresh: a chrome-mv3-dev/ from a previous session is ignored (WXT wipes it)
+//   parseable and unchanged for SETTLE_MS  -> settled: web-ext-run never gets a directory WXT is still writing
 const SETTLE_MS = 400;
 const waitForSettledBuild = async (deadline: number): Promise<boolean> => {
   const manifest = join(extensionOut, "manifest.json");
@@ -141,8 +120,6 @@ class CapturingRunner {
   #runners: Runner[];
   #closePromise: Promise<void> | null = null;
   constructor(params: { runners: unknown[] }) {
-    // web-ext builds each runner (here, the single chromium runner) and passes
-    // them in; they carry the run/exit/registerCleanup surface we rely on.
     this.#runners = params.runners as Runner[];
     activeBrowser = this;
   }
@@ -176,12 +153,9 @@ class CapturingRunner {
     );
     Promise.all(done).then(cb, cb);
   }
-  // Close the browser for teardown, once. Memoized so the launch path and
-  // shutdown that race each other await the SAME close (no double-kill, and
-  // shutdown cannot process.exit while a close it did not start is mid-flight).
-  // exit() closes Chrome by the pid chrome-launcher recorded but first awaits
-  // web-ext's setup; bound that so a hung CDP handshake cannot stall teardown,
-  // then fall back to a direct kill by the same recorded pid.
+  // Memoized so the launch path and shutdown await the SAME close: no double kill, and shutdown cannot exit
+  // while a close it did not start is mid-flight. exit() first awaits web-ext's setup, so it is bounded and a
+  // direct kill by the recorded pid follows.
   close(): Promise<void> {
     this.#closePromise ??= (async () => {
       await Promise.race([this.#exit().catch(() => {}), sleep(8_000)]);
@@ -236,8 +210,6 @@ const launch = async (): Promise<void> => {
       return;
     }
     console.log("[browser] dev browser open (fresh temp profile).");
-    // Relaunch when the developer quits the browser or it crashes: web-ext-run
-    // fires its cleanup callbacks when the Chromium instance exits.
     started.registerCleanup(() => {
       if (activeBrowser !== started) return; // already torn down or superseded
       activeBrowser = null;

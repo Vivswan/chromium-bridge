@@ -66,8 +66,7 @@ pub enum EnrollmentAuthority {
     Approved(PresenceAttestation),
 }
 
-/// Record a credential an accepted registration produced, replacing an earlier enrollment of the same
-/// credential id. Returns the snapshot after the write.
+/// Replaces an earlier enrollment of the same credential id (`Trust::enroll`).
 pub fn record(
     label: &BrowserLabel,
     credential: Credential,
@@ -93,16 +92,14 @@ pub fn record(
     })
 }
 
-/// What `revoke <browser>` did.
 #[derive(Debug)]
 pub struct BrowserRevoked {
     /// The credentials that went, in record order.
     pub forgotten: Vec<Enrollment>,
-    /// The record after the write.
     pub trust: TrustState,
 }
 
-/// Why a browser was not forgotten. Either way nothing was written.
+/// Either way nothing was written.
 #[derive(Debug, thiserror::Error)]
 pub enum RevokeBrowserError {
     /// No enrollment carries the label; `enrolled` names the labels that are present, in record order, so
@@ -156,10 +153,8 @@ pub(crate) fn audit_browsers_revoked(surface: Surface, forgotten: &[Enrollment])
     }
 }
 
-/// Why the sign counter did not advance.
 #[derive(Debug)]
 pub enum CounterError {
-    /// The credential is no longer enrolled.
     NotEnrolled,
     /// The stored counter already reached `stored`: another host accepted a later assertion between this
     /// one's verification and its write, or this assertion is the replay.
@@ -169,9 +164,9 @@ pub enum CounterError {
     Io(io::Error),
 }
 
-/// Whether `received` moves the counter forward: a zero on both sides is an authenticator that does not
-/// count; once either side counts, the value must advance on every assertion. The verifier applies the same
-/// rule to its snapshot; this is the authoritative application, under the lock.
+/// A zero on both sides is an authenticator that does not count; once either side counts, the value must
+/// advance on every assertion. verify.rs applies the same rule to its snapshot; the write under the lock is
+/// the authoritative application.
 pub fn counter_advances(stored: u32, received: u32) -> bool {
     (stored == 0 && received == 0) || received > stored
 }

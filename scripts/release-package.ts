@@ -238,7 +238,7 @@ export function installerPlan(release: ReleaseTag, platform: string, arch: strin
 
 export const installerOutputs = ["installer", "installersha256file"] as const;
 
-/** `bump` is `true` when a formula was written (a final tag) and `false` for a prerelease, which the tap never sees. */
+/** `true` when a formula was written. */
 export const formulaOutputs = ["bump"] as const;
 
 /**

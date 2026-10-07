@@ -56,7 +56,6 @@ fn plant(clients: Option<&[&str]>) {
     .unwrap();
 }
 
-/// `(kind, name)` of every record in the trail, in order.
 fn trail() -> Vec<(AuditKind, Option<String>)> {
     std::fs::read_to_string(audit_path().unwrap())
         .unwrap()

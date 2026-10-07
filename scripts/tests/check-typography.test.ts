@@ -45,7 +45,6 @@ describe("forbiddenIn", () => {
   });
 
   test("astral characters count as one column and are not misflagged", () => {
-    // U+1F600 (emoji) before an em-dash: the dash sits at codepoint column 3.
     const hits = forbiddenIn("\u{1F600}a\u2014b");
     expect(hits).toEqual([{ line: 1, column: 3, char: "\u2014", codepoint: "U+2014" }]);
   });
@@ -57,14 +56,11 @@ describe("forbiddenIn", () => {
   });
 
   test("the CJK prose marks stay allowed (they are not in the set)", () => {
-    // U+3001 U+3002 U+300C U+300D: ideographic comma/full stop and corner
-    // brackets - legitimate in CJK prose, deliberately not banned.
     expect(forbiddenIn("\u4F60\u597D\u3002\u300C\u5F15\u7528\u300D\u3001")).toEqual([]);
   });
 
   test("neighbours of banned ranges stay allowed", () => {
-    // U+2016 (after U+2000-2015), U+2017, U+2022 bullet, U+2192 arrow,
-    // U+2260 not-equal, U+2FFF (before U+3000), U+FF5F (after U+FF5E).
+    // Each sits one codepoint past a banned range's edge, or is a symbol the set leaves alone.
     expect(forbiddenIn("\u2016\u2017\u2022\u2192\u2260\u2FFF\uFF5F")).toEqual([]);
   });
 });
@@ -141,8 +137,6 @@ describe("scanFile (temp fixtures, never the repo)", () => {
   });
 
   test("a symlink is scanned as its link text and never followed", () => {
-    // Target holds a banned char; the link text is clean: no hits. And a
-    // link whose TEXT carries a banned char is flagged even when dangling.
     const target = join(dir, "target.txt");
     writeFileSync(target, "followed \u2014 content\n");
     const cleanLink = join(dir, "clean-link");

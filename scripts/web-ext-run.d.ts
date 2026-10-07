@@ -15,9 +15,8 @@ declare module "web-ext-run" {
   }
   interface RunOptions {
     shouldExitProgram?: boolean;
-    // web-ext's injectable runner class (its dependency-injection seam). We
-    // pass a wrapper so we hold the runner handle even if run() rejects after
-    // spawning the browser.
+    // web-ext's dependency-injection seam: dev-browser.ts passes a wrapper so it holds the runner handle even
+    // when run() rejects after spawning the browser.
     MultiExtensionRunner?: new (params: {
       runners: unknown[];
     }) => unknown;

@@ -1,10 +1,4 @@
-// Tiny helpers shared across the packages.
-
-/**
- * Exhaustiveness backstop: a `switch` default lands here only if a union arm
- * was left unhandled, which the `never` parameter turns into a compile error
- * at the call site. The throw covers the runtime-corrupt case.
- */
+/** The throw covers what the `never` parameter cannot: a corrupt value that reached a default arm at runtime. */
 export function unreachable(value: never): never {
   throw new Error(`unreachable: ${JSON.stringify(value)}`);
 }

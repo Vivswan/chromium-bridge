@@ -157,10 +157,8 @@ describe("offByDefaultViolations", () => {
   });
 
   test("a renamed gate TOOL fails closed too, not just a renamed key", () => {
-    // The tool was renamed consistently in the catalogue and the matrix, so
-    // riskMatrixViolations is clean - but the gates list still says
-    // page_upload. Silence here would mean the off-by-default gate simply
-    // stopped being verified.
+    // The matrix row and the defaults agree on the renamed tool; only the gates list still says page_upload,
+    // and silence here would mean that gate stopped being verified.
     const rows = parseRiskMatrix(
       row("page_attach_file", "**Critical**", "debugger", "**off by default** (opt-in)"),
     );

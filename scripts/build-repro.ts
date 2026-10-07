@@ -19,7 +19,6 @@ import { accessSync, constants } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Repo root, derived from this file's location (scripts/ is a direct child).
 const bbRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 function bbDie(message: string, exitCode = 1): never {
@@ -33,8 +32,6 @@ const env: Record<string, string | undefined> = { ...process.env };
 const home = env.HOME;
 if (!home) bbDie("HOME is not set");
 
-// Locate a cargo binary (PATH, then the common Homebrew / rustup spots) and
-// prepend its directory to PATH so the rustc it shells out to is discoverable.
 function findCargo(): string {
   for (const candidate of [
     "cargo",
@@ -59,6 +56,7 @@ function findCargo(): string {
 const bbCargo = findCargo();
 env.BB_CARGO = bbCargo;
 const cargoDir = dirname(bbCargo);
+// cargo resolves rustc through PATH unless RUSTC is set, so the chosen cargo's directory is put there.
 const pathEntries = (env.PATH ?? "").split(delimiter);
 if (!pathEntries.includes(cargoDir)) {
   env.PATH = `${cargoDir}${delimiter}${env.PATH ?? ""}`;

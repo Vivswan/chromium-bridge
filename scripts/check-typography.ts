@@ -20,8 +20,7 @@ import { lstatSync, readFileSync, readlinkSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** Banned codepoints, as inclusive [first, last] ranges. All escaped so this
- * file never flags itself. Kept identical to the retired action's set. */
+/** Banned codepoints as inclusive ranges, written escaped so this file never flags itself. */
 export const FORBIDDEN_RANGES: ReadonlyArray<readonly [number, number]> = [
   [0x00a0, 0x00a0], // no-break space
   [0x00ab, 0x00ab], // left guillemet
@@ -51,17 +50,11 @@ function isForbidden(codepoint: number): boolean {
   return FORBIDDEN_RANGES.some(([first, last]) => codepoint >= first && codepoint <= last);
 }
 
-/** Whether the content is binary: a null byte in the first 8 KiB (the same
- * sniff git uses). UTF-16 text also trips this, which is why the caller
- * checks for UTF-16 BOMs FIRST - a UTF-16 source file must be converted, not
- * skipped as if it were an icon. */
+/** A null byte in the first 8 KiB, git's own binary sniff. */
 export function looksBinary(bytes: Uint8Array): boolean {
   return bytes.subarray(0, 8192).includes(0);
 }
 
-/** Whether the content announces itself as UTF-16 (BOM). Such a file is
- * text - exactly what this gate exists to read - so it is an error upstream,
- * never a binary skip. */
 export function isUtf16(bytes: Uint8Array): boolean {
   return (
     bytes.length >= 2 &&
@@ -74,16 +67,13 @@ export interface Hit {
   line: number;
   /** 1-based column (in codepoints). */
   column: number;
-  /** The offending character. */
   char: string;
   /** "U+XXXX" form of the codepoint. */
   codepoint: string;
 }
 
-/** Scan decoded text for forbidden codepoints. Every occurrence is reported,
- * not just the first per line. Iteration is by codepoint (for..of), so an
- * astral character counts as one column and can never split into surrogate
- * halves that dodge the ranges. */
+/** Iterates by codepoint, so an astral character is one column and never splits into surrogate halves that
+ * dodge the ranges. */
 export function forbiddenIn(text: string): Hit[] {
   const hits: Hit[] = [];
   let line = 1;
@@ -108,8 +98,6 @@ export function forbiddenIn(text: string): Hit[] {
   return hits;
 }
 
-/** Parse .typography-allow: one exact repo-relative path per line, blank
- * lines and #-comment lines ignored. */
 export function parseAllowlist(text: string): Set<string> {
   const allowed = new Set<string>();
   for (const raw of text.split("\n")) {
@@ -127,13 +115,11 @@ export function decodeStrict(bytes: Uint8Array): string {
   return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
 }
 
-/** Scan one tracked path on disk. Returns its content hits, or null when the
- * content is proven binary (null-byte sniff). A symlink is scanned as its
- * tracked content - the link TEXT via readlink - never followed (the target
- * may be outside the repo, or the tracked-content bytes could differ from
- * what a follow reads). Throws on anything unscannable: missing, unreadable,
- * UTF-16, or not valid UTF-8 - the caller turns that into a failure, never
- * a skip. */
+/** A symlink is scanned as its link TEXT, never followed: the target may be outside the repo, and the
+ * tracked bytes are the link. Anything unscannable throws, and the caller fails rather than skips.
+ *   UTF-16 BOM          -> error: text this gate exists to read, not an icon to skip; checked before the null sniff
+ *   null byte in 8 KiB  -> null: proven binary
+ *   invalid UTF-8       -> error */
 export function scanFile(absPath: string): Hit[] | null {
   if (lstatSync(absPath).isSymbolicLink()) {
     // Raw link bytes, strictly decoded: a lenient readlink would smear
@@ -169,10 +155,8 @@ if (import.meta.main) {
   // entry by entry: a path whose bytes are not valid UTF-8 is an error, not
   // a U+FFFD mush that then fails to open and vanishes.
   const pathBytes = execFileSync("git", ["ls-files", "-z"], { cwd: root });
-  // Paths git records as deleted from the worktree (a pending `git rm` is
-  // still listed by ls-files): recorded state, nothing on disk to scan.
-  // Decoded with the same strict rule as the primary list; an undecodable
-  // entry is simply not excusable (and errors via the primary list anyway).
+  // An indexed file missing from the working tree (an unstaged delete) is still listed by ls-files:
+  // recorded state with nothing on disk to scan.
   const deleted = new Set<string>();
   for (const raw of splitNul(execFileSync("git", ["ls-files", "-z", "--deleted"], { cwd: root }))) {
     try {
@@ -192,11 +176,8 @@ if (import.meta.main) {
     }
   }
 
-  // Two exemption lists, matching the platform action's pair: the managed
-  // .typography-allow (every sync replaces it) and the repo-owned
-  // .typography-allow.local. Entries here are EXACT paths (see the header) -
-  // deliberately stricter than the action's prefix matching, so anything
-  // this gate passes also passes CI, never the reverse.
+  // The platform action's pair: the managed .typography-allow (every sync replaces it) and the repo-owned
+  // .typography-allow.local.
   const allowFiles = [".typography-allow", ".typography-allow.local"];
   const allowed = new Set<string>();
   for (const allowFile of allowFiles) {
@@ -257,7 +238,6 @@ if (import.meta.main) {
   console.log(`check-typography: ${scanned} text files clean (${files.length} tracked paths)`);
 }
 
-/** Split a NUL-delimited buffer into per-entry buffers (no decoding). */
 function splitNul(bytes: Buffer): Buffer[] {
   const parts: Buffer[] = [];
   let start = 0;

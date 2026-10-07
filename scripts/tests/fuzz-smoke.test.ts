@@ -62,11 +62,10 @@ describe("parseOptions", () => {
   });
 
   test("an unknown or malformed flag exits 2 with the usage before any toolchain probe", () => {
-    // parseOptions calls process.exit, so the rejection paths are exercised
-    // through a real subprocess. --seed=0 is malformed (seeds are positive),
-    // the oversized values would wrap inside libFuzzer's 32-bit parsing, and
-    // the failure-dir shapes could point the startup delete outside
-    // fuzz/failures.
+    // parseOptions exits the process, so the refusals run as a subprocess.
+    //   --seed=0                 -> libFuzzer reads a seed of 0 as "random"
+    //   --runs / --seed too big  -> wrap inside libFuzzer's 32-bit parsing
+    //   the --failure-dir shapes -> could aim the startup delete outside fuzz/failures
     for (const arg of [
       "--bogus",
       "--runs=0",
@@ -102,11 +101,9 @@ describe("parseOptions", () => {
 });
 
 describe("toolchain-missing behavior", () => {
-  // With PATH emptied, rustup cannot be found, so the script takes its skip
-  // path; the flag must turn that skip into a failure (a skipped nightly must
-  // not read as green and auto-close the tracking issue). A throwaway
-  // --failure-dir keeps the startup clear away from a developer's real
-  // fuzz/failures reports.
+  // With PATH emptied rustup cannot be found and the script takes its skip path; a skipped nightly must not
+  // read as green and auto-close the tracking issue. The throwaway --failure-dir keeps the startup clear
+  // away from a developer's real fuzz/failures reports.
   const runWithoutToolchain = (args: string[]) =>
     spawnSync(
       process.execPath,
@@ -296,8 +293,8 @@ describe("buildReport (failure-report contract v1)", () => {
 
 describe("generatedInputsError", () => {
   // The seeds and the JSON dictionary are generated (`moon run fuzz-seeds`) and gitignored, so a fresh
-  // checkout has neither; a run that silently dropped them would fuzz without the corpus the nightly
-  // had and print the same green line (the #152 review thread). The driver must refuse and name the task.
+  // checkout has neither; a run that silently dropped them would fuzz without the corpus the nightly had and
+  // print the same green line. The driver must refuse and name the task.
   test("a checkout without the generated corpus is refused, naming the generator task", () => {
     const core = mkdtempSync(join(tmpdir(), "fuzz-smoke-core-"));
     try {
@@ -314,7 +311,6 @@ describe("generatedInputsError", () => {
       // The structured target takes no seeds and no dictionary, so nothing is demanded for it.
       expect(refused).not.toContain("handshake_verify");
 
-      // Positive control: the complete layout is accepted.
       for (const dir of ["fuzz/seeds/nm_frame", "fuzz/seeds/classify_frame", "fuzz/dictionaries"]) {
         mkdirSync(join(core, dir), { recursive: true });
       }

@@ -1,13 +1,11 @@
-//! The bridge transport on Windows: a named pipe in the local namespace, one
-//! instance per connection, every instance created with the user-only
-//! descriptor and the first with `FILE_FLAG_FIRST_PIPE_INSTANCE`, so a name
-//! another process already holds fails the bind instead of being shared.
-//!
-//! All I/O is overlapped, which is what lets a read carry a deadline and lets
-//! `shutdown` from another thread wake a blocked reader: the two things the
-//! broker's attach phase needs that a synchronous pipe handle cannot do. Clones
-//! share one handle and one timeout, as clones of a socket share its options;
-//! each clone owns the event its own operations signal.
+//! One instance per connection, the first with `FILE_FLAG_FIRST_PIPE_INSTANCE`, so a name another process
+//! holds fails the bind instead of being shared. All I/O is overlapped: that is what gives a read a deadline
+//! and lets `shutdown` from another thread wake a blocked reader, both of which the broker's attach phase
+//! needs.
+//! ```text
+//! clones  -> one handle and one timeout, as clones of a socket share its options
+//! events  -> one per clone, signalled by that clone's own operations alone
+//! ```
 #![expect(
     unsafe_code,
     reason = "audited FFI quarantine: the named-pipe, overlapped I/O, and event calls, each behind a safe wrapper"
@@ -45,7 +43,6 @@ use super::PipeName;
 /// Kernel buffer hint per direction; the bridge frames are small NDJSON lines.
 const PIPE_BUFFER: u32 = 64 * 1024;
 
-/// The server end: creates instances and hands each connected one out.
 pub struct PipeListener {
     name: Vec<u16>,
     descriptor: UserOnlyDescriptor,
@@ -55,8 +52,6 @@ pub struct PipeListener {
 }
 
 impl PipeListener {
-    /// Claim `name` with a first instance: fails when any process already holds
-    /// an instance of it, so a squatted name is refused rather than joined.
     pub fn bind(name: &PipeName) -> io::Result<PipeListener> {
         let listener = PipeListener {
             name: wide(name.as_str()),
@@ -97,9 +92,7 @@ impl PipeListener {
         OwnedHandle::try_from(handle).map_err(|_| io::Error::last_os_error())
     }
 
-    /// Block until a client connects and hand the connected instance out. The
-    /// second element stands where a socket listener returns the peer
-    /// address; a pipe has none.
+    /// The second element stands where a socket listener returns the peer address; a pipe has none.
     pub fn accept(&self) -> io::Result<(PipeStream, ())> {
         let taken = self
             .pending
@@ -128,9 +121,9 @@ impl PipeListener {
         }
     }
 
-    /// Create the next instance before the connected one is handed out: with only connected instances a client
-    /// arriving between accepts waits out its deadline on ERROR_PIPE_BUSY, and with none the name is gone. A
-    /// failure costs that early arrival alone; the next `accept` creates its own instance.
+    /// With only connected instances a client arriving between accepts waits out its deadline on
+    /// ERROR_PIPE_BUSY, and with none the name is gone. A failure costs that early arrival alone; the next
+    /// `accept` creates its own.
     fn listen_again(&self) {
         match self.create_instance(false) {
             Ok(next) => {
@@ -141,12 +134,8 @@ impl PipeListener {
     }
 }
 
-/// The pid of the process that created this process's stdin pipe: the harness
-/// that spawned the server. Every spawner (CreatePipe, libuv, Rust's own
-/// Command) opens both ends of a child's stdio pipe itself before handing one
-/// across, so the kernel's client and server pids agree and name the creator;
-/// anything else (a console or file on stdin, a pipe end passed on from
-/// another process) fails closed.
+/// The harness that spawned the server, judged by [`super::pipe_creator`]; a console or file on stdin fails
+/// closed.
 pub(crate) fn stdin_pipe_creator() -> io::Result<u32> {
     let stdin = io::stdin().as_raw_handle();
     // SAFETY: the handle is this process's live stdin; the call only reads
@@ -172,7 +161,6 @@ pub(crate) fn stdin_pipe_creator() -> io::Result<u32> {
         .map_err(|e| io::Error::new(io::ErrorKind::PermissionDenied, e))
 }
 
-/// Wait for a client to open `instance`.
 fn wait_for_client(instance: &OwnedHandle) -> io::Result<()> {
     let event = Event::new()?;
     let mut overlapped = event.overlapped();
@@ -196,8 +184,6 @@ fn wait_for_client(instance: &OwnedHandle) -> io::Result<()> {
     }
 }
 
-/// Which end of the pipe a stream holds; it selects whose pid the kernel is
-/// asked for and whether `shutdown` can disconnect the peer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PipeEnd {
     Server,
@@ -222,9 +208,8 @@ impl Shared {
     }
 }
 
-/// One end of a connected pipe. `Read`/`Write` as a socket; `try_clone`,
-/// `set_read_timeout`, and `shutdown` with the semantics the rest of the crate
-/// relies on from `UnixStream`.
+/// The `BridgeStream` on Windows: `Read`/`Write`, `try_clone`, `set_read_timeout`, and `shutdown` with the
+/// semantics the rest of the crate relies on from `UnixStream`.
 pub struct PipeStream {
     shared: Arc<Shared>,
     event: Event,
@@ -238,10 +223,8 @@ impl PipeStream {
         })
     }
 
-    /// Open the pipe at `name`, waiting up to `timeout` for a free instance
-    /// while the server is between `accept`s. The open asks for identification
-    /// only, so a server impersonating this client (the squatter case) gets no
-    /// more than its identity.
+    /// The open asks for identification only, so a server impersonating this client (the squatter case) gets
+    /// no more than its identity.
     pub fn connect(name: &PipeName, timeout: Duration) -> io::Result<PipeStream> {
         let name = wide(name.as_str());
         let deadline = Instant::now().checked_add(timeout).ok_or_else(|| {
@@ -293,13 +276,11 @@ impl PipeStream {
         }
     }
 
-    /// Another handle onto the same connection, sharing its timeout and
-    /// shutdown state.
     pub fn try_clone(&self) -> io::Result<PipeStream> {
         PipeStream::new(Arc::clone(&self.shared))
     }
 
-    /// Bound every read on this connection, as `set_read_timeout` on a socket.
+    /// Mirrors `UnixStream::set_read_timeout`, zero-duration refusal and message included.
     pub fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
         if timeout == Some(Duration::ZERO) {
             return Err(io::Error::new(
@@ -315,10 +296,8 @@ impl PipeStream {
         Ok(())
     }
 
-    /// End the connection from any clone: a reader of this connection blocked
-    /// on another thread wakes with EOF, and on a server end the peer reads
-    /// EOF too (a client end has no disconnect call; its peer sees EOF once the
-    /// last clone drops).
+    /// A reader blocked on another thread wakes with EOF. On a server end the peer reads EOF too; a client
+    /// end has no disconnect call, so its peer sees EOF only once the last clone drops.
     pub fn shutdown(&self, _how: Shutdown) -> io::Result<()> {
         self.shared.closed.store(true, Ordering::Release);
         let handle = self.shared.handle.as_raw_handle();
@@ -334,7 +313,6 @@ impl PipeStream {
         Ok(())
     }
 
-    /// The pid the kernel recorded for the other end when it connected.
     pub fn peer_pid(&self) -> io::Result<u32> {
         let handle = self.shared.handle.as_raw_handle();
         let mut pid = 0u32;
@@ -405,8 +383,8 @@ impl Read for PipeStream {
 }
 
 impl PipeStream {
-    /// Fold a finished read into socket semantics: a peer gone is EOF, a
-    /// cancelled read is a timeout or (after `shutdown`) EOF.
+    /// Socket semantics for the Win32 codes: a peer gone is EOF, a cancelled read is a timeout or, after
+    /// `shutdown`, EOF.
     fn read_outcome(&self, finished: io::Result<usize>, timed_out: bool) -> io::Result<usize> {
         let err = match finished {
             Ok(n) => return Ok(n),
@@ -449,9 +427,8 @@ impl Write for PipeStream {
     }
 }
 
-/// Wait for the operation recorded in `overlapped` to complete or be cancelled
-/// and return its byte count. Every issued operation goes through here before
-/// its buffers go out of scope.
+/// Every issued operation goes through here before its buffers go out of scope; the SAFETY comments on the
+/// issuing calls rely on it.
 fn finish(handle: *mut std::ffi::c_void, overlapped: &OVERLAPPED) -> io::Result<usize> {
     let mut transferred = 0u32;
     // SAFETY: `overlapped` is the live record of an operation issued on
@@ -464,7 +441,6 @@ fn finish(handle: *mut std::ffi::c_void, overlapped: &OVERLAPPED) -> io::Result<
     usize::try_from(transferred).map_err(|_| io::Error::other("transfer count exceeds usize"))
 }
 
-/// A manual-reset event one stream's operations signal on completion.
 struct Event(OwnedHandle);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -545,12 +521,9 @@ mod tests {
 
     #[test]
     fn a_claimed_name_refuses_a_second_listener_and_both_ends_see_the_local_peer() {
-        // External facts the bridge rests on: FILE_FLAG_FIRST_PIPE_INSTANCE
-        // fails a bind while any instance of the name exists (another broker
-        // of ours, or a name squatted before us; a same-user process can still
-        // add an instance later, which mutual attestation catches), and the
-        // kernel reports the pid on each end of a connected pipe (the input to
-        // attestation). Both ends here are this process.
+        // External facts: FILE_FLAG_FIRST_PIPE_INSTANCE fails a bind while any instance of the name exists (a
+        // same-user process can still add one later, which mutual attestation catches), and the kernel
+        // reports the pid on each end of a connected pipe. Both ends here are this process.
         let name = unique_name("claim");
         let listener = PipeListener::bind(&name).unwrap();
         assert!(
@@ -582,13 +555,10 @@ mod tests {
 
     #[test]
     fn the_stdin_pipe_creator_is_the_process_that_spawned_us() {
-        // External fact the harness measurement rests on: a child's stdin pipe,
-        // created by its spawner (here Rust's Command), reports the spawner's
-        // pid on both ends, even though the child only inherited one end; and
-        // GetNamedPipe{Client,Server}ProcessId answer for an anonymous pipe.
-        // The test re-runs itself as that child, which also attests its
-        // harness end to end: the spawner is this same binary, so the measured
-        // hash must equal the child's own identity.
+        // External facts: a child's stdin pipe reports the spawner's pid on both ends though the child
+        // inherited one, and GetNamedPipe{Client,Server}ProcessId answer for an anonymous pipe. The test
+        // re-runs itself as that child, whose spawner is this same binary, so the measured hash must equal
+        // its own identity.
         if std::env::var_os(STDIN_PEER_CHILD).is_some() {
             use super::super::super::super::attest::{attest_parent, ensure_own_identity};
 
@@ -629,11 +599,9 @@ mod tests {
 
     #[test]
     fn a_client_arriving_between_accepts_finds_the_name_listening() {
-        // External fact: with every instance connected and none listening,
-        // CreateFileW reports ERROR_PIPE_BUSY and WaitNamedPipeW waits out the
-        // connect deadline; with no instance at all the name is gone. The
-        // listener therefore holds a fresh instance before it hands the
-        // connected one out. The connect below runs with no accept pending.
+        // External fact: with every instance connected and none listening, CreateFileW reports
+        // ERROR_PIPE_BUSY until the deadline; with no instance at all the name is gone. The connect below
+        // runs with no accept pending.
         let name = unique_name("between-accepts");
         let listener = PipeListener::bind(&name).unwrap();
         let (_server, _client) = pair(&listener, &name);
@@ -643,10 +611,8 @@ mod tests {
 
     #[test]
     fn a_read_deadline_fires_and_shutdown_wakes_a_blocked_reader() {
-        // The broker bounds its attach phase with set_read_timeout and ends
-        // connections with shutdown from another thread; neither exists on a
-        // synchronous pipe handle, so both are pinned here against the
-        // overlapped implementation.
+        // The broker bounds its attach phase with set_read_timeout and ends connections with shutdown from
+        // another thread; neither exists on a synchronous pipe handle.
         let name = unique_name("deadline");
         let listener = PipeListener::bind(&name).unwrap();
         let (mut server, mut client) = pair(&listener, &name);

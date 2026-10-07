@@ -148,8 +148,7 @@ describe("scanFiles", () => {
 });
 
 // Once per covered file class, the red run is the control for the green one. The bare `*.rs` pathspecs
-// reach nested files only because git's `*` crosses `/`, which nothing else here checks. The git children
-// run under gitEnv(), so this file can itself run inside the pre-commit hook without touching its index.
+// reach nested files only because git's `*` crosses `/`, which nothing else here checks.
 const coveredPaths: ReadonlyArray<readonly [path: string, comment: string]> = [
   ["docs/guide.md", "#"],
   ["scripts/tool.ts", "//"],
@@ -206,12 +205,9 @@ test("a tag in a file class no pathspec names is not scanned", () => {
   expect(run.stdout).toMatch(/^check-planning-refs: 0 file\(s\) clean/);
 });
 
-// A git hook exports GIT_DIR and GIT_INDEX_FILE. The CLI, given an explicit root, must still read THAT
-// root's index and leave the hook's repository untouched: the first hook run of an earlier form of this
-// file staged a planted page into the real index. Here the hook's repository is a second scratch repo and
-// the CLI inherits its variables unstripped, so the isolation under test is the script's own. Under a hook
-// the STAGED content is judged: the page is tagged in the index and clean in the working tree, so the
-// hook run exits 1 while the same tree outside a hook exits 0.
+// Given an explicit root, the CLI must read THAT root's index even under a hook's GIT_DIR and GIT_INDEX_FILE.
+//   hook repo = a second scratch repo, its variables inherited unstripped  -> the isolation is the script's own
+//   the page tagged in the index, clean in the working tree                -> hook run exits 1, plain run exits 0
 test("under a hook an explicit root is judged by its own staged content, not the hook's repository", () => {
   const target = scratch();
   const setup = gitEnv();

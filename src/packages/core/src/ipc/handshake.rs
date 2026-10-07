@@ -1,7 +1,5 @@
-//! The authenticated bridge handshake: an HMAC-SHA256 challenge-response
-//! keyed on the per-run secret from the lock file, with an optional signed
-//! browser label. Strict hex decoding and label validation both fail closed -
-//! these fields arrive from the peer before it is trusted.
+//! Everything the peer sends here arrives before it is trusted, so hex decoding and the label check fail
+//! closed rather than sanitize.
 
 use std::io::{self, BufRead, Write};
 
@@ -14,8 +12,6 @@ use crate::protocol::{bridge_read, bridge_write, Handshake};
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// HMAC-SHA256 of `msg` under `key`, hex-encoded. The key is the per-run
-/// secret's bytes and the message is built by [`handshake_mac_message`].
 fn compute_mac(key: &[u8], msg: &[u8]) -> io::Result<String> {
     // HMAC accepts a key of any length, so this cannot fail today; propagate
     // (failing the handshake) rather than panic if the Mac impl ever changes.
@@ -25,13 +21,8 @@ fn compute_mac(key: &[u8], msg: &[u8]) -> io::Result<String> {
     Ok(hex::encode(mac.finalize().into_bytes()))
 }
 
-/// The exact bytes the handshake MAC covers: the server's nonce and, when the
-/// client claims a browser label, a NUL separator plus that label. Covering
-/// the label makes the claim authenticated rather than merely adjacent to the
-/// MAC - a response whose label was altered in any way fails verification.
-/// The two forms cannot collide: the nonce is fixed-width hex (never contains
-/// NUL), so a message either ends at the nonce (no label) or continues past
-/// exactly one NUL with the label bytes.
+/// The label rides inside the MAC so the claim is authenticated, not adjacent to it. The forms cannot
+/// collide: the nonce is hex (never NUL), so a message ends at the nonce or continues past exactly one NUL.
 fn handshake_mac_message(nonce: &str, label: Option<&str>) -> Vec<u8> {
     let mut msg = nonce.as_bytes().to_vec();
     if let Some(label) = label {
@@ -41,9 +32,8 @@ fn handshake_mac_message(nonce: &str, label: Option<&str>) -> Vec<u8> {
     msg
 }
 
-/// Constant-time verification that `provided_hex` is HMAC-SHA256(key, msg).
-/// Uses `Mac::verify_slice`, whose comparison does not short-circuit, so a
-/// caller cannot recover the expected tag byte-by-byte via timing.
+/// `verify_slice` compares without short-circuiting, so the tag cannot be recovered byte by byte through
+/// timing.
 fn verify_mac(key: &[u8], msg: &[u8], provided_hex: &str) -> io::Result<()> {
     let provided = hex::decode(provided_hex)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "mac is not valid hex"))?;
@@ -54,33 +44,20 @@ fn verify_mac(key: &[u8], msg: &[u8], provided_hex: &str) -> io::Result<()> {
         .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "hmac mismatch"))
 }
 
-/// The label assigned to a connection whose handshake carried no label
-/// (single-browser installs, pre-label wrappers). Keeps one-browser setups
-/// working with zero configuration.
+/// The slot a connection without a label lands in, so a one-browser install needs no configuration.
 pub const DEFAULT_LABEL: &str = "default";
 
-/// A browser label that HAS passed [`validate_label`] -- the only way to
-/// build one is the validating [`parse`](Self::parse) constructor (or
-/// [`default_label`](Self::default_label), whose fixed value satisfies the
-/// same rule; a unit test pins that). Downstream code -- the session's
-/// connection registry, the broker's attach path, audit records -- takes this
-/// type instead of a raw `String`, so "was this string ever validated?" is
-/// answered by the type, not by re-checking at every hop. The label domain
-/// only; the trusted-client name shares the rule through its own newtype
-/// ([`crate::allowlist::ClientName`]), and the harness label validates where
-/// it is read.
+/// Proof that a label passed [`validate_label`]: constructible only through [`parse`](Self::parse) or
+/// [`default_label`](Self::default_label), whose fixed value a test holds to the same rule. The
+/// trusted-client name carries the same rule in its own newtype ([`crate::allowlist::ClientName`]).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BrowserLabel(String);
 
 impl BrowserLabel {
-    /// Validate and wrap. `None` for anything [`validate_label`] rejects;
-    /// the caller fails closed (the handshake, the CLI parser).
     pub fn parse(s: &str) -> Option<Self> {
         validate_label(s).then(|| BrowserLabel(s.to_string()))
     }
 
-    /// The label of a connection whose handshake carried none
-    /// ([`DEFAULT_LABEL`]).
     pub fn default_label() -> Self {
         BrowserLabel(DEFAULT_LABEL.to_string())
     }
@@ -89,8 +66,6 @@ impl BrowserLabel {
         &self.0
     }
 
-    /// Unwrap for a wire field (`BridgeReq.browser`, the handshake
-    /// `Response.label`), where the protocol type is a plain string.
     pub fn into_string(self) -> String {
         self.0
     }
@@ -102,25 +77,16 @@ impl std::fmt::Display for BrowserLabel {
     }
 }
 
-/// Lets a `HashMap<BrowserLabel, _>` be probed with a plain `&str` (the tool
-/// call's unvalidated `browser` argument is compared, never trusted). Sound
-/// because the derived `Hash`/`Eq` delegate to the inner `String`.
+/// Lets the registry be probed by the tool call's unvalidated `browser` string. Sound only while `Hash`/`Eq`
+/// stay derived, so they agree with `str`'s.
 impl std::borrow::Borrow<str> for BrowserLabel {
     fn borrow(&self) -> &str {
         &self.0
     }
 }
 
-/// Whether `label` is an acceptable browser label: 1-32 characters, starting
-/// with an ASCII alphanumeric, the rest ASCII alphanumeric or `.`, `_`, `-`.
-/// The label arrives in the (signed) handshake response and ends up in log
-/// lines, audit records, and tool output, so it is bounded and restricted to
-/// a tame charset; the leading-alphanumeric rule also keeps a label from ever
-/// looking like a command-line flag. Anything else fails the handshake (fail
-/// closed) rather than being sanitized. Shared by the other self-asserted
-/// name domains: the browser label carries its proof in [`BrowserLabel`], the
-/// trusted-client name in [`crate::allowlist::ClientName`], and the harness
-/// label validates where it is read.
+/// The label reaches log lines, audit records, and tool output, hence the bound and the tame charset; the
+/// leading alphanumeric keeps it from ever reading as a command-line flag.
 pub fn validate_label(label: &str) -> bool {
     let bytes = label.as_bytes();
     (1..=32).contains(&bytes.len())
@@ -130,12 +96,7 @@ pub fn validate_label(label: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
-/// Server side: run the challenge-response over a freshly-accepted connection,
-/// using the same buffered reader/writer the session will keep, so no bytes are
-/// consumed past the handshake. On success returns the browser label the
-/// client carried in its signed response (`None` when it sent none), already
-/// validated -- the returned [`BrowserLabel`] is the proof. The label is read
-/// only AFTER the MAC verifies; a malformed one fails the whole handshake.
+/// Runs on the reader/writer the session keeps afterwards, so no byte past the handshake is consumed here.
 pub fn server_handshake<R: BufRead, W: Write>(
     reader: &mut R,
     writer: &mut W,
@@ -159,10 +120,7 @@ fn server_handshake_with_secret<R: BufRead, W: Write>(
 
     match bridge_read::<_, Handshake>(reader)? {
         Some(Handshake::Response { mac, label }) => {
-            // Authenticate FIRST; nothing the peer sent is trusted before
-            // this. The MAC covers the nonce AND the claimed label
-            // (handshake_mac_message), so a label that was altered after
-            // signing fails here.
+            // Nothing the peer sent is trusted before the MAC verifies, the label included.
             verify_mac(
                 secret.as_bytes(),
                 &handshake_mac_message(&nonce, label.as_deref()),
@@ -190,12 +148,7 @@ fn server_handshake_with_secret<R: BufRead, W: Write>(
     }
 }
 
-/// Client side: read the server's challenge and answer it with
-/// HMAC(secret, nonce). `label` names the browser this host fronts; the server
-/// keys its connection registry by it (missing label = the default slot). It
-/// is a [`BrowserLabel`], so an unvalidated string cannot even be offered.
-/// Reuses the pump's buffered reader/writer so the handshake never leaks into
-/// forwarded frames.
+/// Runs on the pump's reader/writer, so no byte past the handshake leaks into forwarded frames.
 pub fn client_handshake<R: BufRead, W: Write>(
     reader: &mut R,
     writer: &mut W,
@@ -210,10 +163,8 @@ pub fn client_handshake<R: BufRead, W: Write>(
     )
 }
 
-/// The wire-level client half. `label` is a raw `Option<String>` on purpose:
-/// the server must reject a malformed label no matter what the peer runs
-/// (zero trust), and the tests exercise exactly that with strings the public
-/// [`client_handshake`] can no longer produce.
+/// `label` is a raw `Option<String>` on purpose: the server must reject a malformed label whatever the peer
+/// runs, and the tests exercise that with strings the public [`client_handshake`] cannot produce.
 fn client_handshake_with_secret<R: BufRead, W: Write>(
     reader: &mut R,
     writer: &mut W,
@@ -239,9 +190,8 @@ fn client_handshake_with_secret<R: BufRead, W: Write>(
     }
 }
 
-/// Fuzz-only wrappers over the private handshake internals, for the cargo-fuzz
-/// workspace (see the `fuzzing` feature in Cargo.toml). Thin delegations only;
-/// the real functions stay private and nothing here adds behavior.
+/// The private internals, exposed under the `fuzzing` feature for the fuzz crate; off-feature the API is
+/// unchanged.
 #[cfg(feature = "fuzzing")]
 #[doc(hidden)]
 pub mod fuzz_api {
@@ -274,14 +224,11 @@ mod tests {
 
     #[test]
     fn label_validation_bounds_length_and_charset() {
-        // Accepted: browser-ish names within 32 chars of [A-Za-z0-9._-],
-        // starting alphanumeric.
         for ok in ["default", "chrome", "Brave-2", "work_profile", "a", "x.y"] {
             assert!(validate_label(ok), "{ok:?} should validate");
         }
-        // Rejected: empty, overlong, spaces/newlines (log injection), path
-        // separators, non-ASCII, and anything starting like a flag or a
-        // dotfile (first char must be alphanumeric).
+        // Rejected inputs name the hazards: log injection, path separators, flag-looking and dotfile-looking
+        // names.
         for bad in [
             "",
             "a b",
@@ -297,7 +244,6 @@ mod tests {
         ] {
             assert!(!validate_label(bad), "{bad:?} should be rejected");
         }
-        // The 32-char boundary itself is accepted.
         assert!(validate_label(&"x".repeat(32)));
         // The fixed default bypasses parse, so it is held to the same rule here.
         assert!(validate_label(BrowserLabel::default_label().as_str()));
@@ -320,17 +266,13 @@ mod tests {
 
     #[test]
     fn handshake_challenge_response_authenticates_over_a_pipe() {
-        // Drive the client half against a known challenge and confirm it emits
-        // the exact HMAC response (including the carried label) the server will
-        // verify. The server's own accept path is exercised end-to-end in the
-        // socketpair test below and in tests/protocol/e2e.py.
+        // The client must sign (nonce, label) and ship the label beside the MAC; this is the only client-half
+        // pin that runs on Windows, where the socketpair round trip below does not.
         use std::io::Cursor;
 
         // A test fixture, not a credential.
         let secret = "a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4"; // nosemgrep: generic.secrets.security.detected-generic-secret.detected-generic-secret
         let nonce = "feedface";
-        // The MAC covers nonce AND label (handshake_mac_message), so the
-        // label claim is authenticated, not merely adjacent to the MAC.
         let expected = compute_mac(
             secret.as_bytes(),
             &handshake_mac_message(nonce, Some("chrome")),
@@ -369,8 +311,7 @@ mod tests {
         // A test fixture, not a credential.
         let secret = "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"; // nosemgrep: generic.secrets.security.detected-generic-secret.detected-generic-secret
 
-        // Matching secrets on both ends: the server accepts and returns the
-        // label the client carried in its signed response.
+        // Matching secrets: the server returns the label the client signed.
         let (srv, cli) = UnixStream::pair().unwrap();
         let cli_secret = secret.to_string();
         let client = std::thread::spawn(move || {
@@ -384,8 +325,7 @@ mod tests {
         assert_eq!(label, BrowserLabel::parse("brave"));
         assert!(client.join().unwrap().is_ok());
 
-        // No label carried: the server reports None (the caller applies the
-        // default), still authenticated.
+        // No label carried: None, still authenticated.
         let (srv, cli) = UnixStream::pair().unwrap();
         let cli_secret = secret.to_string();
         let client = std::thread::spawn(move || {
@@ -401,9 +341,7 @@ mod tests {
         );
         assert!(client.join().unwrap().is_ok());
 
-        // A malformed label fails the handshake even with a valid MAC: the
-        // label feeds registry keys and log lines, so it is validated (fail
-        // closed) right after authentication.
+        // A malformed label fails even with a valid MAC.
         let (srv, cli) = UnixStream::pair().unwrap();
         let cli_secret = secret.to_string();
         let client = std::thread::spawn(move || {
@@ -436,10 +374,7 @@ mod tests {
 
     #[test]
     fn a_tampered_label_invalidates_the_mac() {
-        // A response whose label was altered after signing must fail
-        // verification: the MAC covers (nonce, label), so swapping the label
-        // while keeping the MAC is detected. This is what makes the label an
-        // authenticated claim rather than a free-rider next to the MAC.
+        // Swapping or stripping the label after signing must fail: the label is an authenticated claim.
         // A test fixture, not a credential.
         let secret = "d00dd00dd00dd00dd00dd00dd00dd00d"; // nosemgrep: generic.secrets.security.detected-generic-secret.detected-generic-secret
         let nonce = "cafebabe";

@@ -155,12 +155,9 @@ export function findPlanningRefs(path: string, text: string): Hit[] {
     }));
 }
 
-/** The environment for a git child aimed at a repository OTHER than the one a running git hook is
- * committing: the caller's, minus the GIT_* variables the hook exports (GIT_DIR, GIT_INDEX_FILE, ...).
- * Inherited, they would make `git -C <root>` read and WRITE the hook's repository instead of root. The
- * hook's own repository keeps them, so a commit built on an alternate index is scanned as staged; the
- * hook itself is still detected from the caller's GIT_INDEX_FILE, so an explicit root under a hook is
- * judged by its own index too. */
+/** A root the caller named is another repository, so the hook's GIT_* variables (GIT_DIR, GIT_INDEX_FILE) are
+ * scrubbed or `git -C <root>` would read and WRITE the hook's repository; this checkout keeps them, so a commit
+ * on an alternate index is scanned as staged. */
 export function gitEnv(): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_")));
 }

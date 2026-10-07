@@ -11,17 +11,14 @@ use crate::tools::ToolId;
 
 use super::base64url;
 
-/// Domain prefix of a per-action presence statement (the tap that approves one capability-granting act).
 pub const PRESENCE_DOMAIN: &str = "chromium-bridge-webauthn-presence-v1";
 
-/// Domain prefix of an enrollment statement (the tap that registers a new credential).
 pub const ENROLL_DOMAIN: &str = "chromium-bridge-webauthn-enroll-v1";
 
-/// Bounds on the statement fields the extension echoes back; the host mints them, zero trust bounds them anyway.
+/// The extension echoes these fields back; the host minted them, and zero trust bounds them anyway.
 pub const MAX_NONCE_LEN: usize = 256;
 pub const MAX_ACTION_LEN: usize = 1024;
 
-/// Which ceremony a statement belongs to; the two domains are distinct and neither is a prefix of the other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatementDomain {
     Presence,
@@ -37,8 +34,7 @@ impl StatementDomain {
     }
 }
 
-/// A single-use statement nonce: 1..=[`MAX_NONCE_LEN`] bytes, NUL-free. [`fresh`](Self::fresh) mints the one
-/// the host uses (32 CSPRNG bytes, base64url); [`parse`](Self::parse) is the wire boundary.
+/// [`parse`](Self::parse) is the wire boundary; [`fresh`](Self::fresh) mints the host's own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Nonce(String);
 
@@ -58,8 +54,7 @@ impl Nonce {
     }
 }
 
-/// What the user is approving, as the host names it (the audit trail and the extension's prompt show it):
-/// 1..=[`MAX_ACTION_LEN`] bytes, NUL-free.
+/// What the user is approving, as the host names it: the audit trail and the extension's prompt show it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Action(String);
 
@@ -116,12 +111,15 @@ impl PageOp {
 /// a port, so 300 admits every real one.
 pub const MAX_ORIGIN_LEN: usize = 300;
 
-/// The web origin a page operation lands on, as the extension's URL parser serializes it. [`parse`](Self::parse)
-/// is the wire boundary: the text is admitted only when the WHATWG parser's own origin serialization reproduces
-/// it byte for byte, so an opaque origin (`null`), a path, a query, userinfo, a default port, or any host the
-/// parser would rewrite is refused, and no statement is ever minted for a page the user cannot be shown. One
-/// rule of this crate's own on top: the audit trail delimits its fields with `;`, `=`, and space, and a host
-/// carrying any of them (the parser admits `;` and `=`) could forge a field in a record, so it is refused too.
+/// The web origin a page operation lands on. [`parse`](Self::parse) admits text only when the WHATWG parser's
+/// own origin serialization reproduces it byte for byte, so no statement is minted for a page the user cannot
+/// be shown.
+///
+/// ```text
+/// `null`, a path, a query, userinfo, a default port, a rewritten host -> refused by the round trip
+/// `;`, `=`, or a space anywhere                                       -> refused here: the audit trail
+///                                                                        delimits its fields with them
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Origin(String);
 
@@ -182,7 +180,6 @@ impl Statement {
     }
 }
 
-/// The 32-byte challenge an authenticator signs over.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Challenge([u8; 32]);
 

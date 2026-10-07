@@ -1,19 +1,12 @@
-//! The enrollment key's public half (65-byte X9.63 uncompressed P-256 point)
-//! and its fingerprints.
-
 use sha2::{Digest, Sha256};
 
 use super::base64_encode;
 use super::EnclaveError;
 
-/// Byte length of the public key on the wire: the X9.63 uncompressed P-256
-/// point (`0x04 || X || Y`). Part of the cross-language contract - the
-/// extension's verifier rejects any other length (generated/enclave.ts).
+/// The X9.63 uncompressed point, `0x04 || X || Y`; the extension's verifier rejects any other length.
 pub const PUBKEY_LEN: usize = 65;
 
-/// The enrollment key's public half, validated to be a 65-byte uncompressed
-/// X9.63 P-256 point (`0x04 || X || Y`) - exactly what WebCrypto's
-/// `importKey("raw", ...)` accepts for ECDSA P-256.
+/// Exactly what WebCrypto's `importKey("raw", ...)` accepts for ECDSA P-256.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnclavePublicKey {
     sec1: Vec<u8>,
@@ -53,7 +46,6 @@ impl EnclavePublicKey {
         hex::encode(Sha256::digest(&self.sec1))
     }
 
-    /// Fingerprint grouped in 4-char blocks for human comparison.
     pub fn fingerprint_display(&self) -> String {
         let hex = self.fingerprint_hex();
         hex.as_bytes()
@@ -75,13 +67,11 @@ mod tests {
         let pk = EnclavePublicKey::from_x963(good.clone()).unwrap();
         assert_eq!(pk.as_bytes(), &good[..]);
         assert_eq!(pk.fingerprint_hex().len(), 64);
-        // Grouped display covers the same hex.
         assert_eq!(
             pk.fingerprint_display().replace(' ', ""),
             pk.fingerprint_hex()
         );
 
-        // Wrong length.
         assert!(EnclavePublicKey::from_x963(vec![0x04; 64]).is_err());
         assert!(EnclavePublicKey::from_x963(vec![0x04; 66]).is_err());
         assert!(EnclavePublicKey::from_x963(Vec::new()).is_err());

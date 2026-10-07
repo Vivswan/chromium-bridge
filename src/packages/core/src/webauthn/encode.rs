@@ -5,7 +5,6 @@
 use coset::iana::{self, EnumI64 as _};
 use coset::{CborSerializable as _, CoseKeyBuilder};
 
-/// The authenticatorData flag bits, as the spec numbers them.
 pub mod flags {
     pub const UP: u8 = 0x01;
     pub const UV: u8 = 0x04;
@@ -25,8 +24,8 @@ pub const P256_GENERATOR_SEC1: [u8; 65] = [
     0xf5,
 ];
 
-/// `rpIdHash || flags || signCount || [aaguid || credIdLen || credId || cose]`; the attested block is
-/// written exactly when `attested` is given, whatever `flags` claims, so a seed can lie about AT.
+/// The attested block is written exactly when `attested` is given, whatever `flags` claims, so a seed can
+/// lie about AT.
 pub fn authenticator_data(
     rp_id_hash: &[u8; 32],
     flags: u8,

@@ -1,7 +1,5 @@
-//! The pipe's security descriptor: the current user's SID, rendered to the SDDL
-//! text of [`super::user_only_sddl`] and parsed back by Windows into a
-//! descriptor the pipe instances are created with. Admission to the pipe is
-//! then kernel-enforced at `CreateFileW`, before any byte reaches the broker.
+//! Admission to the pipe is kernel-enforced at `CreateFileW`, before any byte reaches the broker; the
+//! descriptor text is [`super::user_only_sddl`].
 #![expect(
     unsafe_code,
     reason = "audited FFI quarantine: the token, SID, and SDDL calls, each behind a safe wrapper"
@@ -67,7 +65,6 @@ impl UserOnlyDescriptor {
         })
     }
 
-    /// The attributes to pass to `CreateNamedPipeW`; they point into `self`.
     pub(crate) fn attributes(&self) -> *const SECURITY_ATTRIBUTES {
         &self.attributes
     }
@@ -78,7 +75,6 @@ impl UserOnlyDescriptor {
 // the only reference.
 unsafe impl Send for UserOnlyDescriptor {}
 
-/// The current user's SID, read off this process's own token.
 fn current_user_sid() -> io::Result<SidString> {
     let token = own_token()?;
     let mut needed = 0u32;
@@ -130,7 +126,6 @@ fn current_user_sid() -> io::Result<SidString> {
     SidString::try_from(sid).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
-/// This process's own token, opened for query only.
 fn own_token() -> io::Result<OwnedHandle> {
     // SAFETY: GetCurrentProcess takes nothing and returns a pseudo-handle that
     // is never closed.
@@ -148,8 +143,7 @@ fn own_token() -> io::Result<OwnedHandle> {
     OwnedHandle::try_from(handle).map_err(|_| io::Error::last_os_error())
 }
 
-/// Memory a Win32 call allocated with `LocalAlloc` on our behalf, freed exactly
-/// once on drop.
+/// Memory a Win32 call allocated with `LocalAlloc` on our behalf.
 struct LocalAllocated<T>(*mut T);
 
 impl<T> Drop for LocalAllocated<T> {
@@ -165,8 +159,6 @@ pub(crate) fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-/// The string at a NUL-terminated UTF-16 pointer.
-///
 /// # Safety
 /// `p` must point at a NUL-terminated UTF-16 string that stays live for the
 /// duration of the call.

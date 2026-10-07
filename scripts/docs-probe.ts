@@ -1,16 +1,15 @@
 #!/usr/bin/env bun
-// The page probe behind `moon run check-docs-probe`. Block structure comes from Bun's Markdown
-// renderer, so prose is what Markdown renders as a paragraph or a list item, a loose item's
-// paragraphs counting as the item; headings, code, tables, raw HTML, and images contribute nothing.
-// Front matter is blanked before rendering so line numbers still match the file, and a BEGIN/END
-// GENERATED region (render-architecture-map.ts writes one) is dropped where the renderer sees its
-// markers as HTML blocks, so a marker quoted inside a fence is code and changes nothing.
-// A path is a backticked token with a slash and an extension (or ./, ../, a trailing slash), or a
-// relative link destination; placeholders (<...>), globs, owner/repo slugs, and bare file names are
-// left alone, since a page may name files the reader will create.
-// A translated page (check-docs-locales says which) is probed for paths and links only: a whitespace
-// word count does not read CJK, so the English page carries the cap and check-docs-locales keeps the
-// translated tree mirroring it file-for-file.
+// The page probe behind `moon run check-docs-probe`. Bun's Markdown renderer decides the block structure, so
+// prose is what renders as a paragraph or a list item (a loose item's paragraphs count as the item); front
+// matter is blanked line for line so line numbers match the file.
+//
+//   BEGIN/END GENERATED region     -> dropped where the renderer sees HTML blocks; a marker quoted in a fence is code
+//   path                           -> a backticked token with a slash and an extension (or ./, ../, a trailing slash),
+//                                     or a relative link destination
+//   <placeholder>, glob, owner/repo -> left alone, like a bare file name: a page may name files the reader will create
+//   translated page                -> paths and links only (check-docs-locales says which): a whitespace word count
+//                                     does not read CJK, so the English page carries the cap and the mirror check
+//                                     keeps the trees file-for-file
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
@@ -54,7 +53,6 @@ function finding(
 }
 
 export interface ProbeOptions {
-  /** Repository root every slash path resolves against. */
   readonly root: string;
   readonly maxWords: number;
   /** false: word counts only, for pages that describe another repository's files. */
@@ -83,7 +81,6 @@ const INLINE_END = "\u0002";
 const BLOCK_END = "\u0003";
 const isBlockKind = (ch: string | undefined) => ch === "P" || ch === "L" || ch === "N";
 
-/** The page with front matter blanked, line for line, so line numbers still match the file. */
 function blankFrontMatter(text: string): string[] {
   const lines = text.split("\n").map((line) => line.replace(/\r$/, ""));
   const out = [...lines];
@@ -319,7 +316,6 @@ function gitQuery(root: string, file: string, directory: boolean): string {
   return `${rel === "" ? "." : rel}${directory ? "/" : ""}`;
 }
 
-/** The files a slash path may name: one per base, existing or not. */
 function candidates(root: string, pageDir: string, extra: readonly string[], path: string) {
   const dirs =
     path.startsWith("./") || path.startsWith("../") ? [pageDir] : bases(root, pageDir, extra);
@@ -446,8 +442,6 @@ export function probePage(text: string, file: string, options: ProbeOptions): Fi
   return findings.sort((a, b) => a.line - b.line);
 }
 
-// --- the baseline --------------------------------------------------------------
-
 // An allowance names the page and a fingerprint of the unit's own text (or the path a path finding
 // names), never a line: an unrelated line shift leaves it valid, and it goes stale exactly when its
 // paragraph changed or vanished. `page hash  # kind: first words`; the comment is for the reader.
@@ -469,7 +463,6 @@ export function readBaseline(text: string, label: string): Set<string> {
   return keys;
 }
 
-/** The baseline lines for `findings`, one per distinct key, as --print-baseline writes them. */
 export function baselineLines(findings: readonly Finding[]): string[] {
   const seen = new Set<string>();
   const lines: string[] = [];
@@ -483,9 +476,7 @@ export function baselineLines(findings: readonly Finding[]): string[] {
 }
 
 export interface Judgment {
-  /** Findings the baseline does not allow. */
   readonly fresh: Finding[];
-  /** Baseline entries no finding fires at any more. */
   readonly stale: string[];
   readonly allowed: number;
 }
@@ -500,8 +491,6 @@ export function judge(findings: readonly Finding[], baseline: ReadonlySet<string
   const stale = [...baseline].filter((key) => !fired.has(key)).sort();
   return { fresh, stale, allowed: findings.length - fresh.length };
 }
-
-// --- CLI -----------------------------------------------------------------------
 
 const USAGE = [
   // The file names itself, so a vendored copy under another name prints a command that exists there.
@@ -528,7 +517,6 @@ interface CliOptions {
   readonly pages: readonly string[];
 }
 
-/** A page argument as the root-relative label the findings and the baseline use. */
 function pageLabel(root: string, page: string): string {
   const absolute = realpath(resolve(root, page));
   if (!statSync(absolute, { throwIfNoEntry: false })?.isFile())

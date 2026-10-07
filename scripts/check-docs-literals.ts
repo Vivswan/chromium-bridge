@@ -46,18 +46,13 @@ export interface Violation {
  * `attestation.json.sig` is compared whole, never by its prefix). */
 export const BUNDLE_TOKEN = /(?<![\w.-])attestation\.[\w.-]*\w/g;
 
-/** The release-level attestation bundle's asset name. Source of truth:
- * the fleet's fleet-release-publish.yml (`BUNDLE_NAME`, the fleet's
- * publish leg the managed ci.yml calls), which no file in this repository
- * carries; SECURITY.md tells users to pass it to `gh attestation verify
- * --bundle`, so a fleet rename is a manual update here, and the test pins
- * that the name is a [`BUNDLE_TOKEN`] itself, or no doc could ever satisfy
- * the family check. */
+/** Mirrors `BUNDLE_NAME` in the fleet's fleet-release-publish.yml, which no file here carries, so a fleet
+ * rename is a manual update; SECURITY.md tells users to pass it to `gh attestation verify --bundle`.
+ * check-docs-literals.test.ts pins that it matches [`BUNDLE_TOKEN`], or no doc could satisfy the family check. */
 export const RELEASE_BUNDLE_NAME = "attestation.json";
 
 export const CHROME_VERSION_TOKEN = /\bChrom(?:e|ium) \d+\b/g;
 
-/** FAMILY check: every match of `family` in the doc must be in `allowed`. */
 export function familyViolations(
   doc: string,
   text: string,
@@ -81,8 +76,6 @@ export function familyViolations(
   return out;
 }
 
-/** MCP-version check: on lines mentioning MCP, every date-shaped token must be
- * the canonical protocol version. */
 export function mcpLineViolations(doc: string, text: string, canonical: string): Violation[] {
   const out: Violation[] = [];
   const lines = text.split("\n");
@@ -102,10 +95,8 @@ export function mcpLineViolations(doc: string, text: string, canonical: string):
   return out;
 }
 
-/** Bridge-version check: on lines mentioning BRIDGE_PROTOCOL_VERSION (the
- * compatibility table row and the README version rows all name the constant
- * next to its value), every backticked bare integer must be the current
- * version. */
+/** The docs name BRIDGE_PROTOCOL_VERSION beside its value (the compatibility table, the README version
+ * rows), so the backticked integers on those lines are the copies. */
 export function bridgeVersionLineViolations(
   doc: string,
   text: string,
@@ -145,7 +136,6 @@ export function tokenPresenceViolation(
   return { doc, line: 0, message: `must state the canonical ${label} "${literal}"` };
 }
 
-/** PRESENCE check: the doc must contain the literal somewhere. */
 export function presenceViolation(
   doc: string,
   text: string,
@@ -156,20 +146,15 @@ export function presenceViolation(
   return { doc, line: 0, message: `must state the canonical ${label} "${literal}"` };
 }
 
-/** The bounded regex for a comma-joined list: matches the exact run and
- * rejects a superset that kept a retired key (or grew an extra one) before or
- * after the canonical run. Shared by the list checks. */
+/** Bounded so a copy that kept a retired key, or grew one, before or after the canonical run does not
+ * count as current. */
 function boundedListRegex(items: readonly string[]): RegExp {
   const escaped = items.join(", ").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`(?<![a-z0-9-], )${escaped}(?!, [a-z0-9-])`, "g");
 }
 
-/** LIST-PRESENCE check: the doc must state the exact comma-joined list at
- * least `occurrences` times (tolerating line wraps and `code` spans). The
- * match is bounded: a doc copy that kept a retired key (or grew an extra one)
- * before or after the canonical run does not count as current. Prefer
- * [`listSectionViolations`] when the copies must live in specific paragraphs
- * (a bare count lets an unrelated correct copy mask a drifted one). */
+/** Counts bounded copies anywhere in the doc. Prefer [`listSectionViolations`] when the copies must live
+ * in named paragraphs: a bare count lets an unrelated correct copy mask a drifted one. */
 export function listPresenceViolation(
   doc: string,
   text: string,
@@ -189,11 +174,8 @@ export function listPresenceViolation(
   };
 }
 
-/** LIST-SECTION check: the list must appear (bounded, wrap/`code` tolerant)
- * in the paragraph that begins at each `anchor` phrase. Anchoring to the
- * intended paragraphs closes the residual in the bare-count check: a drift in
- * one specific list fails even if a correct copy exists elsewhere in the doc,
- * because each anchor's own window is checked in isolation. */
+/** Each anchor's paragraph is checked in isolation, so a drift in one list fails even when a correct copy
+ * exists elsewhere. */
 export function listSectionViolations(
   doc: string,
   text: string,
@@ -230,10 +212,9 @@ export function listSectionViolations(
   return out;
 }
 
-/** ENV-TABLE check: within the doc's lines that mention the env var (as a
- * whole word - BB_LOG must not be satisfied by BB_LOG_FORMAT), every accepted
- * value must appear as a whole word (so "errors" cannot stand in for "error"
- * and the documented value set cannot lag a new or renamed level/format). */
+/** Whole-word matches on both sides, each with the input that motivated it:
+ *   BB_LOG must not be satisfied by BB_LOG_FORMAT  -> the env var name is matched as a word
+ *   "errors" must not stand in for "error"         -> each accepted value is matched as a word */
 export function envTableViolations(
   doc: string,
   text: string,
@@ -348,7 +329,6 @@ if (import.meta.main) {
     violations.push(...bridgeVersionLineViolations(doc, text, bridgeVersion));
   }
 
-  // The docs whose job is to state a value must state the current one.
   const presences: Array<[string, string, string]> = [
     [".github/SECURITY.md", NATIVE_HOST_ID, "native host id"],
     [".github/SECURITY.md", KEYCHAIN_LABEL, "enclave keychain label"],
@@ -404,7 +384,6 @@ if (import.meta.main) {
     ),
   );
 
-  // The env-var reference tables must enumerate the full accepted value sets.
   for (const doc of ["README.md", "docs/cli.md"]) {
     const text = readDoc(doc);
     violations.push(...envTableViolations(doc, text, LOG_LEVEL_ENV, LOG_LEVELS));

@@ -1,8 +1,7 @@
 #!/usr/bin/env bun
 
-// Platform facts installers.yml's smoke rests on: msiexec reports its reason only in a UTF-16LE log;
-// `reg query` exits 1 both for a missing key and for one it was not allowed to read, so only its not-found
-// text counts as absent; the pkg postinstall's output lands in /var/log/install.log.
+// Platform facts installers.yml's smoke rests on: msiexec reports its reason only in a UTF-16LE log, and the pkg
+// postinstall's output lands in /var/log/install.log.
 
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -18,7 +17,6 @@ import {
 } from "./lib.ts";
 import { pkgIdentifier } from "./release-package.ts";
 
-/** The runner the smoke drives, behind one surface a test stands a fake in for. */
 export interface Host {
   run: (argv: string[]) => Finished;
   presence: (path: string) => Presence;
@@ -27,11 +25,9 @@ export interface Host {
   log: (line: string) => void;
 }
 
-/** The chrome user-scope row of `doctor --list` once both the manifest and the pointer are in place. */
+// The `doctor --list` rows the smoke matches; Linux writes no pointer, so its row reads n/a.
 export const chromeRegistered = /chrome\s+detected\s+user\s+manifest ok\s+pointer ok/;
-/** The same row once `uninstall` ran: both slots gone, the browser still detected. */
 export const chromeUnregistered = /chrome\s+detected\s+user\s+manifest missing\s+pointer missing/;
-/** The chrome system-scope row after the .deb's post-install; Linux writes no pointer. */
 export const chromeSystemRegistered = /chrome\s+detected\s+system\s+manifest ok\s+pointer n\/a/;
 
 const keyNotFound = /unable to find the specified registry key/;
@@ -65,7 +61,8 @@ class Steps extends CommandChecks {
     }
   }
 
-  /** The key is gone only when reg says so; a key it could not read is a failed check, not a clean uninstall. */
+  /** `reg query` exits 1 both for a missing key and for one it was not allowed to read, so only its not-found text
+   * counts as absent; a key it could not read is a failed check, not a clean uninstall. */
   absentKey(key: string): void {
     const argv = ["reg", "query", key];
     const finished = this.run(...argv);
@@ -126,7 +123,6 @@ function windows(installer: string, steps: Steps, host: Host, localAppData: stri
   steps.absentKey(`HKCU\\Software\\Google\\Chrome\\Extensions\\${PINNED_EXTENSION_ID}`);
 }
 
-/** The per-user roots the checks read: HOME (macOS) and LOCALAPPDATA (Windows), as the runner has them. */
 export interface Roots {
   home?: string;
   localAppData?: string;

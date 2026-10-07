@@ -6,14 +6,11 @@
 // (.github/actions/setup-moon, the Containerfile); rust is pinned in rust-toolchain.toml alone. python
 // stays uv's (.python-version) and rust stays rustup's: proto's plugin allow-list must name neither, or
 // two provisioners own one tool.
-//
-// Run via `moon run check-toolchain` (part of the ci gate).
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { repoRoot } from "./lib.ts";
 
-/** Every disagreement among the pins under `root`, one line each; empty when the copies agree. */
 export function toolchainMismatches(root: string): string[] {
   const mismatches: string[] = [];
   const fail = (message: string): void => {

@@ -1,8 +1,5 @@
-// What would drift silently: the one-owner rule across two files of different grammars, which neither
-// proto nor Docker enforces for us. proto reads .prototools alone, Docker reads the Containerfile alone
-// and silently lets the last of two ARG lines win, so only this reader can refuse a tool pinned in both
-// files, twice in the Containerfile, or in an indented form the other parser accepts. The fixtures are
-// hand-written shapes of those inputs.
+// The one-owner rule spans two files of different grammars, and neither proto nor Docker enforces it: proto
+// reads .prototools alone, Docker reads the Containerfile alone and lets the last of two ARG lines win.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -29,7 +26,6 @@ const containerfile = [
   "ARG PROTO_VERSION",
 ];
 
-// undefined for a file: the file is absent.
 function fixture(files: {
   prototools?: string[] | undefined;
   containerfile?: string[] | undefined;

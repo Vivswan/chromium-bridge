@@ -27,7 +27,6 @@ function must(cwd: string, ...cmd: string[]): string {
   return result.stdout;
 }
 
-/** A root cargo workspace, an excluded nested one depending on it by path, and a bun workspace. */
 function manifests(version: string): Record<string, string> {
   return {
     "Cargo.toml": `[workspace]\nresolver = "2"\nmembers = ["core", "host"]\nexclude = ["core/fuzz"]\n\n[workspace.package]\nversion = "${version}"\nedition = "2021"\n`,
@@ -64,7 +63,6 @@ function lockedExits(dir: string): number[] {
   );
 }
 
-/** A committed scratch repository whose lockfiles match version 0.1.0. */
 function lockedRepo(): string {
   const dir = scratch.dir("refresh-lockfiles");
   writeTree(dir, manifests("0.1.0"));

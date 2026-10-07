@@ -21,7 +21,6 @@ export const INSTALL_HOOKS = [
 ] as const;
 
 export interface InstallHook {
-  /** The manifest, relative to the root. */
   file: string;
   script: (typeof INSTALL_HOOKS)[number];
 }
@@ -35,7 +34,6 @@ function manifestScripts(root: string, file: string): Record<string, unknown> {
   return scripts as Record<string, unknown>;
 }
 
-/** The root manifest plus one per `workspaces` pattern match, as bun resolves them. */
 export function workspaceManifests(root: string): string[] {
   const parsed = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
     workspaces?: unknown;
@@ -52,7 +50,6 @@ export function workspaceManifests(root: string): string[] {
   return [...files].sort();
 }
 
-/** Every install-time script any workspace manifest declares. */
 export function installHooks(root: string): InstallHook[] {
   const hooks: InstallHook[] = [];
   for (const file of workspaceManifests(root)) {

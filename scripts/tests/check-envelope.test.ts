@@ -1,8 +1,6 @@
-// The rules of the envelope asymmetry gate (check-envelope.ts), exercised against inputs a live run cannot
-// produce: a table entry whose declared direction its probes contradict, a writer-only tag classified inbound,
-// a refinement that vanished or stopped firing, a dead refinement counter. Importing the script runs no gate
-// (main() only runs under import.meta.main); the one import-time check is the refinement counter's liveness
-// probe, which throws rather than let a dead counter pass.
+// The envelope asymmetry gate's rules, each shown firing on an input a live run cannot produce. Importing
+// check-envelope.ts runs no gate; its one import-time check, the refinement counter's liveness probe, throws
+// rather than let a dead counter pass.
 
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
@@ -122,8 +120,7 @@ describe("asymmetryProblems", () => {
   });
 
   test("a generated-schema replacement that admits an unknown field the base refuses is named", () => {
-    // The successor of the old strict-overlay pin: the loose-frames rule never reaches a replaced node, so a
-    // loose replacement would widen silently.
+    // The loose-frames rule never reaches a replaced node, so a loose replacement would widen silently.
     const policy = pairs.policy_current as ReaderPair;
     const path = "$.properties.overlay";
     const entry = ASYMMETRIES.policy_current?.[path] as Asymmetry;
@@ -304,7 +301,6 @@ describe("refinementProblems", () => {
   test.each(counters)(
     "%s is refused by the liveness probe, naming each failed probe",
     (_, count, names) => {
-      // refinementCounterProblems owns the failure mode it closes.
       const problems = refinementCounterProblems(count);
       expect(problems).toHaveLength(names.length);
       for (const [i, name] of names.entries()) {
@@ -324,7 +320,6 @@ describe("refinementProblems", () => {
     const unrefined = z.looseObject({ type: z.literal("verdict"), ok: z.boolean() });
     const problems = refinementProblems("verdict", unrefined, [splitPin]);
     expect(problems.join("\n")).toContain("pins 1");
-    // Without the refinement, the mixture probe parses: it is reported.
     expect(problems.join("\n")).toContain("no longer refuses");
   });
 
@@ -333,7 +328,6 @@ describe("refinementProblems", () => {
       .looseObject({ type: z.literal("verdict"), ok: z.boolean() })
       .superRefine(() => {});
     const problems = refinementProblems("verdict", inert, [splitPin]);
-    // The count matches, so every problem is a probe the no-op let through.
     expect(problems.length).toBeGreaterThan(0);
     for (const problem of problems) {
       expect(problem).toContain("no longer refuses");

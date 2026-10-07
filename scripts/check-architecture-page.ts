@@ -1,16 +1,12 @@
 #!/usr/bin/env bun
-// The page test: every box that names a file names one that exists, every
-// symbol after the path is exported by that file, every concept diagram has a
-// "Demonstrated by:" line whose links resolve, and the number of concept
-// diagrams is pinned. Existence only: a caption-only box passes untouched, and
-// a demonstration link is checked to resolve, not to test its diagram's claim.
+// Existence only: a box's path must exist and its symbols be exported, a demonstration link must resolve, and
+// nothing tests a diagram's claim; a caption-only box passes untouched.
 //
 // Label grammar, per <br> segment:
 //   starts with a path (top-level directory, slash, segments)  -> binds that path; the rest are its exported symbols
 //   no path, a path bound earlier in the label                 -> more symbols of the bound path
 //   no path, nothing bound yet                                 -> a caption; a slash or `()` inside it is reported
-// Diagrams inside a generated region are the declaration's, not the author's,
-// and need no demonstration line.
+// A diagram inside a generated region is the declaration's, not the author's, and needs no demonstration line.
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -27,9 +23,8 @@ const DEMONSTRATED = "Demonstrated by:";
 const exportedNamesByFile = new Map<string, ReadonlySet<string>>();
 
 /**
- * A declared or re-exported name as written, a default export as `default`, `export * as ns` as
- * `ns`. `export * from` is not followed: biome.jsonc's noReExportAll forbids it in this repository,
- * so no box can name a symbol that reaches its file only through a star.
+ * `export * from` is not followed: biome.jsonc's noReExportAll forbids it here, so no box can name a symbol
+ * that reaches its file only through a star.
  */
 export function exportedNames(file: string): ReadonlySet<string> {
   const cached = exportedNamesByFile.get(file);
@@ -112,7 +107,6 @@ export function nodeLabels(mermaid: string): { labels: string[]; problems: strin
 }
 
 export interface PageCheckOptions {
-  /** The repository root the label paths are relative to. */
   root: string;
   /** The top-level directories a label path may start with (default: the directories under root). */
   pathRoots?: readonly string[];
@@ -242,7 +236,6 @@ function insideGeneratedRegion(page: Page, line: number): boolean {
   return open;
 }
 
-/** The repository file a demonstration link names, or a problem string. */
 function resolveLink(
   link: string,
   options: PageCheckOptions,
@@ -299,11 +292,6 @@ function textLines(page: Page, pattern: RegExp): number[] {
   });
 }
 
-/**
- * Every problem in one page: a node naming a missing path or an unexported
- * symbol, a concept diagram without its "Demonstrated by:" line before the
- * next heading, or a demonstration link that does not resolve to a file.
- */
 export function diagramProblems(markdown: string, options: PageCheckOptions): string[] {
   const pathRoots = options.pathRoots ?? defaultPathRoots(options.root);
   const problems: string[] = [];

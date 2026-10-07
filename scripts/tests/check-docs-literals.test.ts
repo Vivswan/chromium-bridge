@@ -197,11 +197,9 @@ describe("presence and env tables", () => {
 
   test("a doc lagging the browser key list is flagged; a wrapped list passes", () => {
     const keys = ["chrome", "brave", "edge"];
-    // The doc wraps the list across lines: still the canonical list.
     expect(
       listPresenceViolation("d.md", "keys (chrome, brave,\n  edge)", keys, "browser key list"),
     ).toBeNull();
-    // A retired or added key changes the joined string: flagged.
     expect(
       listPresenceViolation("d.md", "keys (chrome, brave)", keys, "browser key list"),
     ).toMatchObject({
@@ -224,9 +222,7 @@ describe("presence and env tables", () => {
       ]),
     ).toEqual([]);
 
-    // The "Known browser keys" paragraph drifts (added a retired key) while a
-    // DECOY correct copy is appended elsewhere: a bare count would be
-    // restored to 2, but section anchoring still fails the drifted paragraph.
+    // A decoy correct copy elsewhere restores a bare count to 2; anchoring still fails the drifted paragraph.
     const drifted = [
       "for each known browser (chrome, brave), whether it is present.",
       "",
@@ -241,7 +237,6 @@ describe("presence and env tables", () => {
     expect(v).toHaveLength(1);
     expect(v[0]?.message).toContain("Known browser keys");
 
-    // A missing anchor paragraph is its own violation.
     expect(
       listSectionViolations("d.md", "no such section here", keys, "browser key list", [
         "Known browser keys",

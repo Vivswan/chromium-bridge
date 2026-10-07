@@ -1,36 +1,20 @@
-// Single source of truth for the BROWSER-OWNED configurable settings: their
-// schema and their defaults. The storage reads over them are the extension's
-// (lib/shared/settings.ts there).
-//
-// Only fields the browser itself owns live here: the site-scope opt-in, tab
-// grouping, and the display language. The policy fields are host-owned
-// (the generated policy contract in generated/policy.ts governs them), and
-// `requireEnrollment` is retired - enrollment is simply required.
-//
-// The Settings type is inferred from the schema, and DEFAULTS is derived by
-// parsing an empty bag - so a new setting is added in exactly one place.
+// The browser-owned settings and their defaults; the storage reads live in the extension (lib/shared/settings.ts)
+// and the policy fields are host-owned (generated/policy.ts). DEFAULTS is parsed from an empty bag, so a setting
+// is added in exactly one place.
 
 import { z } from "zod";
 
-// The canonical TS-side list of accepted uiLanguage values. Language stays
-// browser-owned, so this list is NOT generated from the Rust core; the host's
-// hand-kept copy (src/packages/core/src/lang.rs UI_LANGUAGES) is pinned against
-// this one by tests/lang-parity.test.ts. Everything TS-side (the settings
-// schema below, the runtime-message enum, the pickers) derives from here.
+// Language stays browser-owned, so this list is not generated from the Rust core; lang.rs UI_LANGUAGES is pinned
+// to it by tests/lang-parity.test.ts.
 export const UI_LANGUAGES = ["auto", "en", "zh_CN", "zh_TW"] as const;
 
 export type UiLanguageValue = (typeof UI_LANGUAGES)[number];
 
 export const SettingsSchema = z.object({
   allowAllSites: z.boolean().default(false),
-  // Collect tab_open tabs into a "Chromium Bridge" group.
   groupTabs: z.boolean().default(true),
-  // The extension UI's display language. Defaults to "en": English is the
-  // canonical language on every surface, and Chinese is an explicit choice,
-  // never an inherited one. "auto" (opt-in) resolves from the browser UI
-  // language (zh -> zh_CN, zh-Hant/TW/HK/MO -> zh_TW, else en). Distinct from
-  // Chrome's own default_locale: this is the user's explicit choice for
-  // in-extension UI.
+  // "en", never the browser language: English is canonical on every surface and Chinese an explicit choice.
+  // "auto" (opt-in) resolves zh -> zh_CN, zh-Hant/TW/HK/MO -> zh_TW, else en.
   uiLanguage: z.enum(UI_LANGUAGES).default("en"),
 });
 

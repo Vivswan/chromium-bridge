@@ -77,15 +77,9 @@ const killWeb = () => {
   }
 };
 
-// Extension (WXT): foreground with the real terminal so its output shows and
-// its keyboard shortcuts work; stdin is piped so your keystrokes (WXT's `r`
-// reload, Ctrl-C) reach it. WXT builds, serves, and reloads the extension over
-// its dev-server websocket but no longer opens a browser (webExt.disabled in
-// wxt.config.ts) - the [browser] lane below owns that. Detached for the same
-// reason as the site: the chain is bun wrapper -> bash -c -> node wxt, and
-// bash dies on SIGTERM WITHOUT forwarding it, which orphans node wxt;
-// signaling the group reaches node wxt, whose own handlers close its dev
-// server.
+// WXT owns the terminal: stdout and stderr inherited, stdin piped so `r` and Ctrl-C reach it. Detached because
+// the chain is bun wrapper -> bash -c -> node wxt, and bash dies on SIGTERM without forwarding it; the group
+// signal reaches node wxt, whose own handlers close its dev server.
 const wxt = spawn("bun", ["run", "dev"], {
   cwd: extensionDir,
   stdio: ["pipe", "inherit", "inherit"],
@@ -98,10 +92,8 @@ if (wxt.stdin) {
   wxt.stdin.on("error", () => {});
 }
 
-// The dev browser lane (scripts/dev-browser.ts) OWNS the throwaway dev browser through web-ext-run
-// and relaunches it from web-ext-run's own cleanup callback when the developer quits it or it
-// crashes. Detached so one group signal tears down the lane AND the Chromium it spawned; the lane's
-// own SIGTERM handler exits the runner, which closes Chrome by the pid chrome-launcher recorded.
+// Detached so one group signal tears down the lane AND the Chromium it spawned; the lane's SIGTERM handler
+// closes Chrome by the pid chrome-launcher recorded.
 const browser = spawn("bun", [join(repoRoot, "scripts/dev-browser.ts")], {
   cwd: repoRoot,
   stdio: ["ignore", "pipe", "pipe"],

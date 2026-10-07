@@ -159,11 +159,11 @@ describe("packageArchive", () => {
 });
 
 describe("packageInstaller", () => {
-  // What would drift silently: pkgbuild and the MSI ProductVersion refuse a prerelease suffix, so the
-  // tools must get the tag's core while the file names keep the full tag; the binary inside each installer
-  // must be the attested one unchanged (copied, never rebuilt or stripped); and the checksum names the
-  // installer as it sits on disk. A fake tool stands in for pkgbuild, cargo-deb, candle and light, which
-  // exist only on their own runners.
+  // pkgbuild and the MSI ProductVersion refuse a prerelease suffix, so the tools get the tag's core while
+  // the file names keep the full tag. A fake tool stands in for pkgbuild, cargo-deb, candle and light,
+  // which exist only on their own runners.
+  //   the binary inside each installer  -> the attested one, copied unchanged (never rebuilt or stripped)
+  //   the checksum                       -> names the installer as it sits on disk
   const release = parseTag("v1.2.3-rc.1");
   const fakeTool = (calls: { argv: string[]; cwd: string }[]): RunTool => {
     return (argv, cwd) => {
