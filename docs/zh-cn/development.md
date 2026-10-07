@@ -220,12 +220,12 @@ uv 只固定在 `.prototools` 中, python 由 uv 管理: 协议测试套件通�
 扩展基于 WXT 构建, 它生成清单 (包括固定的密钥) 并打包 `src/apps/extension/src/entrypoints/` 下的入口点。
 
 ```sh
-bun install
-bun run --cwd src/apps/extension dev       # WXT dev mode: rebuild on change
-bun run --cwd src/apps/extension build     # production bundle
+moon run setup              # once per checkout: the bun workspace, the Rust toolchain, the crates
+moon run extension:dev      # WXT dev mode: rebuild on change
+moon run extension:build    # production bundle
 ```
 
-在 `chrome://extensions` (开发者模式) 中把 `build/extension/chrome-mv3` 作为未打包的扩展加载。单元测试 (`bun run --cwd src/apps/extension test`) 在 Vitest 上用 `fakeBrowser` 运行, 不需要真实浏览器。
+在 `chrome://extensions` (开发者模式) 中把 `build/extension/chrome-mv3` 作为未打包的扩展加载。单元测试 (`moon run extension:test`) 在 Vitest 上用 `fakeBrowser` 运行, 不需要真实浏览器。
 
 ## 测试
 

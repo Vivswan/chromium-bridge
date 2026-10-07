@@ -220,12 +220,12 @@ uv 只固定於 `.prototools`, 而 python 由 uv 擁有: 協定測試套件透�
 擴充功能建立在 WXT 之上, 由它產生資訊清單 (含固定的金鑰) 並打包 `src/apps/extension/src/entrypoints/` 下的進入點。
 
 ```sh
-bun install
-bun run --cwd src/apps/extension dev       # WXT dev mode: rebuild on change
-bun run --cwd src/apps/extension build     # production bundle
+moon run setup              # once per checkout: the bun workspace, the Rust toolchain, the crates
+moon run extension:dev      # WXT dev mode: rebuild on change
+moon run extension:build    # production bundle
 ```
 
-在 `chrome://extensions` (開發人員模式) 中把 `build/extension/chrome-mv3` 載入為未封裝的擴充功能。單元測試 (`bun run --cwd src/apps/extension test`) 以 Vitest 搭配 `fakeBrowser` 執行, 不需要真實瀏覽器。
+在 `chrome://extensions` (開發人員模式) 中把 `build/extension/chrome-mv3` 載入為未封裝的擴充功能。單元測試 (`moon run extension:test`) 以 Vitest 搭配 `fakeBrowser` 執行, 不需要真實瀏覽器。
 
 ## 測試
 

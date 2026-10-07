@@ -36,7 +36,7 @@
 update-release.yml 在一個矩陣上建置 `binaries` 工作 (目前是 `macos-14/arm64`、`ubuntu-22.04/x64` 與 `windows-2022/x64`; Intel macOS 被**刻意省略**, 因為託管執行器稀缺, 而 Linux 使用較舊的 glibc 基準以擴大相容性)。對每個目標:
 
 1. `bun scripts/build-repro.ts` 產生可重現的發行執行檔。
-2. `bun install --frozen-lockfile && bun run --cwd src/apps/extension build` 產生擴充功能套件。
+2. `bun install --frozen-lockfile` 與 `moon run extension:build` 產生擴充功能套件; 建置會先產生契約模組與 WXT 型別。
 3. 所有內容打包成 `chromium-bridge-<tag>-<platform>-<arch>.tar.gz` (Windows 上為 `.zip`), 內含執行檔、`extension/dist`、`RELEASE.txt`、`LICENSE.md` 與 `README.md`。
 4. 同一個執行檔被包裝成該平台的安裝程式 (見下一節)。
 5. 產生壓縮檔的 `.sha256`、壓縮檔內執行檔的另一個 `.binary.sha256`, 以及安裝程式的 `.sha256`, 並以一份建置來源證明涵蓋這三個檔案; 它的 Sigstore bundle 成為 `chromium-bridge-<tag>-<platform>-<arch>.attestation.jsonl` 資產。獨立的擴充功能 zip 與 SBOM 也以同樣方式附帶 `<asset>.attestation.jsonl` bundle; `--bundle` 驗證方式記載於 [SECURITY.md](../../.github/SECURITY.md#release-artifact-integrity)。

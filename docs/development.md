@@ -220,12 +220,12 @@ The workflow-level `CI_IMAGE_TAG` is the one switch: an empty value runs every j
 The extension is built on WXT, which generates the manifest (including the pinned key) and bundles the entrypoints under `src/apps/extension/src/entrypoints/`.
 
 ```sh
-bun install
-bun run --cwd src/apps/extension dev       # WXT dev mode: rebuild on change
-bun run --cwd src/apps/extension build     # production bundle
+moon run setup              # once per checkout: the bun workspace, the Rust toolchain, the crates
+moon run extension:dev      # WXT dev mode: rebuild on change
+moon run extension:build    # production bundle
 ```
 
-Load `build/extension/chrome-mv3` as an unpacked extension in `chrome://extensions` (Developer mode). Unit tests (`bun run --cwd src/apps/extension test`) run on Vitest with `fakeBrowser`, no real browser needed.
+Load `build/extension/chrome-mv3` as an unpacked extension in `chrome://extensions` (Developer mode). Unit tests (`moon run extension:test`) run on Vitest with `fakeBrowser`, no real browser needed.
 
 ## Testing
 
