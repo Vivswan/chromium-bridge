@@ -311,7 +311,7 @@ export function policyOverlaySchema(policy: PolicyShape): JsonObject {
 // ---- emission -------------------------------------------------------------------------
 
 export function schemaExpression(type: string, schema: unknown): string {
-  return `${zodSource(schema)} as z.ZodType<${type}>`;
+  return `${zodSource(schema)} satisfies z.ZodType<${type}>`;
 }
 
 /** The source of one exported validator; without a `type` it is exported as zod types it (a faithful base,
