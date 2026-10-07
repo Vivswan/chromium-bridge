@@ -193,7 +193,9 @@ uv 只固定在 `.prototools` 中, python 由 uv 管理: 协议测试套件通�
 
 ## CI 布局
 
-`checks.yml` 把每个关注点定义一次, 由受管 ci.yml 在 all-green 门禁内调用。Linux 作业在 `container-image.yml` 构建的 CI 镜像 (`ghcr.io/<owner>/<repo>-ci`) 内运行。推送到 main 会发布 `:latest` 和内容标签 (构建输入的哈希); 改动了构建输入的拉取请求会从它自己的合并提交发布内容标签, 因此它的检查就在它所改动的镜像内运行。
+`checks.yml` 把每个关注点定义一次, 由受管 ci.yml 在 all-green 门禁内调用。Linux 作业在 CI 镜像 (`ghcr.io/<owner>/<repo>-ci`) 内运行, 推送到 main 时 `container-image.yml` 把它发布为 `:latest` 和内容标签 (构建输入的哈希)。改动了构建输入的拉取请求分两步获得内容标签, 因此它的检查就在它所改动的镜像内运行。
+
+拉取请求自己的 `container-image.yml` 运行只构建, 不持有任何包令牌。它成功后, `container-image-publish.yml` 以 main 的定义运行: 检出拉取请求的合并提交, 拒绝不再合并该运行头提交的那个, 重新计算内容标签, 在任何登录之前重新构建, 并仅在该标签仍空闲时推送它。因此拉取请求产出的任何东西都不会被推送, `:latest` 只由 main 移动。
 
 `scripts/ci-image.ts digest` 每次运行选一次标签: 若注册表已有内容标签, 或这个拉取请求正在构建它 (`image` 作业会等待那次构建), 就用内容标签; 否则用 `CI_IMAGE_TAG` (`latest`), 并以通知说明原因。来自 fork 的拉取请求无法发布, 因此当它的输入没有对应镜像时会回退到 `latest`。`CI_IMAGE_TAG` 为空时, 每个作业都在裸运行器上运行。
 

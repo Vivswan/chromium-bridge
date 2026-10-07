@@ -193,7 +193,9 @@ uv 只固定於 `.prototools`, 而 python 由 uv 擁有: 協定測試套件透�
 
 ## CI 配置
 
-`checks.yml` 把每個關注點定義一次, 由受管理的 ci.yml 在 all-green 閘門內呼叫。Linux 工作在 `container-image.yml` 建置的 CI 映像檔 (`ghcr.io/<owner>/<repo>-ci`) 內執行。推送到 main 會發布 `:latest` 與內容標籤 (建置輸入的雜湊); 更動了建置輸入的 pull request 會從它自己的合併提交發布內容標籤, 因此它的檢查就在它所更動的映像檔內執行。
+`checks.yml` 把每個關注點定義一次, 由受管理的 ci.yml 在 all-green 閘門內呼叫。Linux 工作在 CI 映像檔 (`ghcr.io/<owner>/<repo>-ci`) 內執行, 推送到 main 時 `container-image.yml` 把它發布為 `:latest` 與內容標籤 (建置輸入的雜湊)。更動了建置輸入的 pull request 分兩步取得內容標籤, 因此它的檢查就在它所更動的映像檔內執行。
+
+pull request 自己的 `container-image.yml` 執行只建置, 不持有任何套件權杖。它成功後, `container-image-publish.yml` 以 main 的定義執行: 簽出 pull request 的合併提交, 拒絕不再合併該執行頭提交的那個, 重新計算內容標籤, 在任何登入之前重新建置, 並只在該標籤仍空閒時推送它。因此 pull request 產出的任何東西都不會被推送, `:latest` 只由 main 移動。
 
 `scripts/ci-image.ts digest` 每次執行選一次標籤: 若登錄所已有內容標籤, 或這個 pull request 正在建置它 (`image` 工作會等待那次建置), 就用內容標籤; 否則用 `CI_IMAGE_TAG` (`latest`), 並以通知說明原因。來自 fork 的 pull request 無法發布, 因此當它的輸入沒有對應映像檔時會回退到 `latest`。`CI_IMAGE_TAG` 為空時, 每個工作都在裸機執行器上執行。
 

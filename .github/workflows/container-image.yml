@@ -2,9 +2,11 @@
 # contents: read), so publishing the image compose.yaml builds is its own workflow. GHCR creates the
 # package private on first push; make it public once in the package settings.
 #
-# A pull request that changes a build input builds the image from its merge commit and pushes the content
-# tag alone, so checks.yml's image job on the same event runs that pull request's Linux jobs in it
-# (scripts/ci-image.ts digest waits for the tag). A fork's pull request is skipped: its token is read-only.
+# Trust boundary. YAML a pull request controls holds no package token: the `build` job below runs on
+# pull_request with contents: read and pushes nothing. Nothing a pull request produced is ever pushed:
+# container-image-publish.yml, which runs main's own definition after this workflow completes, rebuilds
+# from the pull request's merge checkout and pushes the content tag alone. A fork's pull request builds
+# nothing here (scripts/ci-image.ts eligible).
 
 name: Container image
 
@@ -38,9 +40,56 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Build-only: proves the pull request's Containerfile builds, fails the pull request fast when it does
+  # not, and is the run container-image-publish.yml follows. No login, no push, no token beyond the
+  # read-only default; the gha cache it writes is scoped to the pull request.
+  build:
+    name: Build the CI image from the pull request
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+          no-cache: true
+      - run: bun install --frozen-lockfile
+      - id: eligible
+        env:
+          PUBLISH_EVENT: ${{ github.event_name }}
+          PUBLISH_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+        run: bun scripts/ci-image.ts eligible
+      # The same materialized context the publisher builds from, so a Containerfile that copies a file the
+      # tag does not hash fails here first.
+      - if: steps.eligible.outputs.eligible == 'true'
+        env:
+          CI_IMAGE_CONTEXT: image-context
+        run: bun scripts/ci-image.ts context
+      - if: steps.eligible.outputs.eligible == 'true'
+        id: image
+        env:
+          CI_IMAGE_ROOT: image-context
+        run: bun scripts/ci-image.ts coordinates
+      - if: steps.eligible.outputs.eligible == 'true'
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - if: steps.eligible.outputs.eligible == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: image-context
+          file: image-context/Containerfile
+          platforms: linux/amd64
+          push: false
+          build-args: PROTO_VERSION=${{ steps.image.outputs.proto }}
+          tags: ${{ steps.image.outputs.name }}:${{ steps.image.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   publish:
     name: Build and push the CI image
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -56,11 +105,18 @@ jobs:
         with:
           bun-version-file: .bun-version
           no-cache: true
+      - run: bun install --frozen-lockfile
+      # The build context is written from this commit's blobs: exactly the files the tag hashes.
+      - env:
+          CI_IMAGE_CONTEXT: image-context
+        run: bun scripts/ci-image.ts context
       - name: Image name, tag, and proto pin
         id: image
         # The tag hashes every build input by name and content (scripts/ci-image.ts: the Containerfile,
         # .dockerignore, and what .dockerignore admits), and the proto pin is the Containerfile's one
         # build arg.
+        env:
+          CI_IMAGE_ROOT: image-context
         run: bun scripts/ci-image.ts coordinates
       - name: Is this commit still the head of main
         id: latest
@@ -74,8 +130,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
-          context: .
-          file: Containerfile
+          context: image-context
+          file: image-context/Containerfile
           platforms: linux/amd64
           push: true
           build-args: PROTO_VERSION=${{ steps.image.outputs.proto }}

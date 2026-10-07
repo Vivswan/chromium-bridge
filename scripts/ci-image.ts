@@ -3,13 +3,19 @@
 // The CI image's coordinates for the workflows, from one derivation of its name. Each mode writes step
 // outputs (GITHUB_OUTPUT) and nothing else.
 //
-//   digest       checks.yml image job: the image every Linux job pins, by digest (imageSelection)  -> container
-//   coordinates  container-image.yml: the image name, the content tag, the proto build arg        -> name, tag, proto
-//   latest       container-image.yml: whether this commit may move the :latest tag                -> publish
+//   digest          checks.yml image job: the image every Linux job pins, by digest (imageSelection)  -> container
+//   eligible        both image workflows: whether this run is a pull request this repository builds for -> eligible
+//   merge-checkout  container-image-publish.yml: the pull request's merge commit into CI_IMAGE_ROOT, refused
+//                   unless it merges the run's head, then its build context into CI_IMAGE_CONTEXT       -> (dies)
+//   context         container-image.yml: this checkout's build context into CI_IMAGE_CONTEXT             -> (dies)
+//   coordinates     both image workflows: the image name, the content tag, the proto build arg, read
+//                   from CI_IMAGE_ROOT (default: this checkout)                                          -> name, tag, proto
+//   unpublished     container-image-publish.yml: whether the content tag is still free to push            -> publish
+//   latest          container-image.yml: whether this commit may move the :latest tag                    -> publish
 
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join } from "node:path";
 import { $ } from "bun";
 import pWaitFor, { TimeoutError } from "p-wait-for";
 import {
@@ -29,8 +35,10 @@ export function imageName(repository: string): string {
   return `ghcr.io/${repository.toLowerCase()}-ci`;
 }
 
-/** The workflow that builds and publishes the image, on a push to main and on a pull request alike. */
+/** The workflow that builds the image: pushed from main, built without pushing on a pull request. */
 export const imageWorkflow = ".github/workflows/container-image.yml";
+/** The workflow that publishes a pull request's image, running main's own definition after the build above. */
+export const publishWorkflow = ".github/workflows/container-image-publish.yml";
 
 /**
  * Everything the image is built from: the Containerfile, .dockerignore, and the files .dockerignore lets
@@ -38,12 +46,27 @@ export const imageWorkflow = ".github/workflows/container-image.yml";
  * triggers are a copy of it (ci-image.test.ts holds the two together).
  */
 export function imageInputs(root: string): string[] {
+  // Docker reads it in place of .dockerignore when present: the context would widen with no hashed
+  // file touched.
+  if (existsSync(join(root, "Containerfile.dockerignore"))) {
+    throw new Error(
+      "Containerfile.dockerignore would replace .dockerignore as the context's owner",
+    );
+  }
+  // Trimmed as docker trims, so the list read here is the list docker applies.
   const admitted = readFileSync(join(root, ".dockerignore"), "utf8")
     .split("\n")
+    .map((line) => line.trim())
     .filter((line) => line.startsWith("!"))
     .map((line) => line.slice(1));
   for (const path of admitted) {
     if (/[*?[]/.test(path)) throw new Error(`.dockerignore admits a pattern, not a file: !${path}`);
+    // The publisher hashes a pull request's checkout inside main's; a path may not reach past it.
+    if (isAbsolute(path) || path.split("/").some((part) => part === "..")) {
+      throw new Error(
+        `.dockerignore admits a path that is not a plain path inside the build context: !${path}`,
+      );
+    }
   }
   return ["Containerfile", ".dockerignore", ...admitted];
 }
@@ -53,17 +76,58 @@ export function triggerPaths(root: string): string[] {
   return [...imageInputs(root), imageWorkflow];
 }
 
-/**
- * How long the publishing job may run, read from the workflow so the wait for its tag has the same
- * bound: a build still going past it has been stopped, and waiting longer would wait for nothing.
- */
-export function publishTimeoutMinutes(root: string): number {
-  const parsed = Bun.YAML.parse(readFileSync(join(root, imageWorkflow), "utf8")) as {
-    jobs?: { publish?: { "timeout-minutes"?: unknown } };
+/** A job's `timeout-minutes`, read from its workflow. */
+function jobTimeoutMinutes(root: string, workflow: string, job: string): number {
+  const parsed = Bun.YAML.parse(readFileSync(join(root, workflow), "utf8")) as {
+    jobs?: Record<string, { "timeout-minutes"?: unknown }>;
   };
-  const minutes = parsed.jobs?.publish?.["timeout-minutes"];
-  if (typeof minutes !== "number") throw new Error(`${imageWorkflow}: no publish timeout-minutes`);
+  const minutes = parsed.jobs?.[job]?.["timeout-minutes"];
+  if (typeof minutes !== "number") throw new Error(`${workflow}: no ${job} timeout-minutes`);
   return minutes;
+}
+
+/**
+ * How long a pull request's tag may take to appear: its build job, then the publishing job that runs
+ * after it, each as long as its workflow allows. A build still going past that has been stopped, and
+ * waiting longer would wait for nothing.
+ */
+export function publishBoundMinutes(root: string): number {
+  return (
+    jobTimeoutMinutes(root, imageWorkflow, "build") +
+    jobTimeoutMinutes(root, publishWorkflow, "publish")
+  );
+}
+
+/**
+ * The build context the publishers hand docker: exactly the inputs, written under `out` from the blobs
+ * of the commit checked out at `root`, so a Containerfile can copy nothing the tag does not hash. A
+ * path that is not a regular file in the commit (a symlink, a directory, a submodule, or absent, as a
+ * path under a symlinked directory is) is refused by name, so no byte outside the commit is read.
+ */
+export function materializeContext(root: string, out: string, env: Env): string[] {
+  const blob = (path: string): void => {
+    const entry = runGit(root, env, "ls-tree", "HEAD", "--", path).trim();
+    if (entry === "") throw new Error(`${path} is not in the commit`);
+    const mode = entry.split(" ")[0];
+    if (mode !== "100644" && mode !== "100755") {
+      throw new Error(`${path} is not a regular file in the commit (mode ${mode})`);
+    }
+    const show = Bun.spawnSync(["git", "show", `HEAD:${path}`], {
+      cwd: root,
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (show.exitCode !== 0)
+      throw new Error(`git show HEAD:${path} failed: ${show.stderr.toString().trim()}`);
+    mkdirSync(dirname(join(out, path)), { recursive: true });
+    writeFileSync(join(out, path), show.stdout);
+  };
+  blob(".dockerignore");
+  blob("Containerfile");
+  const inputs = imageInputs(out);
+  for (const path of inputs) if (path !== ".dockerignore" && path !== "Containerfile") blob(path);
+  return inputs;
 }
 
 /**
@@ -72,15 +136,42 @@ export function publishTimeoutMinutes(root: string): number {
  */
 export function contentTag(root: string, inputs: readonly string[]): string {
   const sha256 = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
-  const manifest = inputs.map((path) => `${sha256(readFileSync(join(root, path)))}  ${path}\n`);
+  const manifest = inputs.map((path) => {
+    // The checkout's own bytes: a link would hash, and build from, a file the tag does not name.
+    if (lstatSync(join(root, path)).isSymbolicLink()) throw new Error(`${path} is a symlink`);
+    return `${sha256(readFileSync(join(root, path)))}  ${path}\n`;
+  });
   return sha256(manifest.join("")).slice(0, 12);
 }
 
-/** What the image job runs in: the event, and for a pull request, whose head it is and what it changes. */
+/** Whether a run is a pull request this repository builds an image for. */
+export type Eligibility = { eligible: true } | { eligible: false; reason: string };
+
+/**
+ * The one predicate both image workflows and the image job apply: a pull request whose head is this
+ * repository's own. A fork's is not. The actor does not enter: no step a pull request controls holds a
+ * token (its build job pushes nothing, and the publisher runs main's own definition), so a dependabot
+ * pull request is an ordinary one.
+ */
+export function publishEligibility(
+  event: string,
+  headRepository: string,
+  repository: string,
+): Eligibility {
+  if (event !== "pull_request")
+    return { eligible: false, reason: `a ${event} is not a pull request` };
+  if (headRepository !== repository) {
+    return {
+      eligible: false,
+      reason: `a pull request from ${headRepository} is not ${repository}'s own`,
+    };
+  }
+  return { eligible: true };
+}
+
+/** What the image job runs in: whether this repository builds for it, and whether it changes a trigger path. */
 export interface ImageRun {
-  event: string;
-  /** The pull request's head is this repository's own, so its token may publish; a fork's is read-only. */
-  sameRepository: boolean;
+  eligibility: Eligibility;
   /** The pull request changes a trigger path, so container-image.yml is building from it on this event. */
   changesTrigger: boolean;
 }
@@ -88,13 +179,20 @@ export interface ImageRun {
 /**
  * The run from the step's env: GITHUB_EVENT_NAME, and for a pull request the base and head shas and the
  * head repository checks.yml passes from github.event.pull_request. The diff is the pull request's own
- * commits (merge base to head), the same files GitHub's `paths` filter reads to start the publisher, so
- * the two agree even when main changed a trigger path in the meantime. The content tag is the merge
+ * commits (merge base to head), the same files GitHub's `paths` filter reads to start the build, so the
+ * two agree even when main changed a trigger path in the meantime. The content tag is the merge
  * checkout's, as in the publisher.
  */
 export function imageRun(env: Env, root = repoRoot): ImageRun {
   const event = requiredEnv("GITHUB_EVENT_NAME", env);
-  if (event !== "pull_request") return { event, sameRepository: false, changesTrigger: false };
+  if (event !== "pull_request") {
+    return { eligibility: publishEligibility(event, "", ""), changesTrigger: false };
+  }
+  const eligibility = publishEligibility(
+    event,
+    requiredEnv("PR_HEAD_REPOSITORY", env),
+    requiredEnv("GITHUB_REPOSITORY", env),
+  );
   const range = `${requiredEnv("PR_BASE_SHA", env)}...${requiredEnv("PR_HEAD_SHA", env)}`;
   const changed = runGit(
     root,
@@ -105,11 +203,23 @@ export function imageRun(env: Env, root = repoRoot): ImageRun {
     "--",
     ...triggerPaths(root),
   );
+  return { eligibility, changesTrigger: changed.trim() !== "" };
+}
+
+/**
+ * The publisher builds the pull request's merge commit, the one checks.yml's jobs run and hash, and only
+ * the one the triggering run was about: a merge ref that no longer merges that run's head belongs to a
+ * newer push, whose own run publishes.
+ */
+export function mergeHeadCheck(
+  mergeRef: string,
+  secondParent: string,
+  headSha: string,
+): { ok: true } | { ok: false; refused: string } {
+  if (secondParent === headSha) return { ok: true };
   return {
-    event,
-    sameRepository:
-      requiredEnv("PR_HEAD_REPOSITORY", env) === requiredEnv("GITHUB_REPOSITORY", env),
-    changesTrigger: changed.trim() !== "",
+    ok: false,
+    refused: `${mergeRef} merges ${secondParent}, not this run's head ${headSha}: nothing published (the pull request moved on; its newer run publishes)`,
   };
 }
 
@@ -125,8 +235,8 @@ export interface ImageSelection {
  * The image the Linux jobs run: the one built from exactly this checkout's inputs when the registry holds
  * it; the one a same-repository pull request is building when it changes a trigger path, waited for; else
  * `fallback`, the tag main last published. The fallback covers a push to main (container-image.yml
- * publishes beside these checks), a fork's pull request (it cannot publish), and a checkout whose inputs
- * main never published.
+ * publishes beside these checks), a fork's pull request (nothing builds for it), and a checkout whose
+ * inputs main never published.
  */
 export function imageSelection(
   content: string,
@@ -135,15 +245,10 @@ export function imageSelection(
   run: ImageRun,
 ): ImageSelection {
   if (published) return { tag: content, wait: false };
-  if (run.event === "pull_request" && run.sameRepository && run.changesTrigger) {
-    return { tag: content, wait: true };
-  }
-  const why =
-    run.event !== "pull_request"
-      ? `a ${run.event} leaves publishing one to ${imageWorkflow}`
-      : run.sameRepository
-        ? "this pull request changes no build input"
-        : "a pull request from a fork cannot publish one";
+  if (run.eligibility.eligible && run.changesTrigger) return { tag: content, wait: true };
+  const why = run.eligibility.eligible
+    ? "this pull request changes no build input"
+    : `${run.eligibility.reason}, and only a pull request's build is waited for`;
   return {
     tag: fallback,
     wait: false,
@@ -249,9 +354,9 @@ const modes: Record<string, () => Promise<void>> = {
     if (probed.kind === "digest") {
       digest = probed.digest;
     } else if (selection.wait) {
-      const minutes = publishTimeoutMinutes(repoRoot);
+      const minutes = publishBoundMinutes(repoRoot);
       console.log(
-        `waiting up to ${minutes} minutes for ${reference}, published by this pull request's ${imageWorkflow} run`,
+        `waiting up to ${minutes} minutes for ${reference}: this pull request's ${imageWorkflow} run builds it, then ${publishWorkflow} publishes it`,
       );
       // A failed ask is retried like absence until the bound, whose failure quotes the last answer: a
       // persistent refusal reads as itself, not as a build that never published.
@@ -268,7 +373,7 @@ const modes: Record<string, () => Promise<void>> = {
       } catch (error) {
         if (!(error instanceof TimeoutError)) throw error;
         die(
-          `${reference} was not published within ${minutes} minutes: this pull request's ${imageWorkflow} run did not push it (its build failed or was stopped; see that run). The registry's last answer: ${last}`,
+          `${reference} was not published within ${minutes} minutes: this pull request's ${imageWorkflow} build or its ${publishWorkflow} run did not push it (failed, stopped, or refused; see those runs). The registry's last answer: ${last}`,
         );
       }
     } else {
@@ -280,10 +385,58 @@ const modes: Record<string, () => Promise<void>> = {
     console.log(`CI image: ${reference} is ${(JSON.parse(container) as { image: string }).image}`);
     githubOutput("container", container);
   },
+  async eligible() {
+    const eligibility = publishEligibility(
+      requiredEnv("PUBLISH_EVENT"),
+      requiredEnv("PUBLISH_HEAD_REPOSITORY"),
+      requiredEnv("GITHUB_REPOSITORY"),
+    );
+    if (!eligibility.eligible) console.log(`::notice::no image built: ${eligibility.reason}`);
+    githubOutput("eligible", String(eligibility.eligible));
+  },
+  async "merge-checkout"() {
+    const number = requiredEnv("PR_NUMBER");
+    if (!/^[1-9][0-9]*$/.test(number)) die(`PR_NUMBER is not a pull request number: ${number}`);
+    const head = requiredEnv("PR_HEAD_SHA");
+    const root = join(repoRoot, requiredEnv("CI_IMAGE_ROOT"));
+    const mergeRef = `refs/pull/${number}/merge`;
+    const url = `${requiredEnv("GITHUB_SERVER_URL")}/${requiredEnv("GITHUB_REPOSITORY")}`;
+    const env = gitEnv(process.env);
+    runGit(repoRoot, env, "init", "-q", root);
+    runGit(root, env, "fetch", "-q", url, mergeRef);
+    runGit(root, env, "checkout", "-q", "FETCH_HEAD");
+    const secondParent = runGit(root, env, "rev-parse", "FETCH_HEAD^2").trim();
+    const check = mergeHeadCheck(mergeRef, secondParent, head);
+    if (!check.ok) die(check.refused);
+    console.log(
+      `${root}: ${mergeRef} (${runGit(root, env, "rev-parse", "HEAD").trim()}) merges ${head}`,
+    );
+    const context = join(repoRoot, requiredEnv("CI_IMAGE_CONTEXT"));
+    console.log(`${context}: ${materializeContext(root, context, env).join(", ")}`);
+  },
+  async context() {
+    const context = join(repoRoot, requiredEnv("CI_IMAGE_CONTEXT"));
+    console.log(
+      `${context}: ${materializeContext(repoRoot, context, gitEnv(process.env)).join(", ")}`,
+    );
+  },
   async coordinates() {
+    const root = join(repoRoot, process.env.CI_IMAGE_ROOT ?? ".");
     githubOutput("name", imageName(requiredEnv("GITHUB_REPOSITORY")));
-    githubOutput("tag", contentTag(repoRoot, imageInputs(repoRoot)));
-    githubOutput("proto", readPin("proto"));
+    githubOutput("tag", contentTag(root, imageInputs(root)));
+    githubOutput("proto", readPin("proto", root));
+  },
+  async unpublished() {
+    const reference = `${imageName(requiredEnv("GITHUB_REPOSITORY"))}:${requiredEnv("CI_IMAGE_CONTENT_TAG")}`;
+    const inspected = await inspect(reference);
+    if (inspected.kind === "failed")
+      die(`imagetools inspect ${reference} failed: ${inspected.said}`);
+    if (inspected.kind === "digest") {
+      console.log(
+        `::notice::${reference} is already published as ${inspected.digest.trim()}: nothing pushed (a content tag never moves)`,
+      );
+    }
+    githubOutput("publish", String(inspected.kind === "absent"));
   },
   async latest() {
     const listed = (await $`git ls-remote origin refs/heads/main`.text()).trim();

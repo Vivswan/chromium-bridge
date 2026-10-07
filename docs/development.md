@@ -193,7 +193,9 @@ uv is pinned only in `.prototools`, and python is owned by uv: the protocol suit
 
 ## CI layout
 
-`checks.yml` defines each concern once, called by the managed ci.yml inside the all-green gate. The Linux jobs run inside the CI image `container-image.yml` builds (`ghcr.io/<owner>/<repo>-ci`). A push to main publishes `:latest` and the content tag (a hash of the build inputs); a pull request that changes a build input publishes the content tag from its own merge commit, so its checks run in the image it changes.
+`checks.yml` defines each concern once, called by the managed ci.yml inside the all-green gate. The Linux jobs run inside the CI image (`ghcr.io/<owner>/<repo>-ci`), which a push to main publishes from `container-image.yml` as `:latest` and as the content tag (a hash of the build inputs). A pull request that changes a build input gets the content tag in two steps, so its checks run in the image it changes.
+
+The pull request's own `container-image.yml` run only builds, holding no package token. When it succeeds, `container-image-publish.yml` runs main's definition: it checks out the pull request's merge commit, refuses one that no longer merges the run's head, recomputes the content tag, rebuilds before any login, and pushes that tag alone when it is still free. So nothing a pull request produced is pushed, and `:latest` moves from main alone.
 
 `scripts/ci-image.ts digest` picks the tag once per run: the content tag when the registry holds it or this pull request is building it (the `image` job waits for that build), else `CI_IMAGE_TAG` (`latest`), with a notice saying why. A fork's pull request cannot publish, so with no image for its inputs it falls back to `latest`. An empty `CI_IMAGE_TAG` runs every job on the bare runner.
 

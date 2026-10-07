@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   classifyInspection,
@@ -12,6 +12,9 @@ import {
   imageSelection,
   imageWorkflow,
   latestDecision,
+  materializeContext,
+  mergeHeadCheck,
+  publishEligibility,
   triggerPaths,
 } from "../ci-image.ts";
 import { repoRoot, runGit, Scratch, writeTree } from "../lib.ts";
@@ -45,6 +48,38 @@ describe("image inputs and the content tag", () => {
     expect(() => imageInputs(root)).toThrow(/pattern, not a file: !scripts\/\*\.sh/);
   });
 
+  // The publisher hashes and builds a pull request's checkout in a subdirectory of main's; what the tag
+  // names must not reach past it. Docker reads `Containerfile.dockerignore` in place of `.dockerignore`
+  // when present, which would widen the context without touching a hashed file.
+  test.each([
+    [
+      "an admitted path that climbs out of the root",
+      { "../package.json": "" },
+      /not a plain path inside the build context: !\.\.\/package\.json/,
+    ],
+    [
+      "an admitted absolute path",
+      { "/etc/passwd": "" },
+      /not a plain path inside the build context: !\/etc\/passwd/,
+    ],
+    [
+      "a Containerfile.dockerignore beside the .dockerignore",
+      { "Containerfile.dockerignore": "*\n" },
+      /Containerfile\.dockerignore would replace \.dockerignore/,
+    ],
+  ])("%s is refused", (_name, admitted, message) => {
+    const root = context(admitted as Record<string, string>);
+    expect(() => imageInputs(root)).toThrow(message);
+  });
+
+  test("a symlinked input is refused: the tag hashes the checkout's own bytes", () => {
+    const root = context({});
+    writeTree(root, { "outside/.prototools": 'proto = "9.9.9"\n' });
+    symlinkSync(join(root, "outside/.prototools"), join(root, ".prototools"));
+    writeFileSync(join(root, ".dockerignore"), "*\n!.prototools\n");
+    expect(() => contentTag(root, imageInputs(root))).toThrow(/\.prototools is a symlink/);
+  });
+
   test("equal contents give equal tags, and the same bytes split differently across files do not", () => {
     const same = [context({ a: "ab", b: "cd" }), context({ a: "ab", b: "cd" })];
     const moved = context({ a: "abc", b: "d" });
@@ -64,25 +99,136 @@ describe("image inputs and the content tag", () => {
   });
 });
 
-// Two facts the source does not say. A same-repository pull request that changes an input waits for its
-// own build: the checks once ran on main's image and could not prove a Containerfile fix, nor fix a red
-// one. A fork's pull request never waits: GitHub hands it a read-only token, so no build of its content
-// ever publishes, and a wait would spend the job's timeout.
+// The one predicate both image workflows and the image job apply. The fork row is the fact GitHub
+// enforces and nothing here states: a fork's token is read-only, so no build of its content ever
+// publishes, and a wait for one would spend the job's timeout. The dependabot row says the actor is not
+// an input: no step a pull request controls holds a token, so there is nothing to withhold from it.
+describe("publishEligibility", () => {
+  const repository = "example-user/repo";
+  test.each<[string, string, string, ReturnType<typeof publishEligibility>]>([
+    [
+      "a push is not a pull request",
+      "push",
+      "",
+      { eligible: false, reason: "a push is not a pull request" },
+    ],
+    [
+      "a pull request from this repository is eligible",
+      "pull_request",
+      repository,
+      { eligible: true },
+    ],
+    [
+      "a fork's pull request is not",
+      "pull_request",
+      "fork-owner/repo",
+      { eligible: false, reason: `a pull request from fork-owner/repo is not ${repository}'s own` },
+    ],
+    [
+      "a dependabot pull request from this repository is an ordinary one",
+      "pull_request",
+      repository,
+      { eligible: true },
+    ],
+  ])("%s", (_name, event, headRepository, eligibility) => {
+    expect(publishEligibility(event, headRepository, repository)).toEqual(eligibility);
+  });
+});
+
+// The fact the first incident taught: a same-repository pull request that changes an input waits for its
+// own build (the checks once ran on main's image and could not prove a Containerfile fix, nor fix a red
+// one), and anything ineligible falls back at once.
 describe("imageSelection", () => {
   const content = "0123456789ab";
-  const changing: ImageRun = { event: "pull_request", sameRepository: true, changesTrigger: true };
-  test.each<[string, boolean, { tag: string; wait: boolean }]>([
+  const changing: ImageRun = { eligibility: { eligible: true }, changesTrigger: true };
+  test.each<[string, ImageRun, { tag: string; wait: boolean }]>([
     [
-      "a same-repository pull request waits for the tag it is building",
-      true,
+      "an eligible pull request waits for the tag it is building",
+      changing,
       { tag: content, wait: true },
     ],
-    ["a fork's pull request falls back at once, saying why", false, { tag: "latest", wait: false }],
-  ])("%s", (_name, sameRepository, decision) => {
-    const selection = imageSelection(content, "latest", false, { ...changing, sameRepository });
+    [
+      "an ineligible run falls back at once, saying why",
+      { ...changing, eligibility: { eligible: false, reason: "a fork" } },
+      { tag: "latest", wait: false },
+    ],
+  ])("%s", (_name, run, decision) => {
+    const selection = imageSelection(content, "latest", false, run);
     expect(selection).toMatchObject(decision);
     if (decision.wait) expect(selection.notice).toBeUndefined();
     else expect(selection.notice).toContain(content);
+  });
+});
+
+// What the build can copy is what the tag hashes: the context is written from the commit's blobs, never
+// the checkout's files, so a symlink (a blob of mode 120000) or a path under a symlinked directory (not
+// in the tree at all) is refused instead of read through.
+describe("materializeContext", () => {
+  const env = { PATH: process.env.PATH };
+  function committed(files: Record<string, string>, links: Record<string, string>): string {
+    const root = scratch.dir("ci-image-commit");
+    writeTree(root, { Containerfile: "FROM scratch\n", ...files });
+    for (const [path, target] of Object.entries(links)) symlinkSync(target, join(root, path));
+    const git = (...args: string[]) => runGit(root, env, ...args);
+    git("init", "-q", "-b", "main");
+    git("config", "user.name", "t");
+    git("config", "user.email", "t@example.invalid");
+    git("add", ".");
+    git("commit", "-q", "-m", "inputs");
+    return root;
+  }
+
+  test("exactly the admitted blobs are written, a leading space before a bang included, and nothing else", () => {
+    const root = committed(
+      {
+        ".dockerignore": "*\n!.prototools\n !pins/extra\n",
+        ".prototools": "p",
+        "pins/extra": "e",
+        "src/main.rs": "",
+      },
+      {},
+    );
+    const out = scratch.dir("ci-image-context");
+    expect(materializeContext(root, out, env).sort()).toEqual(
+      [".dockerignore", "Containerfile", ".prototools", "pins/extra"].sort(),
+    );
+    expect(readdirSync(out, { recursive: true }).sort()).toEqual(
+      [".dockerignore", "Containerfile", ".prototools", "pins", "pins/extra"].sort(),
+    );
+    expect(readFileSync(join(out, "pins/extra"), "utf8")).toBe("e");
+  });
+
+  test("a symlinked input is refused by its mode", () => {
+    const root = committed(
+      { ".dockerignore": "*\n!.prototools\n" },
+      { ".prototools": "../outside" },
+    );
+    expect(() => materializeContext(root, scratch.dir("ci-image-context"), env)).toThrow(
+      ".prototools is not a regular file in the commit (mode 120000)",
+    );
+  });
+
+  test("an input under a symlinked directory is refused as not in the commit", () => {
+    const root = committed({ ".dockerignore": "*\n!inputs/.prototools\n" }, { inputs: ".." });
+    expect(() => materializeContext(root, scratch.dir("ci-image-context"), env)).toThrow(
+      "inputs/.prototools is not in the commit",
+    );
+  });
+});
+
+// The publisher must build the merge commit the triggering run was about; a newer push moves the merge
+// ref under a run still in flight, and publishing from it would tag content that run never built.
+describe("mergeHeadCheck", () => {
+  const head = "a".repeat(40);
+  const newer = "b".repeat(40);
+  test("a merge of the run's head passes", () => {
+    expect(mergeHeadCheck("refs/pull/7/merge", head, head)).toEqual({ ok: true });
+  });
+  test("a merge of a newer head is refused, naming both shas", () => {
+    expect(mergeHeadCheck("refs/pull/7/merge", newer, head)).toEqual({
+      ok: false,
+      refused: `refs/pull/7/merge merges ${newer}, not this run's head ${head}: nothing published (the pull request moved on; its newer run publishes)`,
+    });
   });
 });
 
