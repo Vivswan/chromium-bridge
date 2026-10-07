@@ -22,8 +22,10 @@
 //   browser_revoke    -> browser_revoke_result; the host forgets this browser's credentials, and the note goes
 //
 // One exchange carries every request, each naming the reply tags that answer it: the host answers in order on
-// one pipe, so a second ceremony is refused, never queued behind the first. A detach also drops the pending
-// request, since the host that asked is gone with the port.
+// one pipe, so a second ceremony is refused, never queued behind the first. A request given up on (a timeout
+// after posting, a cancelled begin) leaves the host owing a reply that arrives before any reply to a later
+// request; it is recorded as owed and the first frame it could be is dropped, so it settles nothing. A detach
+// also drops the pending request and every debt, since the host that owed them is gone with the port.
 
 import {
   type BrowserRevokeResultFrame,
@@ -59,7 +61,7 @@ import {
 import { browser } from "wxt/browser";
 import type { z } from "zod";
 import type { PortCollaborator } from "../background/connection";
-import { exchange, type NamedReading } from "../background/exchange";
+import { exchange, type Failure, type NamedReading } from "../background/exchange";
 import { inLife } from "../shared/in-life";
 import { readKey } from "../shared/read-key";
 
@@ -132,10 +134,78 @@ interface AwaitingAct {
   act: Act;
 }
 const awaitingAct = inLife<AwaitingAct | null>(() => null);
-/** How many begins given up on (cancelled, or timed out after posting) the host still owes a reply; the next
- * presence frame to arrive settles one, before any correlation, since the host answers in order. */
-const unansweredBegins = inLife(() => 0);
+/** A reply the host still owes for a request this side gave up on. `accepts` says whether a frame is that
+ * reply, and names only frames the host never pushes, since a frame is matched to a debt by its tag alone;
+ * `leaves` is the further debt the consumed reply leaves (a late presence_result ok leaves the act's outcome
+ * frame owed; an enrollment's pushed request leaves its enroll_result). Oldest first: the host answers in
+ * order, so the oldest debt is paid first and a later request's reply can never be taken before it; a debt
+ * is consumed before any correlation, so no reply settles a request it was not for. */
+interface OwedReply {
+  accepts: (tag: string, ok: boolean) => boolean;
+  leaves?: (tag: string, ok: boolean) => OwedReply | null;
+}
+const owed = inLife<OwedReply[]>(() => []);
 
+const owe = (reply: OwedReply): void => {
+  owed.value.push(reply);
+};
+const tagged = (...tags: string[]): OwedReply => ({ accepts: (tag) => tags.includes(tag) });
+/** What a begun enrollment is owed: its options or its refusal, or on an enrolled machine the pushed request
+ * and then the refusal. */
+const enrollmentBegun: OwedReply = {
+  accepts: (tag) => ["presence_request", "enroll_options", "enroll_result"].includes(tag),
+  leaves: (tag) => (tag === "presence_request" ? tagged("enroll_result") : null),
+};
+/** What a begun act is owed: its request, or its early result frame; an ok on a tap-only lane is a push. */
+const actBegun = (act: Act): OwedReply => ({
+  accepts: (tag, ok) =>
+    tag === "presence_request" || (tag === act.result && !(ok && act.lanes === "tap")),
+});
+/** Set when a kill release's exchange timed out in any phase. Its reply, kill_status_result, is also what the
+ * host pushes on a transition or an unreadable record, so no frame can be told to be the release's and no debt
+ * can be recorded for it; every ceremony is refused until the connection goes (a detach clears it) and the
+ * next connect starts clean. */
+const releaseUnresolved = inLife(() => false);
+const RELEASE_UNRESOLVED =
+  "the native host owes a reply to a kill-switch release that timed out; the WebAuthn exchange is locked until the host reconnects";
+const isRelease = (act: Act): boolean => act.result === "kill_status_result";
+/** The refusal handler of a release whose timeout cannot be turned into a debt. */
+const locking = (failure: Failure): Refused => {
+  if (failure.why === "timed-out") releaseUnresolved.value = true;
+  return { ok: false, error: failure.error };
+};
+/** One ceremony request, refused outright while a release's reply is unresolved. */
+function request<TView, R extends (WebAuthnInboundFrame | ActOutcome)["type"]>(
+  frame: object,
+  how: NamedReading<WebAuthnInboundFrame | ActOutcome, TView, R>,
+): { posted: boolean; view: Promise<TView | Refused> } {
+  if (releaseUnresolved.value) {
+    const failure: Failure = { why: "busy", error: RELEASE_UNRESOLVED, posted: false };
+    const refused = how.refused
+      ? how.refused(failure)
+      : { ok: false as const, error: failure.error };
+    return { posted: false, view: Promise.resolve(refused) };
+  }
+  return ceremony.request(frame, how);
+}
+/** Whether a frame on `tag` is the oldest owed reply, consuming the debt when so. */
+function consumeOwed(tag: string, msg: object): boolean {
+  const ok = (msg as { ok?: unknown }).ok === true;
+  const head = owed.value[0];
+  if (!head?.accepts(tag, ok)) return false;
+  owed.value.shift();
+  const next = head.leaves?.(tag, ok);
+  if (next) owed.value.unshift(next);
+  console.warn(`[bb] dropping the late ${tag} of a request given up on`);
+  return true;
+}
+/** The refusal handler of a request whose timeout leaves `reply` owed. */
+const owing =
+  (reply: OwedReply) =>
+  (failure: Failure): Refused => {
+    if (failure.why === "timed-out") owe(reply);
+    return { ok: false, error: failure.error };
+  };
 export const collaborator: PortCollaborator = {
   onAttach(c) {
     ceremony.attach(c);
@@ -143,7 +213,8 @@ export const collaborator: PortCollaborator = {
   onDetach() {
     dropPending();
     awaitingAct.value = null;
-    unansweredBegins.value = 0;
+    owed.value = [];
+    releaseUnresolved.value = false;
     ceremony.detach();
   },
   onFrame(msg) {
@@ -175,6 +246,7 @@ export function beginEnrollment(): Promise<EnrollBeginView> {
       }
       return { ok: false, error: result.data.reason };
     },
+    refused: owing(enrollmentBegun),
   }).view;
 }
 
@@ -190,6 +262,7 @@ export async function finishEnrollment(response: RegistrationResponse): Promise<
         ? { ok: true, credentialId: result.data.credential_id }
         : { ok: false, error: result.data.reason };
     },
+    refused: owing(tagged("enroll_result")),
   }).view;
   if (view.ok) {
     const note: WebAuthnEnrollment = { credentialId: view.credentialId, enrolledAt: Date.now() };
@@ -221,13 +294,14 @@ export async function recordedEnrollment(): Promise<EnrollmentNoteView> {
  * `revoke <browser>` left behind). Only an ok drops the pending presence request: the host keeps its request
  * through a refusal, and a browser with no credential still answers its own through the window. */
 export async function forgetBrowser(): Promise<ForgetView> {
-  const view = await ceremony.request({ type: "browser_revoke" } satisfies BrowserRevokeWire, {
+  const view = await request({ type: "browser_revoke" } satisfies BrowserRevokeWire, {
     replies: ["browser_revoke_result"],
     read(frame): ForgetView {
       const result = BrowserRevokeResultFrameSchema.safeParse(frame);
       if (!result.success) return { ok: false, error: "malformed browser_revoke_result from host" };
       return result.data.ok ? { ok: true } : { ok: false, error: result.data.reason };
     },
+    refused: owing(tagged("browser_revoke_result")),
   }).view;
   if (view.ok) pendingRequest.value = null;
   if (view.ok || view.error === ("not_enrolled" satisfies BrowserRevokeResultFrame["reason"])) {
@@ -245,7 +319,7 @@ function post<TView, R extends (WebAuthnInboundFrame | ActOutcome)["type"]>(
   frame: object,
   how: NamedReading<WebAuthnInboundFrame | ActOutcome, TView, R>,
 ): { posted: boolean; view: Promise<TView | Refused> } {
-  const { posted, view } = ceremony.request(frame, how);
+  const { posted, view } = request(frame, how);
   if (posted) dropPending();
   return { posted, view };
 }
@@ -276,7 +350,7 @@ export function beginAct(frame: ActFrame): Promise<ActBegunView> {
     },
     refused(failure): Refused {
       if (awaitingAct.value === awaiting) awaitingAct.value = null;
-      return { ok: false, error: failure.error };
+      return (isRelease(act) ? locking : owing(actBegun(act)))(failure);
     },
   });
   if (posted) awaitingAct.value = awaiting;
@@ -301,6 +375,7 @@ export function claimAct(
   tag: ActResultTag,
   msg: { ok: boolean },
 ): ((view: PresenceAssertView) => void) | null {
+  if (consumeOwed(tag, msg)) return null;
   const awaited = awaitingAct.value?.act;
   const early = awaited?.result === tag;
   if (early && msg.ok && awaited.lanes === "tap") return null;
@@ -347,45 +422,39 @@ export function beginPresence(
 ): PresenceBegin {
   const expected = `${action} on ${origin}`;
   let awaiting = true;
-  const { view } = ceremony.request(
-    { type: "presence_begin", action, origin } satisfies PresenceBeginWire,
-    {
-      replies: ["presence_request", "presence_result"],
-      read(frame): PresenceBeginView {
-        awaiting = false;
-        if (frame.type === "presence_result") {
-          const result = PresenceResultFrameSchema.safeParse(frame);
-          return {
-            ok: false,
-            error:
-              result.success && !result.data.ok
-                ? result.data.reason
-                : "malformed presence_result from host",
-          };
-        }
-        const parsed = PresenceRequestFrameSchema.safeParse(frame);
-        if (!parsed.success) return { ok: false, error: "malformed presence_request from host" };
-        if (parsed.data.action !== expected) {
-          return { ok: false, error: "the host's request names another act" };
-        }
-        hold({ frame: parsed.data, asked: "page_op", onVerdict });
-        return { ok: true, request: parsed.data };
-      },
-      refused(failure): PresenceBeginView {
-        awaiting = false;
-        // The exchange gave up on a posted begin: the host's reply is still coming and must not be taken
-        // for a push (or for the next request's reply), the same debt a cancel records.
-        if (failure.why === "timed-out") unansweredBegins.value += 1;
-        return { ok: false, error: failure.error };
-      },
+  const { view } = request({ type: "presence_begin", action, origin } satisfies PresenceBeginWire, {
+    replies: ["presence_request", "presence_result"],
+    read(frame): PresenceBeginView {
+      awaiting = false;
+      if (frame.type === "presence_result") {
+        const result = PresenceResultFrameSchema.safeParse(frame);
+        return {
+          ok: false,
+          error:
+            result.success && !result.data.ok
+              ? result.data.reason
+              : "malformed presence_result from host",
+        };
+      }
+      const parsed = PresenceRequestFrameSchema.safeParse(frame);
+      if (!parsed.success) return { ok: false, error: "malformed presence_request from host" };
+      if (parsed.data.action !== expected) {
+        return { ok: false, error: "the host's request names another act" };
+      }
+      hold({ frame: parsed.data, asked: "page_op", onVerdict });
+      return { ok: true, request: parsed.data };
     },
-  );
+    refused(failure): PresenceBeginView {
+      awaiting = false;
+      return owing(tagged("presence_request", "presence_result"))(failure);
+    },
+  });
   return {
     view,
     cancel() {
       if (!awaiting) return;
       awaiting = false;
-      unansweredBegins.value += 1;
+      owe(tagged("presence_request", "presence_result"));
       void ceremony
         .claim("presence_request")
         ?.fail("the confirmation ended before the host answered");
@@ -461,7 +530,7 @@ function answerPending(
     if (pending.asked === "page_op") pending.onVerdict(view.ok);
     return view;
   };
-  const { posted, view } = ceremony.request(frame, {
+  const { posted, view } = request(frame, {
     replies: ["presence_result"],
     read(reply): PresenceAssertView | Promise<PresenceAssertView> {
       const result = PresenceResultFrameSchema.safeParse(reply);
@@ -469,12 +538,26 @@ function answerPending(
         return verdict({ ok: false, error: "malformed presence_result from host" });
       if (!result.data.ok) return verdict({ ok: false, error: result.data.reason });
       if (pending.asked !== "act") return verdict({ ok: true });
+      const { act } = pending;
       return ceremony.hold({
-        replies: [outcomeTag(pending.act.result)],
-        read: (outcome) => outcome.view,
+        replies: [outcomeTag(act.result)],
+        read: (reply) => reply.view,
+        refused: isRelease(act) ? locking : owing(tagged(act.result)),
       });
     },
     refused(failure): PresenceAssertView {
+      if (failure.why === "timed-out") {
+        // The verdict is owed; when it passed, the act's outcome frame follows it. A release's outcome cannot
+        // be told from a push, so its timeout locks the exchange instead.
+        const act = pending.asked === "act" ? pending.act : null;
+        if (act && isRelease(act)) releaseUnresolved.value = true;
+        else {
+          owe({
+            accepts: (tag) => tag === "presence_result",
+            leaves: (_tag, ok) => (ok && act ? tagged(act.result) : null),
+          });
+        }
+      }
       const view: PresenceAssertView = { ok: false, error: failure.error };
       return failure.posted ? verdict(view) : view;
     },
@@ -483,20 +566,12 @@ function answerPending(
   return view;
 }
 
-/** Route one inbound WebAuthn frame: a presence frame owed to a begin given up on is dropped first; the rest
+/** Route one inbound WebAuthn frame: a frame owed to a request given up on is dropped first; the rest
  * answers the outstanding exchange (a presence request's reader holds it for the page); a presence request
  * nobody asked for is a host push, held and opening the page where the tap happens, which shows the action
  * before asking for it; anything else is dropped. */
 export function handleWebAuthnFrame(msg: WebAuthnInboundFrame): void {
-  if (
-    unansweredBegins.value > 0 &&
-    (msg.type === "presence_request" || msg.type === "presence_result")
-  ) {
-    // The reply to a begin given up on: the host answers in order, so it precedes the reply to whatever was
-    // asked after, and must not be handed to that request or held as a push.
-    unansweredBegins.value -= 1;
-    return;
-  }
+  if (consumeOwed(msg.type, msg)) return;
   if (ceremony.answer(msg)) return;
   if (msg.type !== "presence_request") {
     console.warn(`[bb] dropping unsolicited ${msg.type}`);
@@ -518,5 +593,6 @@ export function resetWebAuthnForTests(): void {
   ceremony.detach();
   pendingRequest.reset();
   awaitingAct.reset();
-  unansweredBegins.reset();
+  owed.reset();
+  releaseUnresolved.reset();
 }

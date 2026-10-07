@@ -293,6 +293,107 @@ describe("presence-gated acts beyond the release", () => {
     });
   });
 
+  const TIMED_OUT = { ok: false, error: "no reply from the native host (timed out)" };
+  const grantRequest = { ...presenceRequest, action: "set policy: pageEvalEnabled=on" };
+
+  test("a timed-out act's late reply never settles the act that followed it", async () => {
+    // The host answers in order on one pipe and its frames carry no id, so the reply owed to A is the first
+    // frame that could be it, consumed before any correlation; B's own request then answers B.
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const a = beginAct(grant);
+    await vi.advanceTimersByTimeAsync(HOST_REPLY_TIMEOUT_MS + 1);
+    await expect(a).resolves.toEqual(TIMED_OUT);
+    const b = beginAct(grant);
+    expect(claimAct("policy_set_result", { ok: false })).toBeNull();
+    let settled = false;
+    void b.then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(false);
+    handleWebAuthnFrame(grantRequest as never);
+    await expect(b).resolves.toEqual({ ok: true, request: grantRequest });
+    expect(pendingPresenceRequest()).toEqual(grantRequest);
+  });
+
+  test("a timed-out answer is owed the host's verdict and, when it passed, the act's outcome; neither answers the next act", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const a = beginAct(grant);
+    handleWebAuthnFrame(grantRequest as never);
+    await a;
+    const answered = assertPresence(answer);
+    await vi.advanceTimersByTimeAsync(HOST_REPLY_TIMEOUT_MS + 1);
+    await expect(answered).resolves.toEqual(TIMED_OUT);
+    const b = beginAct(grant);
+    handleWebAuthnFrame({ type: "presence_result", ok: true });
+    expect(claimAct("policy_set_result", { ok: false })).toBeNull();
+    handleWebAuthnFrame(grantRequest as never);
+    await expect(b).resolves.toEqual({ ok: true, request: grantRequest });
+  });
+
+  test.each([
+    { phase: "its request", answerFirst: false, verdictFirst: false },
+    { phase: "its verdict", answerFirst: true, verdictFirst: false },
+    { phase: "its outcome", answerFirst: true, verdictFirst: true },
+  ])(
+    "a release that timed out awaiting $phase locks the exchange until the host reconnects",
+    async ({ answerFirst, verdictFirst }) => {
+      // kill_status_result is also what the host pushes (a transition, an unreadable record), so a late one
+      // cannot be told to be the release's: no debt can be recorded, and nothing else may begin on this
+      // connection.
+      vi.useFakeTimers();
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      vi.spyOn(fakeBrowser.runtime, "openOptionsPage").mockResolvedValue(undefined);
+      const a = beginAct({ type: "kill_release" });
+      const release = { ...presenceRequest, action: "release the kill switch" };
+      let timedOut: Promise<unknown> = a;
+      if (answerFirst) {
+        handleWebAuthnFrame(release as never);
+        await a;
+        timedOut = assertPresence(answer);
+        // The verdict passed: the host now owes the release's outcome frame, and that wait times out.
+        if (verdictFirst) handleWebAuthnFrame({ type: "presence_result", ok: true });
+      }
+      await vi.advanceTimersByTimeAsync(HOST_REPLY_TIMEOUT_MS + 1);
+      await expect(timedOut).resolves.toEqual(TIMED_OUT);
+      const locked = {
+        ok: false,
+        error:
+          "the native host owes a reply to a kill-switch release that timed out; the WebAuthn exchange is locked until the host reconnects",
+      };
+      await expect(beginAct(grant)).resolves.toEqual(locked);
+      await expect(beginEnrollment()).resolves.toEqual(locked);
+      expect(claimAct("kill_status_result", { ok: false })).toBeNull();
+      expect(posted).toHaveLength(answerFirst ? 2 : 1);
+      // The next connection starts clean.
+      collaborator.onDetach();
+      attach(collaborator, (frame) => {
+        posted.push(frame as Record<string, unknown>);
+        return true;
+      });
+      const b = beginAct(grant);
+      handleWebAuthnFrame(grantRequest as never);
+      await expect(b).resolves.toEqual({ ok: true, request: grantRequest });
+    },
+  );
+
+  test("a timed-out enrollment on an enrolled machine is owed the pushed request and the refusal that follows it", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(fakeBrowser.runtime, "openOptionsPage").mockResolvedValue(undefined);
+    const enrolling = beginEnrollment();
+    await vi.advanceTimersByTimeAsync(HOST_REPLY_TIMEOUT_MS + 1);
+    await expect(enrolling).resolves.toEqual(TIMED_OUT);
+    const b = beginAct(grant);
+    handleWebAuthnFrame(presenceRequest as never);
+    expect(pendingPresenceRequest()).toBeNull();
+    handleWebAuthnFrame({ type: "enroll_result", ok: false, reason: "presence_required" } as never);
+    handleWebAuthnFrame(grantRequest as never);
+    await expect(b).resolves.toEqual({ ok: true, request: grantRequest });
+  });
+
   test("posting a new act drops the request the host superseded; a refused post leaves it", async () => {
     const begun = beginAct(grant);
     const request = { ...presenceRequest, action: "set policy: pageEvalEnabled=on" };
