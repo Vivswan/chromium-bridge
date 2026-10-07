@@ -68,7 +68,7 @@ CLI 除了二进制本身不需要任何东西, 在桌面机、无头机器和 C
 
 3. 加载扩展: 在 `chrome://extensions` 开启开发者模式, 点「加载已解压的扩展程序」, 选择压缩包里的 `extension/dist` 目录。然后重启浏览器。扩展需要 Chrome 134 或更新版本; 更旧的浏览器会拒绝加载它。
 
-4. 配对与登记: `chromium-bridge pair` 会打印主机密钥的指纹; 在扩展的选项页上批准它, 然后在同一页面登记你浏览器的认证器 ([docs/cli.md](./docs/zh-cn/cli.md#登记-pair--revoke--enclave-status))。
+4. 配对, 然后登记 (推荐): `chromium-bridge pair` 会打印主机密钥的指纹; 在扩展的选项页上批准它 ([docs/cli.md](./docs/zh-cn/cli.md#登记-pair--revoke--enclave-status))。在同一页面登记你浏览器的认证器是推荐项, 而非必需; [快速入门的加固一节](./docs/zh-cn/quickstart.md#推荐的加固)说明它带来什么。
 
 5. 把你的 MCP 客户端连接到二进制的绝对路径 (大多数客户端不会展开 `~`)。不带参数运行时, 二进制通过 stdio 说 MCP。
 

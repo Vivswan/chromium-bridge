@@ -77,4 +77,6 @@ All three are described in [cli.md](./cli.md) and the [security page](./security
 | Homebrew | `brew uninstall chromium-bridge` |
 | archive | delete the extracted directory |
 
-Pairing state is separate: `chromium-bridge revoke --all` deletes the host key and forgets every browser and trusted client, and the extension's options page clears its pin. The authenticators enrolled in step 6 live in `trust.json`; `revoke <browser>` forgets one browser's, `revoke --all` starts over, and a `trust.json` that `doctor` cannot read is the [troubleshooting page's](./troubleshooting.md#doctor-says-the-kill-state-or-the-trust-record-is-unreadable) case.
+Pairing state is separate: `chromium-bridge revoke --all` deletes the host key and forgets every browser and trusted client, and the extension's options page clears its pin.
+
+The authenticators enrolled in step 6 live in `trust.json`. `revoke <browser>` forgets the ones enrolled under that browser's label, which is `default` for every browser on a shared unlabelled manifest, as [cli.md](./cli.md#enrollment-pair--revoke--enclave-status) explains. `revoke --all` starts over, and a `trust.json` that `doctor` cannot read is the [troubleshooting page's](./troubleshooting.md#doctor-says-the-kill-state-or-the-trust-record-is-unreadable) case.

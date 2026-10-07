@@ -77,4 +77,6 @@ CLI 只需要二进制本身, 在桌面机、无头机器和 CI 上都一样。
 | Homebrew | `brew uninstall chromium-bridge` |
 | 压缩包 | 删除解压出的目录 |
 
-配对状态是独立的: `chromium-bridge revoke --all` 删除主机密钥并忘记每一个浏览器和受信任客户端, 扩展的选项页清除其固定的指纹。第 6 步登记的认证器保存在 `trust.json` 中; `revoke <browser>` 只忘记一个浏览器的, `revoke --all` 从头来过, 而 `doctor` 读不了的 `trust.json` 是[故障排除页面](./troubleshooting.md#doctor-显示紧急开关状态或信任记录不可读)的情形。
+配对状态是独立的: `chromium-bridge revoke --all` 删除主机密钥并忘记每一个浏览器和受信任客户端, 扩展的选项页清除其固定的指纹。
+
+第 6 步登记的认证器保存在 `trust.json` 中。`revoke <browser>` 忘记在该浏览器标识下登记的认证器; 在共享一份未设置标识的清单时, 这个标识对每个浏览器都是 `default`, 如 [cli.md](./cli.md#登记-pair--revoke--enclave-status) 所说明。`revoke --all` 从头来过, 而 `doctor` 读不了的 `trust.json` 是[故障排除页面](./troubleshooting.md#doctor-显示紧急开关状态或信任记录不可读)的情形。

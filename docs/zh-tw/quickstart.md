@@ -77,4 +77,6 @@ CLI 只需要執行檔本身, 在桌面、無頭機器與 CI 上都一樣。
 | Homebrew | `brew uninstall chromium-bridge` |
 | 壓縮檔 | 刪除解壓出來的目錄 |
 
-配對狀態是分開的: `chromium-bridge revoke --all` 刪除主機金鑰並忘記每一個瀏覽器與受信任用戶端, 擴充功能的選項頁面則清除其固定的金鑰。步驟 6 登記的認證器保存在 `trust.json` 中; `revoke <browser>` 只忘記一個瀏覽器的, `revoke --all` 從頭來過, 而 `doctor` 無法讀取的 `trust.json` 是[疑難排解頁面](./troubleshooting.md#doctor-顯示緊急開關狀態或信任記錄無法讀取)的情況。
+配對狀態是分開的: `chromium-bridge revoke --all` 刪除主機金鑰並忘記每一個瀏覽器與受信任用戶端, 擴充功能的選項頁面則清除其固定的金鑰。
+
+步驟 6 登記的認證器保存在 `trust.json` 中。`revoke <browser>` 忘記在該瀏覽器標籤下登記的認證器; 在共用一份未設定標籤的資訊清單時, 這個標籤對每個瀏覽器都是 `default`, 如 [cli.md](./cli.md#登記-pair--revoke--enclave-status) 所說明。`revoke --all` 從頭來過, 而 `doctor` 無法讀取的 `trust.json` 是[疑難排解頁面](./troubleshooting.md#doctor-顯示緊急開關狀態或信任記錄無法讀取)的情況。

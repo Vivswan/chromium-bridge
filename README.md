@@ -68,7 +68,7 @@ The CLI needs nothing beyond the binary itself, on desktops, headless machines, 
 
 3. Load the extension: the archive's `extension/dist` directory via `chrome://extensions`, Developer mode, "Load unpacked". Restart the browser. The extension needs Chrome 134 or later; an older browser refuses to load it.
 
-4. Pair and enroll: `chromium-bridge pair` prints the host key's fingerprint; approve it on the extension's options page, then enroll your browser's authenticator from the same page ([docs/cli.md](./docs/cli.md#enrollment-pair--revoke--enclave-status)).
+4. Pair, then enroll (recommended): `chromium-bridge pair` prints the host key's fingerprint; approve it on the extension's options page ([docs/cli.md](./docs/cli.md#enrollment-pair--revoke--enclave-status)). Enrolling your browser's authenticator from the same page is recommended, not required; [the quickstart's hardening section](./docs/quickstart.md#recommended-hardening) says what it adds.
 
 5. Connect your MCP client to the binary's absolute path (most clients do not expand `~`). Run with no arguments, the binary speaks MCP over stdio.
 

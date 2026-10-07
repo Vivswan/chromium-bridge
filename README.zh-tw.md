@@ -68,7 +68,7 @@ CLI 除了執行檔本身之外不需要任何東西, 在桌面、無頭機器�
 
 3. 載入擴充功能: 透過 `chrome://extensions`, 開啟開發人員模式, 點「載入未封裝項目」, 選擇壓縮檔中的 `extension/dist` 目錄。重新啟動瀏覽器。擴充功能需要 Chrome 134 或更新版本; 更舊的瀏覽器會拒絕載入它。
 
-4. 配對與登記: `chromium-bridge pair` 會印出主機金鑰的指紋; 在擴充功能的選項頁面核准它, 然後在同一個頁面登記你瀏覽器的認證器 ([docs/cli.md](./docs/zh-tw/cli.md#登記-pair--revoke--enclave-status))。
+4. 配對, 然後登記 (建議): `chromium-bridge pair` 會印出主機金鑰的指紋; 在擴充功能的選項頁面核准它 ([docs/cli.md](./docs/zh-tw/cli.md#登記-pair--revoke--enclave-status))。在同一個頁面登記你瀏覽器的認證器是建議項, 而非必要; [快速入門的強化一節](./docs/zh-tw/quickstart.md#建議的強化)說明它帶來什麼。
 
 5. 將你的 MCP 用戶端連接到執行檔的絕對路徑 (大多數用戶端不會展開 `~`)。不帶參數執行時, 執行檔透過 stdio 使用 MCP 通訊。
 
