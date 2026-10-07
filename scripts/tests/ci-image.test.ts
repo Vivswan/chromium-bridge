@@ -71,19 +71,18 @@ describe("image inputs and the content tag", () => {
 describe("imageSelection", () => {
   const content = "0123456789ab";
   const changing: ImageRun = { event: "pull_request", sameRepository: true, changesTrigger: true };
-  test("a same-repository pull request changing an input waits for the tag it is building", () => {
-    expect(imageSelection(content, "latest", false, changing)).toEqual({
-      tag: content,
-      wait: true,
-    });
-  });
-  test("a fork's pull request changing an input falls back at once, saying why", () => {
-    const selection = imageSelection(content, "latest", false, {
-      ...changing,
-      sameRepository: false,
-    });
-    expect(selection).toMatchObject({ tag: "latest", wait: false });
-    expect(selection.notice).toContain(content);
+  test.each<[string, boolean, { tag: string; wait: boolean }]>([
+    [
+      "a same-repository pull request waits for the tag it is building",
+      true,
+      { tag: content, wait: true },
+    ],
+    ["a fork's pull request falls back at once, saying why", false, { tag: "latest", wait: false }],
+  ])("%s", (_name, sameRepository, decision) => {
+    const selection = imageSelection(content, "latest", false, { ...changing, sameRepository });
+    expect(selection).toMatchObject(decision);
+    if (decision.wait) expect(selection.notice).toBeUndefined();
+    else expect(selection.notice).toContain(content);
   });
 });
 
@@ -120,43 +119,60 @@ describe("classifyInspection", () => {
 // What would drift silently: the diff is over the trigger paths alone, so a pull request touching only
 // sources never waits for an image nobody builds.
 describe("imageRun", () => {
-  const env = (base: string) => ({
+  const env = (base: string, head: string) => ({
     GITHUB_EVENT_NAME: "pull_request",
     GITHUB_REPOSITORY: "example-user/repo",
     PR_HEAD_REPOSITORY: "example-user/repo",
     PR_BASE_SHA: base,
+    PR_HEAD_SHA: head,
     PATH: process.env.PATH,
   });
 
-  function repository(change: Record<string, string>): { root: string; base: string } {
+  function commit(git: (...args: string[]) => string, message: string): void {
+    git("add", ".");
+    git("commit", "-q", "--allow-empty", "-m", message);
+  }
+
+  /** A base commit, then `change` committed on top as the pull request's head; the identity is the scratch repository's own. */
+  function repository(change: Record<string, string>): {
+    root: string;
+    base: string;
+    head: string;
+    git: (...args: string[]) => string;
+  } {
     const root = context({ ".prototools": 'proto = "1.0.0"\n' });
     writeTree(root, { "src/main.rs": "fn main() {}\n" });
     const git = (...args: string[]) => runGit(root, { PATH: process.env.PATH }, ...args);
     git("init", "-q", "-b", "main");
-    git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "add", ".");
-    git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "base");
+    git("config", "user.name", "t");
+    git("config", "user.email", "t@example.invalid");
+    commit(git, "base");
     const base = git("rev-parse", "HEAD").trim();
     writeTree(root, change);
-    git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "add", ".");
-    git(
-      "-c",
-      "user.name=t",
-      "-c",
-      "user.email=t@example.invalid",
-      "commit",
-      "-q",
-      "--allow-empty",
-      "-m",
-      "change",
-    );
-    return { root, base };
+    commit(git, "change");
+    const head = git("rev-parse", "HEAD").trim();
+    return { root, base, head, git };
   }
 
   test("a pull request changing an admitted file changes the trigger; one changing a source does not", () => {
     const input = repository({ ".prototools": 'proto = "1.0.1"\n' });
     const source = repository({ "src/main.rs": "fn main() { }\n" });
-    expect(imageRun(env(input.base), input.root).changesTrigger).toBe(true);
-    expect(imageRun(env(source.base), source.root).changesTrigger).toBe(false);
+    expect(imageRun(env(input.base, input.head), input.root).changesTrigger).toBe(true);
+    expect(imageRun(env(source.base, source.head), source.root).changesTrigger).toBe(false);
+  });
+
+  // GitHub's paths filter reads the pull request's own commits (merge-base to head), so the publisher
+  // builds for this pull request; a diff of the merge checkout against the base would read nothing
+  // changed and pin the fallback while the publisher's tag is on its way.
+  test("a pull request whose input change main made too in the meantime still changes the trigger", () => {
+    const { root, base, head, git } = repository({ ".prototools": 'proto = "1.0.1"\n' });
+    git("checkout", "-q", base);
+    writeTree(root, { ".prototools": 'proto = "1.0.1"\n' });
+    commit(git, "the same change on main");
+    const main = git("rev-parse", "HEAD").trim();
+    git("merge", "-q", "--no-ff", "-m", "merge", head);
+    expect(git("diff", "--name-only", main, "HEAD").trim()).toBe("");
+    expect(imageRun(env(main, head), root).changesTrigger).toBe(true);
   });
 });
 

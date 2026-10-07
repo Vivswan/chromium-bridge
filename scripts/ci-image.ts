@@ -11,7 +11,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { $ } from "bun";
-import pWaitFor from "p-wait-for";
+import pWaitFor, { TimeoutError } from "p-wait-for";
 import {
   die,
   type Env,
@@ -86,21 +86,22 @@ export interface ImageRun {
 }
 
 /**
- * The run from the step's env: GITHUB_EVENT_NAME, and for a pull request the base sha and head repository
- * checks.yml passes from github.event.pull_request. The diff against the base is the pull request's own
- * change, since the checkout is its merge with the base.
+ * The run from the step's env: GITHUB_EVENT_NAME, and for a pull request the base and head shas and the
+ * head repository checks.yml passes from github.event.pull_request. The diff is the pull request's own
+ * commits (merge base to head), the same files GitHub's `paths` filter reads to start the publisher, so
+ * the two agree even when main changed a trigger path in the meantime. The content tag is the merge
+ * checkout's, as in the publisher.
  */
 export function imageRun(env: Env, root = repoRoot): ImageRun {
   const event = requiredEnv("GITHUB_EVENT_NAME", env);
   if (event !== "pull_request") return { event, sameRepository: false, changesTrigger: false };
-  const base = requiredEnv("PR_BASE_SHA", env);
+  const range = `${requiredEnv("PR_BASE_SHA", env)}...${requiredEnv("PR_HEAD_SHA", env)}`;
   const changed = runGit(
     root,
     gitEnv(env),
     "diff",
     "--name-only",
-    base,
-    "HEAD",
+    range,
     "--",
     ...triggerPaths(root),
   );
@@ -252,23 +253,24 @@ const modes: Record<string, () => Promise<void>> = {
       console.log(
         `waiting up to ${minutes} minutes for ${reference}, published by this pull request's ${imageWorkflow} run`,
       );
-      // A failed ask is retried like absence until the bound.
-      digest = await pWaitFor(
-        async () => {
-          const polled = await inspect(reference);
-          return polled.kind === "digest" && pWaitFor.resolveWith(polled.digest);
-        },
-        {
-          interval: 30_000,
-          before: false,
-          timeout: {
-            milliseconds: minutes * 60_000,
-            message: new Error(
-              `${reference} was not published within ${minutes} minutes: this pull request's ${imageWorkflow} run did not push it (its build failed or was stopped); see that run`,
-            ),
+      // A failed ask is retried like absence until the bound, whose failure quotes the last answer: a
+      // persistent refusal reads as itself, not as a build that never published.
+      let last = probed.said;
+      try {
+        digest = await pWaitFor(
+          async () => {
+            const polled = await inspect(reference);
+            if (polled.kind !== "digest") last = polled.said;
+            return polled.kind === "digest" && pWaitFor.resolveWith(polled.digest);
           },
-        },
-      );
+          { interval: 30_000, before: false, timeout: minutes * 60_000 },
+        );
+      } catch (error) {
+        if (!(error instanceof TimeoutError)) throw error;
+        die(
+          `${reference} was not published within ${minutes} minutes: this pull request's ${imageWorkflow} run did not push it (its build failed or was stopped; see that run). The registry's last answer: ${last}`,
+        );
+      }
     } else {
       const fallen = await inspect(reference);
       if (fallen.kind !== "digest") die(`imagetools inspect ${reference} failed: ${fallen.said}`);

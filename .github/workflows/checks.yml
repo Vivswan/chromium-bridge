@@ -38,7 +38,7 @@ jobs:
     outputs:
       container: ${{ steps.container.outputs.container }}
     steps:
-      # Full history: the digest step diffs the PR against its base to learn whether it changes a build input.
+      # Full history: the digest step diffs the PR's own commits to learn whether they change a build input.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -49,6 +49,7 @@ jobs:
       - id: container
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
         run: bun scripts/ci-image.ts digest
 
