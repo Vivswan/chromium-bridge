@@ -28,9 +28,9 @@ env:
 jobs:
   # The image's own user cannot write the runner-owned workspace, hence root. Every consumer carries a
   # zizmor unpinned-images ignore: the audit is static and cannot follow the expression to the digest
-  # resolved here, which is the pin. The timeout is the build's (container-image.yml): a PR that changes a
-  # build input waits here for the image it is building; a failed build, or a registry that keeps failing to
-  # answer, spends it.
+  # resolved here, which is the pin. A PR that changes a build input waits here for the image it is
+  # building, as long as container-image.yml's publish job may run (the script reads that bound), so this
+  # timeout exceeds it.
   image:
     name: CI image
     runs-on: ubuntu-latest

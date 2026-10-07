@@ -54,6 +54,19 @@ export function triggerPaths(root: string): string[] {
 }
 
 /**
+ * How long the publishing job may run, read from the workflow so the wait for its tag has the same
+ * bound: a build still going past it has been stopped, and waiting longer would wait for nothing.
+ */
+export function publishTimeoutMinutes(root: string): number {
+  const parsed = Bun.YAML.parse(readFileSync(join(root, imageWorkflow), "utf8")) as {
+    jobs?: { publish?: { "timeout-minutes"?: unknown } };
+  };
+  const minutes = parsed.jobs?.publish?.["timeout-minutes"];
+  if (typeof minutes !== "number") throw new Error(`${imageWorkflow}: no publish timeout-minutes`);
+  return minutes;
+}
+
+/**
  * The content tag: a digest over each input's name and digest, so bytes moving across file boundaries
  * change it as surely as an edit does.
  */
@@ -191,13 +204,25 @@ export function classifyInspection(
     : { kind: "failed", said };
 }
 
+/** One ask of the registry, killed after a minute so a stalled ask ends as a failure, not as a hang. */
 async function inspect(reference: string): Promise<Inspected> {
-  // Interpolated, so the shell neither brace-expands nor splits the Go template.
-  const format = "{{.Manifest.Digest}}";
-  const run = await $`docker buildx imagetools inspect ${reference} --format ${format}`
-    .quiet()
-    .nothrow();
-  const inspected = classifyInspection(reference, run.exitCode, run.text(), run.stderr.toString());
+  const argv = [
+    "docker",
+    "buildx",
+    "imagetools",
+    "inspect",
+    reference,
+    "--format",
+    "{{.Manifest.Digest}}",
+  ];
+  const run = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe", timeout: 60_000 });
+  const [stdout, stderr] = await Promise.all([
+    new Response(run.stdout).text(),
+    new Response(run.stderr).text(),
+  ]);
+  const exitCode = await run.exited;
+  const said = run.signalCode ? `${stderr}\nkilled by ${run.signalCode} after a minute` : stderr;
+  const inspected = classifyInspection(reference, exitCode, stdout, said);
   if (inspected.kind !== "digest") console.log(`${reference}: ${inspected.said}`);
   return inspected;
 }
@@ -223,17 +248,26 @@ const modes: Record<string, () => Promise<void>> = {
     if (probed.kind === "digest") {
       digest = probed.digest;
     } else if (selection.wait) {
+      const minutes = publishTimeoutMinutes(repoRoot);
       console.log(
-        `waiting for ${reference}, published by this pull request's ${imageWorkflow} run`,
+        `waiting up to ${minutes} minutes for ${reference}, published by this pull request's ${imageWorkflow} run`,
       );
-      // Unbounded here, and a failed ask is retried like absence: the image job's timeout is the one
-      // bound, and it is the build's.
+      // A failed ask is retried like absence until the bound.
       digest = await pWaitFor(
         async () => {
           const polled = await inspect(reference);
           return polled.kind === "digest" && pWaitFor.resolveWith(polled.digest);
         },
-        { interval: 30_000, before: false },
+        {
+          interval: 30_000,
+          before: false,
+          timeout: {
+            milliseconds: minutes * 60_000,
+            message: new Error(
+              `${reference} was not published within ${minutes} minutes: this pull request's ${imageWorkflow} run did not push it (its build failed or was stopped); see that run`,
+            ),
+          },
+        },
       );
     } else {
       const fallen = await inspect(reference);
