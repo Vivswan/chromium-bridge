@@ -317,6 +317,34 @@ fn kill_release_needs_an_assertion_from_this_browsers_credential_and_persists_th
     );
 }
 
+/// A release over a trust record the host cannot read is refused before any request exists, fails closed (no
+/// kill claim at all), and carries the sentence `unkill` prints for the same failure, since the page shows it.
+#[test]
+fn a_kill_release_over_an_unreadable_record_is_refused_in_the_cli_sentence() {
+    let _dir = scratch_runtime_dir();
+    let mut brave = Exchange::new(label("brave"));
+    crate::kill::engage(Surface::Cli).unwrap();
+    std::fs::write(crate::trust::Trust::path().unwrap(), b"{ not the record").unwrap();
+
+    let replies = brave.kill_release();
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    let HostReply::Admin(AdminControl::KillStatusResult {
+        ok: false,
+        killed: None,
+        error: Some(error),
+    }) = &replies[0]
+    else {
+        panic!("{replies:?}");
+    };
+    assert!(
+        error.starts_with("the trust record could not be read or written: "),
+        "{error}"
+    );
+    let refusals = audit_records(AuditKind::KillRelease);
+    assert_eq!(refusals.len(), 1, "{refusals:?}");
+    assert_eq!(refusals[0].outcome.as_deref(), Some("refused"));
+}
+
 /// Every refusal the host owes an answer that is not a fresh assertion from this browser's own credential:
 /// each row names the input and the one code it produces, and the switch stays engaged through all of them.
 #[test]
