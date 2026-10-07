@@ -389,7 +389,6 @@ describe("auditGraph", () => {
         "root:expands-a-word: the word $((...)) inside root:gate is not literal (the rules judge only what they can read)",
         "root:expands-a-word: the word $((...)) inside root:gate is not literal (the rules judge only what they can read)",
         `root:expands-a-word: the word \${X} inside root:gate is not literal (the rules judge only what they can read)`,
-        "root:expands-a-word: the word ($(bunx fixture-tool)) inside root:gate is not literal (the rules judge only what they can read)",
         "root:expands-a-word: the word ($(bunx fixture-tool)) holds an extglob pattern the parser keeps as text, so a command inside it is unread",
         "root:extglobs-outside-the-gate: the word ($(bunx fixture-tool)) holds an extglob pattern the parser keeps as text, so a command inside it is unread",
         "root:launches-bunx: runs bunx (bun's global cache stands in for a missing package)",
@@ -479,9 +478,8 @@ describe("auditGraph", () => {
     ]);
   });
 
-  // mvdan-sh exposes a redirect's operator only as Go's enum number (the published types declare a table the
-  // bundle lacks), so a release that renumbered them would silently read a here-string as a file, or a file as a
-  // delimiter.
+  // mvdan-sh exposes a redirect's operator only as Go's enum number, so a release that renumbered them would
+  // silently read a here-string as a file, or a file as a delimiter.
   test("every redirect form that opens a file names it, and a descriptor dup, a here-string, and a heredoc's body and delimiter do not", () => {
     const redirects: TaskGraph = {
       root: {

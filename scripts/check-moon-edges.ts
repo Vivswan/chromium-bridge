@@ -263,6 +263,7 @@ function parseCommands(task: Task): Commands {
   const data: Word[] = [];
   const isData = new Set<number>();
   syntax.Walk(parser.Parse(task.script, ""), (node) => {
+    // The walk visits null after each subtree, which the published Walk type does not say.
     if (node === null) return true;
     switch (syntax.NodeType(node)) {
       case "Stmt":
@@ -490,7 +491,8 @@ export function auditGraph(graph: TaskGraph): string[] {
     const task = graph[project]?.[id];
     if (task === undefined) continue;
     const parsed = commandsOf.get(target) ?? { commands: [], words: [], data: [] };
-    for (const w of [...parsed.words, ...parsed.data].filter((w) => w.reading !== "literal")) {
+    // An opaque word is refused by its own rule in every task, so the gate reads the expansions only.
+    for (const w of [...parsed.words, ...parsed.data].filter((w) => w.reading === "expansion")) {
       findings.push(
         `${target}: the word ${w.text} inside ${GATE} is not literal (the rules judge only what they can read)`,
       );
