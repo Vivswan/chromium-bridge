@@ -735,7 +735,7 @@ describe("splitTaggedUnionSchema", () => {
     properties: { type: { type: "string", const: "b" } },
     required: ["type"],
   };
-  const defs = { X: { type: "string" } };
+  const defs = { X: { type: "string", minLength: 5 } };
   const withX = (x: unknown) => ({
     oneOf: [{ ...variantA, properties: { ...variantA.properties, x } }, variantB],
     $defs: defs,
@@ -744,21 +744,37 @@ describe("splitTaggedUnionSchema", () => {
     ((await splitTaggedUnionSchema(schema)).get("a") as { properties: { x: unknown } }).properties
       .x;
 
-  test("splits per tag and dereferences the $defs indirection; a sibling beside the $ref is merged into the target, the sibling winning a collision", async () => {
+  test("splits per tag and dereferences the $defs indirection; a description beside the $ref rides into the target", async () => {
     const parts = await splitTaggedUnionSchema({ oneOf: [variantA, variantB], $defs: defs });
     expect([...parts.keys()]).toEqual(["a", "b"]);
-    expect(await partX({ oneOf: [variantA, variantB], $defs: defs })).toEqual({ type: "string" });
+    expect(await partX({ oneOf: [variantA, variantB], $defs: defs })).toEqual(defs.X);
     expect(await partX(withX({ $ref: "#/$defs/X", description: "doc" }))).toEqual({
       description: "doc",
-      type: "string",
+      ...defs.X,
     });
-    expect(await partX(withX({ $ref: "#/$defs/X", minLength: 1 }))).toEqual({
-      minLength: 1,
-      type: "string",
-    });
-    expect(await partX(withX({ $ref: "#/$defs/X", type: "integer" }))).toEqual({
-      type: "integer",
-    });
+  });
+
+  // The dereference library merges a $ref's siblings into the target with the sibling winning, so a constraint
+  // beside a $ref would silently rewrite the referenced schema: a sibling minLength: 1 over the target's
+  // minLength: 5 admits "a", a sibling type over the target's type replaces it.
+  test("G4: a $ref with a constraint sibling is refused before dereferencing, wherever the document holds it", async () => {
+    await expect(
+      splitTaggedUnionSchema(withX({ $ref: "#/$defs/X", minLength: 1 })),
+    ).rejects.toThrow("(G4)");
+    await expect(
+      splitTaggedUnionSchema(withX({ $ref: "#/$defs/X", type: "integer" })),
+    ).rejects.toThrow("(G4)");
+    // Under a keyword no schema walk knows (a 2020-12 container), reached through a plain $ref: the
+    // dereference still resolves and merges it, so the check must see every object of the document.
+    await expect(
+      splitTaggedUnionSchema({
+        ...withX({ $ref: "#/$defs/Y/prefixItems/0" }),
+        $defs: {
+          ...defs,
+          Y: { type: "array", prefixItems: [{ $ref: "#/$defs/X", minLength: 1 }] },
+        },
+      }),
+    ).rejects.toThrow("(G4)");
   });
 
   test("refuses non-unions, tagless variants, duplicate tags, and an unresolvable $ref; an external $ref stays for prepare to refuse", async () => {

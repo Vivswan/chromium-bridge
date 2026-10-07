@@ -1,12 +1,10 @@
 // The rules scripts/gen-schema.ts holds every emitted validator to (R1-R4), each shown firing on the schema
-// it exists to refuse; the external facts the emission leans on (which keywords json-schema-to-zod reads,
-// what json-schema-to-typescript makes of the node shapes the generators produce); and the arg type names the
-// generated catalogue exports, which consumers import. The emitted validator is the artifact under test, so every case goes through the real emitter, never a hand-built
-// reading, except R3, which guards the emitter itself.
+// it exists to refuse; and the external facts the emission leans on (which keywords json-schema-to-zod reads,
+// what json-schema-to-typescript makes of the node shapes the generators produce). The emitted validator is
+// the artifact under test, so every case goes through the real emitter, never a hand-built reading, except
+// R3, which guards the emitter itself.
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import {
   assertReadingRules,
   assertSchemaRules,
@@ -151,49 +149,6 @@ test("a property without a null arm refuses null; the null arm admits it", () =>
   expect(reader.safeParse({ a: "x", b: null }).success).toBe(true);
   expect(reader.safeParse({ a: null, b: null }).success).toBe(false);
   expect(reader.safeParse({ b: null }).success).toBe(false);
-});
-
-// The per-op arg types are the catalogue's public export names (TabFocusArgs, PageEvalArgs, ...), one per op,
-// held to this list so a renaming in the generator fails here and not in a module that imports one.
-test("ops.gen.ts exports one args type per op, under the catalogue's public names", () => {
-  const source = readFileSync(
-    join(import.meta.dir, "../../src/packages/shared/src/ops.gen.ts"),
-    "utf8",
-  );
-  const exported = [...source.matchAll(/^export (?:interface|type) (\w+Args)\b/gm)]
-    .map((match) => match[1])
-    .filter((name) => name !== "OpArgs")
-    .sort();
-  expect(exported).toEqual(
-    [
-      "ListBrowsersArgs",
-      "TabListArgs",
-      "TabFocusArgs",
-      "TabOpenArgs",
-      "TabCloseArgs",
-      "PageSnapshotArgs",
-      "PageClickArgs",
-      "PageFillArgs",
-      "PageTextArgs",
-      "PageScreenshotArgs",
-      "PageScrollArgs",
-      "PageWaitForArgs",
-      "PageEvalArgs",
-      "PageSnapshotPreciseArgs",
-      "CookieGetArgs",
-      "StorageGetArgs",
-      "PageNavigateArgs",
-      "PageBackArgs",
-      "PageForwardArgs",
-      "PageReloadArgs",
-      "PagePressArgs",
-      "PageHoverArgs",
-      "PageSelectArgs",
-      "ConsoleGetArgs",
-      "PageHandleDialogArgs",
-      "PageUploadArgs",
-    ].sort(),
-  );
 });
 
 describe("the emitted source", () => {

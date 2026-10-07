@@ -18,6 +18,7 @@
     "json-schema-to-zod": "2.8.1",
     "json-schema-traverse": "1.0.0",
     "mvdan-sh": "0.10.1",
+    "neotraverse": "1.0.1",
     "oxc-parser": "^0.152.0",
     "remark-parse": "^11.0.0",
     "unified": "^11.0.5",

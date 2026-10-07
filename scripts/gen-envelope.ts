@@ -24,7 +24,9 @@
 //   G3  oneOf only as a discriminated union (the same required const tag in every branch, values distinct), then
 //       rewritten to anyOf: the mutual exclusivity needs no exclusive-union check at runtime
 //   G4  every internal $ref dereferenced (json-schema-ref-parser) before emission, an external one left in
-//       place for prepare to refuse; nothing downstream resolves one
+//       place for prepare to refuse; nothing downstream resolves one. The library merges a $ref's siblings
+//       over the target, the sibling winning, so a $ref may carry nothing beside it but the description
+//       schemars puts there: a constraint sibling would rewrite the referenced schema and is refused first
 //   G5  every keyword and type on the supported list below, in a position the library enforces (the keyword
 //       census in scripts/tests/gen-schema.test.ts says which it reads); an unlisted keyword aborts until
 //       support lands in that census AND in the adversarial tests. The empty schema {} is the contract's own
@@ -53,6 +55,7 @@ import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import $RefParser from "@apidevtools/json-schema-ref-parser";
+import { walk } from "neotraverse";
 import { z } from "zod";
 import {
   ASYMMETRIES,
@@ -85,11 +88,33 @@ export const ANNOTATION_KEYS = new Set([
   "examples",
 ]);
 
+// The one key schemars emits beside a $ref (a field's doc comment). Any other key, annotation or constraint,
+// fails generation until this set admits it.
+const REF_SIBLING_KEYS = new Set(["description"]);
+
+/** G4: no $ref carries a key beside it, other than the ones REF_SIBLING_KEYS admits, that the dereference
+ * would merge over the target. The dereference resolves a $ref in any object of the document, keyword or not,
+ * so the walk is over every object, not over the schema keywords. */
+export function assertRefSiblings(schema: JsonObject): void {
+  walk(schema, (context, node: unknown) => {
+    if (!isObject(node) || typeof node.$ref !== "string") return;
+    const extra = Object.keys(node).filter((key) => key !== "$ref" && !REF_SIBLING_KEYS.has(key));
+    if (extra.length > 0) {
+      throw new Error(
+        `gen-envelope: $ref ${node.$ref} at #/${context.path.join("/")} carries ${extra.join(", ")}; ` +
+          `the dereference would merge them over the target, so only ${[...REF_SIBLING_KEYS].join(", ")} ` +
+          "may sit beside a $ref (G4)",
+      );
+    }
+  });
+}
+
 /** Split an internally-tagged (serde `tag = "type"`) enum schema into one subschema per tag, every internal
  * $ref dereferenced first (G4). Refuses anything that is not exactly the shape schemars emits for such an
  * enum: a top-level oneOf whose every branch is an object schema carrying a unique string `type` const. */
 export async function splitTaggedUnionSchema(schema: unknown): Promise<Map<string, unknown>> {
   if (!isObject(schema)) throw new Error("gen-envelope: split expected a schema object");
+  assertRefSiblings(schema);
   // dereference rewrites its argument in place; the Rust output is read once per group, so a copy keeps the
   // caller's object as it was.
   const inlined = (await $RefParser.dereference(structuredClone(schema) as never, {
