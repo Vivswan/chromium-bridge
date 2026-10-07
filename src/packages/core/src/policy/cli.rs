@@ -27,6 +27,12 @@ use crate::cli::PolicyCommand;
 use crate::presence::{self, TerminalStdin};
 use crate::runtime_record::RuntimeRecord as _;
 
+/// The store line for a machine with no baseline, printed by `policy show` and by the doctor row: the deny
+/// baseline holds until either grant surface signs the first one.
+pub const PRE_CUTOVER_STORE_NOTE: &str = "none yet (pre-cutover; the extension keeps enforcing its deny \
+                                          baseline until `chromium-bridge policy set` or the options page's \
+                                          Security policy section signs a baseline)";
+
 // ---- The reports (typed, versioned) ------------------------------------------
 
 /// The store state a status report distinguishes. `none` is the pre-cutover
@@ -224,11 +230,7 @@ fn render_status(r: &PolicyStatusReport) -> String {
     let mut out = String::from("chromium-bridge policy\n");
     match r {
         PolicyStatusReport::None { .. } => {
-            out.push_str(
-                "store:      none yet (pre-cutover; the extension keeps enforcing its deny\n            \
-                 baseline until a baseline is signed via\n            \
-                 `chromium-bridge policy set`)\n",
-            );
+            out.push_str(&format!("store:      {PRE_CUTOVER_STORE_NOTE}\n"));
         }
         PolicyStatusReport::Error { detail, .. } => {
             out.push_str(&format!(

@@ -201,7 +201,7 @@ flowchart LR
 | `allowlist.rs` | 受信任用戶端允許清單: 項目型別、配對與撤銷寫入, 以及 `pair-client` / `revoke-client` / `list-clients` |
 | `trust.rs` | 信任記錄 (`trust.json`): 緊急開關閂鎖、已配對的用戶端、變更紀元, 以及每個強制執行點從一次讀取得出的准入決定 |
 | `kill.rs` | 緊急開關的啟用/解除; 解除需要 `PresenceAttestation` |
-| `presence/` | 授予能力之行為的使用者在場證明: 來自該行為規則所允許憑證的 WebAuthn 斷言 (解除緊急開關用本瀏覽器的憑證, 登記另一個瀏覽器可用任何已登記的憑證), 僅在該規則不允許任何憑證時才用擴充功能的確認視窗, 或在 CLI 終端機上輸入的片語; 每次行為由哪條路徑背書都會記入稽核 |
+| `presence/` | 授予能力之行為的使用者在場證明: 來自該行為規則所允許憑證的 WebAuthn 斷言 (解除緊急開關或授予用本瀏覽器的憑證, 登記另一個瀏覽器可用任何已登記的憑證), 僅在該規則不允許任何憑證時才用擴充功能的確認視窗, 或在 CLI 終端機上輸入的片語; 每次行為由哪條路徑背書都會記入稽核 |
 | `webauthn/` | 作為 WebAuthn 信賴方 (relying party) 的主機: 輕觸所簽署的聲明、註冊與斷言解析器、驗證器, 以及保存在 `trust.json` 中的登記儲存 |
 | `enclave/` | 主機身分金鑰: `pair` 鑄造進 OS 憑證儲存區 (或以 `--file-store` 存成 0600 檔案) 的 P-256 金鑰, 擴充功能固定它並用它驗證簽章的策略基準 |
 | `audit.rs` | 持久的稽核日誌: 有上限的 0600 `audit.log`、嚴格解析的 JSON 記錄、`audit` 子命令讀取器 |
@@ -405,7 +405,9 @@ flowchart LR
 
 主機是信賴方, 擴充功能是 WebAuthn 用戶端, 以擴充功能 id 作為 RP ID。登記以 `enroll_begin`、`enroll_options`、`enroll_finish` 與 `enroll_result` 走同一套交換; 一台機器上的第一次登記採首次使用即信任, 之後每一次都需要本機上任一瀏覽器下已登記憑證的輕觸。
 
-選項頁面執行儀式並作答: 它登記這個瀏覽器的認證器, 並解除緊急開關。它的「忘記這個瀏覽器」動作送出 `browser_revoke`, 主機隨即忘記在該連線自身標籤下登記的憑證, 與 `chromium-bridge revoke <browser>` 是同一個動作。一次解除是在這個瀏覽器已登記憑證上的一次觸碰; 當主機的請求沒有指名任何憑證時, 頁面改為請求一次確認。
+選項頁面執行儀式並作答: 它登記這個瀏覽器的認證器, 解除緊急開關, 並簽署第 11.3 節的各項授予 (一次策略 set、一次放寬的回復、一次用戶端配對)。一次解除或一次授予是在這個瀏覽器已登記憑證上的一次觸碰; 當主機的請求沒有指名任何憑證時, 頁面改為請求一次確認。
+
+它的「忘記這個瀏覽器」動作送出 `browser_revoke`, 主機隨即忘記在該連線自身標籤下登記的憑證, 與 `chromium-bridge revoke <browser>` 是同一個動作。
 
 來自確認視窗的 `presence_confirm` 只在沒有任何已登記憑證能夠作答時才被接受, 所以已登記的瀏覽器永遠不會被降級為一次點擊。
 
@@ -553,7 +555,9 @@ MCP 伺服器 (`src/packages/core/src/error.rs` 中的 `CallError::code()`) 是�
 
 主機擁有安全策略: 四個能力授予、確認策略、`disabledTools` 與確認逾時。
 
-主機在執行階段目錄下的 `policy.json` 中最多保存一份簽章的基準加上一份未簽章的限制覆蓋層; 該目錄由 `src/packages/core/src/ipc/runtime_dir.rs` 中的 `RuntimeDir` 解析。狀態透過七個增量加入、由主機處理的控制訊框 (`protocol/control.rs` 中的 `PolicyControl`) 傳遞, 其分類與終結方式與主機金鑰及管理訊框完全相同: 由主機回答, 從不轉送給 MCP 伺服器, 伺服器那一段若試圖注入則被丟棄。
+主機在執行階段目錄下的 `policy.json` 中最多保存一份簽章的基準加上一份未簽章的限制覆蓋層; 該目錄由 `src/packages/core/src/ipc/runtime_dir.rs` 中的 `RuntimeDir` 解析。
+
+狀態透過 `protocol/control.rs` 中的 `PolicyControl` 訊框傳遞 (策略通道 get、restrict、set、rollback 與 history, 以及語言訊框), 每一個的分類與終結方式都與主機金鑰及管理訊框完全相同: 由主機回答, 從不轉送給 MCP 伺服器, 伺服器那一段若試圖注入則被丟棄。
 
 ```mermaid
 flowchart LR
@@ -575,29 +579,34 @@ flowchart LR
   editor -->|a tightening| admin
   admin -->|policy_restrict| host
   host -->|restrict, the free lane| store
+  editor -->|a grant, behind this browser's tap| host
+  host -->|policy_set, a relaxing policy_rollback: the signed lane| store
 ```
 
-授予所消耗的證明是 CLI 終端機上輸入的片語, 主機金鑰簽署精確的文件位元組。限制接縫拒絕任何會放寬的覆蓋層, 所以編輯器唯一能達成的結果就是收緊。
+授予所消耗的在場證明, 在編輯器發起時是這個瀏覽器的在場證明 (第 6.2 節的交換), 否則是 CLI 終端機上輸入的片語; 兩種情況下主機金鑰都簽署精確的文件位元組。由誰回答每項行為, 由[安全頁面](security.md#你要確認什麼-以及什麼算在場)負責。
 
-驗證測試: [store_tests.rs](../../src/packages/core/src/policy/store/store_tests.rs), [policy-sync.test.ts](../../src/apps/extension/tests/background/policy-sync.test.ts), [policy-swap.test.ts](../../src/apps/extension/tests/background/policy-swap.test.ts), [policy-editor.test.tsx](../../src/apps/extension/tests/components/policy-editor.test.tsx)。
+限制接縫拒絕任何會放寬的覆蓋層, 所以對既有基準的收緊從任一介面都自由傳送; 放寬或第一個基準走授予通道。
+
+驗證測試: [store_tests.rs](../../src/packages/core/src/policy/store/store_tests.rs), [presence/tests.rs](../../src/packages/core/src/native_host/presence/tests.rs), [policy-sync.test.ts](../../src/apps/extension/tests/background/policy-sync.test.ts), [policy-swap.test.ts](../../src/apps/extension/tests/background/policy-swap.test.ts), [policy-editor.test.tsx](../../src/apps/extension/tests/components/policy-editor.test.tsx)。
 
 - `policy_get {}` (擴充功能 -> 主機): 按需重新整理。與這一族中每個由擴充功能發起的訊框一樣, 它只在主機已於同一通道推送過訊框的連線上送出 (策略訊框是 `policy_current`, 語言訊框是 `lang_current`)。
 - 其背後的「從不先開口」規則: 舊主機會把未知訊框分類為可轉送, 而 MCP 伺服器的嚴格解析會拆掉瀏覽器那一段, 所以面對舊主機時, 新訊框根本不會流動。
 - `policy_current { ok, baseline?, sig?, overlay?, error? }` (主機 -> 擴充功能): 策略狀態, 在每次連線與每次觀察到儲存變更時主動推送, 也是 `policy_get` 的回覆。主機只透過一個具型別的中間型別建構它, 所以擴充功能絕不能看到的混合形式根本無法建構:
   - `ok: true` 帶精確的簽章基準位元組 (base64, 讓簽章產物逐位元組地撐過 JSON 這一跳)、選用的簽章與選用的覆蓋層。
   - `ok: false` 帶 `error` (指出儲存缺失、損壞或無法讀取, 或 `policy_get` 格式錯誤), 且絕不帶基準, 所以擴充功能會失敗即關閉, 而不是信任沒人背書的位元組。
-- `policy_restrict { overlay }` (擴充功能 -> 主機) 與 `policy_restrict_result { ok, error? }` (主機 -> 擴充功能): 選項頁面的策略編輯器透過未簽章的限制接縫收緊有效策略, 該接縫拒絕任何放寬; 套用的限制之後會跟著一個攜帶已寫入狀態的 `policy_current`, 所以結果只帶裁決。放寬仍然是簽章寫入 (`chromium-bridge policy set`)。
+- `policy_restrict { overlay }` (擴充功能 -> 主機) 與 `policy_restrict_result { ok, error? }` (主機 -> 擴充功能): 選項頁面的策略編輯器透過未簽章的限制接縫收緊有效策略, 該接縫拒絕任何放寬; 套用的限制之後會跟著一個攜帶已寫入狀態的 `policy_current`, 所以結果只帶裁決。放寬走下面的授予通道。
+- `policy_set { overlay }`、`policy_rollback { revision, entry? }` 與 `policy_history {}` (擴充功能 -> 主機), 各自帶一個結果訊框: 授予通道與被取代修訂版的環。一次 set 或一次放寬的回復會開啟一個 `presence_request` (第 6.2 節), 其核准帶著裁決與一個 `policy_current`; 只收緊的回復自由套用。沒有主機金鑰或變更無效時, 在任何請求存在之前就以 CLI 的措辭拒絕。
 - `lang_get {}` / `lang_set { value }` (擴充功能 -> 主機) 與 `lang_current { value, seq }` (主機 -> 擴充功能): 共用的 `uiLanguage` 偏好 (同一執行階段目錄中的 `lang.json`), 刻意放在簽章策略文件之外 - 不簽章、不棘輪、無法影響任何安全決策 - 以序號做回音抑制。
 
 強制執行契約刻意不對稱: 授予能力的策略帶有主機金鑰對精確位元組的簽章, 且寫入時消耗了一次在場證明; 只移除能力的策略則以未簽章覆蓋層的形式自由傳遞。同一使用者的程序能對主機金鑰做什麼, 是[信任邊界帳冊](./security/trust-boundaries.md#邊界-3-chrome---原生訊息主機-native-messaging-訊框格式)點名的殘餘風險。
 
-沒有主機金鑰的機器沒有授予面: `policy set` 一開始就拒絕, 直到 `pair` 鑄造出一把為止。
+沒有主機金鑰的機器沒有授予面: `policy set` 與頁面的編輯器都以同樣的措辭一開始就拒絕, 直到 `pair` 鑄造出一把為止。
 
 擴充功能用自己固定的金鑰 (絕不用訊框提供的身分) 驗證簽章, 嚴格解析已驗證的位元組, 在本機對覆蓋層做方向檢查, 並在受信任儲存空間中保留一個數值棘輪: 已固定的擴充功能絕不會在沒有新簽章的情況下套用放寬, 且該簽章所簽署的 `touched` 集合必須點名被放寬的欄位。
 
 切換之後, 每連線的分派屏障會拒絕橋接 op, 直到該連線的第一次策略推送已驗證並套用, 所以 op 不可能搶在收緊之前執行。
 
-在線路驗證這一側, 這七個訊框與其他每個控制訊框走同一套產生的機制 (上文第 11 節); `policy_current` 在不對稱表中宣告其 ok 分支, 並輸出為可辨識聯集, 由 `moon run check-envelope` 閘門證明。
+在線路驗證這一側, 這些訊框與其他每個控制訊框走同一套產生的機制 (上文第 11 節); `policy_current` 在不對稱表中宣告其 ok 分支, 並輸出為可辨識聯集, 由 `moon run check-envelope` 閘門證明。
 
 主機也在分派時強制執行自己的策略 (`policy/gating.rs`): 能力授予已關閉或列於 `disabledTools` 的工具, 會在任何橋接流量之前以穩定的 `TOOL_DISABLED` 代碼拒絕; 儲存缺失時放行 (切換前), 無法讀取時全部拒絕。
 

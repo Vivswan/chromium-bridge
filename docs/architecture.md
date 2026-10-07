@@ -201,7 +201,7 @@ The binary is a thin argv dispatch (`src/apps/host/src/main.rs`) over the `chrom
 | `allowlist.rs` | The trusted-client allowlist: the entry types, the pairing and revocation writes, and `pair-client` / `revoke-client` / `list-clients` |
 | `trust.rs` | The trust record (`trust.json`): the kill latch, the paired clients, the change epoch, and the admission decision every enforcement point takes from one read |
 | `kill.rs` | Kill-switch engage/release; release demands a `PresenceAttestation` |
-| `presence/` | Proof of user presence for a capability-granting act: a WebAuthn assertion from a credential the act's rule admits (this browser's for a kill release, any enrolled one for enrolling another browser), the extension's confirmation window only where that rule admits none, or the typed phrase on the CLI's terminal; which path vouched is audited per act |
+| `presence/` | Proof of user presence for a capability-granting act: a WebAuthn assertion from a credential the act's rule admits (this browser's for a kill release or a grant, any enrolled one for enrolling another browser), the extension's confirmation window only where that rule admits none, or the typed phrase on the CLI's terminal; which path vouched is audited per act |
 | `webauthn/` | The host as WebAuthn relying party: the statement a tap signs, the registration and assertion parsers, the verifier, and the enrollment store kept in `trust.json` |
 | `enclave/` | The host identity key: a P-256 key `pair` mints into the OS credential store (or a 0600 file with `--file-store`), which the extension pins and verifies the signed policy baseline against |
 | `audit.rs` | The durable audit trail: bounded 0600 `audit.log`, strict-parsed JSON records, `audit` subcommand reader |
@@ -405,7 +405,9 @@ flowchart LR
 
 The host is the relying party and the extension is the WebAuthn client, with the extension id as the RP ID. Enrollment runs the same exchange with `enroll_begin`, `enroll_options`, `enroll_finish`, and `enroll_result`; the first enrollment on a machine is trust on first use, every later one needs a tap from a credential already enrolled on the machine, under any browser.
 
-The options page runs the ceremony and answers: it enrolls this browser's authenticator and releases the kill switch. Its Forget this browser action sends `browser_revoke`, and the host forgets the credentials enrolled under that connection's own label, the same act as `chromium-bridge revoke <browser>`. A release is a tap on this browser's enrolled credential; when the host's request names no credential, the page asks for a confirmation instead.
+The options page runs the ceremony and answers: it enrolls this browser's authenticator, releases the kill switch, and signs the grants of section 11.3 (a policy set, a rollback that relaxes, a client pairing). A release or a grant is a tap on this browser's enrolled credential; when the host's request names no credential, the page asks for a confirmation instead.
+
+Its Forget this browser action sends `browser_revoke`, and the host forgets the credentials enrolled under that connection's own label, the same act as `chromium-bridge revoke <browser>`.
 
 A `presence_confirm` from the confirmation window is accepted only when no enrolled credential could have answered, so an enrolled browser is never demoted to a click.
 
@@ -553,7 +555,9 @@ Note the three distinct "versions": the MCP JSON-RPC version `2026-07-28` (secti
 
 The host owns the security policy: the four capability grants, the confirmation policy, `disabledTools`, and the confirmation timeouts.
 
-The host persists at most one signed baseline plus an unsigned restriction overlay in `policy.json` under the runtime directory, which `RuntimeDir` in `src/packages/core/src/ipc/runtime_dir.rs` resolves. The state travels over seven additive host-handled control frames (`PolicyControl` in `protocol/control.rs`), classified and terminated exactly like the host-key and admin frames: answered by the host, never forwarded to the MCP server, and dropped when the server leg tries to inject one.
+The host persists at most one signed baseline plus an unsigned restriction overlay in `policy.json` under the runtime directory, which `RuntimeDir` in `src/packages/core/src/ipc/runtime_dir.rs` resolves.
+
+The state travels over the `PolicyControl` frames in `protocol/control.rs` (the policy lanes get, restrict, set, rollback, and history, and the language frames), each classified and terminated exactly like the host-key and admin frames: answered by the host, never forwarded to the MCP server, and dropped when the server leg tries to inject one.
 
 ```mermaid
 flowchart LR
@@ -575,29 +579,34 @@ flowchart LR
   editor -->|a tightening| admin
   admin -->|policy_restrict| host
   host -->|restrict, the free lane| store
+  editor -->|a grant, behind this browser's tap| host
+  host -->|policy_set, a relaxing policy_rollback: the signed lane| store
 ```
 
-The attestation a grant consumes is the typed phrase on the CLI's terminal, and the host key signs the exact document bytes. The restriction seam refuses an overlay that would relax anything, so the editor's only reachable outcome is a tightening.
+The attestation a grant consumes is this browser's presence proof when the editor asks (the exchange of section 6.2), or the typed phrase on the CLI's terminal; the host key signs the exact document bytes either way. The [security page](security.md#what-you-confirm-and-what-counts-as-presence) owns who answers each act.
 
-Demonstrated by: [store_tests.rs](../src/packages/core/src/policy/store/store_tests.rs), [policy-sync.test.ts](../src/apps/extension/tests/background/policy-sync.test.ts), [policy-swap.test.ts](../src/apps/extension/tests/background/policy-swap.test.ts), [policy-editor.test.tsx](../src/apps/extension/tests/components/policy-editor.test.tsx).
+The restriction seam refuses an overlay that would relax anything, so a tightening of an existing baseline travels free from either surface; a loosening, or the first baseline, takes the grant lane.
+
+Demonstrated by: [store_tests.rs](../src/packages/core/src/policy/store/store_tests.rs), [presence/tests.rs](../src/packages/core/src/native_host/presence/tests.rs), [policy-sync.test.ts](../src/apps/extension/tests/background/policy-sync.test.ts), [policy-swap.test.ts](../src/apps/extension/tests/background/policy-swap.test.ts), [policy-editor.test.tsx](../src/apps/extension/tests/components/policy-editor.test.tsx).
 
 - `policy_get {}` (extension -> host): on-demand refresh. Like every extension-originated frame in this family, it is sent only on a connection where the host has already pushed a frame on the same lane (`policy_current` for the policy frames, `lang_current` for the language ones).
 - The never-speak-first rule behind that: an old host would classify an unknown frame as forwardable and the MCP server's strict parse would tear the browser leg down, so against an old host the new frames simply never flow.
 - `policy_current { ok, baseline?, sig?, overlay?, error? }` (host -> extension): the policy state, pushed unsolicited at every connect and on every observed store change, and the reply to `policy_get`. The host builds it only through a typed intermediate, so the mixtures the extension must never see cannot be constructed:
   - `ok: true` carries the exact signed baseline bytes (base64, so the signed artifact survives the JSON hop byte-for-byte), the optional signature, and the optional overlay.
   - `ok: false` carries `error` (naming the absent, damaged, or unreadable store, or a malformed `policy_get`) and never a baseline, so the extension fails closed rather than trusting bytes nobody vouched for.
-- `policy_restrict { overlay }` (extension -> host) and `policy_restrict_result { ok, error? }` (host -> extension): the options page's policy editor tightening the effective policy through the unsigned restriction seam, which refuses anything that relaxes it; an applied restriction is followed by a `policy_current` carrying the written state, so the result carries the verdict alone. Loosening stays a signed write (`chromium-bridge policy set`).
+- `policy_restrict { overlay }` (extension -> host) and `policy_restrict_result { ok, error? }` (host -> extension): the options page's policy editor tightening the effective policy through the unsigned restriction seam, which refuses anything that relaxes it; an applied restriction is followed by a `policy_current` carrying the written state, so the result carries the verdict alone. Loosening takes the grant lane below.
+- `policy_set { overlay }`, `policy_rollback { revision, entry? }`, and `policy_history {}` (extension -> host), each with a result frame: the grant lane and the superseded-revision ring. A set or a relaxing rollback opens a `presence_request` (section 6.2), whose approval carries the verdict and a `policy_current`; a rollback that only tightens applies free. A keyless host or an invalid change is refused before any request exists, in the CLI's words.
 - `lang_get {}` / `lang_set { value }` (extension -> host) and `lang_current { value, seq }` (host -> extension): the shared `uiLanguage` preference (`lang.json` in the same runtime directory), deliberately outside the signed policy document - not signed, not ratcheted, unable to affect any security decision - with echo suppression by sequence number.
 
 The enforcement contract is asymmetric by design: policy that grants capability carries the host key's signature over the exact bytes and consumed a presence attestation when it was written, while policy that only removes capability travels free as the unsigned overlay. What a same-user process can do to the host key is a residual the [trust boundaries ledger](./security/trust-boundaries.md#boundary-3-chrome---native-host--native-messaging-framing) names.
 
-A machine with no host key has no grant surface: `policy set` refuses up front until `pair` has minted one.
+A machine with no host key has no grant surface: `policy set` and the page's editor refuse up front, in the same words, until `pair` has minted one.
 
 The extension verifies the signature against its own pinned key (never a frame-supplied identity), strict-parses the verified bytes, direction-checks the overlay locally, and keeps a value ratchet in trusted storage: a pinned extension never applies a relaxation without a fresh signature whose signed `touched` set names the relaxed field.
 
 Post-cutover a per-connection dispatch barrier refuses bridge ops until the connection's first policy push has verified and applied, so an op cannot race ahead of a tightening.
 
-On the wire-validation side the seven frames ride the same generated machinery as every other control frame (section 11 above); `policy_current` declares its ok-split in the asymmetry table and is emitted as a discriminated union, proved by the `moon run check-envelope` gate.
+On the wire-validation side these frames ride the same generated machinery as every other control frame (section 11 above); `policy_current` declares its ok-split in the asymmetry table and is emitted as a discriminated union, proved by the `moon run check-envelope` gate.
 
 The host also enforces its own policy at dispatch (`policy/gating.rs`): a tool whose capability grant is off or that is in `disabledTools` is refused with the stable `TOOL_DISABLED` code before any bridge traffic, with an absent store allowing (pre-cutover) and an unreadable one denying all.
 

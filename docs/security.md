@@ -100,9 +100,10 @@ An enrolled browser is never demoted to the window. The acts behind the gate, an
 - releasing the kill switch: the browser's own credential;
 - enrolling another browser: any enrolled credential;
 - `page_eval` and `page_upload` where the policy's `presenceConfirm` is on: the browser's own credential, the request naming the op and the page's origin;
-- minting the host key, pairing a client, and relaxing the policy: the CLI's terminal.
+- minting the host key: the CLI's terminal;
+- pairing a client, and relaxing the policy (a `policy set`, a rollback that relaxes, or the first baseline): the browser's own credential from the options page, the window where that browser enrolled none, or the CLI's terminal. A tightening over an existing baseline needs no proof on either surface.
 
-**Two policy lanes.** A policy change that grants capability is signed by the host key behind the typed confirmation; a change that only restricts travels unsigned and free, because a forged restriction can only remove capability. The [CLI page](cli.md#host-owned-policy-policy) owns the commands; the [defaults table](../.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe) owns what relaxing each gate costs you.
+**Two policy lanes.** A policy change that grants capability is signed by the host key behind the presence proof above, from the options page or the CLI; a change that only restricts travels unsigned and free from either surface, because a forged restriction can only remove capability. The [CLI page](cli.md#host-owned-policy-policy) owns the commands; the [defaults table](../.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe) owns what relaxing each gate costs you.
 
 ## Where we deliberately stop
 
@@ -121,7 +122,7 @@ On every OS, harness admission is enforced only once one client is paired; befor
 
 | OS | Client attestation | User presence | Policy grant lane | Where the bar holds |
 | --- | --- | --- | --- | --- |
-| macOS | the spawning harness's code identity, checked against the paired clients | the browser's authenticator on an enrolled browser; the window otherwise; the terminal for the CLI | `pair` mints the host key into the Keychain, so `policy set` signs here | the bridge admits only this binary, run by this user, holding the run secret |
+| macOS | the spawning harness's code identity, checked against the paired clients | the browser's authenticator on an enrolled browser; the window otherwise; the terminal for the CLI | `pair` mints the host key into the Keychain, so a grant from either surface signs here | the bridge admits only this binary, run by this user, holding the run secret |
 | Linux | the spawning harness's image hash, checked against the paired clients | the same ladder | `pair` mints the key into the Secret Service, or a 0600 file with `--file-store` | holds on the same gates |
 | Windows | the spawning harness's image hash and Authenticode publisher, checked against the paired clients; pairing is the [CLI page's](cli.md#trusted-clients-pair-client--revoke-client--list-clients) | the same ladder | `pair` mints the key into the Credential Manager | a named pipe only this user can open, mutual image attestation, the run secret |
 

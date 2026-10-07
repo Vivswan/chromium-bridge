@@ -26,6 +26,7 @@ pub mod gating;
 pub use cli::{
     gather_history_report, gather_policy_status, run_policy, PolicyErrorReport,
     PolicyHistoryEntryReport, PolicyHistoryReport, PolicyStatusReport, PolicyStoreState,
+    PRE_CUTOVER_STORE_NOTE,
 };
 pub use plan::{
     audit_grant_refused, plan_grant, refused_grant, rollback_inputs, touched_fields, wire_names,

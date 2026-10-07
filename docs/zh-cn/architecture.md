@@ -201,7 +201,7 @@ flowchart LR
 | `allowlist.rs` | 受信任客户端白名单: 条目类型、配对与吊销写入, 以及 `pair-client` / `revoke-client` / `list-clients` |
 | `trust.rs` | 信任记录 (`trust.json`): 紧急开关闩锁、已配对的客户端、变更纪元, 以及每个执行点从一次读取中得出的准入决定 |
 | `kill.rs` | 紧急开关的启用/解除; 解除需要 `PresenceAttestation` |
-| `presence/` | 授予能力的操作所需的用户在场证明: 来自该操作规则所允许凭据的 WebAuthn 断言 (解除紧急开关用本浏览器的凭据, 登记另一个浏览器用任一已登记的凭据), 仅当该规则不允许任何凭据时才用扩展的确认窗口, 或在 CLI 终端上键入的短语; 由哪条路径担保会按操作逐一审计 |
+| `presence/` | 授予能力的操作所需的用户在场证明: 来自该操作规则所允许凭据的 WebAuthn 断言 (解除紧急开关或授予用本浏览器的凭据, 登记另一个浏览器用任一已登记的凭据), 仅当该规则不允许任何凭据时才用扩展的确认窗口, 或在 CLI 终端上键入的短语; 由哪条路径担保会按操作逐一审计 |
 | `webauthn/` | 作为 WebAuthn 依赖方 (relying party) 的主机: 一次触碰所签署的声明、注册与断言解析器、校验器, 以及保存在 `trust.json` 中的登记存储 |
 | `enclave/` | 主机身份密钥: `pair` 铸造到操作系统凭据存储 (或使用 `--file-store` 时的 0600 文件) 中的 P-256 密钥, 扩展固定该密钥并据此验证签名的策略基线 |
 | `audit.rs` | 持久审计日志: 有界的 0600 `audit.log`、严格解析的 JSON 记录、`audit` 子命令读取器 |
@@ -405,7 +405,9 @@ flowchart LR
 
 主机是依赖方, 扩展是 WebAuthn 客户端, 以扩展 id 作为 RP ID。登记走同一套交换流程, 使用 `enroll_begin`、`enroll_options`、`enroll_finish` 与 `enroll_result`; 一台机器上的首次登记是首次使用即信任, 此后的每次登记都需要来自本机已登记凭据的一次触碰, 不限浏览器。
 
-选项页运行该仪式并作答: 它登记本浏览器的认证器, 并解除紧急开关。它的「忘记此浏览器」操作发送 `browser_revoke`, 主机随即忘记在该连接自身标识下登记的凭据, 与 `chromium-bridge revoke <browser>` 是同一个操作。一次解除是在本浏览器已登记凭据上的一次轻触; 当主机的请求没有指名任何凭据时, 页面改为请求一次确认。
+选项页运行该仪式并作答: 它登记本浏览器的认证器, 解除紧急开关, 并签名第 11.3 节的各项授予 (一次策略 set、一次放宽的回滚、一次客户端配对)。一次解除或一次授予是在本浏览器已登记凭据上的一次轻触; 当主机的请求没有指名任何凭据时, 页面改为请求一次确认。
+
+它的「忘记此浏览器」操作发送 `browser_revoke`, 主机随即忘记在该连接自身标识下登记的凭据, 与 `chromium-bridge revoke <browser>` 是同一个操作。
 
 只有在没有任何已登记凭据能够作答时, 才接受来自确认窗口的 `presence_confirm`, 因此已登记的浏览器绝不会被降级为一次点击。
 
@@ -553,7 +555,9 @@ MCP 服务器 (`src/packages/core/src/error.rs` 中的 `CallError::code()`) 是�
 
 主机持有安全策略: 四项能力授予、确认策略、`disabledTools` 与确认超时。
 
-主机在运行时目录下的 `policy.json` 中最多持久化一个签名的基线加一个未签名的限制覆盖层; 该目录由 `src/packages/core/src/ipc/runtime_dir.rs` 中的 `RuntimeDir` 解析。状态通过七个增量的、由主机处理的控制帧 (`protocol/control.rs` 中的 `PolicyControl`) 传递, 其分类与终结方式与主机密钥帧和管理帧完全一致: 由主机应答, 从不转发给 MCP 服务器, 当服务器链路试图注入时直接丢弃。
+主机在运行时目录下的 `policy.json` 中最多持久化一个签名的基线加一个未签名的限制覆盖层; 该目录由 `src/packages/core/src/ipc/runtime_dir.rs` 中的 `RuntimeDir` 解析。
+
+状态通过 `protocol/control.rs` 中的 `PolicyControl` 帧传递 (策略通道 get、restrict、set、rollback 与 history, 以及语言帧), 每一个的分类与终结方式都与主机密钥帧和管理帧完全一致: 由主机应答, 从不转发给 MCP 服务器, 当服务器链路试图注入时直接丢弃。
 
 ```mermaid
 flowchart LR
@@ -575,29 +579,34 @@ flowchart LR
   editor -->|a tightening| admin
   admin -->|policy_restrict| host
   host -->|restrict, the free lane| store
+  editor -->|a grant, behind this browser's tap| host
+  host -->|policy_set, a relaxing policy_rollback: the signed lane| store
 ```
 
-授予所消耗的在场证明是在 CLI 终端上键入的短语, 主机密钥对精确的文档字节签名。限制接缝拒绝任何会放宽内容的覆盖层, 因此编辑器唯一能达成的结果就是收紧。
+授予所消耗的在场证明, 在编辑器发起时是本浏览器的在场证明 (第 6.2 节的交换), 否则是在 CLI 终端上键入的短语; 两种情况下主机密钥都对精确的文档字节签名。由谁应答每项操作, 由[安全页面](security.md#你要确认什么-以及什么算在场)负责。
 
-验证测试: [store_tests.rs](../../src/packages/core/src/policy/store/store_tests.rs), [policy-sync.test.ts](../../src/apps/extension/tests/background/policy-sync.test.ts), [policy-swap.test.ts](../../src/apps/extension/tests/background/policy-swap.test.ts), [policy-editor.test.tsx](../../src/apps/extension/tests/components/policy-editor.test.tsx)。
+限制接缝拒绝任何会放宽内容的覆盖层, 因此对已有基线的收紧从任一界面都自由传递; 放宽或首个基线走授予通道。
+
+验证测试: [store_tests.rs](../../src/packages/core/src/policy/store/store_tests.rs), [presence/tests.rs](../../src/packages/core/src/native_host/presence/tests.rs), [policy-sync.test.ts](../../src/apps/extension/tests/background/policy-sync.test.ts), [policy-swap.test.ts](../../src/apps/extension/tests/background/policy-swap.test.ts), [policy-editor.test.tsx](../../src/apps/extension/tests/components/policy-editor.test.tsx)。
 
 - `policy_get {}` (扩展 -> 主机): 按需刷新。与这一族中每个由扩展发起的帧一样, 它只在主机已经在同一通道上推送过帧的连接上发送 (策略帧对应 `policy_current`, 语言帧对应 `lang_current`)。
 - 其背后的「绝不先开口」规则: 旧主机会把未知帧归类为可转发, 而 MCP 服务器的严格解析会拆掉浏览器链路, 因此面对旧主机, 新帧根本不会流动。
 - `policy_current { ok, baseline?, sig?, overlay?, error? }` (主机 -> 扩展): 策略状态, 在每次连接时以及每次观察到存储变更时主动推送, 也是对 `policy_get` 的回复。主机只通过一个带类型的中间形态构建它, 因此扩展绝不该看到的混合形态根本无法构造出来:
   - `ok: true` 携带精确的签名基线字节 (base64, 使签名产物逐字节地经过 JSON 跳转而不变)、可选的签名, 以及可选的覆盖层。
   - `ok: false` 携带 `error` (指明存储缺失、损坏或不可读, 或 `policy_get` 格式错误), 绝不携带基线, 因此扩展失败即关闭, 而不是信任无人担保的字节。
-- `policy_restrict { overlay }` (扩展 -> 主机) 与 `policy_restrict_result { ok, error? }` (主机 -> 扩展): 选项页的策略编辑器通过未签名的限制接缝收紧有效策略, 该接缝拒绝任何放宽; 应用成功的限制之后会跟一个携带已写入状态的 `policy_current`, 因此结果帧只携带裁决。放宽仍然是签名写入 (`chromium-bridge policy set`)。
+- `policy_restrict { overlay }` (扩展 -> 主机) 与 `policy_restrict_result { ok, error? }` (主机 -> 扩展): 选项页的策略编辑器通过未签名的限制接缝收紧有效策略, 该接缝拒绝任何放宽; 应用成功的限制之后会跟一个携带已写入状态的 `policy_current`, 因此结果帧只携带裁决。放宽走下面的授予通道。
+- `policy_set { overlay }`、`policy_rollback { revision, entry? }` 与 `policy_history {}` (扩展 -> 主机), 各自带一个结果帧: 授予通道与被取代修订版的环。一次 set 或一次放宽的回滚会打开一个 `presence_request` (第 6.2 节), 其批准携带裁决与一个 `policy_current`; 只收紧的回滚自由应用。没有主机密钥或变更无效时, 在任何请求存在之前就以 CLI 的措辞拒绝。
 - `lang_get {}` / `lang_set { value }` (扩展 -> 主机) 与 `lang_current { value, seq }` (主机 -> 扩展): 共享的 `uiLanguage` 偏好 (同一运行时目录中的 `lang.json`), 刻意置于签名策略文档之外 - 不签名、不棘轮、无法影响任何安全决策 - 并以序号做回声抑制。
 
 执行契约在设计上就是不对称的: 授予能力的策略携带主机密钥对精确字节的签名, 并且在写入时消耗了一次在场证明; 而只移除能力的策略则作为未签名的覆盖层自由传递。同用户进程能对主机密钥做什么, 是[信任边界台账](./security/trust-boundaries.md#边界-3-chrome---原生消息主机-native-messaging-帧格式)点名的残余风险。
 
-没有主机密钥的机器没有授予面: 在 `pair` 铸造出密钥之前, `policy set` 会预先拒绝。
+没有主机密钥的机器没有授予面: 在 `pair` 铸造出密钥之前, `policy set` 与页面的编辑器都会以同样的措辞预先拒绝。
 
 扩展对照自己固定的密钥 (绝不是帧提供的身份) 验证签名, 严格解析已验证的字节, 在本地对覆盖层做方向检查, 并在受信任存储中保持一个取值棘轮: 已固定密钥的扩展绝不会在没有新签名的情况下应用放宽, 且该签名所签的 `touched` 集合必须点名被放宽的字段。
 
 切换之后, 每连接的分发屏障会拒绝桥接操作, 直到该连接的首次策略推送完成验证并应用, 因此操作不可能抢在收紧之前执行。
 
-在线路校验方面, 这七个帧与其他每个控制帧走同一套生成机制 (见上文第 11 节); `policy_current` 在不对称表中声明其 ok 分裂, 并被生成为可区分联合类型, 由 `moon run check-envelope` 门禁证明。
+在线路校验方面, 这些帧与其他每个控制帧走同一套生成机制 (见上文第 11 节); `policy_current` 在不对称表中声明其 ok 分裂, 并被生成为可区分联合类型, 由 `moon run check-envelope` 门禁证明。
 
 主机也在分发时执行自己的策略 (`policy/gating.rs`): 能力授予已关闭或位于 `disabledTools` 中的工具, 在任何桥接流量之前就以稳定的 `TOOL_DISABLED` 代码被拒绝; 存储缺失时允许 (切换前), 存储不可读时全部拒绝。
 

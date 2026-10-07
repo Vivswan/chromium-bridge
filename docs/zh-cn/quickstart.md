@@ -66,7 +66,7 @@ lock file:       /tmp/quickstart-home/Library/Application Support/chromium-bridg
   secret:  <redacted, 32 chars>
 mcp server:      reachable (socket connect OK)
 kill switch:     off (bridge activity permitted)
-policy baseline: none yet (pre-cutover; the extension keeps enforcing its deny baseline until `chromium-bridge policy set` signs a baseline)
+policy baseline: none yet (pre-cutover; the extension keeps enforcing its deny baseline until `chromium-bridge policy set` or the options page's Security policy section signs a baseline)
 native manifests: (host id com.vivswan.chromium_bridge.host)
   chrome    detected      user    manifest ok         /tmp/quickstart-home/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json
                           system  manifest missing    /Library/Google/Chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json
