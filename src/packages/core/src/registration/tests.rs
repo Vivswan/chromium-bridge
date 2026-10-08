@@ -1,29 +1,20 @@
 use super::*;
 
-/// Unique temp tree per test; removed on drop. Tests only ever touch
-/// paths under this root -- never a real browser or user directory.
-struct TempTree(PathBuf);
+/// Tests only ever touch paths under this root -- never a real browser or user directory.
+struct TempTree(tempfile::TempDir);
 
 impl TempTree {
-    fn new(tag: &str) -> TempTree {
-        let root =
-            std::env::temp_dir().join(format!("bb-registration-{tag}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
-        TempTree(root)
+    fn new() -> TempTree {
+        TempTree(tempfile::tempdir().unwrap())
     }
 
     fn path(&self, rel: &str) -> PathBuf {
         // Join per component: pushing a literal "a/b" keeps the "/" on
         // Windows, which breaks string comparison against paths the
         // production code builds with native separators.
-        rel.split('/').fold(self.0.clone(), |p, seg| p.join(seg))
-    }
-}
-
-impl Drop for TempTree {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+        let mut path = self.0.path().to_path_buf();
+        path.extend(rel.split('/'));
+        path
     }
 }
 
@@ -85,7 +76,7 @@ fn pointer_path(target: &Target) -> PathBuf {
 fn register_writes_the_pointer_chrome_reads_and_uninstall_removes_it_with_the_manifest() {
     // The pointer's bytes are what Chrome's preferences loader parses, and the Web Store is the only
     // update source it accepts on macOS and Windows.
-    let tree = TempTree::new("pointer");
+    let tree = TempTree::new();
     let reg = registrar(&tree);
     let target = macos_target(&tree);
     let lines = reg.register(&target).unwrap();
@@ -131,7 +122,7 @@ fn foreign_pointer_blocks_register_and_is_left_alone_by_uninstall() {
     // owns the slot, so register writes nothing, not even the manifest. uninstall still removes a
     // manifest of ours beside it and refuses only the pointer, so nothing of ours survives to dangle
     // once the wrappers go.
-    let tree = TempTree::new("foreign-pointer");
+    let tree = TempTree::new();
     let reg = registrar(&tree);
     let target = macos_target(&tree);
     let pointer = pointer_path(&target);
@@ -167,7 +158,7 @@ fn foreign_pointer_blocks_register_and_is_left_alone_by_uninstall() {
 
 #[test]
 fn register_writes_manifest_and_labeled_wrapper() {
-    let tree = TempTree::new("register");
+    let tree = TempTree::new();
     let reg = registrar(&tree);
     let target = browser_target(&tree);
     // The manifest dir does not exist yet -- a freshly installed browser
@@ -216,7 +207,7 @@ fn register_writes_manifest_and_labeled_wrapper() {
 
 #[test]
 fn register_is_idempotent_and_uninstall_reverses_it() {
-    let tree = TempTree::new("roundtrip");
+    let tree = TempTree::new();
     let reg = registrar(&tree);
     let target = browser_target(&tree);
     reg.register(&target).unwrap();
@@ -253,7 +244,7 @@ fn register_is_idempotent_and_uninstall_reverses_it() {
 
 #[test]
 fn assess_flags_a_dangling_launch_path_as_stale() {
-    let tree = TempTree::new("stale");
+    let tree = TempTree::new();
     let reg = registrar(&tree);
     let target = browser_target(&tree);
     reg.register(&target).unwrap();
@@ -271,7 +262,7 @@ fn assess_flags_a_dangling_launch_path_as_stale() {
 
 #[test]
 fn explicit_dir_gets_the_unlabeled_wrapper() {
-    let tree = TempTree::new("explicit");
+    let tree = TempTree::new();
     let reg = registrar(&tree);
     let target = Target::for_explicit_dir(&tree.path("custom"));
     reg.register(&target).unwrap();
@@ -291,7 +282,7 @@ fn explicit_dir_gets_the_unlabeled_wrapper() {
 /// leaves it byte-identical, and the CLI's explicit --fix alone overwrites it and names what it launched.
 #[test]
 fn a_foreign_manifest_reads_foreign_survives_uninstall_and_is_overwritten_only_by_the_cli() {
-    let tree = TempTree::new("foreign");
+    let tree = TempTree::new();
     let reg = registrar(&tree);
     let target = browser_target(&tree);
     let manifest_path = target.registration.manifest_path();
@@ -335,7 +326,7 @@ fn unreadable_manifest_path_fails_closed() {
     // Two entries that are not a readable file: a directory, and a dangling symlink, which reads as
     // NotFound like an empty slot although replacing it would destroy an entry nobody verified.
     // Neither register nor uninstall may proceed, and the entry stays.
-    let tree = TempTree::new("unreadable");
+    let tree = TempTree::new();
     let reg = registrar(&tree);
     type Plant = fn(&Path);
     fn directory(p: &Path) {
@@ -479,7 +470,7 @@ fn wrapper_ownership_requires_the_exec_trampoline_shape() {
 
 #[test]
 fn foreign_wrapper_names_are_left_in_place() {
-    let tree = TempTree::new("wrapper");
+    let tree = TempTree::new();
     let dir = tree.path("install");
     fs::create_dir_all(&dir).unwrap();
     fs::write(dir.join("run-host-chrome.sh"), "#!/bin/sh\nrm -rf /\n").unwrap();
@@ -500,7 +491,7 @@ fn shell_quote_defuses_single_quotes() {
 fn fix_default_targets_only_detected_browsers_but_explicit_keys_always_work() {
     // Fixture tree: Chrome is really installed (app bundle + config
     // root); Vivaldi is a ghost (leftover config root, no app).
-    let tree = TempTree::new("select");
+    let tree = TempTree::new();
     fs::create_dir_all(tree.path("sys/Applications/Google Chrome.app")).unwrap();
     fs::create_dir_all(tree.path("home/Library/Application Support/Google/Chrome")).unwrap();
     fs::create_dir_all(tree.path("home/Library/Application Support/Vivaldi")).unwrap();
@@ -548,7 +539,7 @@ fn fix_default_targets_only_detected_browsers_but_explicit_keys_always_work() {
 /// account can traverse, nothing under any home, and `uninstall --system` reverses it.
 #[test]
 fn system_scope_registers_into_the_system_roots_once_per_shared_directory() {
-    let tree = TempTree::new("system");
+    let tree = TempTree::new();
     fs::create_dir_all(tree.path("sys/opt/google/chrome")).unwrap();
     fs::create_dir_all(tree.path("sys/opt/brave.com/brave")).unwrap();
     fs::create_dir_all(tree.path("sys/opt/vivaldi")).unwrap();
@@ -711,7 +702,7 @@ fn system_scope_registers_into_the_system_roots_once_per_shared_directory() {
 /// Brave's user row as Chrome's, and `uninstall` removes the manifest and both pointers.
 #[test]
 fn macos_chrome_and_brave_share_one_user_manifest_and_keep_their_own_pointers() {
-    let tree = TempTree::new("macos-shared-user");
+    let tree = TempTree::new();
     fs::create_dir_all(tree.path("sys/Applications/Google Chrome.app")).unwrap();
     fs::create_dir_all(tree.path("sys/Applications/Brave Browser.app")).unwrap();
     let dirs = tree_dirs(&tree);
@@ -830,7 +821,7 @@ fn macos_chrome_and_brave_share_one_user_manifest_and_keep_their_own_pointers() 
 /// key serve), while a key without its file is ours and stale.
 #[test]
 fn a_windows_registration_is_its_key() {
-    let tree = TempTree::new("classify");
+    let tree = TempTree::new();
     let launch = tree.path("bin/chromium-bridge");
     fs::create_dir_all(launch.parent().unwrap()).unwrap();
     fs::write(&launch, "").unwrap();
@@ -902,7 +893,7 @@ fn a_windows_registration_is_its_key() {
 #[cfg(unix)]
 #[test]
 fn lookup_hit_follows_chromiums_existence_probe() {
-    let tree = TempTree::new("lookup");
+    let tree = TempTree::new();
     let dir = tree.path("nm");
     fs::create_dir_all(&dir).unwrap();
     let reg = Registration::ManifestDir(dir.clone());
@@ -929,7 +920,7 @@ fn a_failure_after_the_overwrite_still_reports_what_was_displaced() {
     if nix::unistd::geteuid().is_root() {
         return;
     }
-    let tree = TempTree::new("late-failure");
+    let tree = TempTree::new();
     let reg = registrar(&tree);
     let target = macos_target(&tree);
     let manifest_path = target.registration.manifest_path();
@@ -957,7 +948,7 @@ fn a_failure_after_the_overwrite_still_reports_what_was_displaced() {
 #[test]
 fn a_system_scope_refusal_on_any_directory_leaves_none_of_them_made() {
     use std::os::unix::fs::PermissionsExt;
-    let tree = TempTree::new("preflight");
+    let tree = TempTree::new();
     let dirs = tree_dirs(&tree);
     let pointer_dir =
         tree.path("sys/Library/Application Support/Google/Chrome/External Extensions");
@@ -999,7 +990,7 @@ fn a_system_scope_refusal_on_any_directory_leaves_none_of_them_made() {
 #[test]
 fn system_scope_refuses_a_binary_other_accounts_cannot_launch() {
     use std::os::unix::fs::PermissionsExt;
-    let tree = TempTree::new("launchable");
+    let tree = TempTree::new();
     let root = tree.path("sys");
     let place = |rel: &str, dir_modes: &[(&str, u32)], file_mode: u32| -> PathBuf {
         let exe = root.join(rel);
@@ -1054,7 +1045,7 @@ fn system_scope_refuses_a_binary_other_accounts_cannot_launch() {
 /// and carries no CLI flag.
 #[test]
 fn no_targets_reason_reads_as_a_page_sentence() {
-    let tree = TempTree::new("no-targets-page");
+    let tree = TempTree::new();
     let entries = browsers::resolve(Os::MacOs, &tree_dirs(&tree));
     let Err(FixError::NoTargets(reason)) =
         select_targets(&crate::cli::FixTargets::Detected, &entries, Scope::User)
@@ -1112,7 +1103,7 @@ fn only_an_unremovable_artifact_of_ours_fails_the_uninstall() {
     if nix::unistd::geteuid().is_root() {
         return;
     }
-    let tree = TempTree::new("unremovable");
+    let tree = TempTree::new();
     let reg = registrar(&tree);
     let target = browser_target(&tree);
     reg.register(&target).unwrap();
@@ -1155,7 +1146,7 @@ fn registry_lookup_is_the_keys_default_value() {
 /// the clap table are two files, so this is the one place their agreement is checked.
 #[test]
 fn cli_guidance_offers_the_reason_and_only_flags_the_scope_accepts() {
-    let tree = TempTree::new("guidance");
+    let tree = TempTree::new();
     let dir = tree.path("nm").to_string_lossy().into_owned();
     let reason = "no browser (looked for chrome): install Chrome, then repair again".to_string();
     for scope in [Scope::User, Scope::System] {
@@ -1191,7 +1182,7 @@ fn cli_guidance_offers_the_reason_and_only_flags_the_scope_accepts() {
 #[cfg(unix)]
 #[test]
 fn symlinked_install_dir_is_refused() {
-    let tree = TempTree::new("symlink");
+    let tree = TempTree::new();
     let real = tree.path("elsewhere");
     fs::create_dir_all(&real).unwrap();
     let link = tree.path("install");
@@ -1222,7 +1213,7 @@ fn symlinked_install_dir_is_refused() {
 fn registry_targets_fail_closed_off_windows() {
     #[cfg(not(windows))]
     {
-        let tree = TempTree::new("registry");
+        let tree = TempTree::new();
         let reg = registrar(&tree);
         let target = Target {
             label: Some(Browser::Chrome),
