@@ -1,23 +1,8 @@
 //! The host side of the extension's WebAuthn exchange: enrollment and per-act presence for one browser
 //! connection. One slot ([`Pending`]) holds what is outstanding, and every request answers in one reply, so the
-//! extension's single-flight exchange never waits on a tap.
-//!
-//! ```text
-//! enroll_begin      -> fresh machine: enroll_options (trust on first use)
-//!                      enrolled machine: presence_request + enroll_result { presence_required }
-//!                      held approval: enroll_options
-//! enroll_finish     -> enroll_result
-//! kill_release      -> presence_request (this browser's credentials); on approval presence_result, kill_status_result
-//! presence_begin    -> presence_request for a page operation (this browser's credentials); on approval presence_result,
-//!                      and the extension runs the op it asked about
-//! policy_set        -> presence_request the same way; on approval presence_result, policy_set_result, policy_current;
-//!                      a keyless host or an invalid request is refused before any request exists
-//! policy_rollback   -> policy_rollback_result free when the target only tightens; otherwise as policy_set
-//! client_pair       -> presence_request the same way; on approval presence_result, client_pair_result
-//! presence_assert   -> presence_result, then the pending act
-//! presence_confirm  -> presence_result (the window's answer; only where the request admits no credential)
-//! browser_revoke    -> browser_revoke_result: this browser's enrollments forgotten (no proof: it removes capability)
-//! ```
+//! extension's single-flight exchange never waits on a tap. Which frames open a request, and what rides the
+//! approved `presence_result`, is the wire contract's ([`crate::protocol::control`]); each [`Exchange`] method
+//! carries its own refusals.
 //!
 //! A grant's statement names the change it approves (`set policy: cdpMode=on,confirmGraceMs=30000`), bounded by
 //! [`MAX_ACTION_LEN`]; a change summary past the bound is refused before any request exists, since a tap must

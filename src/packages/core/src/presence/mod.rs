@@ -60,16 +60,8 @@ impl PresencePath {
 
 /// Evidence that presence was attested; the private field makes this module the only producer, so an API
 /// that demands one (like `kill::release`) structurally cannot run with presence unchecked. LINEAR on purpose,
-/// neither `Copy` nor `Clone`: one attestation authorizes exactly one capability-granting act, so a tap minted
-/// for "pair client X" cannot also release the kill switch with both audit records claiming presence.
-///
-/// Both snippets fail to compile today, which is what the fences assert; an impl coming back makes its
-/// snippet compile and that test fail:
-///
-/// ```compile_fail
-/// fn takes_copy<T: Copy>() {}
-/// takes_copy::<genkan_core::presence::PresenceAttestation>();
-/// ```
+/// not `Clone` (so not `Copy` either): one attestation authorizes exactly one capability-granting act, so a
+/// tap minted for "pair client X" cannot also release the kill switch with both audit records claiming presence.
 ///
 /// ```compile_fail
 /// fn takes_clone<T: Clone>() {}
@@ -149,14 +141,9 @@ impl PresenceError {
 
 /// Proof that stdin was a real terminal when the CLI path was selected: the anti-tap-phishing precondition
 /// made structural. The private field keeps [`require`](TerminalStdin::require) the only constructor, and
-/// [`tty_confirm`] demands the witness, so `echo release | genkan unkill` is refused before any
-/// prompt can run at all.
-///
-/// ```text
-/// fd 0 swapped for a pipe between witness and prompt -> the witness encodes ORDERING, not a permanent fact; tty_confirm
-///                                                       re-samples terminal-ness right before reading the phrase and
-///                                                       refuses on a mismatch
-/// ```
+/// [`tty_confirm`] demands the witness, so `echo release | genkan unkill` is refused before any prompt can
+/// run at all. The witness encodes ORDERING (the check ran before anything else), not a permanent fact, which
+/// is why [`tty_confirm`] re-samples before reading.
 #[derive(Debug)]
 pub struct TerminalStdin(());
 
@@ -177,10 +164,9 @@ impl TerminalStdin {
 pub const CLI_CONFIRM_PHRASE: &str = "release";
 
 /// The CLI path: require the phrase on the terminal the witness proved; prompts go to stderr so they reach the
-/// user even with stdout redirected. Terminal-ness is re-sampled here, immediately before the read: the
-/// witness ordered the FIRST check before anything else ran, but fd 0 can be swapped for a pipe in the window
-/// between witness and prompt, and a mismatch must refuse `NotInteractive` without reading rather than accept
-/// a phrase from a non-terminal.
+/// user even with stdout redirected. Terminal-ness is re-sampled immediately before the read: fd 0 can be
+/// swapped for a pipe in the window between witness and prompt, and a mismatch refuses `NotInteractive`
+/// without reading rather than accept a phrase from a non-terminal.
 pub fn tty_confirm(
     reason: &str,
     _terminal: TerminalStdin,
