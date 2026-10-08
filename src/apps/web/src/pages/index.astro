@@ -55,7 +55,7 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
           <a href="#trust">How it works</a>
           <a href="#guarantees">Guarantees</a>
           <a href="#install">Install</a>
-          <a href="https://github.com/Vivswan/chromium-bridge">GitHub</a>
+          <a href="https://github.com/Vivswan/genkan">GitHub</a>
         </nav>
       </div>
     </header>
@@ -80,7 +80,7 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
       </p>
       <div class="cta-row">
         <a class="btn btn-primary" href="#install">Install on your Mac</a>
-        <a class="btn" href="https://github.com/Vivswan/chromium-bridge">Read the code on GitHub</a>
+        <a class="btn" href="https://github.com/Vivswan/genkan">Read the code on GitHub</a>
       </div>
       <div class="fact-row" aria-label="Project status">
         <span>Source-available</span><i></i>
@@ -184,7 +184,7 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
             typed on an interactive terminal, with a piped stdin refused before
             any prompt appears. The gate is hard-wired; there is no flag, env
             var, or grace window that skips it.</p>
-          <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/security/rationale.md#enrollment-and-user-presence">security rationale</a>
+          <a class="g-ref" href="https://github.com/Vivswan/genkan/blob/main/docs/security/rationale.md#enrollment-and-user-presence">security rationale</a>
         </div>
         <div class="g-cell">
           <h3>Capability comes back only with your presence.</h3>
@@ -194,7 +194,7 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
             no page, script, or remote client can forge, or, when no enrolled
             credential could answer, a click in the extension's own window.
             Script and upload approvals stay in that window on every call.</p>
-          <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/security/trust-boundaries.md">trust boundaries</a>
+          <a class="g-ref" href="https://github.com/Vivswan/genkan/blob/main/docs/security/trust-boundaries.md">trust boundaries</a>
         </div>
         <div class="g-cell">
           <h3>Credentials go one way, masked on top.</h3>
@@ -202,21 +202,21 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
             cookie_set or storage_set by design. On top of that, a best-effort
             heuristic masks common secret shapes - JWTs, long hex, long digit
             runs - before they leave the browser.</p>
-          <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/security/tool-risk-matrix.md">tool risk matrix</a>
+          <a class="g-ref" href="https://github.com/Vivswan/genkan/blob/main/docs/security/tool-risk-matrix.md">tool risk matrix</a>
         </div>
         <div class="g-cell">
           <h3>No site runs without your yes.</h3>
           <p>A new origin triggers a prompt in the extension. Until you approve
             it there, no page-level tool touches that site; the one exception is an
             explicit allow-all-sites opt-in you would have to set yourself.</p>
-          <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/security/trust-boundaries.md">trust boundaries</a>
+          <a class="g-ref" href="https://github.com/Vivswan/genkan/blob/main/docs/security/trust-boundaries.md">trust boundaries</a>
         </div>
         <div class="g-cell">
           <h3>One switch halts everything.</h3>
           <p>Engage it from the CLI or the extension; every client
             loses every browser at once. Releasing it takes proof of presence,
             never a silent API call.</p>
-          <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/security/rationale.md#revocation-and-the-kill-switch">security rationale</a>
+          <a class="g-ref" href="https://github.com/Vivswan/genkan/blob/main/docs/security/rationale.md#revocation-and-the-kill-switch">security rationale</a>
         </div>
         <div class="g-cell">
           <h3>Decisions are written down, gaps are counted.</h3>
@@ -225,15 +225,15 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
             design: a failed write drops that record and the next one carries
             a visible gap count, because bookkeeping must never block a
             decision.</p>
-          <a class="g-ref" href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/security.md">security model</a>
+          <a class="g-ref" href="https://github.com/Vivswan/genkan/blob/main/docs/security.md">security model</a>
         </div>
       </div>
 
       <p class="g-foot">Where a boundary cannot be fully enforced in user space,
         the threat model says so instead of implying coverage. Start with
-        <a href="https://github.com/Vivswan/chromium-bridge/blob/main/.github/SECURITY.md">SECURITY.md</a>
+        <a href="https://github.com/Vivswan/genkan/blob/main/.github/SECURITY.md">SECURITY.md</a>
         and the
-        <a href="https://github.com/Vivswan/chromium-bridge/blob/main/docs/security.md">security model</a>.</p>
+        <a href="https://github.com/Vivswan/genkan/blob/main/docs/security.md">security model</a>.</p>
     </section>
 
     <div class="deck-divider" role="presentation">
@@ -246,7 +246,7 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
       <h2 class="sec-title">Three steps, one binary.</h2>
       <p class="sec-sub">The release archive carries the host binary and the
         built extension. The full guide, with verification, is in the
-        <a href="https://github.com/Vivswan/chromium-bridge#quick-start">README</a>.</p>
+        <a href="https://github.com/Vivswan/genkan#quick-start">README</a>.</p>
 
       <ol class="steps">
         <li class="step">
@@ -308,10 +308,10 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
           <span class="mono footer-lic">Individual and Small Organization License 1.0.0</span>
         </div>
         <nav class="footer-nav" aria-label="Footer">
-          <a href="https://github.com/Vivswan/chromium-bridge">GitHub</a>
+          <a href="https://github.com/Vivswan/genkan">GitHub</a>
           <a href={withBase("docs/")}>Documentation</a>
-          <a href="https://github.com/Vivswan/chromium-bridge/blob/main/.github/SECURITY.md">Security policy</a>
-          <a href="https://github.com/Vivswan/chromium-bridge/releases/latest">Releases</a>
+          <a href="https://github.com/Vivswan/genkan/blob/main/.github/SECURITY.md">Security policy</a>
+          <a href="https://github.com/Vivswan/genkan/releases/latest">Releases</a>
         </nav>
         <p class="footer-credit">Adopted from
           <a href="https://github.com/whg517/browser-bridge">whg517/browser-bridge</a>

@@ -10,7 +10,7 @@
 
 CLI 只需要二进制本身, 在桌面机、无头机器和 CI 上都一样。
 
-1. **安装。** 从[最新发布](https://github.com/Vivswan/chromium-bridge/releases/latest)中任选一种; 若想先校验下载文件, 命令见 [SECURITY.md](../../.github/SECURITY.md#release-artifact-integrity)。
+1. **安装。** 从[最新发布](https://github.com/Vivswan/genkan/releases/latest)中任选一种; 若想先校验下载文件, 命令见 [SECURITY.md](../../.github/SECURITY.md#release-artifact-integrity)。
 
    | 渠道 | 命令或点击 | 作用 |
    | --- | --- | --- |

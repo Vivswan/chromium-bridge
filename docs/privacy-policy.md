@@ -59,4 +59,4 @@ Genkan does **not** sell or share your data with anyone. The only party that rec
 ## Contact
 
 Questions or concerns: please open an issue at
-<https://github.com/Vivswan/chromium-bridge/issues>.
+<https://github.com/Vivswan/genkan/issues>.

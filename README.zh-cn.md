@@ -2,7 +2,7 @@
 
 你的 AI 在玄关等候。
 
-[![CI](https://github.com/Vivswan/chromium-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/Vivswan/chromium-bridge/actions/workflows/ci.yml) [![License](https://img.shields.io/badge/license-Individual%20and%20Small%20Organization%201.1.0-blue)](./LICENSE.md)
+[![CI](https://github.com/Vivswan/genkan/actions/workflows/ci.yml/badge.svg)](https://github.com/Vivswan/genkan/actions/workflows/ci.yml) [![License](https://img.shields.io/badge/license-Individual%20and%20Small%20Organization%201.1.0-blue)](./LICENSE.md)
 
 [English](./README.md) | 简体中文 | [繁體中文](./README.zh-tw.md)
 
@@ -50,7 +50,7 @@ genkan 操作的是一个真实的、已通过身份验证的浏览器。它可�
 
 CLI 除了二进制本身不需要任何东西, 在桌面机、无头机器和 CI 上都一样。完整步骤, 连同各个安装渠道以及每种渠道替你做了什么, 见[快速入门](./docs/zh-cn/quickstart.md); 简版如下:
 
-1. 从[最新发布](https://github.com/Vivswan/chromium-bridge/releases/latest)安装: `.pkg`、`.msi`、`.deb`、Homebrew (待 [tap](./docs/zh-cn/release.md#homebrew-tap) 就绪后) 或压缩包。要先校验下载文件, 相关命令见 [SECURITY.md](./.github/SECURITY.md#release-artifact-integrity)。
+1. 从[最新发布](https://github.com/Vivswan/genkan/releases/latest)安装: `.pkg`、`.msi`、`.deb`、Homebrew (待 [tap](./docs/zh-cn/release.md#homebrew-tap) 就绪后) 或压缩包。要先校验下载文件, 相关命令见 [SECURITY.md](./.github/SECURITY.md#release-artifact-integrity)。
 
 2. 把二进制注册到你的浏览器, 除非安装程序已经做了: `.pkg`、`.msi` 和 Homebrew 会做, `.deb` 也为安装时已有的浏览器做了 ([快速入门第 3 步](./docs/zh-cn/quickstart.md#cli-macoslinuxwindows))。这条命令是幂等的: 全新安装、修复, 以及移动二进制后的重新注册:
 
@@ -131,17 +131,17 @@ MCP client B --stdio--> genkan ----attach----^   |
 
 ## 文档
 
-文档发布在 <https://vivswan.github.io/chromium-bridge/docs/zh-cn/>, 提供英文、简体中文和繁体中文版本; 同样的页面也位于 [docs/](./docs/zh-cn/README.md) 下。
+文档发布在 <https://vivswan.github.io/genkan/docs/zh-cn/>, 提供英文、简体中文和繁体中文版本; 同样的页面也位于 [docs/](./docs/zh-cn/README.md) 下。
 
 | 我想 | 页面 |
 |---|---|
-| 安装并连接客户端 | [快速入门](https://vivswan.github.io/chromium-bridge/docs/zh-cn/quickstart) |
-| 了解某个工具可以做什么 | [工具风险矩阵](https://vivswan.github.io/chromium-bridge/docs/zh-cn/security/tool-risk-matrix) |
-| 运行 CLI: doctor、配对、受信任客户端、紧急开关、策略、审计 | [CLI](https://vivswan.github.io/chromium-bridge/docs/zh-cn/cli) |
-| 排查某个症状 | 先运行 `genkan doctor`, 再看[故障排除](https://vivswan.github.io/chromium-bridge/docs/zh-cn/troubleshooting); 如果两者都正常, 查看你的 MCP 客户端的服务器界面 (Claude Code 中的 `/mcp`) 和扩展在 `chrome://extensions` 中的 Service Worker 控制台 (`[genkan]` 日志) |
-| 知道什么是受信任的, 什么不是 | [安全](https://vivswan.github.io/chromium-bridge/docs/zh-cn/security)、[信任边界](https://vivswan.github.io/chromium-bridge/docs/zh-cn/security/trust-boundaries)、[设计依据](https://vivswan.github.io/chromium-bridge/docs/zh-cn/security/rationale) |
-| 看各部分如何组合 | [架构](https://vivswan.github.io/chromium-bridge/docs/zh-cn/architecture) |
-| 构建、测试或发布它 | [开发](https://vivswan.github.io/chromium-bridge/docs/zh-cn/development)、[发布](https://vivswan.github.io/chromium-bridge/docs/zh-cn/release) |
+| 安装并连接客户端 | [快速入门](https://vivswan.github.io/genkan/docs/zh-cn/quickstart) |
+| 了解某个工具可以做什么 | [工具风险矩阵](https://vivswan.github.io/genkan/docs/zh-cn/security/tool-risk-matrix) |
+| 运行 CLI: doctor、配对、受信任客户端、紧急开关、策略、审计 | [CLI](https://vivswan.github.io/genkan/docs/zh-cn/cli) |
+| 排查某个症状 | 先运行 `genkan doctor`, 再看[故障排除](https://vivswan.github.io/genkan/docs/zh-cn/troubleshooting); 如果两者都正常, 查看你的 MCP 客户端的服务器界面 (Claude Code 中的 `/mcp`) 和扩展在 `chrome://extensions` 中的 Service Worker 控制台 (`[genkan]` 日志) |
+| 知道什么是受信任的, 什么不是 | [安全](https://vivswan.github.io/genkan/docs/zh-cn/security)、[信任边界](https://vivswan.github.io/genkan/docs/zh-cn/security/trust-boundaries)、[设计依据](https://vivswan.github.io/genkan/docs/zh-cn/security/rationale) |
+| 看各部分如何组合 | [架构](https://vivswan.github.io/genkan/docs/zh-cn/architecture) |
+| 构建、测试或发布它 | [开发](https://vivswan.github.io/genkan/docs/zh-cn/development)、[发布](https://vivswan.github.io/genkan/docs/zh-cn/release) |
 
 ## 贡献与治理
 

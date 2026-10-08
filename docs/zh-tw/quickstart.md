@@ -10,7 +10,7 @@
 
 CLI 只需要執行檔本身, 在桌面、無頭機器與 CI 上都一樣。
 
-1. **安裝。** 從[最新發行版](https://github.com/Vivswan/chromium-bridge/releases/latest)挑一個; 若想先驗證下載內容, 相關命令在 [SECURITY.md](../../.github/SECURITY.md#release-artifact-integrity)。
+1. **安裝。** 從[最新發行版](https://github.com/Vivswan/genkan/releases/latest)挑一個; 若想先驗證下載內容, 相關命令在 [SECURITY.md](../../.github/SECURITY.md#release-artifact-integrity)。
 
    | 管道 | 命令或點擊 | 作用 |
    | --- | --- | --- |

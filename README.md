@@ -2,7 +2,7 @@
 
 Your AI waits at the genkan.
 
-[![CI](https://github.com/Vivswan/chromium-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/Vivswan/chromium-bridge/actions/workflows/ci.yml) [![License](https://img.shields.io/badge/license-Individual%20and%20Small%20Organization%201.1.0-blue)](./LICENSE.md)
+[![CI](https://github.com/Vivswan/genkan/actions/workflows/ci.yml/badge.svg)](https://github.com/Vivswan/genkan/actions/workflows/ci.yml) [![License](https://img.shields.io/badge/license-Individual%20and%20Small%20Organization%201.1.0-blue)](./LICENSE.md)
 
 English | [Simplified Chinese](./README.zh-cn.md) | [Traditional Chinese](./README.zh-tw.md)
 
@@ -50,7 +50,7 @@ Pre-1.0 ([Cargo.toml](./Cargo.toml)): the protocol layers are covered by end-to-
 
 The CLI needs nothing beyond the binary itself, on desktops, headless machines, and CI alike. The steps in full, with the install channels and what each does for you, are in [the quickstart](./docs/quickstart.md); the short form:
 
-1. Install from the [latest release](https://github.com/Vivswan/chromium-bridge/releases/latest): the `.pkg`, the `.msi`, the `.deb`, Homebrew (once [the tap](./docs/release.md#homebrew-tap) exists), or the archive. To verify a download first, the commands are in [SECURITY.md](./.github/SECURITY.md#release-artifact-integrity).
+1. Install from the [latest release](https://github.com/Vivswan/genkan/releases/latest): the `.pkg`, the `.msi`, the `.deb`, Homebrew (once [the tap](./docs/release.md#homebrew-tap) exists), or the archive. To verify a download first, the commands are in [SECURITY.md](./.github/SECURITY.md#release-artifact-integrity).
 
 2. Register the binary with your browsers, unless the installer did: `.pkg`, `.msi`, and Homebrew do, and the `.deb` does for browsers installed at the time ([quickstart step 3](./docs/quickstart.md#the-cli-macos-linux-windows)). The command is idempotent: fresh install, repair, and re-register after moving the binary:
 
@@ -131,17 +131,17 @@ The durable audit trail (`genkan audit`) records independently of these ([docs/c
 
 ## Documentation
 
-The docs are served at <https://vivswan.github.io/chromium-bridge/docs/>, in English, Simplified Chinese, and Traditional Chinese; the same pages live under [docs/](./docs/README.md).
+The docs are served at <https://vivswan.github.io/genkan/docs/>, in English, Simplified Chinese, and Traditional Chinese; the same pages live under [docs/](./docs/README.md).
 
 | I want to | Page |
 |---|---|
-| Install and connect a client | [Quickstart](https://vivswan.github.io/chromium-bridge/docs/quickstart) |
-| Understand what a tool may do | [Tool risk matrix](https://vivswan.github.io/chromium-bridge/docs/security/tool-risk-matrix) |
-| Run the CLI: doctor, pairing, trusted clients, kill switch, policy, audit | [CLI](https://vivswan.github.io/chromium-bridge/docs/cli) |
-| Fix a symptom | `genkan doctor` first, then [Troubleshooting](https://vivswan.github.io/chromium-bridge/docs/troubleshooting); if both are clean, your MCP client's server UI (`/mcp` in Claude Code) and the extension's service-worker console at `chrome://extensions` (`[genkan]` logs) |
-| Know what is trusted, and what is not | [Security](https://vivswan.github.io/chromium-bridge/docs/security), [trust boundaries](https://vivswan.github.io/chromium-bridge/docs/security/trust-boundaries), [rationale](https://vivswan.github.io/chromium-bridge/docs/security/rationale) |
-| See how the pieces fit | [Architecture](https://vivswan.github.io/chromium-bridge/docs/architecture) |
-| Build, test, or release it | [Development](https://vivswan.github.io/chromium-bridge/docs/development), [Releasing](https://vivswan.github.io/chromium-bridge/docs/release) |
+| Install and connect a client | [Quickstart](https://vivswan.github.io/genkan/docs/quickstart) |
+| Understand what a tool may do | [Tool risk matrix](https://vivswan.github.io/genkan/docs/security/tool-risk-matrix) |
+| Run the CLI: doctor, pairing, trusted clients, kill switch, policy, audit | [CLI](https://vivswan.github.io/genkan/docs/cli) |
+| Fix a symptom | `genkan doctor` first, then [Troubleshooting](https://vivswan.github.io/genkan/docs/troubleshooting); if both are clean, your MCP client's server UI (`/mcp` in Claude Code) and the extension's service-worker console at `chrome://extensions` (`[genkan]` logs) |
+| Know what is trusted, and what is not | [Security](https://vivswan.github.io/genkan/docs/security), [trust boundaries](https://vivswan.github.io/genkan/docs/security/trust-boundaries), [rationale](https://vivswan.github.io/genkan/docs/security/rationale) |
+| See how the pieces fit | [Architecture](https://vivswan.github.io/genkan/docs/architecture) |
+| Build, test, or release it | [Development](https://vivswan.github.io/genkan/docs/development), [Releasing](https://vivswan.github.io/genkan/docs/release) |
 
 ## Contributing and governance
 
