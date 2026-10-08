@@ -101,9 +101,9 @@ An enrolled browser is never demoted to the window. The acts behind the gate, an
 - enrolling another browser: any enrolled credential;
 - `page_eval` and `page_upload` where the policy's `presenceConfirm` is on: the browser's own credential, the request naming the op and the page's origin;
 - minting the host key: the CLI's terminal;
-- pairing a client, and relaxing the policy (a `policy set`, a rollback that relaxes, or the first baseline): the browser's own credential from the options page, the window where that browser enrolled none, or the CLI's terminal. A tightening over an existing baseline needs no proof on either surface.
+- pairing a client, and relaxing the policy (a `policy set`, a rollback that relaxes, or the first baseline): the browser's own credential from the options page, the window where that browser enrolled none, or the CLI's terminal. `policy set` takes that proof whatever direction its edits run. A tightening is free only on the restrict lane below.
 
-**Two policy lanes.** A policy change that grants capability is signed by the host key behind the presence proof above, from the options page or the CLI; a change that only restricts travels unsigned and free from either surface, because a forged restriction can only remove capability. The [CLI page](cli.md#host-owned-policy-policy) owns the commands; the [defaults table](../.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe) owns what relaxing each gate costs you.
+**Two policy lanes.** The grant lane (`policy set`, a relaxing rollback, a loosening on the options page) signs with the host key behind the presence proof above. The restrict lane (`policy restrict`, a tightening rollback, a tightening on the options page) travels unsigned and free, because a forged restriction can only remove capability. The [CLI page](cli.md#host-owned-policy-policy) owns the commands; the [defaults table](../.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe) owns what relaxing each gate costs you.
 
 ## Where we deliberately stop
 

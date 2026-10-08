@@ -110,18 +110,15 @@ export function parseOptions(argv: string[]): Options {
   };
 }
 
-// Dictionaries steer mutation toward the target's input grammar. A byte dictionary is meaningless against
-// Arbitrary-derived input; every other target gets the JSON dictionary, which only steers mutation, so the
-// one binary-layout target (webauthn_authdata) loses nothing but a hint from it.
-const noDictionary = new Set(["handshake_verify", "enclave_challenge"]);
+// Targets whose input is Arbitrary-derived. Its byte encoding is unstable across `arbitrary` versions, so a
+// seed file or a byte dictionary is meaningless and a failure report steers to a unit test. The JSON
+// dictionary only steers mutation, so the one binary-layout target (webauthn_authdata) loses nothing but a
+// hint from it.
+const structuredTargets = new Set(["handshake_verify", "enclave_challenge"]);
 const jsonDictionary = "fuzz/dictionaries/json_protocol.dict";
 
-// Arbitrary-derived input has no stable byte encoding across `arbitrary` versions, so these targets' reports
-// steer to a unit test, never a seed file.
-const structuredTargets = noDictionary;
-
 function dictionaryFor(target: string): string | undefined {
-  return noDictionary.has(target) ? undefined : jsonDictionary;
+  return structuredTargets.has(target) ? undefined : jsonDictionary;
 }
 
 /**
@@ -278,12 +275,6 @@ function main(): number {
   // so run from the core package, not the repo root.
   const core = resolve(repoRoot, "src/packages/core");
   const failureRoot = resolve(core, options.failureDir);
-  // The recursive delete below is where a bad path would destroy tracked files, so the resolved path is
-  // checked once more here.
-  if (!failureRoot.startsWith(`${core}/`) || failureRoot === core) {
-    console.error(`error: failure dir escapes ${core}: ${failureRoot}`);
-    return 2;
-  }
 
   // `timeoutMs` bounds subcommands with no wall-clock flag of their own (cmin): a hang there rides to the JOB
   // timeout, which cancels the run and skips the if:failure() reporting steps.

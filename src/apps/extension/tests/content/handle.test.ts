@@ -5,7 +5,7 @@
 // the reply envelope instead of collapsing into a falsy value).
 
 import type { ClickProbeWire } from "@genkan/shared/content-msg";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, expectTypeOf, test, vi } from "vitest";
 import { handle } from "@/lib/content/handle";
 import type { ClickProbe } from "@/lib/dom/page-api";
 
@@ -89,14 +89,13 @@ describe("the origin binding is enforced unconditionally", () => {
       hasHref: false,
       name: "Pay",
     };
-    // The wire descriptor and the page API's are the same shape (two-way
-    // compile-time parity).
-    const wire: ClickProbeWire = approved;
-    const back: ClickProbe = wire;
+    // The wire schema and the page API's interface are declared in two packages; a field one side gains
+    // alone, optional or not, fails here at typecheck rather than at the parse of a real click.
+    expectTypeOf<ClickProbeWire>().toEqualTypeOf<ClickProbe>();
     await handle({
       op: "page_click",
       args: { selector: "#s" },
-      guard: { expectOrigin: HERE, clickExpect: back },
+      guard: { expectOrigin: HERE, clickExpect: approved },
     });
     expect(clicked).toBe(true);
     // A swapped target is refused by the in-page re-probe.

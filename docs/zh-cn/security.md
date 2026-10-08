@@ -101,9 +101,9 @@ MCP client --(1)-> Rust MCP server --(2)-> native host --(3)-> extension --(4)->
 - 登记另一个浏览器: 任一已登记凭据;
 - 策略的 `presenceConfirm` 开启时的 `page_eval` 与 `page_upload`: 该浏览器自己的凭据, 请求指名该操作与页面的源;
 - 铸造主机密钥: CLI 的终端;
-- 配对客户端与放宽策略 (一次 `policy set`、一次放宽的回滚, 或首个基线): 从选项页出发用该浏览器自己的凭据, 在该浏览器未登记任何凭据时用窗口, 或用 CLI 的终端。对已有基线的收紧在任一界面上都不需要证明。
+- 配对客户端与放宽策略 (一次 `policy set`、一次放宽的回滚, 或首个基线): 从选项页出发用该浏览器自己的凭据, 在该浏览器未登记任何凭据时用窗口, 或用 CLI 的终端。`policy set` 无论其编辑朝哪个方向都要求这一证明。收紧只有走下文的限制通道才免于证明。
 
-**两条策略通道。** 授予能力的策略变更由主机密钥在上述在场证明之后签名, 来自选项页或 CLI 皆可; 只收紧的变更从任一界面都以未签名形式自由传递, 因为伪造的限制只能移除能力。命令由 [CLI 页面](cli.md#主机持有的策略-policy)负责; 放宽每道门禁的代价由[默认值表](../../.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe)负责。
+**两条策略通道。** 授予通道 (`policy set`、放宽的回滚、选项页上的放宽) 在上述在场证明之后由主机密钥签名。限制通道 (`policy restrict`、只收紧的回滚、选项页上的收紧) 以未签名形式自由传递, 因为伪造的限制只能移除能力。命令由 [CLI 页面](cli.md#主机持有的策略-policy)负责; 放宽每道门禁的代价由[默认值表](../../.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe)负责。
 
 ## 我们刻意止步之处
 
