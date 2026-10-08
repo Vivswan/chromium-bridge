@@ -1,0 +1,62 @@
+# The one place CI touches Docker, and only to prove the image builds: the image is the developer's
+# isolated environment (compose.yaml), and CI runs on GitHub's own runners, so nothing is logged in to,
+# published, or loaded.
+#
+# Its own workflow, not a checks.yml job: the paths filter skips it on every other change, and a skip
+# inside the `checks` caller would fail the all-green aggregate (checks.yml's header). It is not in
+# all-green's needs, so a skip here costs nothing.
+
+name: Container build
+
+on:
+  pull_request:
+    paths:
+      - Containerfile
+      - .dockerignore
+      - compose.yaml
+      - compose.podman.yaml
+      - .prototools
+      - rust-toolchain.toml
+      - .github/workflows/container-build.yml
+  push:
+    branches: [main]
+    paths:
+      - Containerfile
+      - .dockerignore
+      - compose.yaml
+      - compose.podman.yaml
+      - .prototools
+      - rust-toolchain.toml
+      - .github/workflows/container-build.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build the Containerfile (no push)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The .bun-version bun, only to run the pin reader; the image installs its own bun through proto.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+          no-cache: true
+      # The Containerfile's one build arg (the proto pin is .prototools's; scripts/compose-run.ts passes it
+      # the same way on a developer machine).
+      - id: pin
+        run: bun scripts/pin.ts proto --output proto
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Containerfile
+          platforms: linux/amd64
+          push: false
+          build-args: PROTO_VERSION=${{ steps.pin.outputs.proto }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

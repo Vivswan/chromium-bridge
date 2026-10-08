@@ -15,8 +15,8 @@ moon run setup   # installs the bun workspace, the pinned Rust toolchain, and th
 
 有四個工具沒有第一方的 proto 外掛, 需手動安裝一次: `cargo install cargo-nextest` (`moon run gate` 使用的測試執行器) 與 `brew install typos-cli cargo-machete actionlint` (typos 與 actionlint 在提交前 hook `moon run static` 中執行; cargo-machete 只在 `moon run ci` 中執行; typos 與 cargo-machete 也可透過 `cargo install` 取得)。CI 從哪裡取得它們:
 
-- **`Containerfile` 以 `ARG <TOOL>_VERSION` 固定這四個工具加上 cargo-deb**。CI 映像檔帶有這四個; cargo-deb 只安裝在裸機的發行與安裝程式執行器上。
-- **自行安裝某個工具的工作透過 `bun scripts/pin.ts <tool>` 讀取同一個固定版本**: checks.yml 的 tooling 工作讀 cargo-machete (在映像檔內, 該版本已經就位), `installers.yml` 與 `update-release.yml` 在各自的裸機執行器上讀 cargo-deb。
+- **`Containerfile` 以 `ARG <TOOL>_VERSION` 固定這四個工具加上 cargo-deb**。容器映像檔為隔離的本機執行帶有這四個; CI 在其執行器上依這些固定版本安裝 cargo-machete 與 cargo-deb, 且從不執行 cargo-nextest (`rust` 工作使用原始的 cargo 子命令)。
+- **自行安裝某個工具的工作透過 `bun scripts/pin.ts <tool>` 讀取同一個固定版本**: checks.yml 的 tooling 工作讀 cargo-machete, `installers.yml` 與 `update-release.yml` 讀 cargo-deb。
 - **typos 與 actionlint 經由受管理的 ci.yml 的 fleet actions 執行**, 使用平台自己的固定版本, 所以本機的版本偏差最壞也只是提早浮現一項發現。
 
 | 工具 | 用途 | 備註 |
@@ -178,7 +178,7 @@ moon ci                    # affected-only, based on touched files - a LOCAL
 3. 該 action 安裝 proto, 接著 `proto install` 佈建 `.prototools` 的工具 (它的 bun 疊在第一個之上, 所以裸機執行器會有兩個)。
 4. 設定 `cargo: "true"` 時, `setup-rust-toolchain` 依 `rust-toolchain.toml` 安裝 rust。
 
-CI 映像檔 (`Containerfile`) 在建置時執行同一個 `proto install`, proto 版本以它唯一的建置引數傳入 (`container-image.yml` 與 `scripts/compose-run.ts` 以 `bun scripts/pin.ts proto` 計算)。在映像檔內, 該 action 會發現一切就緒, 只重跑 `proto install`; 除非映像檔發布後有固定版本變動, 否則那是個空操作。
+容器映像檔 (`Containerfile`) 在建置時執行同一個 `proto install`, proto 版本以它唯一的建置引數傳入 (`scripts/compose-run.ts` 以 `bun scripts/pin.ts proto` 計算)。
 
 `bun scripts/pin.ts <tool>` 是在 proto 存在之前唯一需要的固定版本讀取器。它同時掃描兩個擁有者檔案, 並在某個工具被同時固定於兩處、重複固定或完全未固定時失敗; `bun scripts/pin.ts --all` 以同一規則掃過兩個檔案的每個固定版本, 而 `moon run check-pins` (隸屬於 `hygiene`) 執行這次掃描以及讀取器的單元測試:
 
@@ -195,27 +195,26 @@ uv 只固定於 `.prototools`, 而 python 由 uv 擁有: 協定測試套件透�
 
 ## CI 配置
 
-`checks.yml` 把每個關注點定義一次, 由受管理的 ci.yml 在 all-green 閘門內呼叫。Linux 工作在已發布的 CI 映像檔 (`ghcr.io/<owner>/<repo>-ci:latest`, 由 `container-image.yml` 從 main 建置) 內執行。
-
-工作流程層級的 `CI_IMAGE_TAG` 是唯一的開關: 空值會讓每個工作改以同一個複合 action 在裸機執行器上執行。
+`checks.yml` 把每個關注點定義一次, 由受管理的 ci.yml 在 all-green 閘門內呼叫。每個工作都在 GitHub 代管的執行器上執行, 執行器本身已是隔離的, 所以 CI 從不使用容器; 上文的工具鏈固定一節說明工作如何佈建自己的工具。
 
 | 工作 | 執行內容 | 位置 |
 |-----|------|-------|
-| `image` | 把映像檔標籤解析成摘要一次, 讓每個工作固定到同一份內容 | 裸機執行器 |
-| `rust` | 在 ubuntu、macOS 與 Windows 上執行 clippy 與測試; fmt、loom 模型、rustdoc, 以及模糊測試工作區的 fmt、clippy 與測試只在 Linux 上執行 | Linux 用映像檔, 其他平台用裸機 |
-| `build-release` | `moon run build-release`, 上傳供下方的測試套件使用 | 裸機執行器, 讓執行檔連結執行器較舊的 glibc, 在兩種環境中都能執行 |
-| `coverage` | `cargo llvm-cov`, 僅供參考 (`continue-on-error`, 無門檻) | 映像檔 |
-| `extension` | `typecheck`、`check-ts`、`shared:test`、`extension:test`、`extension:build`, 然後對建置出的資訊清單執行 `check-extension-id` | 映像檔 |
-| `contract` | `check-envelope`、`check-gen-isolation`、`check-refresh-lockfiles` | 映像檔 |
-| `hygiene` | `moon run hygiene` | 映像檔 |
-| `tooling` | `machete`, 使用 `Containerfile` 固定版本的 cargo-machete | 映像檔 |
-| `web` | `web:build` | 映像檔 |
-| `linux-install` | 先下載 `build-release` 的執行檔, 再執行 `scripts/linux-registration.ts`: 在隔離的 HOME 與 XDG 目錄下執行 `doctor --fix`、重新註冊、多瀏覽器、`uninstall` | 裸機執行器, 並帶有 cargo 與 moon 以建置情境驅動指令碼讀取的產生身分模組 |
-| `protocol` | 對下載的執行檔執行 `e2e`、`adversarial` 與 `chaos` 測試套件 | 映像檔 |
-| `interop` | 官方 MCP SDK 用戶端對下載的執行檔 | 映像檔 |
-| `browser` | 可重用的 `browser.yml` (輸入 `chrome-version`), `nightly.yml` 也會呼叫它 | 裸機執行器, Chrome 來自 `setup-chrome` |
+| `rust` | 在 ubuntu、macOS 與 Windows 上執行 clippy 與測試; fmt、loom 模型、rustdoc, 以及模糊測試工作區的 fmt、clippy 與測試只在 Linux 上執行 | 各作業系統的執行器 |
+| `build-release` | `moon run build-release`, 上傳供下方的測試套件使用 | ubuntu 執行器 |
+| `coverage` | `cargo llvm-cov`, 僅供參考 (`continue-on-error`, 無門檻) | ubuntu 執行器 |
+| `extension` | `typecheck`、`check-ts`、`shared:test`、`extension:test`、`extension:build`, 然後對建置出的資訊清單執行 `check-extension-id` | ubuntu 執行器 |
+| `contract` | `check-envelope`、`check-gen-isolation`、`check-refresh-lockfiles` | ubuntu 執行器 |
+| `hygiene` | `moon run hygiene` | ubuntu 執行器 |
+| `tooling` | `machete`, 使用 `Containerfile` 固定版本的 cargo-machete | ubuntu 執行器 |
+| `web` | `web:build` | ubuntu 執行器 |
+| `linux-install` | 先下載 `build-release` 的執行檔, 再執行 `scripts/linux-registration.ts`: 在隔離的 HOME 與 XDG 目錄下執行 `doctor --fix`、重新註冊、多瀏覽器、`uninstall` | ubuntu 執行器, 並帶有 cargo 與 moon 以建置情境驅動指令碼讀取的產生身分模組 |
+| `protocol` | 對下載的執行檔執行 `e2e`、`adversarial` 與 `chaos` 測試套件 | ubuntu 執行器 |
+| `interop` | 官方 MCP SDK 用戶端對下載的執行檔 | ubuntu 執行器 |
+| `browser` | 可重用的 `browser.yml` (輸入 `chrome-version`), `nightly.yml` 也會呼叫它 | ubuntu 執行器, Chrome 來自 `setup-chrome` |
 | `installers` | `installers.yml` 建置 .pkg、.deb 與 .msi, 並在各自的執行器上安裝 | 各平台的執行器 |
-| `audits` | `audits.yml`: 對根工作區與模糊測試工作區執行 cargo deny | 裸機執行器 |
+| `audits` | `audits.yml`: 對根工作區與模糊測試工作區執行 cargo deny | ubuntu 執行器 |
+
+`container-build.yml` 是 CI 唯一觸及 Docker 的地方: 它只建置 `Containerfile` 而不推送, 且只在拉取請求或 main 推送變更了 `Containerfile`、`.dockerignore`、`compose.yaml`、`compose.podman.yaml`、`.prototools`、`rust-toolchain.toml` 或該工作流程本身時執行。它不在 all-green 的 needs 中, 所以在其他變更上被略過不花任何代價。
 
 ## 開發擴充功能
 
@@ -253,7 +252,9 @@ CHROME_BIN=/path/to/isolated/chrome bun tests/browser/run_all.ts
 
 ## 在容器中執行閘門與瀏覽器測試套件
 
-容器就是隔離: 它帶有儲存庫固定版本的每個閘門工具以及發行版的 Chromium, 宿主機上的任何瀏覽器或程序都不在它的觸及範圍內。`Containerfile` 建置它; `compose.yaml` 執行它, 並停留在 `docker compose` 與 `podman compose` 都實作的 Compose Specification 子集內 (`moon run check-compose`, 納入閘門, 負責守住這一點)。
+容器是開發者的隔離環境, 而非 CI 的: 它是筆電上的一個沙箱, 用來執行測試或試裝一次而不碰到機器本身。它帶有儲存庫固定版本的每個閘門工具以及發行版的 Chromium, 宿主機上的任何瀏覽器或程序都不在它的觸及範圍內。
+
+`Containerfile` 建置它; `compose.yaml` 執行它, 並停留在 `docker compose` 與 `podman compose` 都實作的 Compose Specification 子集內 (`moon run check-compose`, 納入閘門, 負責守住這一點)。
 
 | 任務 | 在容器內執行 |
 |------|---------------------------|
