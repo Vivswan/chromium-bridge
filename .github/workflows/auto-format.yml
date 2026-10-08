@@ -39,12 +39,8 @@ jobs:
       # not a floating registry fetch - so this formats exactly like
       # `moon run fix` and the extension job's biome gate. `biome check` lints
       # as well as formats, and its project-domain rules index the generated
-      # contract modules, so they are built from the Rust core first (the gen
-      # tasks' cargo runs take --frozen, which never fetches).
-      - run: bun install --frozen-lockfile
-      - run: |
-          cargo fetch --locked
-          cargo fetch --locked --manifest-path src/packages/core/fuzz/Cargo.toml
+      # contract modules, so they are built from the Rust core first.
+      - uses: ./.github/actions/workspace-deps
       - run: moon run gen-shared
       - name: Format (biome)
         run: bun x biome check --write .

@@ -77,12 +77,9 @@ jobs:
         shell: bash
         run: bun scripts/build-repro.ts
 
-      # extension:build generates the contract modules and the WXT types first (its gen tasks' cargo runs take
-      # --frozen, which never fetches, so the crates are fetched first). One step per command: the Windows leg
-      # runs a block under PowerShell, where a failed native command does not stop the next one.
-      - run: bun install --frozen-lockfile
-      - run: cargo fetch --locked
-      - run: cargo fetch --locked --manifest-path src/packages/core/fuzz/Cargo.toml
+      # extension:build generates the contract modules and the WXT types first, so the workspace is installed
+      # and the crates fetched before it.
+      - uses: ./.github/actions/workspace-deps
       - name: Build extension bundle
         run: moon run extension:build
 
@@ -199,7 +196,8 @@ jobs:
         with:
           # Build the SBOM from the exact released code.
           ref: ${{ inputs.tag }}
-      # Only the tag check runs under this bun; scripts/release-package.ts imports nothing installed.
+      # Only the tag check runs under this bun, with no install step: a package the script imports, Bun
+      # fetches at its bun.lock-pinned version into Bun's global cache on first import.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: .bun-version
@@ -257,8 +255,8 @@ jobs:
         with:
           ref: ${{ inputs.tag }}
           persist-credentials: false
-      # Only the tag check and the formula renderer run under this bun; scripts/release-package.ts imports
-      # nothing installed.
+      # Only the tag check and the formula renderer run under this bun, with no install step: a package the
+      # script imports, Bun fetches at its bun.lock-pinned version into Bun's global cache on first import.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: .bun-version
