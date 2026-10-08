@@ -8,6 +8,9 @@
 //
 // The extension reaches the shared package only through the declaration's `aliases` (`@genkan/shared/`,
 // WXT's `@/`); a bare specifier with no alias is not followed, so without them an undeclared dependency would pass.
+//
+// Its own import walk over oxc-parser rather than dependency-cruiser: the cruiser reads TypeScript through the
+// compiler API, and the pinned TypeScript 7 package ships tsc alone.
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";

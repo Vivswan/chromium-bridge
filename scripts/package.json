@@ -14,6 +14,7 @@
     "@types/bun": "^1.4.0",
     "@types/mvdan-sh": "0.10.9",
     "change-case": "^5.4.4",
+    "dockerfile-ast": "0.7.1",
     "json-schema-to-typescript": "^15.0.4",
     "json-schema-to-zod": "2.8.1",
     "json-schema-traverse": "1.0.0",
@@ -23,6 +24,7 @@
     "remark-parse": "^11.0.0",
     "unified": "^11.0.5",
     "unist-util-visit": "^5.0.0",
+    "vscode-languageserver-textdocument": "1.0.15",
     "web-ext-run": "^0.2.4"
   },
   "dependencies": {
