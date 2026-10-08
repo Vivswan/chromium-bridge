@@ -32,7 +32,7 @@ The protocol suites and the integration test's MCP leg track the MCP 2026-07-28 
 The smoke and integration tests launch a **non-headless Chrome with `--load-extension`**. Driving your everyday Google Chrome this way can **capture and then close your real browser session** (all tabs/windows) on cleanup. So:
 
 - Browser tests require **`CHROME_BIN` set to an isolated browser** - a [Chrome for Testing](https://developer.chrome.com/blog/chrome-for-testing) or Chromium binary that is **not** your daily browser.
-- Inside a container (an engine marker file such as `/.dockerenv` or `/run/.containerenv` is present) the guard also accepts the distro Chromium the CI image carries; on the host it never does.
+- Inside a container (an engine marker file such as `/.dockerenv` or `/run/.containerenv` is present) the guard also accepts the distro Chromium the container image carries; on the host it never does.
 - If `CHROME_BIN` is unset (or points at the standard `Google Chrome.app` / `chrome.exe`), the tests and `run_all.ts` **skip** instead of running - they will not touch your daily Chrome.
 - The tests only ever terminate the browser instance they launched - never a broad/pattern process kill.
 - In CI that local skip must never turn the required browser job silently green, so `browser.yml` sets two independent switches for `browser/run_all.ts` (`browser-safety.ts`; unit tests in `browser-safety.test.ts`): `BB_REQUIRE_BROWSER=1` makes the guard's skip a hard failure, and a named `BB_BROWSER_CANARY_DIR` makes the runner require every suite's RAN marker and fail on its own skip. Neither variable is needed locally.
