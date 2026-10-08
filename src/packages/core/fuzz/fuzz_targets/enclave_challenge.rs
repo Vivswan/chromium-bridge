@@ -5,8 +5,8 @@
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 
-use chromium_bridge_core::enclave::{challenge_message, CHALLENGE_DOMAIN, MAX_CONTEXT_LEN};
-use chromium_bridge_core::webauthn::MAX_NONCE_LEN;
+use genkan_core::enclave::{challenge_message, CHALLENGE_DOMAIN, MAX_CONTEXT_LEN};
+use genkan_core::webauthn::MAX_NONCE_LEN;
 
 #[derive(Arbitrary, Debug)]
 struct Input {

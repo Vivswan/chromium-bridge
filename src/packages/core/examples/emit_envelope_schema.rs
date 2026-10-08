@@ -16,18 +16,18 @@
 //!
 //! Built only when the `envelope-schema` feature is enabled (this example's
 //! `required-features`), so schemars stays out of every binary's dependency
-//! graph (verify with `cargo tree -e normal -p chromium-bridge`).
+//! graph (verify with `cargo tree -e normal -p genkan`).
 //!
 //! Run:
-//!   cargo run -q -p chromium-bridge-core --features envelope-schema \
+//!   cargo run -q -p genkan-core --features envelope-schema \
 //!     --example emit_envelope_schema
 
 use std::error::Error;
 
-use chromium_bridge_core::protocol::control::{
+use genkan_core::protocol::control::{
     AdminControl, Direction, EnclaveControl, HostControlTag, PolicyControl, WebAuthnControl,
 };
-use chromium_bridge_core::protocol::{BridgeReq, BridgeResp, BridgeSignal};
+use genkan_core::protocol::{BridgeReq, BridgeResp, BridgeSignal};
 
 fn inlined_schema_for<T: schemars::JsonSchema>() -> schemars::Schema {
     let mut settings = schemars::generate::SchemaSettings::default();

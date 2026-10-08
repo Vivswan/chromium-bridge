@@ -347,7 +347,7 @@ pub enum PolicyCommand {
         json: bool,
     },
     /// GRANT lane: mint a fresh SIGNED baseline (interactive confirmation); refuses where no host key exists
-    #[command(override_usage = "chromium-bridge policy set <field flags> [--json]")]
+    #[command(override_usage = "genkan policy set <field flags> [--json]")]
     Set {
         #[command(flatten)]
         overlay: PolicyOverlay,
@@ -356,7 +356,7 @@ pub enum PolicyCommand {
         json: bool,
     },
     /// FREE lane: apply an unsigned restriction overlay (no confirmation; only ever removes capability)
-    #[command(override_usage = "chromium-bridge policy restrict <field flags>")]
+    #[command(override_usage = "genkan policy restrict <field flags>")]
     Restrict {
         #[command(flatten)]
         overlay: PolicyOverlay,
@@ -548,14 +548,14 @@ fn parse_tool_list(value: &str) -> Result<Vec<String>, std::convert::Infallible>
 /// parser runs ([`parse`]), so it is documented here and parsed elsewhere.
 #[derive(Parser)]
 #[command(
-    name = "chromium-bridge",
+    name = "genkan",
     version,
     about = "Bridge an MCP client to your real Chromium browser via an extension + native messaging host",
     long_about = None,
     disable_help_subcommand = true,
     after_help = "Modes you never invoke by hand:\n  \
-        chromium-bridge                                    the MCP server; your MCP client launches it with no arguments\n  \
-        chromium-bridge --native-host [--label <browser>]  the native messaging host; Chrome launches it via the host manifest",
+        genkan                                    the MCP server; your MCP client launches it with no arguments\n  \
+        genkan --native-host [--label <browser>]  the native messaging host; Chrome launches it via the host manifest",
 )]
 struct Cli {
     #[command(subcommand)]
@@ -565,11 +565,7 @@ struct Cli {
 /// The argv of native-host mode. Help and version are disabled: see
 /// [`is_native_host_mode`].
 #[derive(Parser)]
-#[command(
-    name = "chromium-bridge",
-    disable_help_flag = true,
-    disable_version_flag = true
-)]
+#[command(name = "genkan", disable_help_flag = true, disable_version_flag = true)]
 struct NativeHostArgs {
     /// Present on Unix (the registered wrapper passes it), absent on Windows
     /// (the registration points straight at the executable).
@@ -589,7 +585,7 @@ struct NativeHostArgs {
 /// Chrome launches a Windows native-messaging host directly and appends the
 /// calling extension origin (plus a parent-window handle) to its command
 /// line. Native-host manifests have no `args` field, so on Windows the
-/// registration points straight at chromium-bridge.exe and this origin
+/// registration points straight at genkan.exe and this origin
 /// selects host mode. Unix registrations keep using the explicit
 /// `--native-host` wrapper argument. Decided before either parser runs:
 /// stdout is the protocol stream in host mode, so nothing may touch it before
@@ -625,7 +621,7 @@ mod tests {
     use crate::policy::{Ms, PolicyOverlay};
 
     fn args(list: &[&str]) -> Vec<String> {
-        std::iter::once("chromium-bridge")
+        std::iter::once("genkan")
             .chain(list.iter().copied())
             .map(String::from)
             .collect()

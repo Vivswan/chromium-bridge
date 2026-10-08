@@ -75,18 +75,18 @@ export interface Plan {
 
 /** Windows ships a zip made by the runner's 7z; the other legs a tarball. */
 export function packagingPlan(tag: string, platform: string, arch: string): Plan {
-  const name = `chromium-bridge-${tag}-${platform}-${arch}`;
+  const name = `genkan-${tag}-${platform}-${arch}`;
   if (platform === "windows") {
     const archive = `${name}.zip`;
     return {
       name,
-      binaryFile: "chromium-bridge.exe",
+      binaryFile: "genkan.exe",
       archive,
       archiver: ["7z", "a", "-tzip", archive, name],
     };
   }
   const archive = `${name}.tar.gz`;
-  return { name, binaryFile: "chromium-bridge", archive, archiver: ["tar", "czf", archive, name] };
+  return { name, binaryFile: "genkan", archive, archiver: ["tar", "czf", archive, name] };
 }
 
 /** A tool run from `cwd`; a nonzero exit throws. Injected so a test can stand in for tar, 7z, and zip. */
@@ -134,7 +134,7 @@ export function packageArchive(
 
 /** The built bundle under a top-level `dist/`, so "Load unpacked" takes the extracted directory as is. */
 export function packageExtensionZip(root: string, env: Env, tag: string, run: RunTool): void {
-  const name = `chromium-bridge-extension-${tag}`;
+  const name = `genkan-extension-${tag}`;
   const staging = join(root, "dist-zip");
   rmSync(staging, { recursive: true, force: true });
   mkdirSync(staging);
@@ -159,7 +159,7 @@ export interface InstallerPlan {
  * The pkg's receipt identifier (`pkgutil --pkgs` lists it): the GitHub reverse-DNS form, since the project
  * has no domain and the `com.vivswan.*` family is the bridge's own identifiers (check-docs-literals).
  */
-export const pkgIdentifier = "io.github.vivswan.chromium-bridge";
+export const pkgIdentifier = "io.github.vivswan.genkan";
 
 /**
  * Each installer wraps the already-built, attested binary unchanged: pkgbuild and WiX copy it, cargo-deb is
@@ -167,13 +167,13 @@ export const pkgIdentifier = "io.github.vivswan.chromium-bridge";
  * prerelease suffix.
  */
 export function installerPlan(release: ReleaseTag, platform: string, arch: string): InstallerPlan {
-  const name = `chromium-bridge-${release.tag}-${platform}-${arch}`;
+  const name = `genkan-${release.tag}-${platform}-${arch}`;
   if (platform === "macos") {
     const installer = `${name}.pkg`;
     const root = "pkg-root";
     return {
       installer,
-      staged: [["target/release/chromium-bridge", `${root}/usr/local/bin/chromium-bridge`]],
+      staged: [["target/release/genkan", `${root}/usr/local/bin/genkan`]],
       tools: [
         [
           "pkgbuild",
@@ -198,22 +198,13 @@ export function installerPlan(release: ReleaseTag, platform: string, arch: strin
       installer,
       staged: [],
       tools: [
-        [
-          "cargo",
-          "deb",
-          "--no-build",
-          "--no-strip",
-          "--package",
-          "chromium-bridge",
-          "--output",
-          installer,
-        ],
+        ["cargo", "deb", "--no-build", "--no-strip", "--package", "genkan", "--output", installer],
       ],
     };
   }
   if (platform === "windows") {
     const installer = `${name}.msi`;
-    const object = "chromium-bridge.wixobj";
+    const object = "genkan.wixobj";
     return {
       installer,
       staged: [],
@@ -224,10 +215,10 @@ export function installerPlan(release: ReleaseTag, platform: string, arch: strin
           "-arch",
           "x64",
           `-dVersion=${release.core}`,
-          "-dBinary=target/release/chromium-bridge.exe",
+          "-dBinary=target/release/genkan.exe",
           "-out",
           object,
-          "packaging/msi/chromium-bridge.wxs",
+          "packaging/msi/genkan.wxs",
         ],
         ["light.exe", "-nologo", "-spdb", "-ext", "WixUtilExtension", "-out", installer, object],
       ],
@@ -306,7 +297,7 @@ export function brewFormula(inputs: FormulaInputs): string {
   const base = `https://github.com/${inputs.repository}/releases/download/${inputs.release.tag}`;
   const archive = (platform: string, arch: string) =>
     `${base}/${packagingPlan(inputs.release.tag, platform, arch).archive}`;
-  return `class ChromiumBridge < Formula
+  return `class Genkan < Formula
   desc "Authenticated MCP bridge to your real Chromium browsers"
   homepage "https://github.com/${inputs.repository}"
   version "${inputs.release.core}"
@@ -327,23 +318,23 @@ export function brewFormula(inputs: FormulaInputs): string {
   end
 
   def install
-    bin.install "chromium-bridge"
+    bin.install "genkan"
   end
 
   def post_install
-    system bin/"chromium-bridge", "doctor", "--fix"
+    system bin/"genkan", "doctor", "--fix"
   end
 
   def caveats
     <<~EOS
       The post-install ran the registration for every detected Chromium browser. If it
       reported no browser, or refused one, fix the cause and run it again:
-        chromium-bridge doctor --fix
+        genkan doctor --fix
     EOS
   end
 
   test do
-    assert_equal "chromium-bridge ${inputs.release.core}", shell_output("#{bin}/chromium-bridge --version").strip
+    assert_equal "genkan ${inputs.release.core}", shell_output("#{bin}/genkan --version").strip
   end
 end
 `;

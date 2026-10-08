@@ -1,7 +1,7 @@
 {
-  "name": "chromium-bridge-tests",
+  "name": "genkan-tests",
   "version": "0.0.0",
-  "description": "Browser-bridge test harnesses: DOM-layer (bun + Chrome CDP) and extension smoke (puppeteer).",
+  "description": "Genkan test harnesses: DOM-layer (bun + Chrome CDP) and extension smoke (puppeteer).",
   "private": true,
   "license": "SEE LICENSE IN LICENSE.md",
   "type": "module",
@@ -15,7 +15,7 @@
     "test:presence": "bun presence_exchange_test.ts"
   },
   "dependencies": {
-    "@chromium-bridge/shared": "workspace:*",
+    "@genkan/shared": "workspace:*",
     "puppeteer-core": "^25.10.0"
   },
   "devDependencies": {

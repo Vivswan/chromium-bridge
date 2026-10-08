@@ -330,7 +330,7 @@ impl Lookup {
 }
 
 /// Where a browser reads the external-extension pointer that makes it offer
-/// "Enable Chromium Bridge?" on its next start (the Web Store copy under
+/// "Enable Genkan?" on its next start (the Web Store copy under
 /// [`PINNED_EXTENSION_ID`]). Linux has none in either scope: Chrome there
 /// installs an external extension without asking, which the threat model
 /// refuses, so Linux users add the extension from the Web Store themselves.
@@ -546,14 +546,12 @@ fn windows_profile_dir(dirs: &BaseDirs, browser: Browser) -> PathBuf {
 /// must be able to traverse.
 pub fn install_dir(os: Os, dirs: &BaseDirs, scope: Scope) -> PathBuf {
     match (os, scope) {
-        (Os::MacOs, Scope::User) => dirs.home.join(".chromium-bridge"),
-        (Os::MacOs, Scope::System) => dirs
-            .system_root
-            .join("Library/Application Support/chromium-bridge"),
-        (Os::Linux, Scope::User) => dirs.data_home().join("chromium-bridge"),
-        (Os::Linux, Scope::System) => dirs.system_root.join("var/lib/chromium-bridge"),
-        (Os::Windows, Scope::User) => dirs.local_app_data().join("chromium-bridge"),
-        (Os::Windows, Scope::System) => dirs.program_files().join("chromium-bridge"),
+        (Os::MacOs, Scope::User) => dirs.home.join(".genkan"),
+        (Os::MacOs, Scope::System) => dirs.system_root.join("Library/Application Support/genkan"),
+        (Os::Linux, Scope::User) => dirs.data_home().join("genkan"),
+        (Os::Linux, Scope::System) => dirs.system_root.join("var/lib/genkan"),
+        (Os::Windows, Scope::User) => dirs.local_app_data().join("genkan"),
+        (Os::Windows, Scope::System) => dirs.program_files().join("genkan"),
     }
 }
 
@@ -812,7 +810,7 @@ mod tests {
                 .registration()
                 .manifest_path(),
             PathBuf::from(
-                "/fix/home/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
+                "/fix/home/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.vivswan.genkan.host.json"
             )
         );
         // App-presence candidates: the two standard install roots per user, the machine's alone for
@@ -867,7 +865,7 @@ mod tests {
     #[test]
     fn each_browser_resolves_its_documented_directory_or_chromes_per_scope() {
         let d = dirs();
-        let host = "com.vivswan.chromium_bridge.host.json";
+        let host = "com.vivswan.genkan.host.json";
         let own = |os: Os, b: Browser| match entry(os, &d, b).manifest.system {
             Lookup::Own { registration, .. } => registration.manifest_path(),
             other @ Lookup::ReadsFrom { .. } => {
@@ -957,7 +955,7 @@ mod tests {
         let brave_win = entry(Os::Windows, &d, Browser::Brave);
         assert_eq!(
             brave_win.manifest.system.registration().location(),
-            r"HKLM\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.vivswan.chromium_bridge.host"
+            r"HKLM\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.vivswan.genkan.host"
         );
         assert_eq!(brave_win.manifest.system.owner(), None);
         assert_eq!(
@@ -1015,7 +1013,7 @@ mod tests {
         assert_eq!(
             e.manifest.user.registration().manifest_path(),
             PathBuf::from(
-                "/fix/home/.config/google-chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json"
+                "/fix/home/.config/google-chrome/NativeMessagingHosts/com.vivswan.genkan.host.json"
             )
         );
         // No pointer on Linux: Chrome would install from it without asking.
@@ -1059,22 +1057,22 @@ mod tests {
         assert_eq!(*hive, Hive::CurrentUser);
         assert_eq!(
             key,
-            r"Software\Google\Chrome\NativeMessagingHosts\com.vivswan.chromium_bridge.host"
+            r"Software\Google\Chrome\NativeMessagingHosts\com.vivswan.genkan.host"
         );
         assert_eq!(
             manifest_path,
-            &PathBuf::from("/fix/local/chromium-bridge/com.vivswan.chromium_bridge.host.json")
+            &PathBuf::from("/fix/local/genkan/com.vivswan.genkan.host.json")
         );
         assert_eq!(
             e.manifest.system,
             Lookup::Own {
                 registration: Registration::Registry {
                     hive: Hive::LocalMachine,
-                    key: r"Software\Google\Chrome\NativeMessagingHosts\com.vivswan.chromium_bridge.host"
+                    key: r"Software\Google\Chrome\NativeMessagingHosts\com.vivswan.genkan.host"
                         .into(),
                     // Under Program Files, which a standard account cannot pre-create a directory in.
                     manifest_path: PathBuf::from(
-                        "/fix/programfiles/chromium-bridge/com.vivswan.chromium_bridge.host.json"
+                        "/fix/programfiles/genkan/com.vivswan.genkan.host.json"
                     ),
                 },
                 readers: vec![Browser::Opera],
@@ -1115,21 +1113,21 @@ mod tests {
         let mut d = dirs();
         assert_eq!(
             install_dir(Os::MacOs, &d, Scope::User),
-            PathBuf::from("/fix/home/.chromium-bridge")
+            PathBuf::from("/fix/home/.genkan")
         );
         assert_eq!(
             install_dir(Os::Linux, &d, Scope::User),
-            PathBuf::from("/fix/home/.local/share/chromium-bridge")
+            PathBuf::from("/fix/home/.local/share/genkan")
         );
         d.xdg_data_home = Some(PathBuf::from("/fix/xdg-data"));
         assert_eq!(
             install_dir(Os::Linux, &d, Scope::User),
-            PathBuf::from("/fix/xdg-data/chromium-bridge")
+            PathBuf::from("/fix/xdg-data/genkan")
         );
         d.local_app_data = Some(PathBuf::from("/fix/local"));
         assert_eq!(
             install_dir(Os::Windows, &d, Scope::User),
-            PathBuf::from("/fix/local/chromium-bridge")
+            PathBuf::from("/fix/local/genkan")
         );
     }
 

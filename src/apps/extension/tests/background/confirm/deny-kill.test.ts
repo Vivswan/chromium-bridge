@@ -7,7 +7,7 @@
 // arriving) is presented for approval. Sender gating rides the same
 // confirm-window-only rule as the other confirm_* messages.
 
-import { type ConfirmPayload, isPresenceGated } from "@chromium-bridge/shared/confirm";
+import { type ConfirmPayload, isPresenceGated } from "@genkan/shared/confirm";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { Browser } from "wxt/browser";
 import { fakeBrowser } from "wxt/testing/fake-browser";

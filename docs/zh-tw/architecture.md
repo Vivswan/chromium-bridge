@@ -1,6 +1,6 @@
-# 架構: chromium-bridge
+# 架構: genkan
 
-> 本頁描述 chromium-bridge 的元件結構、資料流、協定、安全模型與限制, 每個信任邊界各配一張圖。安全決策背後的「為什麼」在 [security/rationale.md](./security/rationale.md)。
+> 本頁描述 genkan 的元件結構、資料流、協定、安全模型與限制, 每個信任邊界各配一張圖。安全決策背後的「為什麼」在 [security/rationale.md](./security/rationale.md)。
 
 > 圖中每個標出檔案的方塊所指的檔案都存在, 對 TypeScript 而言還包括它匯出的符號; 說明方塊則標示外部參與者。`moon run check-architecture` 只證明檔案存在, 而每張圖的 `Demonstrated by:` 連結 (下文的「驗證測試:」行) 都指向涵蓋該圖的測試。
 
@@ -8,7 +8,7 @@
 
 ```
 MCP client A --stdio--> +--------------------------------------------------+
-MCP client B --stdio--> | chromium-bridge (MCP server instances)           |
+MCP client B --stdio--> | genkan (MCP server instances)           |
                         |                                                  |
                         |  first instance = BROKER                         |
                         |   - owns the bridge socket + lock file           |
@@ -24,14 +24,14 @@ MCP client B --stdio--> | chromium-bridge (MCP server instances)           |
                                                  | check + attestation + HMAC handshake
                                                  v
                         +--------------------------------------------------+
-                        | chromium-bridge --native-host  (one per browser, |
+                        | genkan --native-host  (one per browser, |
                         | spawned by that browser, label e.g. "chrome")    |
                         +------------------------+-------------------------+
                                                  | stdin/stdout, Chrome native
                                                  | messaging (4B LE len + JSON)
                                                  v
                         +--------------------------------------------------+
-                        | Chromium Bridge extension (MV3, WXT)             |
+                        | Genkan extension (MV3, WXT)             |
                         |  service worker: dispatch, allowlist, masking,   |
                         |    kill-switch mirror, enrollment pin            |
                         |  content script + CDP backend: one shared DOM    |
@@ -184,7 +184,7 @@ flowchart LR
 
 ### 4.1 Rust 核心 (`src/packages/core`) 與執行檔 (`src/apps/host`)
 
-執行檔是 `chromium-bridge-core` 函式庫之上的一層薄薄的 argv 分派 (`src/apps/host/src/main.rs`):
+執行檔是 `genkan-core` 函式庫之上的一層薄薄的 argv 分派 (`src/apps/host/src/main.rs`):
 
 | 模組 | 職責 |
 |------|------|
@@ -208,7 +208,7 @@ flowchart LR
 | `registration.rs` + `browsers.rs` | `doctor --fix` 與 `uninstall` 背後的註冊引擎與瀏覽器路徑解析器 |
 | `doctor.rs` | 唯讀健康報告 (`doctor` / `status` / `doctor --list`) |
 | `error.rs` | 工具呼叫邊界上具型別的 `CallError`, 以及穩定的 `ERROR_SPECS` 錯誤分類 |
-| `log.rs` | 分級的 stderr 日誌器 (`BB_LOG`) 與 `log_*!` 巨集 |
+| `log.rs` | 分級的 stderr 日誌器 (`GENKAN_LOG`) 與 `log_*!` 巨集 |
 | `identity.rs` | 原生訊息主機 id 與固定的擴充功能金鑰: 唯一的定義處 |
 
 ### 4.2 擴充功能 (`src/apps/extension`)
@@ -234,23 +234,23 @@ flowchart LR
 註冊 (由 `doctor --fix` 透過 `registration.rs` 寫入):
 
 ```
-macOS   ~/.chromium-bridge/run-host-<browser>.sh      # wrapper: exec <host> --native-host --label <browser>
-        ~/.chromium-bridge/run-host.sh                # unlabeled, for a manifest several browsers read
+macOS   ~/.genkan/run-host-<browser>.sh      # wrapper: exec <host> --native-host --label <browser>
+        ~/.genkan/run-host.sh                # unlabeled, for a manifest several browsers read
         ~/Library/Application Support/<Vendor>/NativeMessagingHosts/
-          com.vivswan.chromium_bridge.host.json       # manifest -> that browser's wrapper
+          com.vivswan.genkan.host.json       # manifest -> that browser's wrapper
 
-Linux   ${XDG_DATA_HOME:-~/.local/share}/chromium-bridge/run-host-<browser>.sh
+Linux   ${XDG_DATA_HOME:-~/.local/share}/genkan/run-host-<browser>.sh
         ${XDG_CONFIG_HOME:-~/.config}/<vendor>/NativeMessagingHosts/
-          com.vivswan.chromium_bridge.host.json
+          com.vivswan.genkan.host.json
 
-Windows %LOCALAPPDATA%\chromium-bridge\com.vivswan.chromium_bridge.host.json
-        HKCU\Software\<Vendor>\NativeMessagingHosts\com.vivswan.chromium_bridge.host
+Windows %LOCALAPPDATA%\genkan\com.vivswan.genkan.host.json
+        HKCU\Software\<Vendor>\NativeMessagingHosts\com.vivswan.genkan.host
           (Default) = absolute path of the manifest; manifest points at the exe
 ```
 
 資訊清單的 `path` 就地指向進行註冊的執行檔 (在 Unix 上經由包裝指令碼, 因為資訊清單格式沒有 `args` 欄位); 不建置、不下載、不複製任何東西。包裝指令碼只在只有一個瀏覽器會啟動該資訊清單時帶上 `--label <browser>`; 多個瀏覽器共讀的資訊清單得到不帶標籤的 `run-host.sh`, 以 `registration.rs` 為準。在 Windows 上, Chrome 會把擴充功能來源附加到命令列, 藉此選擇原生主機模式。
 
-執行階段狀態, 位於 0700 的每使用者執行階段目錄 (macOS: `$XDG_RUNTIME_DIR/chromium-bridge` 或 `~/Library/Application Support/chromium-bridge`; Linux: `$XDG_RUNTIME_DIR/chromium-bridge`, 退而求其次用 XDG 快取目錄; Windows: `%LOCALAPPDATA%\chromium-bridge`):
+執行階段狀態, 位於 0700 的每使用者執行階段目錄 (macOS: `$XDG_RUNTIME_DIR/genkan` 或 `~/Library/Application Support/genkan`; Linux: `$XDG_RUNTIME_DIR/genkan`, 退而求其次用 XDG 快取目錄; Windows: `%LOCALAPPDATA%\genkan`):
 
 | 檔案 | 內容 |
 |------|----------|
@@ -278,7 +278,7 @@ stored < FIRST_VERSION                  -> too old to climb: a host record is re
 
 地板是讓淘汰最舊一階變得安全的關鍵。若只由階數推導, 第一階被刪除的那一刻, 每個已儲存的版本都會悄悄重新編號, 錯誤的那一階就會在每個現有檔案上執行。今天每座階梯要麼是空的, 要麼只有一個無操作的階: 這是形狀, 不是資料。
 
-主機身分金鑰存放在 OS 憑證儲存區 (Keychain、Credential Manager 或 Secret Service) 中, 作為 `com.vivswan.chromium-bridge.enclave.signing.v1` 項目, 並以執行階段目錄加以限定, 因此兩個目錄永遠不會共用同一把; `pair --file-store` 則改放進 `host_key.json`。
+主機身分金鑰存放在 OS 憑證儲存區 (Keychain、Credential Manager 或 Secret Service) 中, 作為 `com.vivswan.genkan.enclave.signing.v1` 項目, 並以執行階段目錄加以限定, 因此兩個目錄永遠不會共用同一把; `pair --file-store` 則改放進 `host_key.json`。
 
 ## 5. 關鍵資料流
 
@@ -328,7 +328,7 @@ Broker accepts -> session re-attaches that label (generation-guarded:
 ### 5.3 第二個 MCP 用戶端接入
 
 ```
-Client B spawns its own chromium-bridge process
+Client B spawns its own genkan process
   -> it finds a live broker via the lock file
   -> attests itself over the socket (kernel checks + HMAC + attach frame
      carrying its harness's attested identity)
@@ -407,7 +407,7 @@ flowchart LR
 
 選項頁面執行儀式並作答: 它登記這個瀏覽器的認證器, 解除緊急開關, 並簽署第 11.3 節的各項授予 (一次策略 set、一次放寬的回復、一次用戶端配對)。一次解除或一次授予是在這個瀏覽器已登記憑證上的一次觸碰; 當主機的請求沒有指名任何憑證時, 頁面改為請求一次確認。
 
-它的「忘記這個瀏覽器」動作送出 `browser_revoke`, 主機隨即忘記在該連線自身標籤下登記的憑證, 與 `chromium-bridge revoke <browser>` 是同一個動作。
+它的「忘記這個瀏覽器」動作送出 `browser_revoke`, 主機隨即忘記在該連線自身標籤下登記的憑證, 與 `genkan revoke <browser>` 是同一個動作。
 
 來自確認視窗的 `presence_confirm` 只在沒有任何已登記憑證能夠作答時才被接受, 所以已登記的瀏覽器永遠不會被降級為一次點擊。
 
@@ -438,7 +438,7 @@ flowchart LR
   host -->|the mirror in trusted storage| mirror
 ```
 
-沒有任何東西會自行清除閂鎖: 不會因逾時、重啟或重新連線而清除。解除方式是在終端機執行 `chromium-bridge unkill`, 或擴充功能的 `kill_release`, 後者由該瀏覽器下已登記憑證的 WebAuthn 輕觸作答, 或在該瀏覽器未登記任何憑證時由確認視窗作答。損毀的記錄會拒絕兩個方向, 因為從未知狀態解除緊急開關就是失敗即開放。
+沒有任何東西會自行清除閂鎖: 不會因逾時、重啟或重新連線而清除。解除方式是在終端機執行 `genkan unkill`, 或擴充功能的 `kill_release`, 後者由該瀏覽器下已登記憑證的 WebAuthn 輕觸作答, 或在該瀏覽器未登記任何憑證時由確認視窗作答。損毀的記錄會拒絕兩個方向, 因為從未知狀態解除緊急開關就是失敗即開放。
 
 驗證測試: [kill.test.ts](../../src/apps/extension/tests/background/kill.test.ts), [deny-kill.test.ts](../../src/apps/extension/tests/background/confirm/deny-kill.test.ts), [broker/tests.rs](../../src/packages/core/src/broker/tests.rs), [native_host/tests.rs](../../src/packages/core/src/native_host/tests.rs)。
 
@@ -517,7 +517,7 @@ panic 訊息預設輸出到 stdout, 會損毀 NM 訊框與 MCP NDJSON。緩解: 
 - 夾具檔保存黃金向量: Rust 建構的訊息位元組加上確定性的軟體 P256 證明, 由 `src/apps/extension/tests/background/enclave-golden.test.ts` 透過擴充功能的 WebCrypto 驗證器重放, 所以簽章訊息的編碼本身在兩種語言間被固定下來。夾具檔的簽署金鑰是公開的測試資料, 在兩側都被列入主機身分的拒絕清單 (核心中的 `ensure_not_fixture_key`, 擴充功能配對驗證器與已儲存固定值驗證器中的 `ENCLAVE_FIXTURE_KEY_ID`)。
 - **策略文件與方向** (`src/packages/core/src/policy/`): 主機持有的 `PolicyDoc`、十五個策略欄位 (四個能力授予、確認策略、`disabledTools`、確認逾時)、它們的預設拒絕值、每個欄位的寬鬆方向表, 以及 `relaxes`/`restricts` 比較, 加上簽章儲存與 `set_signed`/`restrict` 寫入接縫。
 - `moon run gen` 輸出 `policy.ts`: 簽章網域常數、帶方向的欄位清單、預設值, 以及針對文件、數值與限制覆蓋層的嚴格 Zod 驗證器。擴充功能自己從輸出的表重新計算每一次方向比較; 它從不相信主機對變更方向的說法。
-- 授予由主機金鑰對 `UTF8("chromium-bridge-policy-v1") || 0x00 || doc_bytes` 簽章, 這是與主機金鑰挑戰網域並列的一個以 NUL 分隔的簽章網域, 相對於它為單射, 所以一種儀式的產物不可能被重放成另一種。
+- 授予由主機金鑰對 `UTF8("genkan-policy-v1") || 0x00 || doc_bytes` 簽章, 這是與主機金鑰挑戰網域並列的一個以 NUL 分隔的簽章網域, 相對於它為單射, 所以一種儀式的產物不可能被重放成另一種。
 - 任何地方都沒有正規化步驟: 主機簽章並儲存精確的文件位元組, 擴充功能先用其固定的金鑰驗證收到的精確位元組, 再對同一份位元組做嚴格解析。第 11.3 節說明承載這一切的訊框。
 - **線路信封與控制訊框** (`src/packages/core/src/protocol.rs` 中的 `BridgeReq` / `BridgeResp`; `src/packages/core/src/protocol/control.rs` 中的 `EnclaveControl`、內嵌 `allowlist::ClientEntry` 的 `AdminControl`、`PolicyControl` 與 `WebAuthnControl`): Rust 型別就是契約, `moon run gen` 從它們產生擴充功能的驗證器到 `envelope.ts`。下表列出每一層及其擁有者。
 
@@ -612,7 +612,7 @@ flowchart LR
 
 這項檢查是誠實主機路徑上的縱深防禦; 擴充功能的閘門在其邊界上保持權威, 正因為主機可能不是我們的。
 
-> 若要在執行階段對這些連結進行疑難排解 (連線是否可達; 鎖定檔、socket 與資訊清單是否就位), 請使用唯讀的 `chromium-bridge doctor`; 見 [cli.md](./cli.md)。
+> 若要在執行階段對這些連結進行疑難排解 (連線是否可達; 鎖定檔、socket 與資訊清單是否就位), 請使用唯讀的 `genkan doctor`; 見 [cli.md](./cli.md)。
 
 ## 12. TypeScript 模組圖
 

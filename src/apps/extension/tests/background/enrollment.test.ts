@@ -1,7 +1,7 @@
-import { ENCLAVE_FIXTURE_KEY_ID } from "@chromium-bridge/shared/generated/enclave";
-import { ENCLAVE_GOLDEN_FIXTURE } from "@chromium-bridge/shared/generated/enclave-fixture";
-import { POLICY_DEFAULTS } from "@chromium-bridge/shared/generated/policy";
-import type { EnrollmentStatus } from "@chromium-bridge/shared/runtime-msg";
+import { ENCLAVE_FIXTURE_KEY_ID } from "@genkan/shared/generated/enclave";
+import { ENCLAVE_GOLDEN_FIXTURE } from "@genkan/shared/generated/enclave-fixture";
+import { POLICY_DEFAULTS } from "@genkan/shared/generated/policy";
+import type { EnrollmentStatus } from "@genkan/shared/runtime-msg";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 import * as pinStore from "@/lib/background/enclave-pin";
@@ -289,7 +289,7 @@ describe("ceremony state machine", () => {
   test("default state fails closed with pairing instructions", async () => {
     const gate = await enrollmentGate();
     expect(gate.allowed).toBe(false);
-    if (!gate.allowed) expect(gate.reason).toContain("chromium-bridge pair");
+    if (!gate.allowed) expect(gate.reason).toContain("genkan pair");
     expect((await getEnrollmentStatus()).state).toBe("unpaired");
   });
 
@@ -435,7 +435,7 @@ describe("ceremony state machine", () => {
     await handleEnclaveFrame({ type: "enclave_error", reason: "not_enrolled" });
     const st = await getEnrollmentStatus();
     expect(st.state).toBe("unpaired");
-    expect(st.lastError).toContain("chromium-bridge pair");
+    expect(st.lastError).toContain("genkan pair");
     expect((await enrollmentGate()).allowed).toBe(false);
   });
 
@@ -562,7 +562,7 @@ describe("ceremony state machine", () => {
     collaborator.onDetach();
     expect((await revokePin()).ok).toBe(true);
     expect((await getEnrollmentStatus()).hostRevokePending).toBe(true);
-    // `chromium-bridge pair --reset` ran out of band and minted a NEW enclave
+    // `genkan pair --reset` ran out of band and minted a NEW enclave
     // key. The reconnect still resends the stale revoke (the accepted pre-pin
     // window) but must not challenge (pairing is paused).
     attach(collaborator, (f) => {
@@ -630,7 +630,7 @@ describe("ceremony state machine", () => {
   });
 
   test("a host-originated enclave_revoked fails a pinned bridge closed", async () => {
-    // The any-side revocation push: `chromium-bridge revoke --all` ran out-of-band,
+    // The any-side revocation push: `genkan revoke --all` ran out-of-band,
     // the host noticed and pushed enclave_revoked. A pinned extension must flip
     // to the fail-closed compromised state without waiting for an opt-in
     // reverify.

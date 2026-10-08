@@ -380,7 +380,7 @@ mod tests {
         );
         let result = reply.result.unwrap();
         assert_eq!(result["protocolVersion"], json!("2025-06-18"));
-        assert_eq!(result["serverInfo"]["name"], json!("chromium-bridge"));
+        assert_eq!(result["serverInfo"]["name"], json!("genkan"));
         assert_eq!(
             result["serverInfo"]["version"],
             json!(env!("CARGO_PKG_VERSION"))
@@ -444,7 +444,7 @@ mod tests {
         assert!(versions.contains(&json!(crate::protocol::MCP_PROTOCOL_VERSION)));
         assert_eq!(
             result["_meta"]["io.modelcontextprotocol/serverInfo"]["name"],
-            json!("chromium-bridge")
+            json!("genkan")
         );
 
         // Subsequent stateless requests carry their own _meta and get the

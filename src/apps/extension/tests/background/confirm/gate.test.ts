@@ -2,7 +2,7 @@
 // settings gates, grace-window behavior, and the deny paths - driven with a
 // fake backend and a fake confirmation provider.
 
-import { type ConfirmPayload, isPresenceGated } from "@chromium-bridge/shared/confirm";
+import { type ConfirmPayload, isPresenceGated } from "@genkan/shared/confirm";
 import { beforeEach, describe, expect, test } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 import { currentPanicEpoch } from "@/lib/background/brake";

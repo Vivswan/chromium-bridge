@@ -14,8 +14,8 @@
 // - everything else: passed through (page_text masks passwords/card numbers
 //   in the page walk itself; cookie_get masks in cookies.ts).
 
-import { StorageReadResultSchema } from "@chromium-bridge/shared/content-msg";
-import type { PolicyValues } from "@chromium-bridge/shared/generated/policy";
+import { StorageReadResultSchema } from "@genkan/shared/content-msg";
+import type { PolicyValues } from "@genkan/shared/generated/policy";
 import { maskSensitive, maskString } from "../shared/masking";
 import type { PageOp } from "../shared/page-ops";
 

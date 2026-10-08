@@ -1,5 +1,5 @@
-import type { PolicyHistoryRow } from "@chromium-bridge/shared/generated/envelope";
-import { OP_NAMES } from "@chromium-bridge/shared/generated/ops";
+import type { PolicyHistoryRow } from "@genkan/shared/generated/envelope";
+import { OP_NAMES } from "@genkan/shared/generated/ops";
 import {
   BOOL_POLICY_FIELDS,
   type BoolPolicyField,
@@ -11,14 +11,14 @@ import {
   type PolicyFieldName,
   type PolicyOverlay,
   type PolicyValues,
-} from "@chromium-bridge/shared/generated/policy";
+} from "@genkan/shared/generated/policy";
 import {
   differingPolicyFields,
   foldPolicyOverlay,
   relaxedPolicyFields,
   summarizePolicyFields,
-} from "@chromium-bridge/shared/policy-compare";
-import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
+} from "@genkan/shared/policy-compare";
+import type { RuntimeResponse } from "@genkan/shared/runtime-msg";
 import { Fragment, useCallback, useEffect, useId, useState } from "react";
 import { browser } from "wxt/browser";
 import { Button } from "@/components/ui/button";

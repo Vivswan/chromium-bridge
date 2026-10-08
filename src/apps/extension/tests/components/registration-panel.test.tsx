@@ -5,8 +5,8 @@
 // healthy-looking table. While a status read is outstanding both actions are disabled,
 // since status and repair share one worker slot and a repair sent then is refused as already in flight.
 
-import type { HealthReport, RegistrationRow } from "@chromium-bridge/shared/generated/envelope";
-import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
+import type { HealthReport, RegistrationRow } from "@genkan/shared/generated/envelope";
+import type { RuntimeResponse } from "@genkan/shared/runtime-msg";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -37,13 +37,13 @@ const REPORT: HealthReport = {
   version: "1.2.3",
   platform: "linux/x86_64",
   lock_file: {
-    value: "/run/user/1000/chromium-bridge/run.lock",
-    details: ["present: yes", "endpoint: /run/user/1000/chromium-bridge/run.sock", "pid:     4242"],
+    value: "/run/user/1000/genkan/run.lock",
+    details: ["present: yes", "endpoint: /run/user/1000/genkan/run.sock", "pid:     4242"],
   },
   mcp_server: { value: "reachable (socket connect OK)", details: [] },
   kill_switch: { value: "off (bridge activity permitted)", details: [] },
   policy_baseline: { value: "revision 3, unsigned", details: ["restriction overlay: active"] },
-  host_key: "none (run `chromium-bridge pair`)",
+  host_key: "none (run `genkan pair`)",
   summary: "OK",
   healthy: true,
 };
@@ -144,7 +144,7 @@ describe("RegistrationPanel", () => {
       expect(screen.getByText(text, raw)).toBeInTheDocument();
     }
     expect(screen.getByText("OK")).toBeInTheDocument();
-    expect(screen.queryByText(/chromium-bridge pair/)).toBeNull();
+    expect(screen.queryByText(/genkan pair/)).toBeNull();
   });
 
   test("an unreadable host report shows the error while the registration rows still render", async () => {

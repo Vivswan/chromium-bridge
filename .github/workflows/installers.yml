@@ -43,7 +43,7 @@ jobs:
           cargo: "true"
 
       - name: Build the release binary
-        run: cargo build --release --locked --package chromium-bridge
+        run: cargo build --release --locked --package genkan
 
       - id: pin
         if: matrix.platform == 'linux'

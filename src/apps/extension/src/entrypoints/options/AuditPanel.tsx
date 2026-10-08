@@ -1,7 +1,7 @@
-import type { AuditEntry } from "@chromium-bridge/shared/enclave";
-import type { AuditTrailEntry } from "@chromium-bridge/shared/generated/envelope";
-import { AUDIT_DEFAULT_LIMIT, AUDIT_READ_MAX_LIMIT } from "@chromium-bridge/shared/generated/host";
-import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
+import type { AuditEntry } from "@genkan/shared/enclave";
+import type { AuditTrailEntry } from "@genkan/shared/generated/envelope";
+import { AUDIT_DEFAULT_LIMIT, AUDIT_READ_MAX_LIMIT } from "@genkan/shared/generated/host";
+import type { RuntimeResponse } from "@genkan/shared/runtime-msg";
 import { useCallback, useEffect, useState } from "react";
 import { browser } from "wxt/browser";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,7 @@ import { send } from "@/lib/messages";
 // The read-only audit panel: two lists, newest first. This browser's own ring of security decisions
 // (confirmations, pairing approvals, revocations, kill toggles) lives in the extension-context-only trusted
 // storage and refreshes on storage.onChanged, so a new decision appears without polling. The host's durable
-// trail is the page `chromium-bridge audit --limit <n>` prints, read through the host on demand (mount,
+// trail is the page `genkan audit --limit <n>` prints, read through the host on demand (mount,
 // Refresh, and Show older, which widens the page by the CLI's default up to the frame's cap); the host spells
 // each line's words, so the two surfaces cannot disagree. Strictly display.
 export function AuditPanel() {

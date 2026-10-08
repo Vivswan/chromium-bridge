@@ -27,7 +27,7 @@
  * install's Chrome must never be pointed at the test host) and removes the one
  * it wrote. Not part of the default suite or CI.
  *
- * Run:  BB_REAL_E2E=1 bun tests/browser/integration_e2e.ts
+ * Run:  GENKAN_REAL_E2E=1 bun tests/browser/integration_e2e.ts
  */
 
 import { execFileSync, spawn } from "node:child_process";
@@ -41,7 +41,7 @@ import {
   MCP_META_CLIENT_CAPABILITIES,
   MCP_META_PROTOCOL_VERSION,
   MCP_PROTOCOL_VERSION,
-} from "@chromium-bridge/shared/generated/protocol";
+} from "@genkan/shared/generated/protocol";
 import puppeteer from "puppeteer-core";
 import {
   assertHostIsolated,
@@ -54,21 +54,21 @@ import {
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../..");
 const IS_WINDOWS = process.platform === "win32";
-const BIN = path.join(REPO, "target", "release", `chromium-bridge${IS_WINDOWS ? ".exe" : ""}`);
-// The unpacked bundle, from the one home every browser suite shares (BB_EXT_DIR, else the chrome-mv3 build).
+const BIN = path.join(REPO, "target", "release", `genkan${IS_WINDOWS ? ".exe" : ""}`);
+// The unpacked bundle, from the one home every browser suite shares (GENKAN_EXT_DIR, else the chrome-mv3 build).
 const DIST = extensionDir();
 // The guard (assertIsolatedBrowserOrSkip) verifies CHROME_BIN by --version
 // before use; it is only ever an isolated Chrome for Testing here.
 const CHROME = process.env.CHROME_BIN ?? "";
-const HOST_NAME = "com.vivswan.chromium_bridge.host";
+const HOST_NAME = "com.vivswan.genkan.host";
 const REG_KEY = `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${HOST_NAME}`;
 const REG_KEY_MACHINE = `HKLM\\Software\\Google\\Chrome\\NativeMessagingHosts\\${HOST_NAME}`;
 
 const FIXTURE = pathToFileURL(path.join(REPO, "tests", "fixtures", "page.html")).href;
 
 // ── preflight (opt-in) ─────────────────────────────────────────────────────
-if (process.env.BB_REAL_E2E !== "1") {
-  console.log("SKIP: set BB_REAL_E2E=1 to run the real Chrome integration test.");
+if (process.env.GENKAN_REAL_E2E !== "1") {
+  console.log("SKIP: set GENKAN_REAL_E2E=1 to run the real Chrome integration test.");
   process.exit(0);
 }
 if (process.platform !== "darwin" && !IS_WINDOWS) {
@@ -159,7 +159,7 @@ function removeWindowsRegistration(): void {
 
 async function main(): Promise<void> {
   // Use a throwaway copy/profile so the test never operates on the real session.
-  const work = fs.mkdtempSync(path.join(os.tmpdir(), "bb-e2e-"));
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), "genkan-e2e-"));
   // Every exit path (a refusal, a crash, Ctrl-C, the normal finish) ends the children this run started and
   // removes its throwaway dirs. The profile and the processes are registered as they come to exist.
   const throwaway: string[] = [work];
@@ -220,7 +220,7 @@ async function main(): Promise<void> {
   }
   // Everything that can throw before the try below is done before the server exists, so a server never
   // outlives the exit hook that removes its runtime dir.
-  const profile = fs.mkdtempSync(path.join(os.tmpdir(), "bb-e2e-profile-"));
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), "genkan-e2e-profile-"));
   throwaway.push(profile);
 
   const mcp = spawn(BIN, [], { stdio: ["pipe", "pipe", "pipe"], env });
@@ -309,7 +309,7 @@ async function main(): Promise<void> {
       testManifest,
       JSON.stringify({
         name: HOST_NAME,
-        description: "chromium-bridge integration test",
+        description: "genkan integration test",
         path: hostPath,
         type: "stdio",
         allowed_origins: [`chrome-extension://${extId}/`],
@@ -324,7 +324,7 @@ async function main(): Promise<void> {
     browser = await puppeteer.launch({
       executablePath: CHROME,
       headless: false,
-      dumpio: process.env.BB_REAL_E2E_DEBUG === "1",
+      dumpio: process.env.GENKAN_REAL_E2E_DEBUG === "1",
       env,
       // Ctrl-C: puppeteer's own handler would exit without this file's cleanup; the SIGINT handler below
       // routes through the exit hook instead.
@@ -358,7 +358,7 @@ async function main(): Promise<void> {
       );
     }
 
-    if (process.env.BB_REAL_E2E_DEBUG === "1") {
+    if (process.env.GENKAN_REAL_E2E_DEBUG === "1") {
       console.log(
         "[e2e] Chrome targets:",
         browser.targets().map((target) => `${target.type()} ${target.url()}`),

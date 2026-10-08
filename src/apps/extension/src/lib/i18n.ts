@@ -1,4 +1,4 @@
-import type { UiLanguageValue } from "@chromium-bridge/shared/settings";
+import type { UiLanguageValue } from "@genkan/shared/settings";
 import type { PublicPath } from "wxt/browser";
 import { browser } from "wxt/browser";
 import type { GeneratedI18nStructure } from "#i18n";
@@ -97,7 +97,7 @@ async function refreshLocale(): Promise<void> {
   } catch (error) {
     // Keep whatever is already loaded; before the first successful load t()
     // degrades to browser-locale getMessage. Never block the UI.
-    console.warn("[bb] could not load locale messages:", error);
+    console.warn("[genkan] could not load locale messages:", error);
   }
 }
 

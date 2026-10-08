@@ -67,7 +67,7 @@ export class Machine extends CommandChecks {
         return binary(argv, { ...Object.fromEntries(inherited), ...roots });
       },
       log,
-      (argv) => `chromium-bridge ${argv.join(" ")}`,
+      (argv) => `genkan ${argv.join(" ")}`,
     );
     this.home = roots.HOME;
     this.config = roots.XDG_CONFIG_HOME;
@@ -80,7 +80,7 @@ export class Machine extends CommandChecks {
   }
 
   wrapper(browser: Browser): string {
-    return join(this.data, "chromium-bridge", `run-host-${browser}.sh`);
+    return join(this.data, "genkan", `run-host-${browser}.sh`);
   }
 
   /** Where a Chromium-branded build would read an external-extension pointer; never written on Linux. */
@@ -216,7 +216,7 @@ export const scenarios: Record<string, (m: Machine) => void> = {
 if (import.meta.main) {
   const scenario = selectMode(scenarios, process.argv.slice(2), "scripts/linux-registration.ts");
   const name = process.argv[2] as string;
-  const bin = join(repoRoot, "target/release/chromium-bridge");
+  const bin = join(repoRoot, "target/release/genkan");
   const binary: RunBinary = (args, env) => {
     const run = Bun.spawnSync([bin, ...args], { env, stdout: "pipe", stderr: "pipe" });
     return { exitCode: run.exitCode, stdout: run.stdout.toString(), stderr: run.stderr.toString() };

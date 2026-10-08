@@ -6,15 +6,12 @@
 // The host decides everything cryptographic (challenge, allowed credentials, verification) and the page
 // adds only what the API needs: ES256 alone, attestation "none", no extensions.
 
-import type {
-  EnrollOptionsFrame,
-  PresenceRequestFrame,
-} from "@chromium-bridge/shared/generated/envelope";
+import type { EnrollOptionsFrame, PresenceRequestFrame } from "@genkan/shared/generated/envelope";
 import type {
   AssertionResponse,
   PresenceSurface,
   RegistrationResponse,
-} from "@chromium-bridge/shared/webauthn";
+} from "@genkan/shared/webauthn";
 import { browser } from "wxt/browser";
 
 /** The two WebAuthn calls, in their JSON spellings, so a test can stand in for the browser. The browser
@@ -34,7 +31,7 @@ export interface PlatformProbe {
 }
 
 /** The display name the authenticator shows for this RP and user; the host's `user_name` is the browser label. */
-export const RP_NAME = "Chromium Bridge";
+export const RP_NAME = "Genkan";
 
 /** The COSE algorithm the host verifies: ES256. The only entry in pubKeyCredParams, so an authenticator
  * that cannot do it fails the ceremony instead of minting a key the host would refuse at enroll_finish. */

@@ -4,8 +4,8 @@
 
 use std::path::Path;
 
-use chromium_bridge_core::identity::PINNED_EXTENSION_ID;
-use chromium_bridge_core::registration::{
+use genkan_core::identity::PINNED_EXTENSION_ID;
+use genkan_core::registration::{
     fuzz_api, manifest_ownership, pointer_json, pointer_ownership, ForeignManifest, Ownership,
     Registrar, RegistrarScope,
 };
@@ -31,7 +31,7 @@ fn pretty(value: &Value) -> Vec<u8> {
 
 pub(super) fn directory() -> Directory {
     let registrar = Registrar {
-        host_exe: "/opt/example/chromium-bridge".into(),
+        host_exe: "/opt/example/genkan".into(),
         install_dir: "/opt/example".into(),
         scope: RegistrarScope::User,
         foreign: ForeignManifest::Replace,
@@ -46,9 +46,6 @@ pub(super) fn directory() -> Directory {
         written.as_bytes(),
         "pretty() is the engine's layout"
     );
-    let legacy = edited(&ours, |v| {
-        v["description"] = json!(fuzz_api::MANIFEST_DESCRIPTION_LEGACY);
-    });
     let pointer_written = pointer_json();
     let pointer: Value = serde_json::from_str(&pointer_written).expect("the engine writes JSON");
     assert_eq!(
@@ -60,7 +57,6 @@ pub(super) fn directory() -> Directory {
         target: targets::REGISTRATION_MANIFEST,
         seeds: vec![
             Seed::accepted("ours_current", pretty(&ours), is_ours),
-            Seed::accepted("ours_legacy", pretty(&legacy), is_ours),
             Seed::refused(
                 "foreign_name",
                 pretty(&edited(&ours, |v| {

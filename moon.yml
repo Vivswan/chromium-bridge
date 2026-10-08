@@ -166,7 +166,7 @@ tasks:
   install:
     description: 'USER-RUN: build the release binary, then register it with your browsers (doctor --fix)'
     deps: ['~:build-release']
-    command: './target/release/chromium-bridge doctor --fix'
+    command: './target/release/genkan doctor --fix'
     options:
       runInCI: false
 
@@ -336,7 +336,7 @@ tasks:
       runInCI: false
 
   test-browser-container:
-    description: 'Browser suites inside the container under xvfb with BB_REQUIRE_BROWSER=1 (a skipped suite fails as in CI); no test Chrome on the host'
+    description: 'Browser suites inside the container under xvfb with GENKAN_REQUIRE_BROWSER=1 (a skipped suite fails as in CI); no test Chrome on the host'
     command: 'bun scripts/compose-run.ts browser'
     options:
       runInCI: false
@@ -355,7 +355,7 @@ tasks:
       - 'extension:build'
     command: 'bun tests/browser/integration_e2e.ts'
     env:
-      BB_REAL_E2E: '1'
+      GENKAN_REAL_E2E: '1'
     options:
       mutex: 'generated-contract'
       runInCI: false

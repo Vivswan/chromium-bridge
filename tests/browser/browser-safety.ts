@@ -30,13 +30,15 @@ const CONTAINER_MARKERS: readonly string[] = ["/.dockerenv", "/run/.containerenv
 const CONTAINER_VERSION = /^Chromium\b/;
 
 /** The unpacked extension bundle the browser suites load: the built
- * chrome-mv3 output by default, overridable with BB_EXT_DIR. One home for
- * the env var name and the default path, so a custom BB_EXT_DIR (or a moved
+ * chrome-mv3 output by default, overridable with GENKAN_EXT_DIR. One home for
+ * the env var name and the default path, so a custom GENKAN_EXT_DIR (or a moved
  * build output) applies to every suite at once instead of whichever files
  * happened to keep their copy current. */
 export function extensionDir(): string {
   const here = dirname(fileURLToPath(import.meta.url));
-  return process.env.BB_EXT_DIR || join(resolve(here, "../.."), "build", "extension", "chrome-mv3");
+  return (
+    process.env.GENKAN_EXT_DIR || join(resolve(here, "../.."), "build", "extension", "chrome-mv3")
+  );
 }
 
 /** The isolation verdict for one binary, by its own --version. */
@@ -57,7 +59,7 @@ export function isolatedBrowser(
 
 /** The environment a real-host suite runs the binary under: a throwaway runtime dir, config dir and HOME
  * under `work` (LOCALAPPDATA is what the binary reads on Windows), created here, plus the log settings the
- * suites parse (an inherited BB_LOG=warn would hide the Info-level session lines). */
+ * suites parse (an inherited GENKAN_LOG=warn would hide the Info-level session lines). */
 export function throwawayHostEnv(work: string): Record<string, string> {
   const dirs = {
     XDG_RUNTIME_DIR: join(work, "runtime"),
@@ -66,7 +68,7 @@ export function throwawayHostEnv(work: string): Record<string, string> {
     LOCALAPPDATA: join(work, "localappdata"),
   };
   for (const dir of Object.values(dirs)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  return { ...process.env, ...dirs, BB_LOG: "info", BB_LOG_FORMAT: "text" } as Record<
+  return { ...process.env, ...dirs, GENKAN_LOG: "info", GENKAN_LOG_FORMAT: "text" } as Record<
     string,
     string
   >;
@@ -86,8 +88,8 @@ export function writeHostWrapper(
     "XDG_CONFIG_HOME",
     "HOME",
     "LOCALAPPDATA",
-    "BB_LOG",
-    "BB_LOG_FORMAT",
+    "GENKAN_LOG",
+    "GENKAN_LOG_FORMAT",
   ];
   if (process.platform === "win32") {
     const wrapper = join(dir, "run-host.cmd");
@@ -141,7 +143,7 @@ export function isolatedBrowserOrNull(): string | null {
 
 /** Exit(0) with a SKIP message unless CHROME_BIN identifies as isolated.
  *
- * BB_REQUIRE_BROWSER=1 (set by CI) turns the skip into a hard failure: in CI
+ * GENKAN_REQUIRE_BROWSER=1 (set by CI) turns the skip into a hard failure: in CI
  * the suite must actually run, so a CHROME_BIN that stops identifying as an
  * isolated Chrome for Testing has to make the job red, never silently green.
  * The variable only ever makes the guard stricter - no value lets a
@@ -156,8 +158,8 @@ export function assertIsolatedBrowserOrSkip(): string {
       "session. Install one and point CHROME_BIN at it, e.g.:\n" +
       "  bunx @puppeteer/browsers install chrome@stable --path tests/.chrome-for-testing\n" +
       "(see tests/README.md -> Safety).";
-    if (process.env.BB_REQUIRE_BROWSER === "1") {
-      console.error(`FAIL (BB_REQUIRE_BROWSER=1, the suite must run): ${reason}`);
+    if (process.env.GENKAN_REQUIRE_BROWSER === "1") {
+      console.error(`FAIL (GENKAN_REQUIRE_BROWSER=1, the suite must run): ${reason}`);
       process.exit(1);
     }
     console.log(`SKIP: ${reason}`);
@@ -167,8 +169,8 @@ export function assertIsolatedBrowserOrSkip(): string {
 }
 
 // A green browser step must mean the suite really asserted something: the guard above can exit(0) as a local skip, and
-// BB_REQUIRE_BROWSER only hardens it while both sides spell that variable the same way. So every suite finishes through
-// finishSuite(): a zero-pass run fails, and under BB_BROWSER_CANARY_DIR a per-suite RAN marker is dropped that a final
+// GENKAN_REQUIRE_BROWSER only hardens it while both sides spell that variable the same way. So every suite finishes through
+// finishSuite(): a zero-pass run fails, and under GENKAN_BROWSER_CANARY_DIR a per-suite RAN marker is dropped that a final
 // CI step requires, so a skip anywhere upstream turns the job red no matter which env var drifted.
 
 /** The exit code a finished suite deserves: nonzero on any failed check AND
@@ -188,7 +190,7 @@ export function writeRanMarker(
   suite: string,
   pass: number,
   fail: number,
-  dir: string | undefined = process.env.BB_BROWSER_CANARY_DIR,
+  dir: string | undefined = process.env.GENKAN_BROWSER_CANARY_DIR,
 ): string | null {
   if (!dir) return null;
   mkdirSync(dir, { recursive: true });

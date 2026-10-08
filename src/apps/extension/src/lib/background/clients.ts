@@ -7,15 +7,15 @@
 // its presence_request lands in lib/webauthn, and the client_pair_result arriving here is handed back through
 // claimAct.
 
-import { type AdminInboundFrame, AdminInboundFrameSchema } from "@chromium-bridge/shared/enclave";
+import { type AdminInboundFrame, AdminInboundFrameSchema } from "@genkan/shared/enclave";
 import {
   ClientListResultSchema,
   type ClientListWire,
   ClientPairResultSchema,
   ClientRevokeResultSchema,
   type ClientRevokeWire,
-} from "@chromium-bridge/shared/generated/envelope";
-import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
+} from "@genkan/shared/generated/envelope";
+import type { RuntimeResponse } from "@genkan/shared/runtime-msg";
 import { handOverVerdict } from "../webauthn/exchange";
 import type { PortCollaborator } from "./connection";
 import { exchange } from "./exchange";
@@ -90,5 +90,5 @@ export function handleAdminFrame(msg: AdminInboundFrame): void {
       answered = handOverVerdict(msg.type, ClientPairResultSchema, msg);
       break;
   }
-  if (!answered) console.warn(`[bb] dropping unsolicited ${msg.type}`);
+  if (!answered) console.warn(`[genkan] dropping unsolicited ${msg.type}`);
 }

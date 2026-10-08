@@ -4,7 +4,7 @@
 // Fail closed: an open request settles at the deadline or on detach, never hangs, and cannot outlive the
 // connection it was posted on; a claimed request is its claimer's to settle.
 
-import type { Refusal } from "@chromium-bridge/shared/runtime-msg";
+import type { Refusal } from "@genkan/shared/runtime-msg";
 import { inLife } from "../shared/in-life";
 import type { Connection } from "./connection";
 

@@ -1,5 +1,5 @@
-import type { PresenceRequestFrame } from "@chromium-bridge/shared/generated/envelope";
-import type { Refusal } from "@chromium-bridge/shared/runtime-msg";
+import type { PresenceRequestFrame } from "@genkan/shared/generated/envelope";
+import type { Refusal } from "@genkan/shared/runtime-msg";
 import { useCallback, useState } from "react";
 import { flushSync } from "react-dom";
 import { send } from "@/lib/messages";

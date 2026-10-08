@@ -213,7 +213,7 @@ export function listSectionViolations(
 }
 
 /** Whole-word matches on both sides, each with the input that motivated it:
- *   BB_LOG must not be satisfied by BB_LOG_FORMAT  -> the env var name is matched as a word
+ *   GENKAN_LOG must not be satisfied by GENKAN_LOG_FORMAT  -> the env var name is matched as a word
  *   "errors" must not stand in for "error"         -> each accepted value is matched as a word */
 export function envTableViolations(
   doc: string,
@@ -295,17 +295,17 @@ if (import.meta.main) {
     {
       // The presence spelling stays in the family so a doc naming the retired per-action presence domain fails.
       label: "enclave domain string",
-      family: /chromium-bridge-(?:enclave|presence)-v\d+/g,
+      family: /genkan-(?:enclave|presence)-v\d+/g,
       allowed: new Set([CHALLENGE_DOMAIN]),
     },
     {
-      label: "BB_LOG env var",
-      family: /\bBB_LOG[A-Z0-9_]*/g,
+      label: "GENKAN_LOG env var",
+      family: /\bGENKAN_LOG[A-Z0-9_]*/g,
       allowed: new Set([LOG_LEVEL_ENV, LOG_FORMAT_ENV]),
     },
     {
       label: "client-name env var",
-      family: /\bCHROMIUM_BRIDGE_[A-Z0-9_]+\b/g,
+      family: /\bGENKAN_CLIENT[A-Z0-9_]*/g,
       allowed: new Set([CLIENT_NAME_ENV]),
     },
     {

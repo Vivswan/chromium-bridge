@@ -286,7 +286,7 @@ fn policy_get_answers_ok_false_without_a_usable_store() {
 
 #[test]
 fn audit_read_answers_the_lines_the_cli_prints() {
-    // The page reads the host trail through the same reader as `chromium-bridge audit`: the newest `limit`
+    // The page reads the host trail through the same reader as `genkan audit`: the newest `limit`
     // lines, an unparsable line kept in its position, the older count, and the live path for the CLI's
     // empty state. Pinned at the frame, where the words leave the host.
     use crate::protocol::control::{AuditReadLimit, AuditTrailEntry};

@@ -8,12 +8,8 @@
 // its guard is refused before it is ever sent) and the reply must match the
 // PageReply envelope (anything else is refused, never shape-sniffed).
 
-import {
-  ClickProbeSchema,
-  ContentMsgSchema,
-  PageReplySchema,
-} from "@chromium-bridge/shared/content-msg";
-import type { OpArgs } from "@chromium-bridge/shared/generated/ops";
+import { ClickProbeSchema, ContentMsgSchema, PageReplySchema } from "@genkan/shared/content-msg";
+import type { OpArgs } from "@genkan/shared/generated/ops";
 import { browser } from "wxt/browser";
 import type { ClickProbe } from "../../dom/page-api";
 import type { PageOp } from "../../shared/page-ops";

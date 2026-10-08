@@ -5,7 +5,7 @@
 // page_eval success values, and page_eval exceptions (a thrown secret must
 // not bypass the mask).
 
-import type { StorageReadResultWire } from "@chromium-bridge/shared/content-msg";
+import type { StorageReadResultWire } from "@genkan/shared/content-msg";
 import { beforeEach, describe, expect, test } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 import { withFreshPolicy } from "@/lib/background/effective-policy";

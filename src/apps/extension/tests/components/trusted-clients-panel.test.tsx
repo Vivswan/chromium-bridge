@@ -2,7 +2,7 @@
 // exactly the host's frame, the host's request is signed here, and a value the host's grammar refuses is refused
 // before anything is posted. The panel never claims a pairing itself: the host's verdict and the re-read list do.
 
-import type { PresenceRequestFrame } from "@chromium-bridge/shared/generated/envelope";
+import type { PresenceRequestFrame } from "@genkan/shared/generated/envelope";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";

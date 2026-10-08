@@ -16,16 +16,12 @@
 // port.ts drives `collaborator`; messages.ts routes the options-page actions here. Every result updates the mirror;
 // a solicited one also resolves the pending request. The panic brake, its latch, and the re-post watermark are brake.ts.
 
-import {
-  isKillStatusFrame,
-  type KillMirror,
-  KillMirrorSchema,
-} from "@chromium-bridge/shared/enclave";
+import { isKillStatusFrame, type KillMirror, KillMirrorSchema } from "@genkan/shared/enclave";
 import type {
   KillEngageWire,
   KillStatusResult,
   KillStatusWire,
-} from "@chromium-bridge/shared/generated/envelope";
+} from "@genkan/shared/generated/envelope";
 import pLimit from "p-limit";
 import { browser } from "wxt/browser";
 import { inLife } from "../shared/in-life";
@@ -49,7 +45,7 @@ function killGateFromStored(stored: Stored<KillMirror>): KillGate {
       reason:
         "the stored kill-switch mirror is malformed; refusing all bridge activity " +
         "(possible tampering). Engage the kill switch from the options page, or run " +
-        "`chromium-bridge kill` / `unkill`, to rewrite it.",
+        "`genkan kill` / `unkill`, to rewrite it.",
     };
   }
   switch (stored.value.state) {
@@ -60,14 +56,14 @@ function killGateFromStored(stored: Stored<KillMirror>): KillGate {
         allowed: false,
         reason:
           "the bridge kill switch is engaged; all bridge activity is refused until " +
-          "it is explicitly released (`chromium-bridge unkill`)",
+          "it is explicitly released (`genkan unkill`)",
       };
     case "unknown":
       return {
         allowed: false,
         reason:
           "the host cannot read its kill-switch state; failing closed until it can " +
-          "(see `chromium-bridge doctor`)",
+          "(see `genkan doctor`)",
       };
   }
 }
@@ -224,7 +220,7 @@ export function handleKillFrame(msg: KillStatusResult): Promise<void> {
   return frames
     .value(() => handleOneKillFrame(msg, seq, settleRelease))
     .catch((e) => {
-      console.warn("[bb] kill frame handling failed", e);
+      console.warn("[genkan] kill frame handling failed", e);
     });
 }
 

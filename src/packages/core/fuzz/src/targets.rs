@@ -6,27 +6,23 @@
 
 use std::io::Cursor;
 
-use chromium_bridge_core::enclave::{base64_decode, base64_encode};
-use chromium_bridge_core::identity::NATIVE_HOST_ID;
-use chromium_bridge_core::ipc::BrowserLabel;
-use chromium_bridge_core::policy::{
+use genkan_core::enclave::{base64_decode, base64_encode};
+use genkan_core::identity::NATIVE_HOST_ID;
+use genkan_core::ipc::BrowserLabel;
+use genkan_core::policy::{
     fold, relaxes, restricts_or_equal, PolicyDoc, PolicyHistory, PolicyOverlay, PolicyStore,
     PolicyValues,
 };
-use chromium_bridge_core::protocol::control::{
-    classify_nm_frame, FrameDisposition, HostControlTag,
-};
-use chromium_bridge_core::protocol::{
+use genkan_core::protocol::control::{classify_nm_frame, FrameDisposition, HostControlTag};
+use genkan_core::protocol::{
     bridge_read, bridge_write, mcp_read, mcp_write, nm_read_frame, nm_write_frame, AttachRequest,
     BridgeReq, BridgeResp, Handshake, JsonRpc, ParsedResp, BRIDGE_MAX_LINE, MCP_MAX_LINE,
     NM_MAX_OUTGOING,
 };
-use chromium_bridge_core::registration::{
-    fuzz_api, manifest_ownership, pointer_ownership, Ownership,
-};
-use chromium_bridge_core::runtime_record::RuntimeRecord as _;
-use chromium_bridge_core::webauthn::encode::P256_GENERATOR_SEC1;
-use chromium_bridge_core::webauthn::{
+use genkan_core::registration::{fuzz_api, manifest_ownership, pointer_ownership, Ownership};
+use genkan_core::runtime_record::RuntimeRecord as _;
+use genkan_core::webauthn::encode::P256_GENERATOR_SEC1;
+use genkan_core::webauthn::{
     parse_registration, verify_assertion, Action, Assertion, AuthenticatorData, CosePublicKey,
     Credential, CredentialId, Nonce, Registration, RpId, Statement, StatementDomain,
 };
@@ -274,8 +270,8 @@ pub fn classify_frame(data: &[u8]) {
 
 /// The two ours/foreign decisions over attacker-controlled JSON on disk: the host manifest and the
 /// extension pointer file. The security property is never-delete-foreign, so each oracle re-derives the
-/// only accepted shape (the manifest: our exact host id plus one of the two markers this project has ever
-/// written; the pointer: an object whose single key is `external_update_url` naming the Web Store) and
+/// only accepted shape (the manifest: our exact host id plus the exact marker this project writes; the
+/// pointer: an object whose single key is `external_update_url` naming the Web Store) and
 /// requires everything else to come back Foreign. The Windows pointer is a registry value compared by
 /// string equality, not bytes a parser judges, so it is outside this target.
 pub fn registration_manifest(data: &[u8]) {
@@ -286,10 +282,7 @@ pub fn registration_manifest(data: &[u8]) {
             && manifest
                 .get("description")
                 .and_then(|v| v.as_str())
-                .is_some_and(|d| {
-                    d == fuzz_api::MANIFEST_DESCRIPTION
-                        || d == fuzz_api::MANIFEST_DESCRIPTION_LEGACY
-                })
+                .is_some_and(|d| d == fuzz_api::MANIFEST_DESCRIPTION)
     });
     match manifest_ownership(&contents) {
         Ownership::Ours => assert!(expect_ours, "claimed Ours outside the accepted shape"),

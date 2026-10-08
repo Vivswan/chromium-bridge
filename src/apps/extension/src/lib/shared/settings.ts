@@ -1,11 +1,11 @@
 // Read the browser-owned settings from browser.storage.local, falling back to their defaults.
 //
-// The schema and the defaults live in @chromium-bridge/shared (settings.ts
+// The schema and the defaults live in @genkan/shared (settings.ts
 // there); this module is only the browser.storage glue. A stored value that
 // fails its field's schema reads as that field's default, so a corrupted or
 // tampered record can never smuggle an unexpected shape into the callers.
 
-import { DEFAULTS, type Settings, SettingsSchema } from "@chromium-bridge/shared/settings";
+import { DEFAULTS, type Settings, SettingsSchema } from "@genkan/shared/settings";
 import type { ZodType } from "zod";
 import { readKeyOr, readKeys } from "./read-key";
 

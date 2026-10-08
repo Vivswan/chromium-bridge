@@ -49,8 +49,8 @@ exclude:
 # its workspace name and its own tree through WXT's `@/`; the bundler resolves both, so the lint must.
 # The first matching prefix wins, so the generated subtree's prefix comes before the package's.
 aliases:
-  "@chromium-bridge/shared/generated/": src/packages/shared/generated/
-  "@chromium-bridge/shared/": src/packages/shared/src/
+  "@genkan/shared/generated/": src/packages/shared/generated/
+  "@genkan/shared/": src/packages/shared/src/
   "@/": src/apps/extension/src/
 
 # from -> the layers it may import; a layer absent here imports nothing outside itself.

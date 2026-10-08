@@ -1,6 +1,6 @@
-# Chromium Bridge
+# Genkan
 
-Chromium Bridge lets an MCP client drive the Chromium browser you are already signed into, through a browser extension and a native-messaging host, with no debug port. Code is the source of truth: where a page states a behaviour, the file that owns it is the authority. The security pages say what the bridge promises and where it stops; the rest say how to use, run, and change it.
+Genkan lets an MCP client drive the Chromium browser you are already signed into, through a browser extension and a native-messaging host, with no debug port. Code is the source of truth: where a page states a behaviour, the file that owns it is the authority. The security pages say what the bridge promises and where it stops; the rest say how to use, run, and change it.
 
 ## I want to...
 
@@ -12,7 +12,7 @@ Chromium Bridge lets an MCP client drive the Chromium browser you are already si
 | Admit an MCP client, or revoke one | [CLI: trusted clients](cli.md#trusted-clients-pair-client--revoke-client--list-clients) |
 | Halt everything now, and release the halt later | [CLI: kill switch](cli.md#kill-switch-kill--unkill) |
 | Change what tools are allowed to do | [CLI: host-owned policy](cli.md#host-owned-policy-policy) |
-| Read the logs and the audit trail | [CLI: logging and audit](cli.md#logging-and-audit-bb_log--bb_log_format) |
+| Read the logs and the audit trail | [CLI: logging and audit](cli.md#logging-and-audit-genkan_log--genkan_log_format) |
 | Read a `doctor` row you did not expect, or recover an unreadable kill record | [Troubleshooting](troubleshooting.md) |
 | Use the bridge from WSL | [Troubleshooting: running under WSL](troubleshooting.md#running-under-wsl) |
 | Know what the bridge promises an attacker cannot do, and where that stops | [Security: the bar](security.md#the-bar-in-one-line) |

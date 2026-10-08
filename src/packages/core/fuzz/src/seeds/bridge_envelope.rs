@@ -4,10 +4,8 @@
 
 use std::io::Cursor;
 
-use chromium_bridge_core::protocol::control::host_control_type;
-use chromium_bridge_core::protocol::{
-    bridge_read, BridgeReq, BridgeResp, BridgeSignal, ParsedResp,
-};
+use genkan_core::protocol::control::host_control_type;
+use genkan_core::protocol::{bridge_read, BridgeReq, BridgeResp, BridgeSignal, ParsedResp};
 use serde_json::{json, Value};
 
 use super::{edited, ndjson, repeated_key, tool_requests, without, Directory, Seed};

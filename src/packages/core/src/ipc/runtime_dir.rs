@@ -85,16 +85,16 @@ fn resolve_from_env() -> PathBuf {
                 std::env::var_os("USERPROFILE").map(|p| PathBuf::from(p).join("AppData/Local"))
             })
             .unwrap_or_else(std::env::temp_dir)
-            .join("chromium-bridge")
+            .join("genkan")
     }
 
     #[cfg(target_os = "macos")]
     {
         match std::env::var_os(RUNTIME_DIR_VAR) {
-            Some(xdg) => PathBuf::from(xdg).join("chromium-bridge"),
+            Some(xdg) => PathBuf::from(xdg).join("genkan"),
             None => {
                 let home = std::env::var_os("HOME").unwrap_or_else(|| "/tmp".into());
-                PathBuf::from(home).join("Library/Application Support/chromium-bridge")
+                PathBuf::from(home).join("Library/Application Support/genkan")
             }
         }
     }
@@ -102,13 +102,13 @@ fn resolve_from_env() -> PathBuf {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         if let Some(xdg) = std::env::var_os(RUNTIME_DIR_VAR) {
-            PathBuf::from(xdg).join("chromium-bridge")
+            PathBuf::from(xdg).join("genkan")
         } else if let Some(xdg_cache) = std::env::var_os("XDG_CACHE_HOME") {
-            PathBuf::from(xdg_cache).join("chromium-bridge")
+            PathBuf::from(xdg_cache).join("genkan")
         } else if let Some(home) = std::env::var_os("HOME") {
-            PathBuf::from(home).join(".cache/chromium-bridge")
+            PathBuf::from(home).join(".cache/genkan")
         } else {
-            std::env::temp_dir().join(format!("chromium-bridge-{}", crate::sys::effective_uid()))
+            std::env::temp_dir().join(format!("genkan-{}", crate::sys::effective_uid()))
         }
     }
 }
@@ -146,11 +146,7 @@ mod tests {
     #[test]
     fn a_runtime_dir_whose_socket_path_overruns_sun_path_is_refused_by_name() {
         let guard = scratch_runtime_dir();
-        let fixed = guard
-            .root()
-            .join("x")
-            .join("chromium-bridge")
-            .join(SOCKET_FILENAME);
+        let fixed = guard.root().join("x").join("genkan").join(SOCKET_FILENAME);
         let pad_to_fit = SOCKET_PATH_MAX
             .checked_sub(fixed.as_os_str().as_bytes().len())
             .and_then(|room| room.checked_add(1))
@@ -160,7 +156,7 @@ mod tests {
         let dir = RuntimeDir::ensure().expect("a socket path at the limit resolves");
         assert_eq!(
             dir.as_path(),
-            at_limit.join("chromium-bridge"),
+            at_limit.join("genkan"),
             "the resolved dir hangs off the variable"
         );
         assert_eq!(
@@ -171,7 +167,7 @@ mod tests {
         UnixListener::bind(dir.socket_path()).expect("bind takes a path at the limit");
 
         let over = guard.point_at_absent(&"x".repeat(pad_to_fit.checked_add(1).unwrap()));
-        let sock = over.join("chromium-bridge").join(SOCKET_FILENAME);
+        let sock = over.join("genkan").join(SOCKET_FILENAME);
         let err = RuntimeDir::resolve().expect_err("one byte over the limit is refused");
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{err}");
         let text = err.to_string();

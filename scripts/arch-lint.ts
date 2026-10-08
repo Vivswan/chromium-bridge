@@ -6,7 +6,7 @@
 //   layer that owns no source file               -> exit 1, never a declaration that matches any tree
 //   computed import() or require()               -> exit 2, never a silently dropped edge
 //
-// The extension reaches the shared package only through the declaration's `aliases` (`@chromium-bridge/shared/`,
+// The extension reaches the shared package only through the declaration's `aliases` (`@genkan/shared/`,
 // WXT's `@/`); a bare specifier with no alias is not followed, so without them an undeclared dependency would pass.
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";

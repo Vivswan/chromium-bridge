@@ -12,7 +12,7 @@
 //
 // `pubkey` is base64 of the PUBKEY_LEN-byte X9.63 uncompressed point
 // (0x04||X||Y) and `key_id` is the lowercase-hex SHA-256 of those bytes (also
-// the fingerprint the user compares against `chromium-bridge pair` output). The
+// the fingerprint the user compares against `genkan pair` output). The
 // domains, bounds, and lengths are the GENERATED constants from the Rust
 // enclave module (generated/enclave.ts); this module owns only the verification
 // logic.
@@ -24,8 +24,8 @@ import {
   MAX_NONCE_BYTES,
   PUBKEY_LEN,
   SIG_LEN,
-} from "@chromium-bridge/shared/generated/enclave";
-import { POLICY_DOMAIN } from "@chromium-bridge/shared/generated/policy";
+} from "@genkan/shared/generated/enclave";
+import { POLICY_DOMAIN } from "@genkan/shared/generated/policy";
 
 const utf8 = new TextEncoder();
 
@@ -192,7 +192,7 @@ export type PairingVerifyResult =
 /** Pairing-time (ceremony) verification. The proof is checked for internal
  * consistency (key_id matches pubkey) and a valid signature by its OWN
  * embedded key. The returned key material is trustworthy ONLY because the
- * user then compares its fingerprint against the `chromium-bridge pair`
+ * user then compares its fingerprint against the `genkan pair`
  * terminal output before it is pinned; outside the ceremony, use
  * verifyProofAgainstPin. */
 export async function verifyPairingProof(

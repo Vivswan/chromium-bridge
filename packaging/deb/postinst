@@ -4,4 +4,4 @@
 # yet is a valid install (exit 3: nothing to register, the binary prints the hint), unlike a registration
 # that failed, which leaves the package unconfigured so the failure is seen.
 set -e
-/usr/bin/chromium-bridge doctor --fix --system || test $? -eq 3
+/usr/bin/genkan doctor --fix --system || test $? -eq 3

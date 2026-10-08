@@ -43,7 +43,7 @@ pub const POLL_INTERVAL: Duration = Duration::from_secs(1);
 #[serde(deny_unknown_fields)]
 pub struct Trust {
     epoch: u64,
-    /// The global kill switch; `true` refuses all bridge activity until `chromium-bridge unkill`.
+    /// The global kill switch; `true` refuses all bridge activity until `genkan unkill`.
     killed: bool,
     /// Epoch of the last kill transition, either direction (0 = never). The native host pushes the kill state
     /// when it moves, so an engage and a release inside one poll interval still reach the extension's mirror.
@@ -426,7 +426,7 @@ impl Admission {
                     tag,
                     "SECURITY: harness admitted WITHOUT attestation enforcement -- no trusted client has \
                      been paired yet (unenrolled). Any same-user process that runs our binary can drive \
-                     the browser. Run `chromium-bridge pair-client` to enroll trusted clients and turn on \
+                     the browser. Run `genkan pair-client` to enroll trusted clients and turn on \
                      enforcement. See SECURITY.md."
                 );
                 // The subject is printed bare, not as a shell argument: an X.500 subject can carry quotes

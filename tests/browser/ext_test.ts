@@ -9,11 +9,11 @@
  * chain under this same launch mode); what this run lacks is a registered
  * host manifest. A probe below calls connectNative with a deliberately
  * unregistered host id and pins the "host not found" disconnect. The real
- * end-to-end run is `BB_REAL_E2E=1 bun tests/browser/integration_e2e.ts`.
+ * end-to-end run is `GENKAN_REAL_E2E=1 bun tests/browser/integration_e2e.ts`.
  *
  * Run:  bun tests/browser/ext_test.ts
  * Requires: bun + puppeteer-core + system Chrome (CHROME_BIN).
- * Override the loaded extension dir with BB_EXT_DIR.
+ * Override the loaded extension dir with GENKAN_EXT_DIR.
  */
 
 import * as fs from "node:fs";
@@ -22,7 +22,7 @@ import * as path from "node:path";
 import puppeteer, { type Target } from "puppeteer-core";
 import { assertIsolatedBrowserOrSkip, extensionDir, finishSuite } from "./browser-safety";
 
-// The load-unpacked target is the built bundle (BB_EXT_DIR overrides; the
+// The load-unpacked target is the built bundle (GENKAN_EXT_DIR overrides; the
 // env var name and default path live in browser-safety.ts, shared by every
 // suite). Run `bun run --cwd src/apps/extension build` first (run_all.ts /
 // moon run test-browser handle this).
@@ -65,7 +65,7 @@ async function main(): Promise<void> {
     }
   }
 
-  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "bb-ext-"));
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "genkan-ext-"));
   console.log("user-data-dir:", userDataDir);
   console.log("launching Chrome with extension...");
 
@@ -171,9 +171,7 @@ async function main(): Promise<void> {
       () =>
         new Promise<string>((resolve) => {
           try {
-            const port = chrome.runtime.connectNative(
-              "com.vivswan.chromium_bridge.host_probe_unregistered",
-            );
+            const port = chrome.runtime.connectNative("com.vivswan.genkan.host_probe_unregistered");
             const timer = setTimeout(() => {
               port.disconnect();
               resolve("no disconnect within 5s");
@@ -195,7 +193,7 @@ async function main(): Promise<void> {
     // ---- i18n: English default, three locales, native-name picker ----------
     // NOT covered here: the language ROUND TRIP extension -> host and back in
     // all three locales needs a registered native host, which this suite does
-    // not launch; it belongs with the BB_REAL_E2E integration run. The locale
+    // not launch; it belongs with the GENKAN_REAL_E2E integration run. The locale
     // swap below exercises only the storage-driven half.
     // CJK is written as \u escapes so the check-cjk gate's allowlist stays
     // limited to the locale bundles and the native-names module.
@@ -324,7 +322,7 @@ async function main(): Promise<void> {
 
     console.log("\n✓ Extension loads and service worker boots with expected APIs.");
     console.log(
-      "  Full native-messaging chain: BB_REAL_E2E=1 bun tests/browser/integration_e2e.ts",
+      "  Full native-messaging chain: GENKAN_REAL_E2E=1 bun tests/browser/integration_e2e.ts",
     );
   } finally {
     await browser.close();

@@ -1,5 +1,5 @@
 [package]
-name = "chromium-bridge"
+name = "genkan"
 version.workspace = true
 edition.workspace = true
 description = "Bridge an MCP client to your real Chromium browser via an extension + native messaging host"
@@ -7,11 +7,11 @@ license-file.workspace = true
 publish.workspace = true
 
 [[bin]]
-name = "chromium-bridge"
+name = "genkan"
 path = "src/main.rs"
 
 [dependencies]
-chromium-bridge-core.workspace = true
+genkan-core.workspace = true
 
 [lints]
 workspace = true
@@ -21,16 +21,16 @@ workspace = true
 # reverse it on removal: they run as root with no user context and may not write into home directories
 # (docs/release.md).
 [package.metadata.deb]
-maintainer = "Chromium Bridge maintainers <noreply@github.com>"
+maintainer = "Genkan maintainers <noreply@github.com>"
 section = "utils"
 priority = "optional"
 depends = "$auto"
 maintainer-scripts = "../../../packaging/deb"
 extended-description = """\
 Authenticated MCP bridge to your real Chromium browsers (Brave, Chrome): a native-messaging host and \
-MV3 extension, no debug port. Installing registers it with every account's browsers; `chromium-bridge \
+MV3 extension, no debug port. Installing registers it with every account's browsers; `genkan \
 doctor` shows the state."""
 assets = [
-    ["target/release/chromium-bridge", "usr/bin/", "755"],
-    ["../../../README.md", "usr/share/doc/chromium-bridge/README.md", "644"],
+    ["target/release/genkan", "usr/bin/", "755"],
+    ["../../../README.md", "usr/share/doc/genkan/README.md", "644"],
 ]

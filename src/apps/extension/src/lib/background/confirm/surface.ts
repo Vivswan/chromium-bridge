@@ -6,7 +6,7 @@
 // service.resolveConfirm); this provider itself only reports denials: the
 // window was closed without answering, or it failed to open at all.
 
-import type { ConfirmPayload } from "@chromium-bridge/shared/confirm";
+import type { ConfirmPayload } from "@genkan/shared/confirm";
 import { browser } from "wxt/browser";
 import type { ConfirmationProvider, Presentation } from "./service";
 
@@ -62,7 +62,7 @@ export class ExtensionWindowProvider implements ConfirmationProvider {
           this.open.set(win.id, deny);
         },
         (e: unknown) => {
-          console.error("[bb] confirmation window failed to open; denying", e);
+          console.error("[genkan] confirmation window failed to open; denying", e);
           deny();
         },
       );

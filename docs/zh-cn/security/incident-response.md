@@ -33,13 +33,13 @@
 
 在补丁就绪之前, 用户可以自行缩小影响范围:
 
-1. **启用紧急开关:** `chromium-bridge kill`, 或扩展的选项页。每一次工具调用都被拒绝, 每一条浏览器连接都在大约一秒内被切断; 命令及其解除由 [CLI 页面](../cli.md#紧急开关-kill--unkill)负责。
-2. **禁用单个工具:** `chromium-bridge policy restrict --disabled-tools <list>` 把它加入主机策略的 `disabledTools`。该标志给出的是完整的、逗号分隔的禁用列表, 所以要保留其中已有的工具。这次写入是免费的 (没有在场提示), 因为限制只会移除能力。
+1. **启用紧急开关:** `genkan kill`, 或扩展的选项页。每一次工具调用都被拒绝, 每一条浏览器连接都在大约一秒内被切断; 命令及其解除由 [CLI 页面](../cli.md#紧急开关-kill--unkill)负责。
+2. **禁用单个工具:** `genkan policy restrict --disabled-tools <list>` 把它加入主机策略的 `disabledTools`。该标志给出的是完整的、逗号分隔的禁用列表, 所以要保留其中已有的工具。这次写入是免费的 (没有在场提示), 因为限制只会移除能力。
    - 随后主机会在任何桥接流量之前, 以 [`ERROR_SPECS`](../../../src/packages/core/src/error.rs) 中稳定的 `TOOL_DISABLED` 代码拒绝该工具, 扩展也会在自己的边界上强制执行推送下来的策略。
    - 先禁用 `page_eval` 这类高风险工具。之后重新启用它属于放宽, 需要付出一次在终端确认之后的经签名策略写入, 这是有意为之的设计 ([CLI 页面](../cli.md#主机持有的策略-policy))。
 3. **撤销白名单, 或关闭「所有站点」:** 在选项页或弹出窗口中, 移除对受影响源的授权, 并确认 `allowAllSites` 已关闭。移除授权同时也会撤销该源的主机权限。
 4. **停止扩展:** 在 `chrome://extensions` 中禁用或移除它。原生消息主机的 stdin 收到 EOF 并退出, 桥接随之被切断; 也结束 MCP 客户端会话, 让 MCP 服务器退出, 并用 `doctor` 确认 ([CLI 页面](../cli.md#doctor--status-只读自检))。
-5. **卸载主机清单:** `chromium-bridge uninstall` 移除原生消息注册, 此后 Chrome 无法再拉起主机 ([CLI 页面](../cli.md#doctor---fix--uninstall-原生消息注册))。
+5. **卸载主机清单:** `genkan uninstall` 移除原生消息注册, 此后 Chrome 无法再拉起主机 ([CLI 页面](../cli.md#doctor---fix--uninstall-原生消息注册))。
 
 ## 修复与验证
 

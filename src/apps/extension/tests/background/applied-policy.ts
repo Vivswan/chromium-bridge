@@ -1,4 +1,4 @@
-import { POLICY_DEFAULTS, type PolicyValues } from "@chromium-bridge/shared/generated/policy";
+import { POLICY_DEFAULTS, type PolicyValues } from "@genkan/shared/generated/policy";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 
 /** Arm the cutover and store an in-scope applied policy, so a decision runs

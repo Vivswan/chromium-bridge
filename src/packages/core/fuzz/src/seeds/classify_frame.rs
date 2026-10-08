@@ -2,15 +2,15 @@
 //! forwards, every host->browser frame it must flag as a stray, and malformed requests. The reader
 //! is the classifier itself: forwarded or handled is accepted, `Malformed` is the refusal.
 
-use chromium_bridge_core::audit::{extension_kind_wire_names, AuditKind};
-use chromium_bridge_core::enclave::{base64_encode, REASON_CODES, SIG_LEN};
-use chromium_bridge_core::policy::PolicyDoc;
-use chromium_bridge_core::protocol::control::{
+use genkan_core::audit::{extension_kind_wire_names, AuditKind};
+use genkan_core::enclave::{base64_encode, REASON_CODES, SIG_LEN};
+use genkan_core::policy::PolicyDoc;
+use genkan_core::protocol::control::{
     classify_nm_frame, AdminControl, EnclaveControl, EnrollOutcome, ExtensionAuditKind,
     FrameDisposition, HostRequest, KillStatus, PolicyControl, PolicyStatus, PresenceOutcome,
     WebAuthnControl,
 };
-use chromium_bridge_core::protocol::BridgeReq;
+use genkan_core::protocol::BridgeReq;
 use serde_json::{json, Value};
 
 use super::{compact, edited, tool_requests, without, Directory, Seed};

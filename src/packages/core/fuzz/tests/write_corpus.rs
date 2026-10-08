@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use chromium_bridge_fuzz::seeds::{
+use genkan_fuzz::seeds::{
     corpus, json_dictionary, render_dictionary, write_corpus, Expect, Summary, Written,
     JSON_DICTIONARY,
 };

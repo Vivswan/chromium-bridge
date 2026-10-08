@@ -5,7 +5,7 @@
 // deliberately NOT here: it stays in service-worker memory only (see
 // enrollment.ts), so a persisted copy can never be replayed against.
 //
-// Record shapes are the Zod schemas in @chromium-bridge/shared (enclave.ts
+// Record shapes are the Zod schemas in @genkan/shared (enclave.ts
 // there); every read parses against them, and key records additionally pass
 // the cryptographic self-check below. Anything that fails either is treated
 // as absent - which fails closed at the enrollment gate.
@@ -17,7 +17,7 @@ import {
   EnclavePinSchema,
   type PendingPairing,
   PendingPairingSchema,
-} from "@chromium-bridge/shared/enclave";
+} from "@genkan/shared/enclave";
 import { browser } from "wxt/browser";
 import { z } from "zod";
 import { readKey, readKeyOr, type Stored } from "../shared/read-key";
@@ -43,11 +43,11 @@ async function keyRecordIsWhole(rec: { keyId: string; pubkeyB64: string }): Prom
   try {
     const pub = parsePubkey(rec.pubkeyB64);
     if ((await computeKeyId(pub)) !== rec.keyId) {
-      console.warn("[bb] stored enclave key record fails fingerprint check; ignoring it");
+      console.warn("[genkan] stored enclave key record fails fingerprint check; ignoring it");
       return false;
     }
   } catch (e) {
-    console.warn("[bb] stored enclave key record does not decode; ignoring it", e);
+    console.warn("[genkan] stored enclave key record does not decode; ignoring it", e);
     return false;
   }
   return true;

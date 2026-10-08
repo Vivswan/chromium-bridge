@@ -1,38 +1,38 @@
-# CLI and troubleshooting: chromium-bridge
+# CLI and troubleshooting: genkan
 
-> This doc is the reference for the `chromium-bridge` binary's subcommands and the common troubleshooting paths. The CLI is the management surface over the core. Components and process boundaries are in [architecture.md](./architecture.md); on-disk paths are in [architecture.md section 4.3](./architecture.md#43-on-disk-artifacts).
+> This doc is the reference for the `genkan` binary's subcommands and the common troubleshooting paths. The CLI is the management surface over the core. Components and process boundaries are in [architecture.md](./architecture.md); on-disk paths are in [architecture.md section 4.3](./architecture.md#43-on-disk-artifacts).
 
 ## Subcommand overview
 
-`chromium-bridge` is a single binary with subcommand dispatch:
+`genkan` is a single binary with subcommand dispatch:
 
 | Invocation | Mode | Description |
 |------|------|------|
-| `chromium-bridge` (no arguments) | MCP server | Default mode, spawned by the MCP client. The first instance becomes the broker; later instances attach to it. |
-| `chromium-bridge --native-host [--label <browser>]` | native host | Thin bridge, spawned by the browser via the host manifest. Never invoked by hand. |
-| `chromium-bridge doctor [--json]` (alias `status`) | read-only diagnostics | Environment and connectivity self-check; changes nothing. `--json` prints the report as one versioned object. |
-| `chromium-bridge doctor --list` | read-only diagnostics | One line per known browser and scope: detection and registration state. |
-| `chromium-bridge doctor --paths` | read-only diagnostics | Prints the runtime dir and lock path this environment resolves to, creating neither. |
-| `chromium-bridge doctor --fix` | repair / install | Registers (or re-registers) this binary as the native-messaging host for your account. The only mutating form of doctor. |
-| `chromium-bridge doctor --fix --system` | repair / install (root) | The same, machine-wide: into the root-owned directories every account's browser reads. What the `.deb` runs after install. |
-| `chromium-bridge uninstall [--system]` | removal | Removes exactly the registrations this project wrote in that scope, nothing else. |
-| `chromium-bridge pair [--reset] [--file-store]` | enrollment | Mints the host key the extension pins, behind a confirmation typed on the terminal; the key lives in the OS credential store, or in a 0600 file with `--file-store`. |
-| `chromium-bridge revoke <browser>` | enrollment | Forgets that browser's enrolled authenticators; no proof needed, the browser enrolls again from its options page. |
-| `chromium-bridge revoke --all` | enrollment | Starts over: deletes the host key and the signed policy baseline, forgets every browser and every trusted client. A bare `revoke` is refused with the usage. |
-| `chromium-bridge enclave-status [--json]` | read-only | Prints the host key state, where it lives, and its fingerprint. |
-| `chromium-bridge pair-client --name <label> (--this-parent \| --hash <hex> \| --signer <id>)` | trusted clients | Adds an MCP-client harness to the trusted-client allowlist; presence-gated. |
-| `chromium-bridge revoke-client --name <label>` | trusted clients | Removes a client; a live broker drops it immediately. |
-| `chromium-bridge list-clients` | read-only | Prints the trusted-client allowlist. |
-| `chromium-bridge kill` | kill switch | Engages the global kill switch: halts ALL bridge activity until an explicit release. |
-| `chromium-bridge unkill` | kill switch | Releases the kill switch, after proof of user presence: a confirmation typed on an interactive terminal (a piped stdin is refused). |
-| `chromium-bridge policy show [--json]` | read-only | Prints the host-owned policy state and the effective policy. |
-| `chromium-bridge policy set <field flags> [--json]` | policy (grant lane) | Mints a fresh SIGNED policy baseline behind the typed terminal confirmation. Signature-only; refuses up front where no host key exists. |
-| `chromium-bridge policy restrict <field flags>` | policy (free lane) | Applies an unsigned restriction overlay; no prompt, because it can only remove capability. |
-| `chromium-bridge policy history [--json]` | read-only | Prints the superseded-revision ring. |
-| `chromium-bridge policy rollback --revision <n> [--entry <id>] [--json]` | policy | Re-derives a past revision's effective policy as a FRESH write, never a replay; `--entry` names one record where the revision appears more than once. |
-| `chromium-bridge audit [--limit <n>]` | read-only audit | Prints the on-disk audit trail, oldest first (default: the last 200 records). |
-| `chromium-bridge lang [show \| set <value>]` | display language | Reads or sets the display language the options page shows; `lang` alone is `show`. |
-| `chromium-bridge --help` | help | Usage information. |
+| `genkan` (no arguments) | MCP server | Default mode, spawned by the MCP client. The first instance becomes the broker; later instances attach to it. |
+| `genkan --native-host [--label <browser>]` | native host | Thin bridge, spawned by the browser via the host manifest. Never invoked by hand. |
+| `genkan doctor [--json]` (alias `status`) | read-only diagnostics | Environment and connectivity self-check; changes nothing. `--json` prints the report as one versioned object. |
+| `genkan doctor --list` | read-only diagnostics | One line per known browser and scope: detection and registration state. |
+| `genkan doctor --paths` | read-only diagnostics | Prints the runtime dir and lock path this environment resolves to, creating neither. |
+| `genkan doctor --fix` | repair / install | Registers (or re-registers) this binary as the native-messaging host for your account. The only mutating form of doctor. |
+| `genkan doctor --fix --system` | repair / install (root) | The same, machine-wide: into the root-owned directories every account's browser reads. What the `.deb` runs after install. |
+| `genkan uninstall [--system]` | removal | Removes exactly the registrations this project wrote in that scope, nothing else. |
+| `genkan pair [--reset] [--file-store]` | enrollment | Mints the host key the extension pins, behind a confirmation typed on the terminal; the key lives in the OS credential store, or in a 0600 file with `--file-store`. |
+| `genkan revoke <browser>` | enrollment | Forgets that browser's enrolled authenticators; no proof needed, the browser enrolls again from its options page. |
+| `genkan revoke --all` | enrollment | Starts over: deletes the host key and the signed policy baseline, forgets every browser and every trusted client. A bare `revoke` is refused with the usage. |
+| `genkan enclave-status [--json]` | read-only | Prints the host key state, where it lives, and its fingerprint. |
+| `genkan pair-client --name <label> (--this-parent \| --hash <hex> \| --signer <id>)` | trusted clients | Adds an MCP-client harness to the trusted-client allowlist; presence-gated. |
+| `genkan revoke-client --name <label>` | trusted clients | Removes a client; a live broker drops it immediately. |
+| `genkan list-clients` | read-only | Prints the trusted-client allowlist. |
+| `genkan kill` | kill switch | Engages the global kill switch: halts ALL bridge activity until an explicit release. |
+| `genkan unkill` | kill switch | Releases the kill switch, after proof of user presence: a confirmation typed on an interactive terminal (a piped stdin is refused). |
+| `genkan policy show [--json]` | read-only | Prints the host-owned policy state and the effective policy. |
+| `genkan policy set <field flags> [--json]` | policy (grant lane) | Mints a fresh SIGNED policy baseline behind the typed terminal confirmation. Signature-only; refuses up front where no host key exists. |
+| `genkan policy restrict <field flags>` | policy (free lane) | Applies an unsigned restriction overlay; no prompt, because it can only remove capability. |
+| `genkan policy history [--json]` | read-only | Prints the superseded-revision ring. |
+| `genkan policy rollback --revision <n> [--entry <id>] [--json]` | policy | Re-derives a past revision's effective policy as a FRESH write, never a replay; `--entry` names one record where the revision appears more than once. |
+| `genkan audit [--limit <n>]` | read-only audit | Prints the on-disk audit trail, oldest first (default: the last 200 records). |
+| `genkan lang [show \| set <value>]` | display language | Reads or sets the display language the options page shows; `lang` alone is `show`. |
+| `genkan --help` | help | Usage information. |
 
 The options page offers the same actions. Terminal-only by design: `uninstall` (below), and the `--system` and `--manifest-dir` repair forms. The page's audit view widens with Show older up to the frame's cap; the whole trail is `audit --limit <n>`. The site allowlist, allow-all, and tab grouping stay on the page. They are browser-local extension storage (see the [privacy policy](./privacy-policy.md)), which no subcommand reads or writes.
 
@@ -46,7 +46,7 @@ It reports:
 - **Lock file**: whether the bridge lock file exists in the runtime directory, and the endpoint and pid recorded in it.
 - **Server reachability**: a passive connect-and-drop probe against our own bridge socket (no bytes sent), reporting `reachable` / `not reachable`.
 - **Kill switch**: engaged, clear, or unreadable. `doctor` exits non-zero while the switch is engaged or its state cannot be read.
-- **Native-host registrations**: for each known browser (chrome, chromium, brave, edge, vivaldi, opera), whether it looks present on this machine and the state of its registration for `com.vivswan.chromium_bridge.host` in each scope, `user` and `system`: `ok`, `missing`, `stale` (ours, but its launch path dangles), or not ours.
+- **Native-host registrations**: for each known browser (chrome, chromium, brave, edge, vivaldi, opera), whether it looks present on this machine and the state of its registration for `com.vivswan.genkan.host` in each scope, `user` and `system`: `ok`, `missing`, `stale` (ours, but its launch path dangles), or not ours.
 - **The verdict follows the browser's lookup order**: the per-user entry when one exists, the system one only in its absence. The diagnosis comes from the same resolver `--fix` repairs with, so what doctor reports is exactly what `--fix` produces.
 
 The options page's Host registration section shows the same rows (lock file, server, kill switch, policy baseline, the verdict), worded by the host, and its identity section shows where the host key lives, as `enclave-status` prints it.
@@ -57,18 +57,18 @@ The options page's Host registration section shows the same rows (lock file, ser
 
 "Server not reachable" means `doctor` read the endpoint from the lock file, but the probe failed. Common causes:
 
-1. **No MCP server is running.** The server is spawned by the MCP client (such as Claude Code) inside its session, so with no client session up nothing is listening and "not reachable" is the expected state. Confirm the client has the chromium-bridge server configured and a session open.
+1. **No MCP server is running.** The server is spawned by the MCP client (such as Claude Code) inside its session, so with no client session up nothing is listening and "not reachable" is the expected state. Confirm the client has the genkan server configured and a session open.
 2. **Stale lock file.** A previous broker exited abnormally and left the lock file behind. The next server instance detects and replaces a stale lock at startup; just start a new client session.
 
 > `doctor` only probes; it does not repair. It will not kill processes, delete the lock file, or restart the server. When you see "not reachable", re-establish the session from the MCP client side rather than intervening in processes by hand.
 
-If a registration is missing or stale for a browser you use, that browser cannot spawn the native host. Run `chromium-bridge doctor --fix`, then restart the browser.
+If a registration is missing or stale for a browser you use, that browser cannot spawn the native host. Run `genkan doctor --fix`, then restart the browser.
 
 ## doctor --fix / uninstall (native-messaging registration)
 
 The CLI below registers the native-messaging host from a terminal through one engine (`registration.rs`). It needs nothing but the host binary itself, on desktops, headless machines, and CI alike.
 
-`chromium-bridge doctor --fix` (re-)registers the binary you invoke it from as the native-messaging host: for each targeted browser it writes the `com.vivswan.chromium_bridge.host.json` manifest where that browser looks for it, and beside it the extension pointer (below).
+`genkan doctor --fix` (re-)registers the binary you invoke it from as the native-messaging host: for each targeted browser it writes the `com.vivswan.genkan.host.json` manifest where that browser looks for it, and beside it the extension pointer (below).
 
 - **Idempotent re-registration:** on a fresh machine `--fix` is also the first registration, and after moving the binary it refreshes a stale one.
 - **Nothing built, downloaded, or copied:** the manifest points at this binary's own resolved path, through a small per-browser wrapper script on macOS/Linux.
@@ -78,14 +78,14 @@ The CLI below registers the native-messaging host from a terminal through one en
 Selecting browsers:
 
 ```text
-chromium-bridge doctor --fix                      # every browser detected for this user
-chromium-bridge doctor --fix --browser chrome,brave
-chromium-bridge doctor --fix --all                # every known browser, detected or not
-chromium-bridge doctor --fix --manifest-dir DIR   # exact NativeMessagingHosts dir
+genkan doctor --fix                      # every browser detected for this user
+genkan doctor --fix --browser chrome,brave
+genkan doctor --fix --all                # every known browser, detected or not
+genkan doctor --fix --manifest-dir DIR   # exact NativeMessagingHosts dir
                                                   # (absolute; repeatable), for a Chromium
                                                   # variant we do not know by name
-sudo chromium-bridge doctor --fix --system        # machine-wide, for every account (root only)
-chromium-bridge doctor --list                     # read-only: detection + registration state
+sudo genkan doctor --fix --system        # machine-wide, for every account (root only)
+genkan doctor --list                     # read-only: detection + registration state
 ```
 
 The scope is the command's: `--system` writes the directories every account's browser reads (`/etc/opt/chrome/native-messaging-hosts`, `/Library/Google/Chrome/NativeMessagingHosts`, `HKLM`) and needs root, while without it a root shell is refused, since root has no browser of its own.
@@ -108,7 +108,7 @@ Known browser keys: `chrome`, `chromium`, `brave`, `edge`, `vivaldi`, `opera`. "
 - **Nothing detected:** `--fix` refuses and asks for an explicit selection instead of guessing, exiting 3 rather than 1 so an installer can tell "no browser yet" from a failure.
 - **The options page's Host registration section** repairs the same two ways, for this account: every detected browser, or one named browser from its row. `--manifest-dir` and `--system` stay in the terminal: a directory is typed, and root is held, where the page has neither.
 
-`chromium-bridge uninstall` reverses exactly what this project registers (via `--fix`) in one scope: the per-browser manifests, the extension pointers, and the wrapper scripts. Re-pass any `--manifest-dir` you registered, and `--system` (as root) for a machine-wide registration.
+`genkan uninstall` reverses exactly what this project registers (via `--fix`) in one scope: the per-browser manifests, the extension pointers, and the wrapper scripts. Re-pass any `--manifest-dir` you registered, and `--system` (as root) for a machine-wide registration.
 
 Before deleting a manifest or pointer it verifies the content is ours (our host id and description marker; the Web Store update url alone). Anything else, or anything it cannot read, is reported and left in place as a warning, never a failure, so a package removal completes; the other artifacts of ours beside it still go, and only one of ours that cannot be removed fails the command.
 
@@ -120,7 +120,7 @@ The extension pointer, beside each manifest:
 
 | OS | Where `--fix` writes it | What the browser does with it |
 | --- | --- | --- |
-| macOS | `<user data dir>/External Extensions/<extension id>.json`, naming the Web Store; with `--system`, `/Library/Application Support/Google/Chrome/External Extensions/` for every browser (Chromium's one machine-wide directory) | asks "Enable Chromium Bridge?" on its next start |
+| macOS | `<user data dir>/External Extensions/<extension id>.json`, naming the Web Store; with `--system`, `/Library/Application Support/Google/Chrome/External Extensions/` for every browser (Chromium's one machine-wide directory) | asks "Enable Genkan?" on its next start |
 | Windows | `HKCU\<vendor>\Extensions\<extension id>`, value `update_url`; `HKLM` with `--system` | the same prompt |
 | Linux | nothing; `doctor` prints `pointer n/a` | it would install from a pointer silently, which the threat model refuses: add the extension from the Web Store yourself |
 
@@ -132,29 +132,29 @@ Whether the listing exists yet, and what to load until it does, is [quickstart.m
 
 Platform notes:
 
-- **Linux AppImage / temp paths**: a registration pointing into an AppImage's FUSE mount (or any temp dir) breaks when that path disappears. `--fix` warns when it detects this. Copy the binary to a stable location first, for example `~/.local/lib/chromium-bridge/chromium-bridge`, and run `doctor --fix` from there.
-- **Windows**: registration is an `HKCU` registry key per browser plus a manifest file under `%LOCALAPPDATA%\chromium-bridge` (with `--system`, `HKLM` and `%ProgramFiles%\chromium-bridge`). The code path compiles and mirrors what the retired `install.ps1` script did, but it has not yet been verified on a real Windows machine; treat Windows registration as best-effort until then. Browser detection on Windows (per-user profile directories; Opera under the roaming profile) carries the same caveat.
+- **Linux AppImage / temp paths**: a registration pointing into an AppImage's FUSE mount (or any temp dir) breaks when that path disappears. `--fix` warns when it detects this. Copy the binary to a stable location first, for example `~/.local/lib/genkan/genkan`, and run `doctor --fix` from there.
+- **Windows**: registration is an `HKCU` registry key per browser plus a manifest file under `%LOCALAPPDATA%\genkan` (with `--system`, `HKLM` and `%ProgramFiles%\genkan`). The code path compiles and mirrors what the retired `install.ps1` script did, but it has not yet been verified on a real Windows machine; treat Windows registration as best-effort until then. Browser detection on Windows (per-user profile directories; Opera under the roaming profile) carries the same caveat.
 
 ## Enrollment: pair / revoke / enclave-status
 
 The host-key ceremony gives the extension one host identity to pin:
 
-- `chromium-bridge pair` asks for a confirmation typed on the terminal (a piped stdin is refused before any prompt), mints a P-256 host key, keeps it in the OS credential store (the Keychain, the Credential Manager, or the Secret Service), and prints the key's SHA-256 fingerprint. Compare that fingerprint with the one the extension shows on its enrollment screen; a mismatch means something sits between them.
-- `chromium-bridge pair --file-store` keeps the key in a 0600 file in the runtime directory instead, for a machine with no usable credential store. The choice is explicit: a store failure is reported, never silently redirected to the file.
-- `chromium-bridge pair --reset` asks for the confirmation first, then removes the previous key (from whichever store holds it) and mints a fresh one; the extension must re-pin. Browser enrollments and client pairings stay.
+- `genkan pair` asks for a confirmation typed on the terminal (a piped stdin is refused before any prompt), mints a P-256 host key, keeps it in the OS credential store (the Keychain, the Credential Manager, or the Secret Service), and prints the key's SHA-256 fingerprint. Compare that fingerprint with the one the extension shows on its enrollment screen; a mismatch means something sits between them.
+- `genkan pair --file-store` keeps the key in a 0600 file in the runtime directory instead, for a machine with no usable credential store. The choice is explicit: a store failure is reported, never silently redirected to the file.
+- `genkan pair --reset` asks for the confirmation first, then removes the previous key (from whichever store holds it) and mints a fresh one; the extension must re-pin. Browser enrollments and client pairings stay.
 - When the credential store does not answer, a `--file-store` reset proceeds with a warning that an entry the store may hold stays behind. Run `pair --reset` again once the store answers; `revoke --all` would also forget every browser and client.
-- `chromium-bridge enclave-status [--json]` reports the current state read-only: whether a key is present, which store holds it, and its fingerprint.
+- `genkan enclave-status [--json]` reports the current state read-only: whether a key is present, which store holds it, and its fingerprint.
 
 User presence for the browser's own acts (releasing the kill switch, enrolling a second browser) is a WebAuthn tap on the browser's authenticator, verified by the host. The options page's identity section enrolls the authenticator; its kill panel, its policy editor, and its trusted-clients form each answer the host's presence request with the proof the kill-switch table below describes.
 
 Forgetting is friction-free, because it only removes capability:
 
-- `chromium-bridge revoke <browser>` forgets every authenticator enrolled under that label. The browser's acts fall back to the confirmation window until it enrolls again from its options page; when it was the last enrolled browser, the next enrollment is first-time again.
+- `genkan revoke <browser>` forgets every authenticator enrolled under that label. The browser's acts fall back to the confirmation window until it enrolls again from its options page; when it was the last enrolled browser, the next enrollment is first-time again.
 - The label is the browser's host manifest `--label` (`brave`, `chrome`), or `default` for every browser on a shared unlabelled manifest (Windows, the shared Chrome manifest), so `revoke default` forgets all of them. An unknown label is refused with the labels the record holds.
 - The options page offers the same for its own browser: Forget this browser, in the identity section's authenticator block. It acts on that host's label, so browsers sharing a manifest are forgotten together.
-- `chromium-bridge revoke --all` starts over in one step: the host key is deleted, the policy record goes (the signed baseline and any restriction overlay), every browser is forgotten, and every trusted client is revoked, so a paired machine admits no client until `pair-client` trusts one again. The kill switch is not touched; release it with `unkill`.
+- `genkan revoke --all` starts over in one step: the host key is deleted, the policy record goes (the signed baseline and any restriction overlay), every browser is forgotten, and every trusted client is revoked, so a paired machine admits no client until `pair-client` trusts one again. The kill switch is not touched; release it with `unkill`.
 - After `revoke --all` a connected extension fails closed either way: by the revocation push when the credential store confirmed the key gone and the record write landed, otherwise at its next key verification. `revoke <browser>` leaves the host key and the pin alone.
-- A bare `chromium-bridge revoke` names neither and is refused with the usage.
+- A bare `genkan revoke` names neither and is refused with the usage.
 
 The CLI never raises that prompt: its own grants (`pair`, `pair-client`, `unkill`, `policy set`) are confirmed by the typed phrase on a real terminal.
 
@@ -163,11 +163,11 @@ The CLI never raises that prompt: its own grants (`pair`, `pair-client`, `unkill
 By default (unenrolled), any process that spawns the server is served, and every start logs that open posture at ERROR level. Creating the trusted-client allowlist closes it:
 
 ```text
-chromium-bridge pair-client --name claude-code --this-parent
-chromium-bridge pair-client --name codex --hash <sha256-hex>
-chromium-bridge pair-client --name claude-desktop --signer <signer-id>
-chromium-bridge list-clients
-chromium-bridge revoke-client --name codex
+genkan pair-client --name claude-code --this-parent
+genkan pair-client --name codex --hash <sha256-hex>
+genkan pair-client --name claude-desktop --signer <signer-id>
+genkan list-clients
+genkan revoke-client --name codex
 ```
 
 - `--this-parent` measures the process that spawned this CLI invocation (run it from inside the client you want to trust). Unix only: on Windows the server keys a harness on the creator of its stdin pipe, which a console command has none of, so pair with `--hash` or `--signer` using the values the server logs at startup while unenrolled.
@@ -180,7 +180,7 @@ Once the allowlist exists, anything unmatched fails closed, including an identit
 
 ## Kill switch (kill / unkill)
 
-`chromium-bridge kill` is the emergency brake: one command that stops every MCP client from driving every connected browser, at once.
+`genkan kill` is the emergency brake: one command that stops every MCP client from driving every connected browser, at once.
 
 - Live browser connections are severed within about a second, and new ones are refused. In-flight tool calls fail fast with `CONNECTION_LOST`.
 - Every subsequent tool call, from every attached client, is refused with the stable `BRIDGE_KILLED` error code. Clients stay connected so they can show you the refusal instead of dying silently.
@@ -191,7 +191,7 @@ Nothing releases the switch on its own. Release demands proof of user presence o
 
 | Surface | The proof a release demands |
 | --- | --- |
-| `chromium-bridge unkill` on the CLI | an explicit confirmation typed on a real terminal; a piped stdin is refused outright, so no script or background program can quietly reopen the bridge through the CLI |
+| `genkan unkill` on the CLI | an explicit confirmation typed on a real terminal; a piped stdin is refused outright, so no script or background program can quietly reopen the bridge through the CLI |
 | the extension's options page | a WebAuthn assertion from a credential enrolled under that browser; the browser's confirmation window only when the browser has no enrolled credential |
 
 Every release attempt is audited: a granted release with the auth path that decided it (`auth=tty`, `auth=webauthn:<fingerprint>`, `auth=confirm_window`), a refusal at the presence gate with the presence error, and a refusal by an unwritable record after presence passed with both.
@@ -202,14 +202,14 @@ If either command reports that the trust record is unreadable, see [the recovery
 
 ## Host-owned policy (policy)
 
-`chromium-bridge policy` is the host-owned policy surface. The concepts (the signed baseline, the unsigned restriction overlay, the extension-side ratchet) are in [architecture.md section 11.3](./architecture.md#113-host-owned-policy-and-language-sync); the `policy baseline:` doctor row is read on the [troubleshooting page](./troubleshooting.md#doctor-reports-policy-baseline-none-yet).
+`genkan policy` is the host-owned policy surface. The concepts (the signed baseline, the unsigned restriction overlay, the extension-side ratchet) are in [architecture.md section 11.3](./architecture.md#113-host-owned-policy-and-language-sync); the `policy baseline:` doctor row is read on the [troubleshooting page](./troubleshooting.md#doctor-reports-policy-baseline-none-yet).
 
 ```text
-chromium-bridge policy show [--json]              # read-only: store state + effective policy
-chromium-bridge policy set <field flags> [--json] # GRANT lane: sign a fresh baseline (terminal confirmation)
-chromium-bridge policy restrict <field flags>     # FREE lane: unsigned restriction overlay
-chromium-bridge policy history [--json]           # read-only: superseded revisions
-chromium-bridge policy rollback --revision <n> [--entry <id>] [--json]
+genkan policy show [--json]              # read-only: store state + effective policy
+genkan policy set <field flags> [--json] # GRANT lane: sign a fresh baseline (terminal confirmation)
+genkan policy restrict <field flags>     # FREE lane: unsigned restriction overlay
+genkan policy history [--json]           # read-only: superseded revisions
+genkan policy rollback --revision <n> [--entry <id>] [--json]
 ```
 
 **Field flags.** `set` and `restrict` share one flag per policy field, spelled as the kebab-case of its camelCase wire name: `--cdp-mode`, `--file-upload`, `--handle-dialog`, `--page-eval`, `--confirm-high-risk-click`, `--confirm-page-eval`, `--presence-confirm`, `--confirm-tab-close`, `--warn-precise-snapshot`, `--eval-mask`, `--host-reverify-ms`, `--confirm-grace-ms`, `--click-toast-timeout-ms`, `--eval-toast-timeout-ms`, and `--disabled-tools`.
@@ -249,22 +249,22 @@ Every policy transition is audited with the surface and, for grants, the presenc
 The extension's display language is shared state the host keeps (`lang.json` in the runtime directory) and pushes to every connected browser, so one choice reaches them all. The options page sets it with the Display language picker in its header; the terminal twin is:
 
 ```text
-chromium-bridge lang              # the current value (same as `lang show`)
-chromium-bridge lang set zh_TW    # one of: auto, en, zh_CN, zh_TW
+genkan lang              # the current value (same as `lang show`)
+genkan lang set zh_TW    # one of: auto, en, zh_CN, zh_TW
 ```
 
 - **Language is not policy:** not signed, not ratcheted, and unable to affect any security decision, which is why it needs no confirmation on either surface.
 - **A value outside the list is refused** at argv and at the page's frame alike, and the previous value stands; setting the current value changes nothing and pushes nothing.
 - **A connected browser swaps on the host's next push** (within its poll interval); an offline one adopts the value when it next connects.
 
-## Logging and audit (BB_LOG / BB_LOG_FORMAT)
+## Logging and audit (GENKAN_LOG / GENKAN_LOG_FORMAT)
 
 Diagnostics in both modes go to **stderr** (stdout carries protocol frames). Two environment variables control the output:
 
 | Variable | Values | Effect |
 |------|------|------|
-| `BB_LOG` | `error` \| `warn` \| `info` (default) \| `debug` | Log threshold. `info` and above print audit lines; set `warn`/`error` to silence auditing. |
-| `BB_LOG_FORMAT` | `text` (default) \| `json` | Format of audit lines. `json` emits one JSON object per line, convenient for machine collection. |
+| `GENKAN_LOG` | `error` \| `warn` \| `info` (default) \| `debug` | Log threshold. `info` and above print audit lines; set `warn`/`error` to silence auditing. |
+| `GENKAN_LOG_FORMAT` | `text` (default) \| `json` | Format of audit lines. `json` emits one JSON object per line, convenient for machine collection. |
 
 **Audit events (stderr)**: every security decision emits one audit line: tool calls (with `req`, `tool`, `outcome`, and on error the stable `code` from [`ERROR_SPECS`](../src/packages/core/src/error.rs), plus `dur_ms`), harness admissions and refusals, client pairing and revocation, host-key revocations, kill-switch transitions, WebAuthn enrollments and presence verdicts, policy writes, and the extension's confirmation and enrollment decisions (forwarded over the port).
 
@@ -275,16 +275,16 @@ The same events are appended as strict JSON records to a durable, size-capped `a
 - **Two extension-local kinds never reach `audit.log`:** `policy_refused` and `policy_compromised` stay in the extension's own audit ring by design, outside the forwarding whitelist; the host records every policy transition as `policy_write`.
 
 ```text
-# BB_LOG_FORMAT default (text)
+# GENKAN_LOG_FORMAT default (text)
 [AUDIT] 2026-10-03 23:12:44.302Z  kill_engage     surface=cli outcome=ok
-# BB_LOG_FORMAT=json
+# GENKAN_LOG_FORMAT=json
 {"kind":"audit","v":1,"ts_ms":1791069164310,"event_kind":"kill_engage","surface":"cli","outcome":"ok"}
 ```
 
 Read the durable trail with the read-only subcommand:
 
 ```text
-$ chromium-bridge audit --limit 20
+$ genkan audit --limit 20
 2026-07-17 19:04:11.201Z  kill_engage     surface=cli outcome=ok
 2026-07-17 19:04:12.480Z  tool_call       tool=tab_list outcome=error code=BRIDGE_KILLED dur_ms=0
 2026-07-17 19:05:02.913Z  kill_release    surface=cli outcome=ok

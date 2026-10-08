@@ -12,10 +12,10 @@
 
 #![cfg(unix)]
 
-use chromium_bridge_core::allowlist;
-use chromium_bridge_core::audit::{audit_path, AuditKind, AuditRecord, Surface};
-use chromium_bridge_core::runtime_record::RuntimeRecord as _;
-use chromium_bridge_core::trust::Trust;
+use genkan_core::allowlist;
+use genkan_core::audit::{audit_path, AuditKind, AuditRecord, Surface};
+use genkan_core::runtime_record::RuntimeRecord as _;
+use genkan_core::trust::Trust;
 
 #[test]
 fn revoke_always_writes_an_audit_trail_entry() {

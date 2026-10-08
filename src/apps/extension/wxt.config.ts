@@ -78,7 +78,7 @@ export default defineConfig({
   manifest: async () => {
     const { EXTENSION_MANIFEST_KEY } = await import("../../packages/shared/generated/identity");
     return {
-      name: "Chromium Bridge",
+      name: "Genkan",
       // The Chrome-resolved description reads from _locales; the in-extension
       // UI additionally honors the user's chosen display language (lib/i18n).
       default_locale: "en",
@@ -89,7 +89,7 @@ export default defineConfig({
       host_permissions: [],
       optional_host_permissions: ["<all_urls>"],
       action: {
-        default_title: "Chromium Bridge",
+        default_title: "Genkan",
       },
       icons: {
         "16": "icons/icon16.png",

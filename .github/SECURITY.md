@@ -27,7 +27,7 @@ Only the latest release is supported.
 
 ## Scope
 
-chromium-bridge drives a real, logged-in browser on the user's machine. It can read page content, cookies (including httpOnly), and web storage, and can execute JavaScript in pages.
+genkan drives a real, logged-in browser on the user's machine. It can read page content, cookies (including httpOnly), and web storage, and can execute JavaScript in pages.
 
 In scope:
 
@@ -75,7 +75,7 @@ The extension installs on Chrome 134 or later (the manifest's `minimum_chrome_ve
 
 What differs on Windows:
 
-- The runtime directory is normally `%LOCALAPPDATA%\chromium-bridge`, falling back to the temp directory when `LOCALAPPDATA` and `USERPROFILE` are unset; the temp directory is not guaranteed per-user.
+- The runtime directory is normally `%LOCALAPPDATA%\genkan`, falling back to the temp directory when `LOCALAPPDATA` and `USERPROFILE` are unset; the temp directory is not guaranteed per-user.
 - The image is measured by re-opening its path; the [ledger](../docs/security/trust-boundaries.md#boundary-2-rust-mcp-server---native-host--bridge-socket-ndjson) records what that leaves open.
 - The parent pid Windows records is caller-selectable at `CreateProcess`, so the harness is measured as the creator of the server's stdin pipe instead; a console, or pipe ends opened by two different processes, fails closed, and the [ledger's boundary 1](../docs/security/trust-boundaries.md#boundary-1-mcp-client---rust-mcp-server--stdio-json-rpc-20) records what remains.
 - `pair-client --this-parent` is Unix-only for the same reason (a console command has no pipe creator); the [CLI page](../docs/cli.md#trusted-clients-pair-client--revoke-client--list-clients) owns how Windows pairs.
@@ -102,7 +102,7 @@ These are host-owned policy defaults: the table shows the signed policy contract
 
 How relaxing works:
 
-- **One write surface, one cost.** `chromium-bridge policy set` signs the policy document with the host key behind a confirmation typed on a real terminal; `policy restrict` tightens for free. The [CLI page](../docs/cli.md#host-owned-policy-policy) owns both lanes.
+- **One write surface, one cost.** `genkan policy set` signs the policy document with the host key behind a confirmation typed on a real terminal; `policy restrict` tightens for free. The [CLI page](../docs/cli.md#host-owned-policy-policy) owns both lanes.
 - **Never silent.** The extension's options page carries no relaxing toggle; its policy editor can only tighten.
 - **Always in force.** The site allowlist (per-origin) and the global kill switch apply regardless of the policy.
 
@@ -145,23 +145,23 @@ Each release publishes:
 
 | Asset | Integrity data |
 |-------|----------------|
-| `chromium-bridge-<tag>-<platform>-<arch>.tar.gz` | its SHA-256, a separate SHA-256 of the binary inside it (`<name>.binary.sha256`), a build provenance attestation covering both, and that attestation's Sigstore bundle as `chromium-bridge-<tag>-<platform>-<arch>.attestation.jsonl` |
+| `genkan-<tag>-<platform>-<arch>.tar.gz` | its SHA-256, a separate SHA-256 of the binary inside it (`<name>.binary.sha256`), a build provenance attestation covering both, and that attestation's Sigstore bundle as `genkan-<tag>-<platform>-<arch>.attestation.jsonl` |
 | the extension zip, the CycloneDX SBOM | their own attestations and `<asset>.attestation.jsonl` bundles, verifiable the same way |
 | the whole release | `attestation.json`: one Sigstore bundle whose single attestation lists every asset as a subject, written by the managed publish stage before the draft flips live |
 
 Verification is yours to run, before you execute anything from an archive:
 
 ```sh
-shasum -a 256 -c chromium-bridge-<tag>-<platform>-<arch>.tar.gz.sha256
-gh attestation verify chromium-bridge-<tag>-<platform>-<arch>.tar.gz --repo Vivswan/chromium-bridge
+shasum -a 256 -c genkan-<tag>-<platform>-<arch>.tar.gz.sha256
+gh attestation verify genkan-<tag>-<platform>-<arch>.tar.gz --repo Vivswan/chromium-bridge
 # after extraction, the bare binary can be verified on its own:
-gh attestation verify chromium-bridge --repo Vivswan/chromium-bridge
-shasum -a 256 -c chromium-bridge-<tag>-<platform>-<arch>.binary.sha256
+gh attestation verify genkan --repo Vivswan/chromium-bridge
+shasum -a 256 -c genkan-<tag>-<platform>-<arch>.binary.sha256
 ```
 
 Offline variants of the `gh attestation verify` calls:
 
-- `--bundle chromium-bridge-<tag>-<platform>-<arch>.attestation.jsonl` reads the attestation from the downloaded release asset instead of GitHub's attestations API. The one bundle covers the archive and the bare binary alike; verification picks the entry matching the asset's digest.
+- `--bundle genkan-<tag>-<platform>-<arch>.attestation.jsonl` reads the attestation from the downloaded release asset instead of GitHub's attestations API. The one bundle covers the archive and the bare binary alike; verification picks the entry matching the asset's digest.
 - `gh attestation verify <asset> -R Vivswan/chromium-bridge --bundle attestation.json` works for any downloaded asset, through the release-level bundle.
 
 Verifying the whole archive also covers the bundled `extension/dist`. Registration (`doctor --fix`) points browsers at the binary as it sits on disk; it downloads nothing and adds no verification step of its own. Verify first, then register.
@@ -175,7 +175,7 @@ Building it yourself skips the release pipeline entirely:
 ```sh
 git checkout <tag>
 bun scripts/build-repro.ts
-shasum -a 256 target/release/chromium-bridge   # compare with the release's .binary.sha256
+shasum -a 256 target/release/genkan   # compare with the release's .binary.sha256
 ```
 
 Known gaps, stated plainly:
@@ -231,9 +231,9 @@ The security-relevant identifiers, each owned by the Rust core and generated int
 
 | Identifier | Value | Note |
 |------------|-------|------|
-| native-messaging host id | `com.vivswan.chromium_bridge.host` | also the manifest filename stem and the extension's `connectNative` argument; `scripts/check-extension-id.ts` keeps every copy pinned to `identity.rs` |
-| host-key credential-store entry prefix | `com.vivswan.chromium-bridge.enclave.signing.v1` | the runtime directory's digest is the suffix, so two directories never share one entry |
-| host-key challenge domain | `chromium-bridge-enclave-v1` | host and extension changed together |
+| native-messaging host id | `com.vivswan.genkan.host` | also the manifest filename stem and the extension's `connectNative` argument; `scripts/check-extension-id.ts` keeps every copy pinned to `identity.rs` |
+| host-key credential-store entry prefix | `com.vivswan.genkan.enclave.signing.v1` | the runtime directory's digest is the suffix, so two directories never share one entry |
+| host-key challenge domain | `genkan-enclave-v1` | host and extension changed together |
 | extension id | `mkjjlmjbcljpcfkfadfmhblmmddkdihf` | derived from the manifest `key` |
 
 ## Lock poisoning policy (std::sync::Mutex)

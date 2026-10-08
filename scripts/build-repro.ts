@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-// Deterministic release build of the chromium-bridge binary: byte-identical across clean rebuilds and checkout
+// Deterministic release build of the genkan binary: byte-identical across clean rebuilds and checkout
 // paths on one machine. Matching a hash built elsewhere also needs the rust-toolchain.toml toolchain via rustup
 // (a distro/Homebrew rustc embeds different std paths) and the same platform SDK/linker; the release workflow
 // builds with this script. See .github/SECURITY.md "Release artifact integrity".
@@ -45,7 +45,7 @@ function findCargo(): string {
 }
 
 const bbCargo = findCargo();
-env.BB_CARGO = bbCargo;
+env.GENKAN_CARGO = bbCargo;
 const cargoDir = dirname(bbCargo);
 // cargo's default rustc lookup is PATH (RUSTC and build.rustc override it), so the chosen cargo's directory
 // is put there.

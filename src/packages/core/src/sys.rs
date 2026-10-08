@@ -89,7 +89,7 @@ mod tests {
 
     /// Set to a scratch directory, turns a re-invocation of the test binary
     /// into the signalled child.
-    const CHILD_ENV: &str = "CHROMIUM_BRIDGE_TEST_SIGNAL_CHILD";
+    const CHILD_ENV: &str = "GENKAN_TEST_SIGNAL_CHILD";
     const TEST_NAME: &str = "sys::tests::signal_cleanup_runs_even_when_the_signal_arrives_blocked";
 
     /// Kills and reaps the child on every exit path, so a failing run never

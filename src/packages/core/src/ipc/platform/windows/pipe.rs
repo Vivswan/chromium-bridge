@@ -507,7 +507,7 @@ mod tests {
 
     fn unique_name(tag: &str) -> PipeName {
         PipeName::for_broker(
-            &std::env::temp_dir().join(format!("chromium-bridge-pipe-test-{tag}")),
+            &std::env::temp_dir().join(format!("genkan-pipe-test-{tag}")),
             std::process::id(),
         )
     }
@@ -551,7 +551,7 @@ mod tests {
 
     /// Set in the child this test spawns of itself; the parent role is the
     /// test run without it.
-    const STDIN_PEER_CHILD: &str = "CHROMIUM_BRIDGE_TEST_STDIN_PEER_CHILD";
+    const STDIN_PEER_CHILD: &str = "GENKAN_TEST_STDIN_PEER_CHILD";
 
     #[test]
     fn the_stdin_pipe_creator_is_the_process_that_spawned_us() {

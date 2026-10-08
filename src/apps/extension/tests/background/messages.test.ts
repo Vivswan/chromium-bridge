@@ -11,7 +11,7 @@ import {
   type RuntimeMsgType,
   type RuntimeRequest,
   runtimeResponseSchema,
-} from "@chromium-bridge/shared/runtime-msg";
+} from "@genkan/shared/runtime-msg";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import type { Browser } from "wxt/browser";
 import { fakeBrowser } from "wxt/testing/fake-browser";

@@ -20,8 +20,8 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use chromium_bridge_core::protocol::{bridge_write, nm_write_frame};
-use chromium_bridge_core::tools::{self, ToolId};
+use genkan_core::protocol::{bridge_write, nm_write_frame};
+use genkan_core::tools::{self, ToolId};
 use serde_json::{json, Map, Value};
 
 use crate::targets::Target;
@@ -329,12 +329,12 @@ pub fn render_dictionary(words: &BTreeSet<Vec<u8>>) -> String {
 mod tests {
     use std::collections::BTreeMap;
 
-    use chromium_bridge_core::identity::NATIVE_HOST_ID;
-    use chromium_bridge_core::protocol::{
+    use genkan_core::identity::NATIVE_HOST_ID;
+    use genkan_core::protocol::{
         MCP_META_CLIENT_CAPABILITIES, MCP_META_PROTOCOL_VERSION, MCP_META_SERVER_INFO,
         MCP_PROTOCOL_VERSION,
     };
-    use chromium_bridge_core::registration::fuzz_api;
+    use genkan_core::registration::fuzz_api;
 
     use super::*;
 
@@ -438,7 +438,7 @@ mod tests {
     /// libFuzzer parses the dictionary itself, so the rendered file must read back, under its syntax
     /// (quoted words, `\\` `\"` `\xHH`, at most 64 bytes), to exactly the word set, and the derivation
     /// must reach the literals the fuzzer most needs to synthesize (our host id, the MCP protocol pin,
-    /// the `_meta` keys, the legacy manifest marker). The cap and the escapes are exercised on a
+    /// the `_meta` keys, the manifest ownership marker). The cap and the escapes are exercised on a
     /// synthetic directory whose words sit exactly on and over the cap, so the filter is seen refusing.
     #[test]
     fn the_dictionary_reads_back_under_libfuzzer_syntax_and_carries_the_protocol_literals() {
@@ -516,7 +516,7 @@ mod tests {
             MCP_META_PROTOCOL_VERSION,
             MCP_META_CLIENT_CAPABILITIES,
             MCP_META_SERVER_INFO,
-            fuzz_api::MANIFEST_DESCRIPTION_LEGACY,
+            fuzz_api::MANIFEST_DESCRIPTION,
         ] {
             assert!(
                 words.contains(literal.as_bytes()),

@@ -1,12 +1,12 @@
-# Privacy Policy: Chromium Bridge
+# Privacy Policy: Genkan
 
 _Last updated: 2026-10-04_
 
-Chromium Bridge is an open-source browser extension that connects an MCP client (such as Claude Code, Claude Desktop, or Codex) to your local Chromium browser through a native-messaging host that runs on your own computer. This policy explains what the extension accesses and what it does, and does not, do with that data.
+Genkan is an open-source browser extension that connects an MCP client (such as Claude Code, Claude Desktop, or Codex) to your local Chromium browser through a native-messaging host that runs on your own computer. This policy explains what the extension accesses and what it does, and does not, do with that data.
 
 ## Summary
 
-**Chromium Bridge does not collect, transmit, or sell any personal data.** It has no analytics, no telemetry, and no remote servers. Everything the extension does happens on your own machine: sites act only after you approve them, and every high-risk action asks for your confirmation.
+**Genkan does not collect, transmit, or sell any personal data.** It has no analytics, no telemetry, and no remote servers. Everything the extension does happens on your own machine: sites act only after you approve them, and every high-risk action asks for your confirmation.
 
 ## What the extension can access
 
@@ -54,7 +54,7 @@ The extension does **not** load or execute remotely-hosted code. The JavaScript 
 
 ## Data sharing and sale
 
-Chromium Bridge does **not** sell or share your data with anyone. The only party that receives anything is the MCP client you yourself configured and pointed at the bridge.
+Genkan does **not** sell or share your data with anyone. The only party that receives anything is the MCP client you yourself configured and pointed at the bridge.
 
 ## Contact
 

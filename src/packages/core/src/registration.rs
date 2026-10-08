@@ -20,7 +20,7 @@
 //!                   manifest points straight at the binary and registration is an HKCU registry key; compiles but is
 //!                   unverified on a real Windows machine (docs/cli.md)
 //! pointer        -> beside the manifest, the external-extension pointer the browser reads on its next start and
-//!                   answers with "Enable Chromium Bridge?" (macOS a file, Windows a key, Linux none: see
+//!                   answers with "Enable Genkan?" (macOS a file, Windows a key, Linux none: see
 //!                   [`ExtensionPointer`]); removing it makes the browser drop the extension it installed from it
 //! ```
 
@@ -36,15 +36,14 @@ use crate::cli::{FixTargets, UninstallArgs};
 use crate::identity::{NATIVE_HOST_ID, PINNED_EXTENSION_ID};
 use serde::Serialize;
 
-/// The `description` the legacy `install.sh` / `install.ps1` wrote, verbatim.
-const MANIFEST_DESCRIPTION_LEGACY: &str = "Chromium Bridge native messaging host";
-
 /// The `description` this engine writes: the ownership marker.
-const MANIFEST_DESCRIPTION: &str =
-    "Chromium Bridge native messaging host (managed by chromium-bridge)";
+const MANIFEST_DESCRIPTION: &str = "Genkan native messaging host (managed by genkan)";
 
 /// First line of every wrapper this project writes.
 const WRAPPER_SHEBANG: &str = "#!/usr/bin/env bash";
+
+/// Second line of every wrapper this project writes: the ownership marker.
+const WRAPPER_MARKER: &str = "# managed by genkan; safe to delete";
 
 /// The only update source Chrome accepts for an externally installed extension on macOS and Windows: the
 /// Web Store, which serves the extension under [`PINNED_EXTENSION_ID`].
@@ -53,7 +52,7 @@ const WEB_STORE_UPDATE_URL: &str = "https://clients2.google.com/service/update2/
 /// The Windows pointer key's value name, the one Chrome's registry loader reads before any other.
 const POINTER_VALUE_NAME: &str = "update_url";
 
-/// Fuzz-only aliases of the two ownership markers and the Web Store url, for the
+/// Fuzz-only aliases of the ownership marker and the Web Store url, for the
 /// cargo-fuzz workspace's ownership oracles and seed generator (see the `fuzzing`
 /// feature in Cargo.toml). Aliases of the real constants, so none can drift from
 /// what this module actually writes; they stay private otherwise.
@@ -61,7 +60,6 @@ const POINTER_VALUE_NAME: &str = "update_url";
 #[doc(hidden)]
 pub mod fuzz_api {
     pub const MANIFEST_DESCRIPTION: &str = super::MANIFEST_DESCRIPTION;
-    pub const MANIFEST_DESCRIPTION_LEGACY: &str = super::MANIFEST_DESCRIPTION_LEGACY;
     pub const WEB_STORE_UPDATE_URL: &str = super::WEB_STORE_UPDATE_URL;
 }
 
@@ -72,8 +70,7 @@ pub struct Registrar {
     /// The host binary every registration points at (resolved `current_exe`
     /// in the CLI; an explicit path in tests).
     pub host_exe: PathBuf,
-    /// Where wrapper scripts live (Unix). Same directory the shell installer
-    /// used, so re-registering over a legacy `install.sh` install converges.
+    /// Where wrapper scripts live (Unix).
     pub install_dir: PathBuf,
     pub scope: RegistrarScope,
     pub foreign: ForeignManifest,
@@ -293,7 +290,7 @@ impl Slot {
                 launched,
                 shape: ForeignShape::Replaceable,
             } => Ok(Some(format!(
-                "  replaced {what}, not written by chromium-bridge ({why}); it launched {}",
+                "  replaced {what}, not written by genkan ({why}); it launched {}",
                 launched
                     .as_deref()
                     .unwrap_or("nothing readable as a launch path")
@@ -318,7 +315,7 @@ impl Slot {
             Slot::Absent => Ok(false),
             Slot::Ours(_) => Ok(true),
             Slot::Foreign { why, .. } => Err(format!(
-                "refusing to remove {what}: {why}. Not written by chromium-bridge; remove it yourself if you are sure."
+                "refusing to remove {what}: {why}. Not written by genkan; remove it yourself if you are sure."
             )),
             Slot::Unreadable(why) => Err(format!(
                 "could not read {what} to verify it is ours: {why} (left in place)"
@@ -436,8 +433,7 @@ pub fn assess_pointer(pointer: &ExtensionPointer) -> PointerState {
 
 /// Decide whether manifest `contents` were written by this project. Ours
 /// means: valid JSON whose `name` is our host id and whose `description` is
-/// EXACTLY one of the two strings this project has ever written (the legacy
-/// shell installers' and this engine's). Anything else -- unparsable, another
+/// EXACTLY the marker this engine writes. Anything else -- unparsable, another
 /// host id, another description -- is foreign and must never be deleted.
 pub fn manifest_ownership(contents: &str) -> Ownership {
     let parsed: serde_json::Value = match serde_json::from_str(contents) {
@@ -453,10 +449,8 @@ pub fn manifest_ownership(contents: &str) -> Ownership {
         }
     }
     match parsed.get("description").and_then(|v| v.as_str()) {
-        Some(MANIFEST_DESCRIPTION_LEGACY) | Some(MANIFEST_DESCRIPTION) => Ownership::Ours,
-        _ => Ownership::Foreign(
-            "manifest description does not match any Chromium Bridge marker".into(),
-        ),
+        Some(MANIFEST_DESCRIPTION) => Ownership::Ours,
+        _ => Ownership::Foreign("manifest description does not match the Genkan marker".into()),
     }
 }
 
@@ -556,7 +550,7 @@ impl Registrar {
         if let Some(key) = label {
             exec_line.push_str(&format!(" --label {}", shell_quote(key)));
         }
-        format!("{WRAPPER_SHEBANG}\n# managed by chromium-bridge; safe to delete\n{exec_line}\n")
+        format!("{WRAPPER_SHEBANG}\n{WRAPPER_MARKER}\n{exec_line}\n")
     }
 
     fn wrapper_path(&self, label: Option<&str>) -> PathBuf {
@@ -906,13 +900,16 @@ fn split_shell_literal(line: &str) -> Option<Vec<String>> {
 }
 
 /// Whether wrapper-script `contents` are something this project wrote: the
-/// bash shebang, optionally comment/blank lines, and exactly ONE payload
-/// line whose literal tokens are exactly
+/// bash shebang, the marker line, optionally further comment/blank lines, and
+/// exactly ONE payload line whose literal tokens are exactly
 /// `exec <path> --native-host [--label <valid-label>]` -- the trampoline
 /// shape this engine generates, and nothing that does more than launch the host.
 fn wrapper_is_ours(contents: &str) -> bool {
     let mut lines = contents.lines();
     if lines.next() != Some(WRAPPER_SHEBANG) {
+        return false;
+    }
+    if lines.next() != Some(WRAPPER_MARKER) {
         return false;
     }
     let mut seen_trampoline = false;
@@ -976,7 +973,7 @@ pub fn remove_wrappers(install_dir: &Path) -> Removal {
             }
         } else {
             removal.refused.push(format!(
-                "refusing to remove {}: not a chromium-bridge wrapper (left in place)",
+                "refusing to remove {}: not a genkan wrapper (left in place)",
                 path.display()
             ));
         }
@@ -1002,7 +999,7 @@ pub fn run_fix(targets: &FixTargets, scope: Scope) -> i32 {
             return code;
         }
     };
-    println!("chromium-bridge doctor --fix (host id {NATIVE_HOST_ID})");
+    println!("genkan doctor --fix (host id {NATIVE_HOST_ID})");
     // The failure count only feeds the exit message, so clamping on
     // (unreachable) overflow is fine.
     let mut failures: usize = 0;
@@ -1024,9 +1021,9 @@ pub fn run_fix(targets: &FixTargets, scope: Scope) -> i32 {
         "next: restart the browser so it re-reads its registrations. Until the extension's Web Store\n\
          listing is published, load the extension unpacked (chrome://extensions, Developer mode:\n\
          extension/dist from the release archive, build/extension/chrome-mv3 from a source build);\n\
-         once it is, browsers registered by name on macOS and Windows offer to enable Chromium\n\
-         Bridge (no pointer is written on Linux or for --manifest-dir). Re-check with\n\
-         `chromium-bridge doctor`."
+         once it is, browsers registered by name on macOS and Windows offer to enable Genkan\n\
+         (no pointer is written on Linux or for --manifest-dir). Re-check with\n\
+         `genkan doctor`."
     );
     if failures > 0 {
         log_error!("doctor", "{failures} target(s) failed; see above");
@@ -1157,7 +1154,7 @@ pub fn fix(
         .collect())
 }
 
-/// `chromium-bridge uninstall`: entry point. Removes the registrations of one
+/// `genkan uninstall`: entry point. Removes the registrations of one
 /// scope for every known browser plus any re-passed `--manifest-dir`, and the
 /// wrapper scripts -- exactly what this project writes, nothing else. The
 /// binary, the browser, and the loaded extension are never touched.
@@ -1177,7 +1174,7 @@ pub fn run_uninstall(args: &UninstallArgs) -> i32 {
         targets.push(Target::for_explicit_dir(dir));
     }
 
-    println!("chromium-bridge uninstall (host id {NATIVE_HOST_ID})");
+    println!("genkan uninstall (host id {NATIVE_HOST_ID})");
     let mut removals: Vec<Removal> = targets
         .iter()
         .map(|target| {
@@ -1226,7 +1223,7 @@ pub(crate) fn resolve_env(scope: Scope) -> Result<(Os, BaseDirs), i32> {
 
 /// Whether every account can launch `exe`: the file readable and executable by others, and each
 /// directory from it up to (not including) `root` traversable by them. A machine-wide registration that
-/// points into one account's home (`sudo ~/.local/lib/chromium-bridge/chromium-bridge doctor --fix
+/// points into one account's home (`sudo ~/.local/lib/genkan/genkan doctor --fix
 /// --system`) reads healthy and fails for everyone else at launch, so it is refused before any write.
 /// `root` is the directory whose reachability is the caller's premise: `/` for a real install, the
 /// fixture root in tests. Windows ACLs are not inspected (residual: the .msi installs per user).
@@ -1311,7 +1308,7 @@ fn resolve_host_exe() -> std::io::Result<PathBuf> {
             "doctor",
             "this binary runs from an ephemeral path ({}); the registration will break \
              when it disappears. Copy the binary to a stable location (e.g. \
-             ~/.local/lib/chromium-bridge/) and run `doctor --fix` from there.",
+             ~/.local/lib/genkan/) and run `doctor --fix` from there.",
             exe.display()
         );
     }
@@ -1513,7 +1510,7 @@ fn registry_supported(_hive: Hive, _key: &str) -> Result<(), String> {
 #[cfg(not(windows))]
 fn registry_supported(hive: Hive, key: &str) -> Result<(), String> {
     Err(format!(
-        "registry registration ({hive}\\{key}) requires a Windows build of chromium-bridge"
+        "registry registration ({hive}\\{key}) requires a Windows build of genkan"
     ))
 }
 
@@ -1565,7 +1562,7 @@ fn registry_key(hive: Hive, key: &str) -> Result<Option<RegistryKey>, String> {
 
 #[cfg(not(windows))]
 fn registry_key(_hive: Hive, _key: &str) -> Result<Option<RegistryKey>, String> {
-    Err("registry access requires a Windows build of chromium-bridge".into())
+    Err("registry access requires a Windows build of genkan".into())
 }
 
 /// The key's default value as the browser reads it: opened with the one right Chromium asks for
@@ -1596,7 +1593,7 @@ fn registry_default_value(hive: Hive, key: &str) -> Result<Option<String>, Strin
 
 #[cfg(not(windows))]
 fn registry_default_value(_hive: Hive, _key: &str) -> Result<Option<String>, String> {
-    Err("registry access requires a Windows build of chromium-bridge".into())
+    Err("registry access requires a Windows build of genkan".into())
 }
 
 #[cfg(windows)]
@@ -1612,7 +1609,7 @@ fn set_registry_value(hive: Hive, key: &str, name: &str, value: &str) -> Result<
 #[cfg(not(windows))]
 fn set_registry_value(hive: Hive, key: &str, _name: &str, _value: &str) -> Result<(), String> {
     Err(format!(
-        "registry registration ({hive}\\{key}) requires a Windows build of chromium-bridge"
+        "registry registration ({hive}\\{key}) requires a Windows build of genkan"
     ))
 }
 
@@ -1631,7 +1628,7 @@ fn delete_registry_key(hive: Hive, key: &str) -> Result<(), String> {
 #[cfg(not(windows))]
 fn delete_registry_key(hive: Hive, key: &str) -> Result<(), String> {
     Err(format!(
-        "registry removal ({hive}\\{key}) requires a Windows build of chromium-bridge"
+        "registry removal ({hive}\\{key}) requires a Windows build of genkan"
     ))
 }
 

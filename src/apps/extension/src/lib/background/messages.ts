@@ -20,7 +20,7 @@ import {
   type RuntimeMsgType,
   type RuntimeRequest,
   type RuntimeResponse,
-} from "@chromium-bridge/shared/runtime-msg";
+} from "@genkan/shared/runtime-msg";
 import type { Browser } from "wxt/browser";
 import { browser } from "wxt/browser";
 import {
@@ -168,7 +168,7 @@ const HANDLERS: { [K in RuntimeMsgType]: Handler<K> } = {
 function denyAndKill(): Promise<RuntimeResponse<"confirm_deny_kill">> {
   denyActiveConfirmation();
   return panicEngage().then((r) => {
-    if (!r.ok) console.error("[bb] confirm-window kill engage unconfirmed", r.error);
+    if (!r.ok) console.error("[genkan] confirm-window kill engage unconfirmed", r.error);
     return r;
   });
 }
@@ -200,7 +200,7 @@ export function route(
     return false;
   }
   void dispatch(msg.type, msg).then(sendResponse, (e: unknown) => {
-    console.error("[bb] runtime message handler failed", msg.type, e);
+    console.error("[genkan] runtime message handler failed", msg.type, e);
     sendResponse({ ok: false, error: `${msg.type} failed` });
   });
   return true;

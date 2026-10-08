@@ -5,7 +5,7 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-use chromium_bridge_fuzz::seeds::{write_corpus, JSON_DICTIONARY};
+use genkan_fuzz::seeds::{write_corpus, JSON_DICTIONARY};
 
 fn main() -> ExitCode {
     let fuzz_dir = Path::new(env!("CARGO_MANIFEST_DIR"));

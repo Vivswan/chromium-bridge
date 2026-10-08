@@ -46,7 +46,7 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       - if: runner.os == 'Linux'
-        run: cargo test -p chromium-bridge-core --lib --features loom loom_model
+        run: cargo test -p genkan-core --lib --features loom loom_model
       - if: runner.os == 'Linux'
         run: cargo doc --workspace --no-deps --document-private-items
         env:
@@ -145,12 +145,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: ./.github/actions/release-binary
-        with:
-          mode: download
       - uses: ./.github/actions/setup-moon
         with:
           cargo: "true"
+      - uses: ./.github/actions/release-binary
+        with:
+          mode: download
       - uses: ./.github/actions/workspace-deps
       - run: moon run gen-shared
       - name: doctor --fix registers, re-registers, and uninstall reverses it (isolated HOME/XDG)
@@ -158,7 +158,7 @@ jobs:
       - name: Explicit multi-browser selection, --all, and full uninstall
         run: bun scripts/linux-registration.ts multi-browser
 
-  # The suites hardcode target/release/chromium-bridge and build it only when missing, so the downloaded
+  # The suites hardcode target/release/genkan and build it only when missing, so the downloaded
   # binary is the one they drive. --upstream none skips the task's build-release dep (the artifact stands in
   # for it) and check-uv (a missing uv fails the run loudly anyway).
   protocol:

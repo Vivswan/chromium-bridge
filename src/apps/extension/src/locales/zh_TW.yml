@@ -2,7 +2,7 @@
 extDescription: "讓 MCP 用戶端 (Claude Code、Codex 等) 操作你真實的 Chrome: 你的分頁與登入狀態。新網站與高風險操作由你核准。"
 
 app:
-  name: "Chromium Bridge"
+  name: "Genkan"
 
 common:
   deny: "拒絕"
@@ -34,7 +34,7 @@ popup:
   status_blocked_compromised: "主機金鑰驗證失敗。橋接已被封鎖。"
   status_blocked_unpaired: "未配對。橋接請求會被拒絕。"
   status_killed: "通路已在每道閘門處切斷。"
-  status_kill_unknown: "緊急停止狀態不可讀: 為安全起見已拒絕一切活動。請查看 `chromium-bridge doctor`。"
+  status_kill_unknown: "緊急停止狀態不可讀: 為安全起見已拒絕一切活動。請查看 `genkan doctor`。"
   status_kill_unverified: "無法讀取緊急停止狀態。在成功讀取之前, 橋接按已切斷處理。"
   engaged_ago: "啟用於 $1 前"
   allowed_sites: "已允許的網站"
@@ -45,7 +45,7 @@ popup:
   pending_allow_on: "允許 $1"
   pending_consequence: "允許後, 用戶端可以你的身分在此點擊、瀏覽和讀取, 直到你移除該網站。"
   pair_compare: "先比對, 再核准"
-  pair_explainer: "這台機器上的 `chromium-bridge pair` 剛剛印出了同樣的字元組。代碼一致意味著此擴充功能與你的主機之間沒有冒充者。"
+  pair_explainer: "這台機器上的 `genkan pair` 剛剛印出了同樣的字元組。代碼一致意味著此擴充功能與你的主機之間沒有冒充者。"
   pair_consequence: "只有逐字元相符時才核准。代碼不同意味著有別的東西在冒充主機: 請拒絕。"
   pair_reject: "代碼不符"
   pair_approve: "相符, 配對"
@@ -56,16 +56,16 @@ popup:
   pair_cli_hint: "或執行"
   kill_note_pair: "立即切斷所有用戶端; 重新啟動後仍保持"
   kill_note_denies: "同時會拒絕此請求"
-  kill_note_release: "解除操作: 在設定頁輕觸驗證器, 或執行 `chromium-bridge unkill`"
+  kill_note_release: "解除操作: 在設定頁輕觸驗證器, 或執行 `genkan unkill`"
   killed_line: "緊急停止已啟用。"
   killed_consequence: "所有用戶端均被切斷。進行中的操作已被停止並記錄。你的網站清單保留不變。"
-  killed_release_note: "此彈出視窗只能啟用, 不能解除。請在設定頁用此瀏覽器已登錄的驗證器輕觸一次解除, 或在 `chromium-bridge unkill` 中輸入確認詞。"
+  killed_release_note: "此彈出視窗只能啟用, 不能解除。請在設定頁用此瀏覽器已登錄的驗證器輕觸一次解除, 或在 `genkan unkill` 中輸入確認詞。"
   pair_foot: "在你完成配對之前, 此擴充功能不會做任何事。"
   open_settings: "開啟設定"
   ext_version: "ext $1"
 
 confirm:
-  title: "Chromium Bridge"
+  title: "Genkan"
   allow: "允許"
   deny: "拒絕"
   gone: "此確認請求已失效。"
@@ -77,7 +77,7 @@ confirm:
   gate_browser_held: "瀏覽器閘門"
   spoof_note_browser: "瀏覽器閘門已扣住, 等待你的決定。"
   spoof_note_host: "主機閘門已扣住: 此操作需要指紋, 而不只是點擊。"
-  spoof_note_drawn: "由 Chromium Bridge 擴充功能在自己的視窗中繪製, 絕不會由網頁繪製。"
+  spoof_note_drawn: "由 Genkan 擴充功能在自己的視窗中繪製, 絕不會由網頁繪製。"
   via: "請求方式"
   this_page: "此頁面"
   high_risk: "高風險"
@@ -119,10 +119,10 @@ confirm:
   approve_software: "允許 (軟體確認)"
   answer_refused: "這次回答未被接受: $1"
   request_id: "請求 $1"
-  kill_note: "拒絕此請求, 並切斷所有用戶端與所有瀏覽器的連線。解除操作: 在設定頁輕觸驗證器, 或執行 `chromium-bridge unkill`。"
+  kill_note: "拒絕此請求, 並切斷所有用戶端與所有瀏覽器的連線。解除操作: 在設定頁輕觸驗證器, 或執行 `genkan unkill`。"
 
 options:
-  title: "Chromium Bridge 設定"
+  title: "Genkan 設定"
   subtitle: "變更會立即儲存。"
   section_security: "安全性原則"
   section_identity: "身分"
@@ -136,7 +136,7 @@ options:
 settings:
   more_label: "詳細資訊"
   group_tabs_title: "歸組橋接分頁"
-  group_tabs_desc: "用戶端開啟的分頁會收進「Chromium Bridge」分頁群組, 讓機器驅動的分頁保持可見。"
+  group_tabs_desc: "用戶端開啟的分頁會收進「Genkan」分頁群組, 讓機器驅動的分頁保持可見。"
   allow_all_title: "允許所有網站"
   allow_all_desc: "略過逐站核准; 啟用時還會觸發瀏覽器的全網站資料權限提示。"
   allow_all_warn: "開啟後, 用戶端可以操作你登入過的每一個網站, 包括銀行和電子郵件。"
@@ -215,12 +215,12 @@ enroll:
   pill_pending: "需要核准"
   col_extension: "此擴充功能看到的"
   col_terminal: "終端機顯示的"
-  col_terminal_hint: "請到執行 `chromium-bridge pair` 的終端機查看。"
+  col_terminal_hint: "請到執行 `genkan pair` 的終端機查看。"
   pinned_at: "釘選於 $1"
   last_verified: "上次手動驗證: $1"
   never_verified: "尚未手動驗證"
   pending_desc: "只有兩個指紋逐字元相符時才核准。不符表示有其他程式在冒充主機。"
-  compromised_desc: "回應驗證的金鑰不是已釘選的那把。請先查明原因 (你是否撤銷或重新安裝過主機?), 再解除配對並重新執行 `chromium-bridge pair`。"
+  compromised_desc: "回應驗證的金鑰不是已釘選的那把。請先查明原因 (你是否撤銷或重新安裝過主機?), 再解除配對並重新執行 `genkan pair`。"
   unpaired_blocked: "在完成配對之前, 橋接請求會被拒絕。"
   btn_verify: "立即驗證"
   btn_revoke: "解除配對"
@@ -238,7 +238,7 @@ clients:
   loading: "載入中..."
   refresh: "重新整理"
   revoke: "撤銷"
-  unenrolled: "尚無受信任用戶端清單: 任何執行橋接程式的本機程序都可以操控瀏覽器。請在下方信任一個用戶端, 或使用 `chromium-bridge pair-client`。"
+  unenrolled: "尚無受信任用戶端清單: 任何執行橋接程式的本機程序都可以操控瀏覽器。請在下方信任一個用戶端, 或使用 `genkan pair-client`。"
   empty: "清單存在但為空: 所有用戶端都會被拒絕 (已鎖定)。"
   error: "無法讀取受信任用戶端: $1"
   no_reply: "本機主機未回應"
@@ -262,7 +262,7 @@ clients:
   pair_invalid_signer_ill_formed: "簽署者錨點不能包含未配對的代理項"
 
 registration:
-  desc: "每個瀏覽器在哪裡尋找此主機。修復會為每個偵測到的瀏覽器重寫資訊清單, 與 `chromium-bridge doctor --fix` 相同。"
+  desc: "每個瀏覽器在哪裡尋找此主機。修復會為每個偵測到的瀏覽器重寫資訊清單, 與 `genkan doctor --fix` 相同。"
   refresh: "重新整理"
   repair: "修復註冊"
   loading: "載入中..."
@@ -279,7 +279,7 @@ registration:
   restart_note: "修復後請重新啟動瀏覽器, 讓它重新讀取註冊資訊。"
   rows_title: "註冊狀態"
   register_one: "註冊 $1"
-  cli_only_note: "依目錄註冊某個 Chromium 變體, 或為所有帳戶在整機範圍內註冊, 仍需在終端機完成 (`chromium-bridge doctor --fix --manifest-dir`, `sudo chromium-bridge doctor --fix --system`): 目錄需要輸入, root 需要持有, 此頁面兩者皆無。"
+  cli_only_note: "依目錄註冊某個 Chromium 變體, 或為所有帳戶在整機範圍內註冊, 仍需在終端機完成 (`genkan doctor --fix --manifest-dir`, `sudo genkan doctor --fix --system`): 目錄需要輸入, root 需要持有, 此頁面兩者皆無。"
 
 doctor:
   title: "主機報告"
@@ -293,11 +293,11 @@ doctor:
   summary: "結論"
 
 policy:
-  desc: "主機允許用戶端在此瀏覽器中做什麼。收緊立即生效。放寬需要在此瀏覽器的驗證器上輕觸一次, 並簽署新的基線, 如同 `chromium-bridge policy set` 在輸入確認後所做的。"
+  desc: "主機允許用戶端在此瀏覽器中做什麼。收緊立即生效。放寬需要在此瀏覽器的驗證器上輕觸一次, 並簽署新的基線, 如同 `genkan policy set` 在輸入確認後所做的。"
   loading: "載入中..."
   error: "無法讀取原則: $1"
   none_title: "尚未套用主機原則"
-  none_desc: "在簽署原則之前, 此瀏覽器執行內建的拒絕基線。在這裡的任何修改都會在輕觸後簽署第一份基線, 如同 `chromium-bridge policy set`。"
+  none_desc: "在簽署原則之前, 此瀏覽器執行內建的拒絕基線。在這裡的任何修改都會在輕觸後簽署第一份基線, 如同 `genkan policy set`。"
   blocked_title: "原則強制執行已被阻止"
   needs_presence: "放寬需要在場確認"
   apply: "套用"
@@ -329,7 +329,7 @@ policy:
 
 kill:
   desc: "啟用後, 所有用戶端與所有瀏覽器的連線會被立即切斷, 進行中的操作也不例外。該狀態在重新啟動後仍然保持。"
-  release_pointer: "解除需要在場證明: 在本頁用此瀏覽器已登錄的驗證器輕觸一次, 或在 `chromium-bridge unkill` 中輸入確認詞。沒有任何東西會悄悄解除它。"
+  release_pointer: "解除需要在場證明: 在本頁用此瀏覽器已登錄的驗證器輕觸一次, 或在 `genkan unkill` 中輸入確認詞。沒有任何東西會悄悄解除它。"
   engage: "啟用緊急停止"
   release: "解除緊急停止"
   release_confirm: "確認解除"
@@ -337,7 +337,7 @@ kill:
   state_alive: "未啟用: 橋接正在服務"
   state_alive_stale: "最後已知狀態: 未啟用 (主機無法連線, 未經驗證)"
   state_killed: "已啟用: 所有橋接活動均被拒絕"
-  state_unknown: "狀態無法讀取: 為安全起見已拒絕一切活動 (請查看 `chromium-bridge doctor`)"
+  state_unknown: "狀態無法讀取: 為安全起見已拒絕一切活動 (請查看 `genkan doctor`)"
   state_unmirrored: "尚未從主機收到狀態"
   state_severed: "已切斷: 無法讀取緊急停止狀態; 橋接按已切斷處理"
   updated: "最近更新: $1"
@@ -349,7 +349,7 @@ audit:
   browser_title: "此瀏覽器"
   empty: "尚無稽核事件。"
   host_title: "主機紀錄"
-  host_desc: "主機的 audit.log, 與 `chromium-bridge audit` 列印的紀錄相同。「顯示更早」向前讀取, 本頁最多 $1 筆; 完整紀錄用 `chromium-bridge audit --limit <n>`。"
+  host_desc: "主機的 audit.log, 與 `genkan audit` 列印的紀錄相同。「顯示更早」向前讀取, 本頁最多 $1 筆; 完整紀錄用 `genkan audit --limit <n>`。"
   show_older: "顯示更早的 $1 筆"
   refresh: "重新整理"
   host_loading: "載入中..."

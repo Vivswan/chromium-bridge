@@ -1,9 +1,6 @@
-import type {
-  EnrollOptionsFrame,
-  PresenceRequestFrame,
-} from "@chromium-bridge/shared/generated/envelope";
-import { type RuntimeResponse, WEBAUTHN_ENROLLMENT_KEY } from "@chromium-bridge/shared/runtime-msg";
-import { PRESENCE_REQUIRED } from "@chromium-bridge/shared/webauthn";
+import type { EnrollOptionsFrame, PresenceRequestFrame } from "@genkan/shared/generated/envelope";
+import { type RuntimeResponse, WEBAUTHN_ENROLLMENT_KEY } from "@genkan/shared/runtime-msg";
+import { PRESENCE_REQUIRED } from "@genkan/shared/webauthn";
 import { useCallback, useEffect, useState } from "react";
 import { browser } from "wxt/browser";
 import { Button } from "@/components/ui/button";
@@ -21,7 +18,7 @@ import { assert, register } from "@/lib/shared/webauthn-ceremony";
 //                        with an authenticator already enrolled here; the approved tap is good for 60 s, so the
 //                        page asks again at once and the ceremony continues as above
 //   forget               webauthn_forget -> the host forgets this browser's credentials (its own label, no proof)
-//                        and the worker clears its note; the same act as `chromium-bridge revoke <browser>`
+//                        and the worker clears its note; the same act as `genkan revoke <browser>`
 //
 // Every refusal is one sentence (refusals.ts), never a raw code.
 

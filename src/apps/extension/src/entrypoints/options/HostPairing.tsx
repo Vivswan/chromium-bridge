@@ -1,4 +1,4 @@
-import type { EnrollmentActionType, RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
+import type { EnrollmentActionType, RuntimeResponse } from "@genkan/shared/runtime-msg";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useState } from "react";
 import { browser } from "wxt/browser";
@@ -19,7 +19,7 @@ export function HostPairing() {
   const { t } = useI18n();
   // null until the first answer lands; a refusal renders the no-status line.
   const [st, setSt] = useState<RuntimeResponse<"get_enrollment"> | null>(null);
-  // The host key's `key:` line as `chromium-bridge enclave-status` prints it (its state, and where it
+  // The host key's `key:` line as `genkan enclave-status` prints it (its state, and where it
   // lives). Read beside the pairing status, never awaited with it: the pin is the extension's own fact and
   // shows at once, while the key line is the host's and may wait out the host deadline; a refusal shows no
   // line.

@@ -1,13 +1,13 @@
 // The pinned extension ID - the ID Chrome derives from the manifest `key`.
 //
 // The constant itself is generated from the pinned key in
-// src/packages/core/src/identity.rs into @chromium-bridge/shared (generated/identity.ts)
+// src/packages/core/src/identity.rs into @genkan/shared (generated/identity.ts)
 // by `moon run gen`, so it cannot drift from the wxt.config.ts-generated manifest;
 // the generator re-derives the ID from the key on every build, and
 // `scripts/check-extension-id.ts` asserts the built manifest keeps the key. If you
 // rotate the key (e.g. to adopt a Chrome Web Store-assigned id), change identity.rs
 // alone - every TS copy is rebuilt from it.
-import { PINNED_EXTENSION_ID } from "@chromium-bridge/shared/generated/identity";
+import { PINNED_EXTENSION_ID } from "@genkan/shared/generated/identity";
 
 export interface IdDiagnosis {
   ok: boolean;
@@ -38,7 +38,7 @@ export function diagnoseExtensionId(
     message:
       `extension id mismatch: running=${runtimeId} expected=${expected}. ` +
       `The native-messaging host pins the expected id in allowed_origins, so this ` +
-      `extension will be REJECTED and chromium-bridge cannot connect. Likely cause: ` +
+      `extension will be REJECTED and genkan cannot connect. Likely cause: ` +
       `you loaded a build whose manifest lacks the pinned \`key\` (Chrome then derives ` +
       `a path-based id), or a Chrome Web Store build with a store-assigned id. Fix: load ` +
       `the built build/extension/chrome-mv3 that contains the pinned key, or update the pinned ` +

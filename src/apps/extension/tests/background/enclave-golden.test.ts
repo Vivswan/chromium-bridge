@@ -1,6 +1,6 @@
 // Golden-vector replay: the cross-language enclave crypto contract, pinned.
 //
-// The fixture ("@chromium-bridge/shared/generated/enclave-fixture") is
+// The fixture ("@genkan/shared/generated/enclave-fixture") is
 // generated from the Rust core by `moon run gen`: message bytes built by
 // challenge_message and deterministic software-P256 signatures in the raw
 // r || s form the host's own signer emits. Replaying it
@@ -17,14 +17,14 @@
 // at all: in production no fixture pin can exist, because every path that
 // creates one is denied.
 
-import { EnclavePinSchema, PendingPairingSchema } from "@chromium-bridge/shared/enclave";
+import { EnclavePinSchema, PendingPairingSchema } from "@genkan/shared/enclave";
 import {
   CHALLENGE_DOMAIN,
   ENCLAVE_FIXTURE_KEY_ID,
   MAX_CONTEXT_BYTES,
   MAX_NONCE_BYTES,
-} from "@chromium-bridge/shared/generated/enclave";
-import { ENCLAVE_GOLDEN_FIXTURE } from "@chromium-bridge/shared/generated/enclave-fixture";
+} from "@genkan/shared/generated/enclave";
+import { ENCLAVE_GOLDEN_FIXTURE } from "@genkan/shared/generated/enclave-fixture";
 import { describe, expect, test } from "vitest";
 import {
   base64Decode,

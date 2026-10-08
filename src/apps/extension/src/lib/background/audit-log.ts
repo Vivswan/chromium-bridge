@@ -19,13 +19,9 @@
 // toggles, which the host audits authoritatively when it HANDLES them) stay
 // in the ring for the panel and are not forwarded.
 
-import {
-  type AuditEntry,
-  AuditEntrySchema,
-  type AuditEventKind,
-} from "@chromium-bridge/shared/enclave";
-import { AUDIT_FORWARDED_KINDS } from "@chromium-bridge/shared/generated/audit";
-import type { AuditEventWire } from "@chromium-bridge/shared/generated/envelope";
+import { type AuditEntry, AuditEntrySchema, type AuditEventKind } from "@genkan/shared/enclave";
+import { AUDIT_FORWARDED_KINDS } from "@genkan/shared/generated/audit";
+import type { AuditEventWire } from "@genkan/shared/generated/envelope";
 import pLimit from "p-limit";
 import { browser } from "wxt/browser";
 import { z } from "zod";
@@ -81,7 +77,7 @@ export function auditEvent(kind: AuditEventKind, fields: AuditFields = {}): void
   // silently discarded by the strict read later.
   const parsed = AuditEntrySchema.safeParse({ at: Date.now(), kind, ...fields });
   if (!parsed.success) {
-    console.warn("[bb] audit event dropped (invalid fields)", kind, parsed.error);
+    console.warn("[genkan] audit event dropped (invalid fields)", kind, parsed.error);
     return;
   }
   const entry: AuditEntry = parsed.data;
@@ -94,7 +90,7 @@ export function auditEvent(kind: AuditEventKind, fields: AuditFields = {}): void
     .catch((e) => {
       // Drop-on-failure, loudly: the decision already happened and must not be re-litigated because its
       // bookkeeping failed.
-      console.warn("[bb] audit ring append failed; event dropped from the ring", e);
+      console.warn("[genkan] audit ring append failed; event dropped from the ring", e);
     });
   if (FORWARDED_KINDS.has(kind)) {
     try {
@@ -116,7 +112,7 @@ export function auditEvent(kind: AuditEventKind, fields: AuditFields = {}): void
         cid: fields.cid,
       } satisfies AuditEventWire);
     } catch (e) {
-      console.warn("[bb] audit event forward failed", e);
+      console.warn("[genkan] audit event forward failed", e);
     }
   }
 }

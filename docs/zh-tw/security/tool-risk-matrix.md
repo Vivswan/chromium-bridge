@@ -4,7 +4,7 @@
 
 風險等級: **低** (唯讀, 無敏感資料)、**中** (讀取頁面內容或導覽)、**高** (寫入頁面, 或讀取憑證)、**嚴重** (任意程式碼或最大影響範圍)。
 
-所列的保護措施都是預設值。確認閘門是主機持有的策略欄位 (`confirmHighRiskClick`、`confirmTabClose`、`confirmPageEval`、`presenceConfirm`、`confirmGraceMs`), 以 `chromium-bridge policy` 編輯 (`set` 會簽署一次授予, `restrict` 則無需簽署); 擴充功能的選項頁面只能收緊它們。放寬其中任何一項都是明確且經簽署的選擇, 其殘餘風險列在[預設值表格](../../../.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe)中。
+所列的保護措施都是預設值。確認閘門是主機持有的策略欄位 (`confirmHighRiskClick`、`confirmTabClose`、`confirmPageEval`、`presenceConfirm`、`confirmGraceMs`), 以 `genkan policy` 編輯 (`set` 會簽署一次授予, `restrict` 則無需簽署); 擴充功能的選項頁面只能收緊它們。放寬其中任何一項都是明確且經簽署的選擇, 其殘餘風險列在[預設值表格](../../../.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe)中。
 
 | 工具 | 風險 | 讀取 | 寫入 / 效果 | 憑證? | Chrome 權限 | 使用者保護 |
 |------|------|-------|-----------------|--------------|-------------|-----------------|

@@ -1,5 +1,5 @@
-import { NATIVE_HOST_ID } from "@chromium-bridge/shared/generated/identity";
-import { BRIDGE_PROTOCOL_VERSION } from "@chromium-bridge/shared/generated/protocol";
+import { NATIVE_HOST_ID } from "@genkan/shared/generated/identity";
+import { BRIDGE_PROTOCOL_VERSION } from "@genkan/shared/generated/protocol";
 import { useEffect, useState } from "react";
 import { browser } from "wxt/browser";
 import { LanguagePicker } from "@/components/app/LanguagePicker";
@@ -20,7 +20,7 @@ import { TrustedClientsPanel } from "./TrustedClientsPanel";
 // surface reflects here with no polling and no manual refresh.
 //
 // The security policy (the 15 host-owned fields) is host-owned: this page tightens it through the host's
-// unsigned restriction lane and shows what it enforces; loosening needs the signed lane (`chromium-bridge
+// unsigned restriction lane and shows what it enforces; loosening needs the signed lane (`genkan
 // policy set`). Engaging the kill switch stays one click away; releasing it is behind the host's presence
 // request, answered by a tap on this browser's enrolled authenticator.
 //

@@ -1,4 +1,4 @@
-//! Wire protocols for chromium-bridge.
+//! Wire protocols for genkan.
 //!
 //! Three protocols live here:
 //! 1. Chrome Native Messaging framing (4-byte LE length prefix + UTF-8 JSON)
@@ -533,7 +533,7 @@ pub mod control;
 pub fn install_stderr_panic_hook() {
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let _ = writeln!(io::stderr(), "[chromium-bridge] panic: {info}");
+        let _ = writeln!(io::stderr(), "[genkan] panic: {info}");
         default(info);
     }));
 }

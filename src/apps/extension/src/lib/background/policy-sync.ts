@@ -21,21 +21,21 @@ import {
   PolicyInboundFrameSchema,
   type StoredPolicyState,
   StoredPolicyStateSchema,
-} from "@chromium-bridge/shared/enclave";
+} from "@genkan/shared/enclave";
 import {
   LangCurrentFrameSchema,
   type LangSetWire,
   PolicyCurrentFrameSchema,
-} from "@chromium-bridge/shared/generated/envelope";
-import { PolicyDocSchema, type PolicyValues } from "@chromium-bridge/shared/generated/policy";
+} from "@genkan/shared/generated/envelope";
+import { PolicyDocSchema, type PolicyValues } from "@genkan/shared/generated/policy";
 import {
   foldPolicyOverlay,
   policyValuesEqual,
   policyValuesFrom,
   relaxedPolicyFields,
-} from "@chromium-bridge/shared/policy-compare";
-import { SettingsSchema, type UiLanguageValue } from "@chromium-bridge/shared/settings";
-import { unreachable } from "@chromium-bridge/shared/util";
+} from "@genkan/shared/policy-compare";
+import { SettingsSchema, type UiLanguageValue } from "@genkan/shared/settings";
+import { unreachable } from "@genkan/shared/util";
 import pLimit from "p-limit";
 import { browser } from "wxt/browser";
 import { z } from "zod";
@@ -193,7 +193,7 @@ function isSharedLanguage(value: string): value is UiLanguageValue {
 async function handleLangCurrent(msg: unknown, attachment: LiveConnection | null): Promise<void> {
   const parsed = LangCurrentFrameSchema.safeParse(msg);
   if (!parsed.success) {
-    console.warn("[bb] dropping malformed lang_current frame");
+    console.warn("[genkan] dropping malformed lang_current frame");
     return;
   }
   // A schema-valid frame proves the peer handles the lane (never-speak-first); the VALUE is judged separately.
@@ -210,7 +210,7 @@ async function handleLangCurrent(msg: unknown, attachment: LiveConnection | null
   if (lang.value && seq <= lang.value.seq) return;
   // Refused WITHOUT advancing the cursor, so a later genuine push with the same seq still applies.
   if (!isSharedLanguage(value)) {
-    console.warn("[bb] refusing lang_current outside the shared language enum");
+    console.warn("[genkan] refusing lang_current outside the shared language enum");
     return;
   }
   // Skip the write when storage already agrees: the push-on-connect replay must not retrigger the i18n watcher.
@@ -255,7 +255,7 @@ export function chooseLanguage(value: UiLanguageValue): Promise<boolean> {
     return attachment.conn.post({ type: "lang_set", value } satisfies LangSetWire);
   });
   void send.catch((e) => {
-    console.warn("[bb] lang_set send failed", e);
+    console.warn("[genkan] lang_set send failed", e);
   });
   return send;
 }
@@ -419,7 +419,7 @@ async function armCutover(): Promise<void> {
     throw new Error("refusing to overwrite a corrupt cutover flag");
   }
   await browser.storage.local.set({ [POLICY_CUTOVER_KEY]: true });
-  console.log("[bb] policy cutover armed: host policy governs from here on (one-way)");
+  console.log("[genkan] policy cutover armed: host policy governs from here on (one-way)");
 }
 
 /** Fail-closed on a corrupt flag: it reads as armed, so the barrier governs. */
@@ -644,14 +644,14 @@ export function handlePolicyFrame(msg: unknown): Promise<void> {
       dup.data.baseline === pendingApproval.value.baselineB64 &&
       JSON.stringify(dup.data.overlay ?? null) === pendingApproval.value.overlayJson
     ) {
-      console.warn("[bb] dropping a policy push identical to one already awaiting approval");
+      console.warn("[genkan] dropping a policy push identical to one already awaiting approval");
       return Promise.resolve();
     }
   }
   return frames
     .value(() => routeOne(msg, attachment))
     .catch((e) => {
-      console.warn("[bb] policy frame handling failed", e);
+      console.warn("[genkan] policy frame handling failed", e);
     });
 }
 
@@ -669,7 +669,7 @@ async function routeOne(msg: unknown, attachment: LiveConnection | null): Promis
  * the attack-shaped refusals (a rejected CLAIM after crypto/ratchet reasoning) reach the audit ring; shape and
  * version-skew refusals are console-only, so the ring stays a security trail. */
 function refuse(why: string, opts: { audit?: boolean } = {}): void {
-  console.warn("[bb] policy push refused:", why);
+  console.warn("[genkan] policy push refused:", why);
   if (opts.audit) auditEvent("policy_refused", { detail: why.slice(0, 512) });
 }
 
@@ -682,7 +682,7 @@ async function markPolicyCompromised(
 ): Promise<void> {
   compromisedThisLife.value = true;
   if (attachment) attachment.policy = { kind: "awaiting" };
-  console.error("[bb] policy baseline failed signature verification:", reason);
+  console.error("[genkan] policy baseline failed signature verification:", reason);
   auditEvent("policy_compromised", { detail: reason.slice(0, 512) });
   try {
     await setCompromised({
@@ -691,7 +691,7 @@ async function markPolicyCompromised(
     });
   } catch (e) {
     console.error(
-      "[bb] FAIL-CLOSED: could not persist the policy compromise mark; the in-life sticky " +
+      "[genkan] FAIL-CLOSED: could not persist the policy compromise mark; the in-life sticky " +
         "latch and the dropped verified mark keep the dispatch barrier closed for this SW life",
       e,
     );
@@ -866,7 +866,7 @@ async function handlePolicyCurrent(msg: unknown, attachment: LiveConnection | nu
         await undoRecordWrite(committed, priorRecord, resetGenerationAtWrite);
       } catch (e) {
         console.error(
-          "[bb] FAIL-CLOSED: could not undo a stale policy record write; the barrier stays " +
+          "[genkan] FAIL-CLOSED: could not undo a stale policy record write; the barrier stays " +
             "closed on this connection and the push is refused",
           e,
         );
@@ -883,11 +883,11 @@ async function handlePolicyCurrent(msg: unknown, attachment: LiveConnection | nu
     attachment.policy = { kind: "verified", scope: scopeAtStart, generation: generationAtStart };
   } else if (attachment) {
     console.warn(
-      "[bb] policy push applied, but the host connection changed mid-flight; no verified mark " +
+      "[genkan] policy push applied, but the host connection changed mid-flight; no verified mark " +
         "stamped - the new connection's own push opens its barrier",
     );
   }
-  console.log("[bb] policy push applied: revision", doc.data.revision);
+  console.log("[genkan] policy push applied: revision", doc.data.revision);
 }
 
 /** Tests only: everything an SW restart would reset. Stored policy state stays, the durable prior-pin identity

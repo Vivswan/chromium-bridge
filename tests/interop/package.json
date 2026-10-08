@@ -1,5 +1,5 @@
 {
-  "name": "chromium-bridge-interop",
+  "name": "genkan-interop",
   "version": "0.0.0",
   "description": "Third-party MCP client interop suite: drives the release binary with the official TypeScript SDK v2 over stdio.",
   "private": true,

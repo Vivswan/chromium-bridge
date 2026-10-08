@@ -1,10 +1,12 @@
-# chromium-bridge
+# Genkan
+
+Your AI waits at the genkan.
 
 [![CI](https://github.com/Vivswan/chromium-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/Vivswan/chromium-bridge/actions/workflows/ci.yml) [![License](https://img.shields.io/badge/license-Individual%20and%20Small%20Organization%201.1.0-blue)](./LICENSE.md)
 
 English | [Simplified Chinese](./README.zh-cn.md) | [Traditional Chinese](./README.zh-tw.md)
 
-A program you installed cannot use your browser without you noticing. Under that bar, chromium-bridge lets any MCP client (Claude Code, Claude Desktop, Codex, or anything that speaks the Model Context Protocol) drive your real Chromium browser: your tabs, your logged-in sessions, your cookies, through a browser extension and a native-messaging host. No second browser, no CDP debug port, no `--remote-debugging` flag.
+A program you installed cannot use your browser without you noticing. Under that bar, genkan lets any MCP client (Claude Code, Claude Desktop, Codex, or anything that speaks the Model Context Protocol) drive your real Chromium browser: your tabs, your logged-in sessions, your cookies, through a browser extension and a native-messaging host. No second browser, no CDP debug port, no `--remote-debugging` flag.
 
 Because it operates the browser you are already signed into, an agent can read a page behind your auth, click through an app you are logged into, or pull a token your framework stashed in `localStorage`. That power is also the risk, so read [Security first](#security-first) before you install. Where the bar stops is stated on [the security page](./docs/security.md).
 
@@ -18,7 +20,7 @@ Because it operates the browser you are already signed into, an agent can read a
 
 ## Security first
 
-chromium-bridge drives a real, authenticated browser. It can read page content, cookies (including `httpOnly`), and web storage, and can run JavaScript in your pages. The guardrails:
+genkan drives a real, authenticated browser. It can read page content, cookies (including `httpOnly`), and web storage, and can run JavaScript in your pages. The guardrails:
 
 - **Approve every site.** Page-level tools run only on origins you approved, and a new origin prompts you; tab titles and URLs alone need no approval ([the matrix](./docs/security/tool-risk-matrix.md#cross-cutting-protections), [the bar](./docs/security.md#the-bar-in-one-line)).
 - **Confirm high-risk actions.** Submit and link clicks, key presses, selects, tab close, file uploads, and every `page_eval` confirm on an extension-owned window the page cannot see or click; `page_eval` and `page_upload` reconfirm on every call ([what you confirm](./docs/security.md#what-you-confirm-and-what-counts-as-presence)). What a same-user program can still do around that window is in the [trust boundaries ledger](./docs/security/trust-boundaries.md#boundary-4-extension---web-page--chrome-api--content-script--dom).
@@ -26,8 +28,8 @@ chromium-bridge drives a real, authenticated browser. It can read page content, 
 - **Gates are on by default.** Each is a documented setting, and relaxing one is an explicit, informed choice ([SECURITY.md](./.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe)).
 - **Cookies and web storage are read-only.** `cookie_get` and `storage_get` return masked values and never write ([the matrix](./docs/security/tool-risk-matrix.md#cross-cutting-protections)); what the mask catches and misses is [SECURITY.md's](./.github/SECURITY.md#masking-is-heuristic-and-best-effort).
 - **Authenticated, attested bridge.** No listening port on any OS: a private Unix-domain socket on macOS and Linux, a named pipe only your user can open on Windows. Every connection passes a same-user check, mutual executable attestation, and an HMAC challenge over a per-run secret; the per-OS mechanism is [SECURITY.md's platform table](./.github/SECURITY.md#platform-support).
-- **Trusted-client allowlist, once you create it.** `chromium-bridge pair-client` creates it; from then on only MCP clients whose attested code identity you approved are served, and any surface can revoke one at any time ([cli.md](./docs/cli.md#trusted-clients-pair-client--revoke-client--list-clients)).
-- **A global kill switch.** One action from the CLI or the extension halts everything until you release it with proof of presence (a tap, the confirmation window where that browser enrolled no authenticator, or the typed phrase on a terminal; [cli.md](./docs/cli.md#kill-switch-kill--unkill)). Security decisions land in an on-disk audit trail ([cli.md](./docs/cli.md#logging-and-audit-bb_log--bb_log_format) owns the event list and its two exceptions).
+- **Trusted-client allowlist, once you create it.** `genkan pair-client` creates it; from then on only MCP clients whose attested code identity you approved are served, and any surface can revoke one at any time ([cli.md](./docs/cli.md#trusted-clients-pair-client--revoke-client--list-clients)).
+- **A global kill switch.** One action from the CLI or the extension halts everything until you release it with proof of presence (a tap, the confirmation window where that browser enrolled no authenticator, or the typed phrase on a terminal; [cli.md](./docs/cli.md#kill-switch-kill--unkill)). Security decisions land in an on-disk audit trail ([cli.md](./docs/cli.md#logging-and-audit-genkan_log--genkan_log_format) owns the event list and its two exceptions).
 
 Full details: [SECURITY.md](./.github/SECURITY.md), [security page](./docs/security.md), [trust boundaries](./docs/security/trust-boundaries.md), [per-tool risk matrix](./docs/security/tool-risk-matrix.md).
 
@@ -53,25 +55,25 @@ The CLI needs nothing beyond the binary itself, on desktops, headless machines, 
 2. Register the binary with your browsers, unless the installer did: `.pkg`, `.msi`, and Homebrew do, and the `.deb` does for browsers installed at the time ([quickstart step 3](./docs/quickstart.md#the-cli-macos-linux-windows)). The command is idempotent: fresh install, repair, and re-register after moving the binary:
 
    ```sh
-   chromium-bridge doctor --fix          # every detected browser
-   chromium-bridge doctor --fix --browser chrome,brave
+   genkan doctor --fix          # every detected browser
+   genkan doctor --fix --browser chrome,brave
    ```
 
-   From the archive, run the extracted binary with a `./` prefix from a stable path: it is registered in place, and `chromium-bridge uninstall` reverses exactly what was registered.
+   From the archive, run the extracted binary with a `./` prefix from a stable path: it is registered in place, and `genkan uninstall` reverses exactly what was registered.
 
 3. Load the extension: the archive's `extension/dist` directory via `chrome://extensions`, Developer mode, "Load unpacked". Restart the browser. The extension needs Chrome 134 or later; an older browser refuses to load it.
 
-4. Pair, then enroll (recommended): `chromium-bridge pair` prints the host key's fingerprint; approve it on the extension's options page ([docs/cli.md](./docs/cli.md#enrollment-pair--revoke--enclave-status)). Enrolling your browser's authenticator from the same page is recommended, not required; [the quickstart's hardening section](./docs/quickstart.md#recommended-hardening) says what it adds.
+4. Pair, then enroll (recommended): `genkan pair` prints the host key's fingerprint; approve it on the extension's options page ([docs/cli.md](./docs/cli.md#enrollment-pair--revoke--enclave-status)). Enrolling your browser's authenticator from the same page is recommended, not required; [the quickstart's hardening section](./docs/quickstart.md#recommended-hardening) says what it adds.
 
 5. Connect your MCP client to the binary's absolute path. Run with no arguments, the binary speaks MCP over stdio.
 
    ```sh
-   claude mcp add chromium-bridge -- /absolute/path/to/chromium-bridge
+   claude mcp add genkan -- /absolute/path/to/genkan
    ```
 
-   Claude Desktop and other `mcpServers` JSON clients take `"command": "/ABSOLUTE/PATH/TO/chromium-bridge"` with `"args": []`; Codex takes the same two keys under `[mcp_servers.chromium-bridge]` in `~/.codex/config.toml`.
+   Claude Desktop and other `mcpServers` JSON clients take `"command": "/ABSOLUTE/PATH/TO/genkan"` with `"args": []`; Codex takes the same two keys under `[mcp_servers.genkan]` in `~/.codex/config.toml`.
 
-Building from source instead: `cargo build --release`, then run the same `doctor --fix` from `target/release/chromium-bridge` ([docs/development.md](./docs/development.md)). On WSL, install where the browser runs ([running under WSL](./docs/troubleshooting.md#running-under-wsl)).
+Building from source instead: `cargo build --release`, then run the same `doctor --fix` from `target/release/genkan` ([docs/development.md](./docs/development.md)). On WSL, install where the browser runs ([running under WSL](./docs/troubleshooting.md#running-under-wsl)).
 
 ## What you can do: 26 tools
 
@@ -96,18 +98,18 @@ Cookies and web storage are read-only by design: there is no `cookie_set` or `st
 One Rust binary, two modes, joined by an authenticated local socket; the CLI manages the state.
 
 ```text
-MCP client A --stdio--> chromium-bridge (broker: first MCP server instance)
-MCP client B --stdio--> chromium-bridge ----attach----^   |
+MCP client A --stdio--> genkan (broker: first MCP server instance)
+MCP client B --stdio--> genkan ----attach----^   |
 (each client attested against the trusted-client         | bridge socket
  allowlist before it is served)                          | (Unix-domain socket,
                                                           | or a user-only named pipe
                                                           | on Windows; attestation + HMAC)
                                                           v
-                             chromium-bridge --native-host   <-- spawned by
+                             genkan --native-host   <-- spawned by
                                        |                         each browser
                                        | chrome.runtime.connectNative
                                        v
-                             Chromium Bridge extension (MV3) --> your page
+                             Genkan extension (MV3) --> your page
 ```
 
 - **MCP server (default mode):** launched by your MCP client over stdio; JSON-RPC 2.0, MCP protocol `2026-07-28`, stateless, with temporary legacy compatibility for older harnesses ([architecture.md 3.2](./docs/architecture.md#32-mcp-json-rpc-mcp-server---mcp-client)). The first instance owns the socket and becomes the broker; later instances attach as relays ([5.3](./docs/architecture.md#53-a-second-mcp-client-attaches)).
@@ -122,10 +124,10 @@ Environment variables read at launch:
 
 | Var | Values | Default | Effect |
 |-----|--------|---------|--------|
-| `BB_LOG` | `error` \| `warn` \| `info` \| `debug` | `info` | stderr log / audit threshold |
-| `BB_LOG_FORMAT` | `text` \| `json` | `text` | Audit-line format; `json` emits one object per line |
+| `GENKAN_LOG` | `error` \| `warn` \| `info` \| `debug` | `info` | stderr log / audit threshold |
+| `GENKAN_LOG_FORMAT` | `text` \| `json` | `text` | Audit-line format; `json` emits one object per line |
 
-The durable audit trail (`chromium-bridge audit`) records independently of these ([docs/cli.md](./docs/cli.md#logging-and-audit-bb_log--bb_log_format)).
+The durable audit trail (`genkan audit`) records independently of these ([docs/cli.md](./docs/cli.md#logging-and-audit-genkan_log--genkan_log_format)).
 
 ## Documentation
 
@@ -136,7 +138,7 @@ The docs are served at <https://vivswan.github.io/chromium-bridge/docs/>, in Eng
 | Install and connect a client | [Quickstart](https://vivswan.github.io/chromium-bridge/docs/quickstart) |
 | Understand what a tool may do | [Tool risk matrix](https://vivswan.github.io/chromium-bridge/docs/security/tool-risk-matrix) |
 | Run the CLI: doctor, pairing, trusted clients, kill switch, policy, audit | [CLI](https://vivswan.github.io/chromium-bridge/docs/cli) |
-| Fix a symptom | `chromium-bridge doctor` first, then [Troubleshooting](https://vivswan.github.io/chromium-bridge/docs/troubleshooting); if both are clean, your MCP client's server UI (`/mcp` in Claude Code) and the extension's service-worker console at `chrome://extensions` (`[bb]` logs) |
+| Fix a symptom | `genkan doctor` first, then [Troubleshooting](https://vivswan.github.io/chromium-bridge/docs/troubleshooting); if both are clean, your MCP client's server UI (`/mcp` in Claude Code) and the extension's service-worker console at `chrome://extensions` (`[genkan]` logs) |
 | Know what is trusted, and what is not | [Security](https://vivswan.github.io/chromium-bridge/docs/security), [trust boundaries](https://vivswan.github.io/chromium-bridge/docs/security/trust-boundaries), [rationale](https://vivswan.github.io/chromium-bridge/docs/security/rationale) |
 | See how the pieces fit | [Architecture](https://vivswan.github.io/chromium-bridge/docs/architecture) |
 | Build, test, or release it | [Development](https://vivswan.github.io/chromium-bridge/docs/development), [Releasing](https://vivswan.github.io/chromium-bridge/docs/release) |

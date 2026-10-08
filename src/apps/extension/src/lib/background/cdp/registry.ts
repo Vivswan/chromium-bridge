@@ -137,7 +137,7 @@ export function installCdpLifecycleListeners(): void {
       if (!granted) await cdpRegistry.teardownAll();
     })().catch((e) => {
       // Teardown is a restriction; a failed check must be loud, not silent.
-      console.warn("[bb] cdp policy teardown check failed", e);
+      console.warn("[genkan] cdp policy teardown check failed", e);
     });
   });
 }

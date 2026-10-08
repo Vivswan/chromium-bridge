@@ -1,6 +1,6 @@
-# Chromium Bridge
+# Genkan
 
-Chromium Bridge 讓 MCP 用戶端透過瀏覽器擴充功能與原生訊息主機, 操作你已經登入的 Chromium 瀏覽器, 不需要偵錯埠。程式碼是唯一的事實來源: 當某個頁面描述一項行為時, 擁有該行為的檔案才是權威。安全頁面說明這座橋接承諾什麼、止於何處; 其餘頁面說明如何使用、執行與修改它。
+Genkan 讓 MCP 用戶端透過瀏覽器擴充功能與原生訊息主機, 操作你已經登入的 Chromium 瀏覽器, 不需要偵錯埠。程式碼是唯一的事實來源: 當某個頁面描述一項行為時, 擁有該行為的檔案才是權威。安全頁面說明這座橋接承諾什麼、止於何處; 其餘頁面說明如何使用、執行與修改它。
 
 ## 我想要...
 
@@ -12,7 +12,7 @@ Chromium Bridge 讓 MCP 用戶端透過瀏覽器擴充功能與原生訊息主�
 | 准入一個 MCP 用戶端, 或撤銷一個 | [CLI: 受信任用戶端](cli.md#受信任用戶端-pair-client--revoke-client--list-clients) |
 | 立刻停止一切, 稍後再解除停止 | [CLI: 緊急開關 (kill switch)](cli.md#緊急開關-kill--unkill) |
 | 變更工具被允許做的事 | [CLI: 主機持有的策略](cli.md#主機持有的策略-policy) |
-| 閱讀日誌與稽核日誌 | [CLI: 日誌與稽核](cli.md#日誌與稽核-bb_log--bb_log_format) |
+| 閱讀日誌與稽核日誌 | [CLI: 日誌與稽核](cli.md#日誌與稽核-genkan_log--genkan_log_format) |
 | 解讀一列出乎意料的 `doctor` 輸出, 或復原無法讀取的緊急開關記錄 | [疑難排解](troubleshooting.md) |
 | 從 WSL 使用這座橋接 | [疑難排解: 在 WSL 下執行](troubleshooting.md#在-wsl-下執行) |
 | 知道這座橋接承諾攻擊者做不到什麼, 以及承諾止於何處 | [安全: 標準線](security.md#一句話說清標準線) |

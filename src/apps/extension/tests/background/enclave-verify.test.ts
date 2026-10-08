@@ -2,7 +2,7 @@ import {
   CHALLENGE_DOMAIN,
   MAX_CONTEXT_BYTES,
   MAX_NONCE_BYTES,
-} from "@chromium-bridge/shared/generated/enclave";
+} from "@genkan/shared/generated/enclave";
 import { describe, expect, test } from "vitest";
 import {
   base64Decode,

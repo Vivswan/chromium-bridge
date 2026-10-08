@@ -36,10 +36,10 @@ src/apps/extension/.wxt/
 # Downloaded isolated Chrome for Testing (browser suites; never committed)
 /tests/.chrome-for-testing/
 
-# Local install destination (binaries live in ~/.chromium-bridge/, but guard
+# Local install destination (binaries live in ~/.genkan/, but guard
 # against accidental copies into the repo)
-/chromium-bridge
-/chromium-bridge.exe
+/genkan
+/genkan.exe
 *.dSYM/
 
 # Test scratch
@@ -57,7 +57,7 @@ src/apps/extension/.wxt/
 /.moon/cache/
 
 # Chrome Web Store upload package (built from dist/, never committed)
-/chromium-bridge-extension-cws-*.zip
+/genkan-extension-cws-*.zip
 
 # Playwright MCP scratch
 /.playwright-mcp/

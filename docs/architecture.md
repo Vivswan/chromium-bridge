@@ -1,6 +1,6 @@
-# Architecture: chromium-bridge
+# Architecture: genkan
 
-> This page is the component structure, the data flows, the protocols, the security model, and the constraints of chromium-bridge, with one diagram per trust boundary. The "why" behind the security decisions is [security/rationale.md](./security/rationale.md).
+> This page is the component structure, the data flows, the protocols, the security model, and the constraints of genkan, with one diagram per trust boundary. The "why" behind the security decisions is [security/rationale.md](./security/rationale.md).
 
 > Every diagram box that names a file names one that exists and, for TypeScript, symbols it exports; a caption box names an outside actor. `moon run check-architecture` proves existence only, and each diagram's `Demonstrated by:` links resolve to the tests that cover it.
 
@@ -8,7 +8,7 @@
 
 ```
 MCP client A --stdio--> +--------------------------------------------------+
-MCP client B --stdio--> | chromium-bridge (MCP server instances)           |
+MCP client B --stdio--> | genkan (MCP server instances)           |
                         |                                                  |
                         |  first instance = BROKER                         |
                         |   - owns the bridge socket + lock file           |
@@ -24,14 +24,14 @@ MCP client B --stdio--> | chromium-bridge (MCP server instances)           |
                                                  | check + attestation + HMAC handshake
                                                  v
                         +--------------------------------------------------+
-                        | chromium-bridge --native-host  (one per browser, |
+                        | genkan --native-host  (one per browser, |
                         | spawned by that browser, label e.g. "chrome")    |
                         +------------------------+-------------------------+
                                                  | stdin/stdout, Chrome native
                                                  | messaging (4B LE len + JSON)
                                                  v
                         +--------------------------------------------------+
-                        | Chromium Bridge extension (MV3, WXT)             |
+                        | Genkan extension (MV3, WXT)             |
                         |  service worker: dispatch, allowlist, masking,   |
                         |    kill-switch mirror, enrollment pin            |
                         |  content script + CDP backend: one shared DOM    |
@@ -184,7 +184,7 @@ Demonstrated by: [control/tests.rs](../src/packages/core/src/protocol/control/te
 
 ### 4.1 The Rust core (`src/packages/core`) and the binary (`src/apps/host`)
 
-The binary is a thin argv dispatch (`src/apps/host/src/main.rs`) over the `chromium-bridge-core` library:
+The binary is a thin argv dispatch (`src/apps/host/src/main.rs`) over the `genkan-core` library:
 
 | Module | Responsibility |
 |------|------|
@@ -208,7 +208,7 @@ The binary is a thin argv dispatch (`src/apps/host/src/main.rs`) over the `chrom
 | `registration.rs` + `browsers.rs` | The registration engine and browser-path resolver behind `doctor --fix` and `uninstall` |
 | `doctor.rs` | Read-only health report (`doctor` / `status` / `doctor --list`) |
 | `error.rs` | Typed `CallError` at the tool-call boundary and the stable `ERROR_SPECS` taxonomy |
-| `log.rs` | Leveled stderr logger (`BB_LOG`) and the `log_*!` macros |
+| `log.rs` | Leveled stderr logger (`GENKAN_LOG`) and the `log_*!` macros |
 | `identity.rs` | The native-messaging host id and the pinned extension key: the single definition site |
 
 ### 4.2 The extension (`src/apps/extension`)
@@ -234,23 +234,23 @@ Trust-state isolation: the enrollment pin, kill mirror, allowlist, and audit rin
 Registration (written by `doctor --fix` through `registration.rs`):
 
 ```
-macOS   ~/.chromium-bridge/run-host-<browser>.sh      # wrapper: exec <host> --native-host --label <browser>
-        ~/.chromium-bridge/run-host.sh                # unlabeled, for a manifest several browsers read
+macOS   ~/.genkan/run-host-<browser>.sh      # wrapper: exec <host> --native-host --label <browser>
+        ~/.genkan/run-host.sh                # unlabeled, for a manifest several browsers read
         ~/Library/Application Support/<Vendor>/NativeMessagingHosts/
-          com.vivswan.chromium_bridge.host.json       # manifest -> that browser's wrapper
+          com.vivswan.genkan.host.json       # manifest -> that browser's wrapper
 
-Linux   ${XDG_DATA_HOME:-~/.local/share}/chromium-bridge/run-host-<browser>.sh
+Linux   ${XDG_DATA_HOME:-~/.local/share}/genkan/run-host-<browser>.sh
         ${XDG_CONFIG_HOME:-~/.config}/<vendor>/NativeMessagingHosts/
-          com.vivswan.chromium_bridge.host.json
+          com.vivswan.genkan.host.json
 
-Windows %LOCALAPPDATA%\chromium-bridge\com.vivswan.chromium_bridge.host.json
-        HKCU\Software\<Vendor>\NativeMessagingHosts\com.vivswan.chromium_bridge.host
+Windows %LOCALAPPDATA%\genkan\com.vivswan.genkan.host.json
+        HKCU\Software\<Vendor>\NativeMessagingHosts\com.vivswan.genkan.host
           (Default) = absolute path of the manifest; manifest points at the exe
 ```
 
 The manifest's `path` points at the registering binary in place (through the wrapper on Unix, because the manifest format has no `args` field); nothing is built, downloaded, or copied. The wrapper carries `--label <browser>` only when one browser alone launches that manifest; one several browsers read gets the unlabeled `run-host.sh`, per `registration.rs`. On Windows, Chrome appends the extension origin to the command line, which selects native-host mode.
 
-Runtime state, in the 0700 per-user runtime directory (macOS: `$XDG_RUNTIME_DIR/chromium-bridge` or `~/Library/Application Support/chromium-bridge`; Linux: `$XDG_RUNTIME_DIR/chromium-bridge` with XDG-cache fallback; Windows: `%LOCALAPPDATA%\chromium-bridge`):
+Runtime state, in the 0700 per-user runtime directory (macOS: `$XDG_RUNTIME_DIR/genkan` or `~/Library/Application Support/genkan`; Linux: `$XDG_RUNTIME_DIR/genkan` with XDG-cache fallback; Windows: `%LOCALAPPDATA%\genkan`):
 
 | File | Contents |
 |------|----------|
@@ -278,7 +278,7 @@ stored < FIRST_VERSION                  -> too old to climb: a host record is re
 
 The floor is what makes retiring the oldest rung safe. Derived from the rung count alone, every stored version would silently renumber the moment the first rung is deleted, and the wrong rung would run on every existing file. Today every ladder is empty or one no-op rung: this is the shape, not data.
 
-The host identity key lives in the OS credential store (the Keychain, the Credential Manager, or the Secret Service) as the `com.vivswan.chromium-bridge.enclave.signing.v1` entry, qualified by the runtime directory so two directories never share one; `pair --file-store` puts it in `host_key.json` instead.
+The host identity key lives in the OS credential store (the Keychain, the Credential Manager, or the Secret Service) as the `com.vivswan.genkan.enclave.signing.v1` entry, qualified by the runtime directory so two directories never share one; `pair --file-store` puts it in `host_key.json` instead.
 
 ## 5. Key data flows
 
@@ -328,7 +328,7 @@ A same-label attach always wins and closes the connection it supersedes. While a
 ### 5.3 A second MCP client attaches
 
 ```
-Client B spawns its own chromium-bridge process
+Client B spawns its own genkan process
   -> it finds a live broker via the lock file
   -> attests itself over the socket (kernel checks + HMAC + attach frame
      carrying its harness's attested identity)
@@ -407,7 +407,7 @@ The host is the relying party and the extension is the WebAuthn client, with the
 
 The options page runs the ceremony and answers: it enrolls this browser's authenticator, releases the kill switch, and signs the grants of section 11.3 (a policy set, a rollback that relaxes, a client pairing). A release or a grant is a tap on this browser's enrolled credential; when the host's request names no credential, the page asks for a confirmation instead.
 
-Its Forget this browser action sends `browser_revoke`, and the host forgets the credentials enrolled under that connection's own label, the same act as `chromium-bridge revoke <browser>`.
+Its Forget this browser action sends `browser_revoke`, and the host forgets the credentials enrolled under that connection's own label, the same act as `genkan revoke <browser>`.
 
 A `presence_confirm` from the confirmation window is accepted only when no enrolled credential could have answered, so an enrolled browser is never demoted to a click.
 
@@ -438,7 +438,7 @@ flowchart LR
   host -->|the mirror in trusted storage| mirror
 ```
 
-Nothing clears the latch on its own: no timeout, restart, or reconnect. Release is `chromium-bridge unkill` on a terminal, or the extension's `kill_release`, answered by a WebAuthn tap from a credential enrolled under that browser, or by the confirmation window where that browser enrolled none. A corrupt record refuses both directions, since an unkill from an unknown state would be a fail-open.
+Nothing clears the latch on its own: no timeout, restart, or reconnect. Release is `genkan unkill` on a terminal, or the extension's `kill_release`, answered by a WebAuthn tap from a credential enrolled under that browser, or by the confirmation window where that browser enrolled none. A corrupt record refuses both directions, since an unkill from an unknown state would be a fail-open.
 
 Demonstrated by: [kill.test.ts](../src/apps/extension/tests/background/kill.test.ts), [deny-kill.test.ts](../src/apps/extension/tests/background/confirm/deny-kill.test.ts), [broker/tests.rs](../src/packages/core/src/broker/tests.rs), [native_host/tests.rs](../src/packages/core/src/native_host/tests.rs).
 
@@ -517,7 +517,7 @@ The cross-process contracts live in the Rust core, the single source of truth; t
 - The fixture file holds golden vectors: Rust-built message bytes with deterministic software-P256 proofs, replayed through the extension's WebCrypto verifier by `src/apps/extension/tests/background/enclave-golden.test.ts`, so the signed-message encoding itself is pinned across languages. The fixture's signing key is public test data and deny-listed as a host identity on both sides (`ensure_not_fixture_key` in the core, `ENCLAVE_FIXTURE_KEY_ID` in the extension's pairing verifier and stored-pin validators).
 - **Policy document and directions** (`src/packages/core/src/policy/`): the host-owned `PolicyDoc`, the fifteen policy fields (the four capability grants, the confirmation policy, `disabledTools`, the confirmation timeouts), their deny defaults, the per-field permissive-direction table, and the `relaxes`/`restricts` comparisons, plus the signed store and the `set_signed`/`restrict` write seams.
 - `moon run gen` emits `policy.ts`: the signing domain constant, the field list with its directions, the defaults, and strict Zod validators for the document, the values, and the restriction overlay. The extension recomputes every direction comparison from the emitted table itself; it never trusts a host's claim about which way a change points.
-- A grant is signed by the host key over `UTF8("chromium-bridge-policy-v1") || 0x00 || doc_bytes`, a NUL-separated signing domain beside the host-key challenge domain, injective against it, so no artifact of one ceremony replays as the other.
+- A grant is signed by the host key over `UTF8("genkan-policy-v1") || 0x00 || doc_bytes`, a NUL-separated signing domain beside the host-key challenge domain, injective against it, so no artifact of one ceremony replays as the other.
 - There is no canonicalization step anywhere: the host signs and stores the exact document bytes, and the extension verifies the exact bytes it received against its pinned key before strict-parsing those same bytes. Section 11.3 covers the frames that carry all of this.
 - **Wire envelopes and control frames** (`BridgeReq` / `BridgeResp` in `src/packages/core/src/protocol.rs`; `EnclaveControl`, `AdminControl`, which embeds `allowlist::ClientEntry`, `PolicyControl` and `WebAuthnControl` in `src/packages/core/src/protocol/control.rs`): the Rust types ARE the contract, and `moon run gen` generates the extension's validators from them into `envelope.ts`. The table below names each layer and its owner.
 
@@ -612,7 +612,7 @@ The host also enforces its own policy at dispatch (`policy/gating.rs`): a tool w
 
 That check is defense in depth for the honest-host path; the extension's gate stays authoritative at its boundary precisely because the host may not be ours.
 
-> To troubleshoot these links at runtime (whether the connection is reachable; whether the lock file, socket, and manifests are in place), use the read-only `chromium-bridge doctor`; see [cli.md](./cli.md).
+> To troubleshoot these links at runtime (whether the connection is reachable; whether the lock file, socket, and manifests are in place), use the read-only `genkan doctor`; see [cli.md](./cli.md).
 
 ## 12. The TypeScript module map
 

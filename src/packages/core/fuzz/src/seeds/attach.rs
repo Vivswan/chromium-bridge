@@ -2,8 +2,8 @@
 
 use std::io::Cursor;
 
-use chromium_bridge_core::ipc::{HashDigest, SignerId};
-use chromium_bridge_core::protocol::{bridge_read, AttachRequest, HarnessId};
+use genkan_core::ipc::{HashDigest, SignerId};
+use genkan_core::protocol::{bridge_read, AttachRequest, HarnessId};
 use serde_json::json;
 
 use super::{edited, ndjson, repeated_key, Directory, Seed};

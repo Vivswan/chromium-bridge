@@ -23,7 +23,7 @@ body:
     id: version
     attributes:
       label: Version
-      description: "Binary (`chromium-bridge --help`) + extension version"
+      description: "Binary (`genkan --help`) + extension version"
     validations:
       required: true
   - type: input
@@ -37,5 +37,5 @@ body:
     id: logs
     attributes:
       label: Logs
-      description: "Relevant `BB_LOG=debug` stderr. **Redact any tokens/cookies/secrets.**"
+      description: "Relevant `GENKAN_LOG=debug` stderr. **Redact any tokens/cookies/secrets.**"
       render: text

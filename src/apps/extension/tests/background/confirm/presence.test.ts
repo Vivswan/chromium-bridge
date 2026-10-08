@@ -1,7 +1,7 @@
 // The presence route's provider over a fake Connection and a fake window surface: the host is asked before any
 // window opens, the window's answer is judged by the host alone, and every refusal denies with no window.
 
-import type { ConfirmPayload } from "@chromium-bridge/shared/confirm";
+import type { ConfirmPayload } from "@genkan/shared/confirm";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 import { PresenceExchangeProvider } from "@/lib/background/confirm/presence";

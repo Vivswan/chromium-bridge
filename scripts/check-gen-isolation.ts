@@ -13,7 +13,7 @@
 import { die, repoRoot } from "./lib.ts";
 
 export const refusedCrates = ["ts-rs"] as const;
-const binary = "chromium-bridge";
+const binary = "genkan";
 
 /** A crate's row in `cargo tree` is `<prefix> name vX.Y.Z`, one space before the name. */
 const inTree = (tree: string, crate: string) => tree.includes(` ${crate} v`);

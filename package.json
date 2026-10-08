@@ -1,5 +1,5 @@
 {
-  "name": "chromium-bridge",
+  "name": "genkan",
   "private": true,
   "description": "Authenticated MCP bridge to your real Chromium browsers - bun workspace root.",
   "license": "SEE LICENSE IN LICENSE.md",

@@ -1,7 +1,7 @@
 // The kill panel's release over the SW contract and a stood-in WebAuthn client. The panel never claims a release
 // itself: the answer's verdict and the mirror do.
 
-import type { PresenceRequestFrame } from "@chromium-bridge/shared/generated/envelope";
+import type { PresenceRequestFrame } from "@genkan/shared/generated/envelope";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";

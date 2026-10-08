@@ -4,11 +4,11 @@
 
 use std::io::Cursor;
 
-use chromium_bridge_core::protocol::{
+use genkan_core::protocol::{
     mcp_read, JsonRpc, MCP_META_CLIENT_CAPABILITIES, MCP_META_PROTOCOL_VERSION,
     MCP_META_SERVER_INFO, MCP_PROTOCOL_VERSION,
 };
-use chromium_bridge_core::tools;
+use genkan_core::tools;
 use serde_json::{json, Value};
 
 use super::{edited, ndjson, repeated_key, tool_requests, Directory, Seed};

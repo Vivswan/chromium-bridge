@@ -9,7 +9,7 @@ moon run harness-smoke                                 # or: bun tests/harness/r
 bun tests/harness/run.ts --mint-seeds ~/scratch/seeds  # also mint captured frames as fuzz seeds, OUTSIDE the repo
 ```
 
-- Harnesses whose CLI is not on PATH are skipped with a message. `BB_HARNESS_<NAME>_BIN` (e.g. `BB_HARNESS_CLAUDE_BIN`) pins a specific executable; by default the driver skips terminal-mux proxy shims (cmux) on PATH, which break stdio MCP health checks.
+- Harnesses whose CLI is not on PATH are skipped with a message. `GENKAN_HARNESS_<NAME>_BIN` (e.g. `GENKAN_HARNESS_CLAUDE_BIN`) pins a specific executable; by default the driver skips terminal-mux proxy shims (cmux) on PATH, which break stdio MCP health checks.
 - Captures land in `build/harness-captures/<harness>.ndjson` (gitignored) plus a `summary.json`; CI's nightly.yml `harness-smoke` job uploads the directory as an artifact.
 - `--mint-seeds <dir>` copies deduplicated captured frames into `<dir>` as `harness-<harness>-<method>` files. The path is required and must lie outside the repository; one inside it exits 2 before any harness runs:
 
@@ -30,13 +30,13 @@ The suite prints one `CANARY` line per harness naming the OPENING method it sent
 ## Isolation (safety)
 
 - Each harness runs against an ISOLATED config dir in a throwaway scratch dir (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`); the user's real harness config is never read or written.
-- The registered server command is a generated tee shim that logs stdin frames to the capture file and pipes them into the real `target/release/chromium-bridge`. The shim also points the server's `XDG_RUNTIME_DIR` / `XDG_CONFIG_HOME` / `HOME` into the scratch dir, so the spawned server can never attach to (or become) the user's real bridge broker, and never reads real pairing or kill-switch state.
+- The registered server command is a generated tee shim that logs stdin frames to the capture file and pipes them into the real `target/release/genkan`. The shim also points the server's `XDG_RUNTIME_DIR` / `XDG_CONFIG_HOME` / `HOME` into the scratch dir, so the spawned server can never attach to (or become) the user's real bridge broker, and never reads real pairing or kill-switch state.
 - No browser is involved: the server runs with no native host attached.
 
 ## Probes without model calls
 
 - Claude Code: `claude mcp list` health-checks every approved server with a real MCP handshake - a genuine connection probe, no model call. (It runs unauthenticated today; a claude release that starts requiring login for it would read as a red night rather than a server regression.)
-- Codex: `codex mcp list --json` only verifies registration (reported as "configured"). The real-backend live probe runs a REAL codex agent session (read-only sandbox), so it requires `OPENAI_API_KEY` plus the explicit `BB_HARNESS_CODEX_LIVE=1` opt-in - an ambient key alone never launches an agent. (The fake-LLM probe below needs neither.)
+- Codex: `codex mcp list --json` only verifies registration (reported as "configured"). The real-backend live probe runs a REAL codex agent session (read-only sandbox), so it requires `OPENAI_API_KEY` plus the explicit `GENKAN_HARNESS_CODEX_LIVE=1` opt-in - an ambient key alone never launches an agent. (The fake-LLM probe below needs neither.)
 - After registering, the driver asserts the entry landed in the ISOLATED config file and refuses to probe otherwise (a harness that ignored the isolation env var may have written the real user config - fail closed).
 - `--require-any` (used by the nightly workflow) fails the run unless at least one harness completed a live MCP connection, so an install failure or a config-entry-only run cannot read as green.
 
@@ -49,7 +49,7 @@ The `claude-live-fakellm` and `codex-live-fakellm` entries run whenever the CLI 
 | `claude -p` | Anthropic Messages API | `ANTHROPIC_BASE_URL` plus a dummy key |
 | `codex exec` | OpenAI Responses API | `model_providers` base_url overrides; codex 0.146+ refuses `wire_api = "chat"` |
 
-The canned scenario is content-addressed, not turn-counted: a request carrying a tool result gets final text; a request advertising the bridge's `tab_list` gets a call to it (under whatever name the harness advertised: `mcp__chromium-bridge__tab_list` for claude, the `mcp__chromium_bridge` namespace for codex); anything else (title generation, token counting) gets a trivial reply. `GET /_test/requests` serves everything the backend saw for the driver's assertions.
+The canned scenario is content-addressed, not turn-counted: a request carrying a tool result gets final text; a request advertising the bridge's `tab_list` gets a call to it (under whatever name the harness advertised: `mcp__genkan__tab_list` for claude, the `mcp__genkan` namespace for codex); anything else (title generation, token counting) gets a trivial reply. `GET /_test/requests` serves everything the backend saw for the driver's assertions.
 
 Each probe asserts three points and fails closed on any of them:
 

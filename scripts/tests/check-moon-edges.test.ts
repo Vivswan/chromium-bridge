@@ -97,7 +97,7 @@ const graph: TaskGraph = {
     },
     "build-release": { command: "cargo", args: ["build", "--release"], script: null, deps: [] },
     install: {
-      command: "./target/release/chromium-bridge",
+      command: "./target/release/genkan",
       deps: [{ target: "root:build-release" }],
     },
     "quoted-runner": { command: "set", script: 'set -e; "bunx" tsc -p scripts' },

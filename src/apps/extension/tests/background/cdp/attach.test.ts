@@ -16,7 +16,7 @@ const dbg = vi.hoisted(() => ({
   sendCommand: vi.fn(() => Promise.resolve({})),
 }));
 vi.mock("wxt/browser", async () => {
-  const { POLICY_DEFAULTS } = await import("@chromium-bridge/shared/generated/policy");
+  const { POLICY_DEFAULTS } = await import("@genkan/shared/generated/policy");
   return {
     browser: {
       debugger: dbg,

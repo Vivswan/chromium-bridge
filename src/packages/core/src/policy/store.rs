@@ -245,7 +245,7 @@ impl std::fmt::Display for PolicyWriteError {
             PolicyWriteError::KeyUnusable(e) => write!(
                 f,
                 "the host key is unusable ({e}); refusing to sign a policy grant \
-                 (run `chromium-bridge pair --reset` to replace it)"
+                 (run `genkan pair --reset` to replace it)"
             ),
             PolicyWriteError::NoBaseline => {
                 write!(f, "no policy baseline exists; there is nothing to restrict")

@@ -4,7 +4,7 @@
 
 风险级别: **低** (只读, 无敏感数据)、**中** (读取页面内容或导航)、**高** (写入页面, 或读取凭据)、**严重** (任意代码或最大影响范围)。
 
-所列保护措施均为默认值。确认门禁是主机持有的策略字段 (`confirmHighRiskClick`、`confirmTabClose`、`confirmPageEval`、`presenceConfirm`、`confirmGraceMs`), 用 `chromium-bridge policy` 编辑 (`set` 会签署一次授予, `restrict` 无需签名); 扩展的选项页只能收紧它们。放宽任何一项都是显式的、经签名的选择, 其残余风险列在[默认值表](../../../.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe)中。
+所列保护措施均为默认值。确认门禁是主机持有的策略字段 (`confirmHighRiskClick`、`confirmTabClose`、`confirmPageEval`、`presenceConfirm`、`confirmGraceMs`), 用 `genkan policy` 编辑 (`set` 会签署一次授予, `restrict` 无需签名); 扩展的选项页只能收紧它们。放宽任何一项都是显式的、经签名的选择, 其残余风险列在[默认值表](../../../.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe)中。
 
 | 工具 | 风险 | 读取 | 写入 / 效果 | 凭据? | Chrome 权限 | 用户保护 |
 |------|------|-------|-----------------|--------------|-------------|-----------------|

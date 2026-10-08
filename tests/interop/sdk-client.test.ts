@@ -12,7 +12,7 @@
  * No browser is launched: with nothing attached, tools/call answers the typed NOT_CONNECTED error INSIDE the result.
  *
  * Run:  moon run test-interop   (or: bun test tests/interop/sdk-client.test.ts)
- * Needs target/release/chromium-bridge (built via cargo if missing, like tests/protocol/e2e.py).
+ * Needs target/release/genkan (built via cargo if missing, like tests/protocol/e2e.py).
  */
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
@@ -27,7 +27,7 @@ const BIN = path.join(
   REPO,
   "target",
   "release",
-  process.platform === "win32" ? "chromium-bridge.exe" : "chromium-bridge",
+  process.platform === "win32" ? "genkan.exe" : "genkan",
 );
 
 // Mirror e2e.py's ensure_binary(): use the release binary if present, build
@@ -67,7 +67,7 @@ function assertConnected(): void {
 }
 
 beforeAll(() => {
-  runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), "bb-interop-"));
+  runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), "genkan-interop-"));
 });
 
 afterAll(async () => {
@@ -139,7 +139,7 @@ test("server/discover advertises the contract", async () => {
     expect(loose.cacheScope).toBe("private");
   }
   const serverInfo = client.getServerVersion();
-  expect(serverInfo?.name).toBe("chromium-bridge");
+  expect(serverInfo?.name).toBe("genkan");
 }, 20_000);
 
 test("tools/list carries the catalogue, stable across refetches", async () => {

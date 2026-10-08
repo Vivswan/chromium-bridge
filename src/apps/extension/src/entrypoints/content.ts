@@ -1,4 +1,4 @@
-import type { PageReply } from "@chromium-bridge/shared/content-msg";
+import type { PageReply } from "@genkan/shared/content-msg";
 import { browser } from "wxt/browser";
 import { defineContentScript } from "wxt/utils/define-content-script";
 import { handle } from "@/lib/content/handle";
@@ -6,7 +6,7 @@ import { maskErrorMessage } from "@/lib/shared/masking";
 
 declare global {
   interface Window {
-    __chromiumBridgeLoaded?: boolean;
+    __genkanLoaded?: boolean;
   }
 }
 
@@ -27,8 +27,8 @@ export default defineContentScript({
   matches: [],
   registration: "runtime",
   main() {
-    if (window.__chromiumBridgeLoaded) return; // guard against double-inject
-    window.__chromiumBridgeLoaded = true;
+    if (window.__genkanLoaded) return; // guard against double-inject
+    window.__genkanLoaded = true;
 
     browser.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       handle(msg)

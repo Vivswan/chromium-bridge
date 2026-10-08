@@ -77,7 +77,7 @@ pub enum CallError {
     /// an explicit human act.
     #[error(
         "the bridge kill switch is engaged - all bridge activity is refused until it is \
-         explicitly released (`chromium-bridge unkill`)"
+         explicitly released (`genkan unkill`)"
     )]
     Killed,
 
@@ -87,7 +87,7 @@ pub enum CallError {
     /// error.
     #[error(
         "the bridge kill state could not be read ({0}); failing closed - \
-         see `chromium-bridge doctor` and docs/troubleshooting.md for recovery"
+         see `genkan doctor` and docs/troubleshooting.md for recovery"
     )]
     KillStateUnknown(String),
 

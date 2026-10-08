@@ -1,4 +1,4 @@
-# Contributing to chromium-bridge
+# Contributing to genkan
 
 Thanks for contributing! This document covers the conventions every change in this repository goes through.
 
@@ -75,7 +75,7 @@ This project drives a real logged-in browser, and a past incident nearly took do
 ## Code style
 
 - **Rust** - `cargo fmt` (enforced by `cargo fmt --check`) and `cargo clippy` with `-D warnings`.
-  - Cargo workspace: `src/packages/core` (the `chromium-bridge-core` library), and `src/apps/host` (the `chromium-bridge` binary).
+  - Cargo workspace: `src/packages/core` (the `genkan-core` library), and `src/apps/host` (the `genkan` binary).
   - Errors on the tool-call path use the typed `CallError` (`src/packages/core/src/error.rs`).
   - Log via the `log_*!` macros (`src/packages/core/src/log.rs`), never bare `eprintln!` for diagnostics. **stdout is protocol** - all logging goes to stderr.
 - **TypeScript** - Biome lints and formats every TS/JS/JSON file in the bun workspace (`moon run check-ts` to check, `moon run fix` to auto-fix; config in `biome.jsonc`).

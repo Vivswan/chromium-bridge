@@ -37,12 +37,12 @@ update-release.yml 在一個矩陣上建置 `binaries` 工作 (目前是 `macos-
 
 1. `bun scripts/build-repro.ts` 產生可重現的發行執行檔。
 2. `bun install --frozen-lockfile` 與 `moon run extension:build` 產生擴充功能套件; 建置會先產生契約模組與 WXT 型別。
-3. 所有內容打包成 `chromium-bridge-<tag>-<platform>-<arch>.tar.gz` (Windows 上為 `.zip`), 內含執行檔、`extension/dist`、`RELEASE.txt`、`LICENSE.md` 與 `README.md`。
+3. 所有內容打包成 `genkan-<tag>-<platform>-<arch>.tar.gz` (Windows 上為 `.zip`), 內含執行檔、`extension/dist`、`RELEASE.txt`、`LICENSE.md` 與 `README.md`。
 4. 同一個執行檔被包裝成該平台的安裝程式 (見下一節)。
-5. 產生壓縮檔的 `.sha256`、壓縮檔內執行檔的另一個 `.binary.sha256`, 以及安裝程式的 `.sha256`, 並以一份建置來源證明涵蓋這三個檔案; 它的 Sigstore bundle 成為 `chromium-bridge-<tag>-<platform>-<arch>.attestation.jsonl` 資產。獨立的擴充功能 zip 與 SBOM 也以同樣方式附帶 `<asset>.attestation.jsonl` bundle; `--bundle` 驗證方式記載於 [SECURITY.md](../../.github/SECURITY.md#release-artifact-integrity)。
+5. 產生壓縮檔的 `.sha256`、壓縮檔內執行檔的另一個 `.binary.sha256`, 以及安裝程式的 `.sha256`, 並以一份建置來源證明涵蓋這三個檔案; 它的 Sigstore bundle 成為 `genkan-<tag>-<platform>-<arch>.attestation.jsonl` 資產。獨立的擴充功能 zip 與 SBOM 也以同樣方式附帶 `<asset>.attestation.jsonl` bundle; `--bundle` 驗證方式記載於 [SECURITY.md](../../.github/SECURITY.md#release-artifact-integrity)。
 6. `gh release upload` 把資產附加到草稿發行; 艦隊的 `publish-release` 階段隨後為草稿上的每個資產產生證明, 彙整成發行層級的 `attestation.json`, 並在所有掛勾工作完成後發布。
 
-因此使用者**不需要 Rust/bun 工具鏈**即可安裝: 註冊就是執行檔自己的 `chromium-bridge doctor --fix`, 見 [quickstart.md](./quickstart.md)。第三方 Actions 在本儲存庫的工作流程與艦隊的發行分支 (leg) 中都固定到提交 SHA; 平台自己的 actions 與可重用工作流程則取 `@stable`, 這是一個指向平台綠燈 `main` 提交的移動標籤 (信任模型見 repo-platform 的 [build-provenance.md](https://github.com/Vivswan/repo-platform/blob/main/docs/platform/build-provenance.md))。
+因此使用者**不需要 Rust/bun 工具鏈**即可安裝: 註冊就是執行檔自己的 `genkan doctor --fix`, 見 [quickstart.md](./quickstart.md)。第三方 Actions 在本儲存庫的工作流程與艦隊的發行分支 (leg) 中都固定到提交 SHA; 平台自己的 actions 與可重用工作流程則取 `@stable`, 這是一個指向平台綠燈 `main` 提交的移動標籤 (信任模型見 repo-platform 的 [build-provenance.md](https://github.com/Vivswan/repo-platform/blob/main/docs/platform/build-provenance.md))。
 
 ## 安裝程式: .pkg、.deb 與 .msi
 
@@ -50,14 +50,14 @@ update-release.yml 在一個矩陣上建置 `binaries` 工作 (目前是 `macos-
 
 | 分支 | 資產 | 安裝到 | 安裝後步驟 |
 | --- | --- | --- | --- |
-| macos-arm64 | `chromium-bridge-<tag>-macos-arm64.pkg` | `/usr/local/bin/chromium-bridge` | 以主控台登入的使用者身分 (`/dev/console` 的擁有者) 執行 `doctor --fix`, 在 Installer.app 與 `sudo installer` 下皆然; 無人登入時失敗 |
-| linux-x64 | `chromium-bridge-<tag>-linux-x64.deb` | `/usr/bin/chromium-bridge` | 以 root 身分執行 `doctor --fix --system`: 每個帳戶的瀏覽器都會讀取的機器層級註冊, 以廠商套件的安裝目錄偵測; 還沒有瀏覽器時印出提示, 安裝照樣成功; `dpkg -r` 會先執行 `uninstall --system` |
-| windows-x64 | `chromium-bridge-<tag>-windows-x64.msi` | `%LOCALAPPDATA%\Programs\chromium-bridge\` (每位使用者各自安裝, 不需提升權限, 位於使用者的 PATH 上) | 以安裝的使用者身分執行 `doctor --fix`; 首次安裝失敗時以 `uninstall` 回復其註冊, 升級失敗時還原先前的設定; 解除安裝時執行 `chromium-bridge uninstall` |
+| macos-arm64 | `genkan-<tag>-macos-arm64.pkg` | `/usr/local/bin/genkan` | 以主控台登入的使用者身分 (`/dev/console` 的擁有者) 執行 `doctor --fix`, 在 Installer.app 與 `sudo installer` 下皆然; 無人登入時失敗 |
+| linux-x64 | `genkan-<tag>-linux-x64.deb` | `/usr/bin/genkan` | 以 root 身分執行 `doctor --fix --system`: 每個帳戶的瀏覽器都會讀取的機器層級註冊, 以廠商套件的安裝目錄偵測; 還沒有瀏覽器時印出提示, 安裝照樣成功; `dpkg -r` 會先執行 `uninstall --system` |
+| windows-x64 | `genkan-<tag>-windows-x64.msi` | `%LOCALAPPDATA%\Programs\genkan\` (每位使用者各自安裝, 不需提升權限, 位於使用者的 PATH 上) | 以安裝的使用者身分執行 `doctor --fix`; 首次安裝失敗時以 `uninstall` 回復其註冊, 升級失敗時還原先前的設定; 解除安裝時執行 `genkan uninstall` |
 
 - **.deb 做機器層級的註冊**, 因為 Debian 維護者指令碼以 root 執行且沒有使用者情境, 不得寫入家目錄; 執行檔在 root 下拒絕每使用者範圍 ([cli.md](./cli.md#doctor---fix--uninstall-原生訊息註冊))。
 - **沒有偵測到任何瀏覽器會使 .pkg 與 .msi 安裝失敗**, 安裝程式日誌中會有 `doctor --fix` 給出的原因。請先安裝一個 Chromium 瀏覽器, 或改用壓縮檔。
 - **這種情況下 .deb 照樣安裝** (`doctor --fix` 結束碼 3, 沒有可註冊的東西), 因為失敗的維護者指令碼會讓 dpkg 停在半設定狀態, 比 .pkg 的拒絕更糟; 因其他原因失敗的註冊仍會讓安裝失敗。
-- **來源:** `packaging/pkg/scripts/postinstall`、`packaging/deb/{postinst,prerm}`、`packaging/msi/chromium-bridge.wxs`, 以及 `src/apps/host/Cargo.toml` 中的 `[package.metadata.deb]` 表。`scripts/release-package.ts installer` 執行 pkgbuild、cargo-deb (`--no-build --no-strip`, 所以 .deb 攜帶的是經過證明的位元組) 以及 WiX 3 的 candle 與 light。
+- **來源:** `packaging/pkg/scripts/postinstall`、`packaging/deb/{postinst,prerm}`、`packaging/msi/genkan.wxs`, 以及 `src/apps/host/Cargo.toml` 中的 `[package.metadata.deb]` 表。`scripts/release-package.ts installer` 執行 pkgbuild、cargo-deb (`--no-build --no-strip`, 所以 .deb 攜帶的是經過證明的位元組) 以及 WiX 3 的 candle 與 light。
 - **每個 pull request 上的證明:** `.github/workflows/installers.yml` 由 `checks.yml` 在 all-green 閘門內呼叫, 從分支建置全部三種安裝程式, 並透過 `scripts/installer-smoke.ts` 在各自的執行器上安裝。Windows 分支是 HKCU 註冊真正執行的地方, 也是迄今唯一執行過的地方。
 
 **目前未簽章。** Gatekeeper 會要求使用者右鍵點選並開啟 .pkg, SmartScreen 則會對 .msi 發出警告。簽章只需切換兩個儲存庫機密以及使用它們的步驟, 而這些目前都還不存在:
@@ -69,18 +69,18 @@ update-release.yml 在一個矩陣上建置 `binaries` 工作 (目前是 `macos-
 
 ## Homebrew tap
 
-`homebrew` 工作從兩個 `.tar.gz.sha256` 資產產生 `Formula/chromium-bridge.rb` (`scripts/release-package.ts brew-formula`), 並以 `REPO_PLATFORM_TOKEN` 在 `Vivswan/homebrew-tap` 上開啟 pull request。
+`homebrew` 工作從兩個 `.tar.gz.sha256` 資產產生 `Formula/genkan.rb` (`scripts/release-package.ts brew-formula`), 並以 `REPO_PLATFORM_TOKEN` 在 `Vivswan/homebrew-tap` 上開啟 pull request。
 
 - **tap 儲存庫由擁有者建立, pull request 也由他們合併。** 在它存在之前這個工作會失敗, 而 `continue-on-error` 讓它不會阻擋發行, 與 SBOM 相同; 在合併之前, tap 提供的是前一版 formula。
 - **tap 只接收正式發行。** Homebrew 把 `1.2.3-dev` 排在 `1.2.3` 之上, 所以預先發行標籤不會產生 formula, 也不會開啟 pull request。
-- **formula 的 `post_install` 就是 `doctor --fix`。** 那裡失敗時安裝仍保留, 並附帶 brew 的警告; `brew postinstall chromium-bridge` 可重試。
+- **formula 的 `post_install` 就是 `doctor --fix`。** 那裡失敗時安裝仍保留, 並附帶 brew 的警告; `brew postinstall genkan` 可重試。
 
 ## SBOM: 附加到草稿的 CycloneDX
 
 update-release.yml 中的 `sbom` 工作與打包工作並行執行 (它以前是一個獨立的 `release: published` 工作流程, 但已發布的發行不可變, 所以 SBOM 必須落在草稿上):
 
-- 它使用 `anchore/sbom-action` 從**已提交的鎖定檔** (`Cargo.lock` + `bun.lock`) 產生 CycloneDX JSON (`chromium-bridge.cdx.json`), 掃描的是宣告的相依套件而非已安裝的目錄樹 (全新的簽出沒有 `node_modules`/`target`)。
-- 它為 SBOM 產生建置來源證明 (與執行檔相同的 `actions/attest-build-provenance` 步驟), 所以 `gh attestation verify chromium-bridge.cdx.json --repo <repo>` 可對下載的資產運作。
+- 它使用 `anchore/sbom-action` 從**已提交的鎖定檔** (`Cargo.lock` + `bun.lock`) 產生 CycloneDX JSON (`genkan.cdx.json`), 掃描的是宣告的相依套件而非已安裝的目錄樹 (全新的簽出沒有 `node_modules`/`target`)。
+- 它為 SBOM 產生建置來源證明 (與執行檔相同的 `actions/attest-build-provenance` 步驟), 所以 `gh attestation verify genkan.cdx.json --repo <repo>` 可對下載的資產運作。
 - 它把 SBOM 及其 `.attestation.jsonl` bundle 附加到該標籤的草稿發行。
 
 SBOM 工具失敗仍然**永遠不會阻擋**執行檔的發行: 這個工作是 `continue-on-error`, 所以艦隊的發布階段 (它等待每個掛勾工作) 仍會執行。發行會在沒有 SBOM 的情況下出去, 而執行上的失敗註解會標示出來。
@@ -121,9 +121,9 @@ SBOM 工具失敗仍然**永遠不會阻擋**執行檔的發行: 這個工作是
 
 - **固定 ID 的陷阱。** 每次安裝都依賴一個固定的擴充功能 ID `mkjjlmjbcljpcfkfadfmhblmmddkdihf`, 它衍生自 [`src/packages/core/src/identity.rs`](../../src/packages/core/src/identity.rs) 中固定的資訊清單金鑰, 並由註冊引擎寫入主機資訊清單的 `allowed_origins`。商店在首次上傳時指派自己的 ID 並忽略資訊清單的 `key`, 所以商店版本無法連線到只信任固定 ID 的主機。
 - **要規劃的緩解措施。** 同時信任兩個 ID: 商店的給商店使用者, 固定的給未封裝載入。`PINNED_EXTENSION_ID` 是單數, 註冊引擎也只從它寫入一個 `allowed_origins` 條目, 所以要先讓身分契約與 Registrar 以複數 ID 建模, 再由 `moon run gen` 把結果帶到每個產生的副本。把商店的公鑰回填到資訊清單的 `key` 是可選的, 且會改變今天的固定 ID。
-- **它解決什麼, 不解決什麼。** 不再需要開發人員模式與「載入未封裝項目」; 一鍵安裝, 在 Chrome 重新啟動後仍然存在, 也適合受管理的 Chrome。主機安裝仍然保留: 商店只散布擴充功能, `chromium-bridge doctor --fix` 仍是原生訊息主機的註冊方式。
+- **它解決什麼, 不解決什麼。** 不再需要開發人員模式與「載入未封裝項目」; 一鍵安裝, 在 Chrome 重新啟動後仍然存在, 也適合受管理的 Chrome。主機安裝仍然保留: 商店只散布擴充功能, `genkan doctor --fix` 仍是原生訊息主機的註冊方式。
 - **先決條件。** 一個開發人員帳戶 (一次性費用, 由擁有者註冊)、一個隱私權政策 URL ([隱私權政策](./privacy-policy.md)即符合), 以及上架素材: 一到五張螢幕截圖 (1280x800 或 640x400)、由 `moon run gen-icons` 從 `assets/icon/` 中的 SVG 來源渲染到擴充功能公開圖示資料夾的 128px `icon128.png`、簡短與詳細描述、一個類別, 以及支援與首頁 URL。
-- **打包。** 發行管線已經產出 `chromium-bridge-extension-<tag>.zip`; 確認它就是可上傳的套件。`scripts/check-version.ts` 已經強制資訊清單版本等於 Cargo 的版本。決定 `key` 欄位是保留 (一致的未封裝 ID) 還是交給商店。
+- **打包。** 發行管線已經產出 `genkan-extension-<tag>.zip`; 確認它就是可上傳的套件。`scripts/check-version.ts` 已經強制資訊清單版本等於 Cargo 的版本。決定 `key` 欄位是保留 (一致的未封裝 ID) 還是交給商店。
 - **提交。** 上傳, 填寫資料使用揭露與隱私權政策, 然後送審。審查需時數天到數週, 之後的每次更新也都要經過審查。
 - **發布之後。** 透過 `identity.rs` 把商店 ID 接入 `allowed_origins`; 把 README 的「載入擴充功能」改為「從 Chrome 線上應用程式商店加入」, 並以未封裝載入作為開發人員路徑; 更新文件; 在落地的 PR 中記錄這個決定, 因為依 GOVERNANCE 散布變更屬於主要變更; 可選擇在 CI 中自動化上傳。
 

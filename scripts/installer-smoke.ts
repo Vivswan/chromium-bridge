@@ -43,7 +43,7 @@ class Steps extends CommandChecks {
   /** `--version` prints exactly Cargo's version: the installed binary is the one this checkout built. */
   version(binary: string): void {
     const stdout = this.ok(binary, "--version");
-    if (stdout.trim() !== `chromium-bridge ${this.expected}`) {
+    if (stdout.trim() !== `genkan ${this.expected}`) {
       throw new Error(
         `${binary} --version printed ${JSON.stringify(stdout)}, expected ${this.expected}`,
       );
@@ -75,11 +75,11 @@ class Steps extends CommandChecks {
 }
 
 function macos(installer: string, steps: Steps, home: string): void {
-  const binary = "/usr/local/bin/chromium-bridge";
+  const binary = "/usr/local/bin/genkan";
   const install = ["sudo", "installer", "-pkg", installer, "-target", "/"];
   const installed = steps.run(...install);
   steps.run("stat", "-f", "%Su", "/dev/console");
-  steps.run("sudo", "grep", "-F", "chromium-bridge", "/var/log/install.log");
+  steps.run("sudo", "grep", "-F", "genkan", "/var/log/install.log");
   steps.exited0(install, installed);
   steps.version(binary);
   steps.ok("pkgutil", "--pkg-info", pkgIdentifier);
@@ -88,37 +88,37 @@ function macos(installer: string, steps: Steps, home: string): void {
   steps.ok(binary, "uninstall");
   steps.outputMatches(chromeUnregistered, binary, "doctor", "--list");
   // Brave reads Chrome's per-user directory on macOS, so Chrome's wrapper is the unlabeled one.
-  steps.absent(join(home, ".chromium-bridge", "run-host.sh"));
+  steps.absent(join(home, ".genkan", "run-host.sh"));
   steps.ok("sudo", "pkgutil", "--forget", pkgIdentifier);
   steps.ok("sudo", "rm", binary);
   steps.absent(binary);
 }
 
 function linux(installer: string, steps: Steps): void {
-  const binary = "/usr/bin/chromium-bridge";
+  const binary = "/usr/bin/genkan";
   steps.ok("sudo", "dpkg", "-i", installer);
   steps.version(binary);
-  steps.ok("dpkg", "-s", "chromium-bridge");
+  steps.ok("dpkg", "-s", "genkan");
   // The postinst registered machine-wide; the runner's own account reads that row as a user would.
   steps.outputMatches(chromeSystemRegistered, binary, "doctor", "--list");
-  steps.ok("sudo", "dpkg", "-r", "chromium-bridge");
+  steps.ok("sudo", "dpkg", "-r", "genkan");
   steps.absent(binary);
   // The prerm's `uninstall --system` ran before the binary went; its artifacts are checked by path.
   steps.absent(`/etc/opt/chrome/native-messaging-hosts/${NATIVE_HOST_ID}.json`);
   // Chrome's system directory is shared with Brave, so its wrapper is the unlabeled one.
-  steps.absent("/var/lib/chromium-bridge/run-host.sh");
+  steps.absent("/var/lib/genkan/run-host.sh");
 }
 
 function windows(installer: string, steps: Steps, host: Host, localAppData: string): void {
   // Detection on Windows is the profile directory; the runner's Chrome has never been started.
   host.mkdir(join(localAppData, "Google", "Chrome", "User Data"));
   steps.msiexec("/i", installer, "install.log");
-  const binary = join(localAppData, "Programs", "chromium-bridge", "chromium-bridge.exe");
+  const binary = join(localAppData, "Programs", "genkan", "genkan.exe");
   steps.version(binary);
   steps.outputMatches(chromeRegistered, binary, "doctor", "--list");
   steps.msiexec("/x", installer, "uninstall.log");
   steps.absent(binary);
-  steps.absent(join(localAppData, "chromium-bridge", `${NATIVE_HOST_ID}.json`));
+  steps.absent(join(localAppData, "genkan", `${NATIVE_HOST_ID}.json`));
   steps.absentKey(`HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${NATIVE_HOST_ID}`);
   steps.absentKey(`HKCU\\Software\\Google\\Chrome\\Extensions\\${PINNED_EXTENSION_ID}`);
 }

@@ -11,9 +11,9 @@ use crate::tools::ToolId;
 
 use super::base64url;
 
-pub const PRESENCE_DOMAIN: &str = "chromium-bridge-webauthn-presence-v1";
+pub const PRESENCE_DOMAIN: &str = "genkan-webauthn-presence-v1";
 
-pub const ENROLL_DOMAIN: &str = "chromium-bridge-webauthn-enroll-v1";
+pub const ENROLL_DOMAIN: &str = "genkan-webauthn-enroll-v1";
 
 /// The extension echoes these fields back; the host minted them, and zero trust bounds them anyway.
 pub const MAX_NONCE_LEN: usize = 256;

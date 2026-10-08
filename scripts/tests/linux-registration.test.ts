@@ -54,7 +54,7 @@ const cases: Case[] = [
     name: "ok: a refusal names the command, the status, and the binary's stderr",
     binary: refusing,
     check: (m) => m.ok("doctor", "--list"),
-    outcome: /^chromium-bridge doctor --list exited 1, expected 0:\nrefused\n$/,
+    outcome: /^genkan doctor --list exited 1, expected 0:\nrefused\n$/,
   },
   { name: "ok: exit 0 passes", binary: accepting, check: (m) => m.ok("--help"), outcome: "passes" },
   {
@@ -62,7 +62,7 @@ const cases: Case[] = [
     binary: refusing,
     check: (m) => m.exits(3, /detected/, "doctor", "--fix"),
     outcome:
-      /^chromium-bridge doctor --fix exited 1, expected 3 with stderr matching \/detected\/:\nrefused\n$/,
+      /^genkan doctor --fix exited 1, expected 3 with stderr matching \/detected\/:\nrefused\n$/,
   },
   {
     name: "exits: the right code with the wrong line fails",
@@ -80,7 +80,7 @@ const cases: Case[] = [
     name: "refused: exit 0 is the vacuous pass and fails the step",
     binary: accepting,
     check: (m) => m.refused("doctor", "--fix"),
-    outcome: /^chromium-bridge doctor --fix exited 0, expected a refusal$/,
+    outcome: /^genkan doctor --fix exited 0, expected a refusal$/,
   },
   {
     name: "refused: a nonzero exit passes",
@@ -92,7 +92,7 @@ const cases: Case[] = [
     name: "outputMatches: silence from a command that exited 0 fails with the pattern named",
     binary: accepting,
     check: (m) => m.outputMatches(/stale/, "doctor", "--list"),
-    outcome: /^chromium-bridge doctor --list printed nothing matching \/stale\/:\n$/,
+    outcome: /^genkan doctor --list printed nothing matching \/stale\/:\n$/,
   },
   {
     name: "outputMatches: the row shape doctor --list prints passes",
@@ -137,7 +137,7 @@ const cases: Case[] = [
     name: "executable: a plain file fails even though it exists",
     binary: accepting,
     check: (m) => m.executable(file(m.wrapper("chrome"), "exec host", 0o644)),
-    outcome: /^expected data\/chromium-bridge\/run-host-chrome\.sh to be executable$/,
+    outcome: /^expected data\/genkan\/run-host-chrome\.sh to be executable$/,
   },
   {
     name: "executable: mode bits set passes",
@@ -203,7 +203,7 @@ test("the binary runs against the machine's roots alone, with the rest of the en
 
 test("a binary that accepts every command and writes nothing fails both scenarios at the first check of its effect", () => {
   expect(() => freshMachine(machine(accepting))).toThrow(
-    /^chromium-bridge doctor --fix exited 0, expected 3 with stderr matching/,
+    /^genkan doctor --fix exited 0, expected 3 with stderr matching/,
   );
   expect(() => multiBrowser(machine(accepting))).toThrow(
     new RegExp(`^expected ${manifestRel} to be a regular file$`),
@@ -221,7 +221,7 @@ function conforming(tamper = false): RunBinary {
     const refused = (stderr: string) => ({ exitCode: 1, stdout: "", stderr });
     const rows = Object.entries(browserConfigDirs) as [Browser, string][];
     const manifestDirOf = (dir: string) => join(config, dir, "NativeMessagingHosts");
-    const wrapperOf = (browser: Browser) => join(data, "chromium-bridge", `run-host-${browser}.sh`);
+    const wrapperOf = (browser: Browser) => join(data, "genkan", `run-host-${browser}.sh`);
     const detected = rows.filter(([, dir]) => existsSync(join(config, dir)));
     const flag = (name: string) => {
       const at = args.indexOf(name);
@@ -319,10 +319,10 @@ describe("packaging/deb/postinst accepts exactly exit 0 and 3 from doctor --fix 
     [1, 1],
     [2, 1],
   ])("the binary exits %i, the postinst exits %i", (binaryExit, expected) => {
-    const stub = join(scratch.dir("postinst-stub"), "chromium-bridge");
+    const stub = join(scratch.dir("postinst-stub"), "genkan");
     writeFileSync(stub, `#!/bin/sh\nexit ${binaryExit}\n`);
     chmodSync(stub, 0o755);
-    const run = Bun.spawnSync(["sh", "-c", postinst.replaceAll("/usr/bin/chromium-bridge", stub)]);
+    const run = Bun.spawnSync(["sh", "-c", postinst.replaceAll("/usr/bin/genkan", stub)]);
     expect(run.exitCode === 0 ? 0 : 1).toBe(expected);
   });
 });

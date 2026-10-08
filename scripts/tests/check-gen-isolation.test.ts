@@ -6,8 +6,8 @@ import { isolationProblems } from "../check-gen-isolation.ts";
 // rest on and nothing else checks. The trees are hand-written in that format.
 
 const clean = [
-  "chromium-bridge v0.0.0 (/repo/src/apps/host)",
-  "├── chromium-bridge-core v0.0.0 (/repo/src/packages/core)",
+  "genkan v0.0.0 (/repo/src/apps/host)",
+  "├── genkan-core v0.0.0 (/repo/src/packages/core)",
   "│   ├── rmcp v0.8.0",
   "│   │   └── schemars v1.0.4",
   "│   └── serde v1.0.219",
@@ -17,8 +17,8 @@ const clean = [
 const viaRmcp = [
   "0schemars v1.0.4",
   "1rmcp v0.8.0",
-  "2chromium-bridge-core v0.0.0 (/repo/src/packages/core)",
-  "3chromium-bridge v0.0.0 (/repo/src/apps/host)",
+  "2genkan-core v0.0.0 (/repo/src/packages/core)",
+  "3genkan v0.0.0 (/repo/src/apps/host)",
 ].join("\n");
 
 describe("isolationProblems", () => {
@@ -45,7 +45,7 @@ describe("isolationProblems", () => {
   test("a refused crate in the graph is named, wherever it sits", () => {
     const tree = `${clean}\n    ├── p256 v0.14.0\n└── ts-rs v10.1.0`;
     expect(isolationProblems(tree, () => viaRmcp)).toEqual([
-      "ts-rs leaked into the chromium-bridge binary dependency graph",
+      "ts-rs leaked into the genkan binary dependency graph",
     ]);
   });
 
@@ -54,13 +54,13 @@ describe("isolationProblems", () => {
   });
 
   const deep = `${viaRmcp}\n${Array.from({ length: 7 }, (_, i) => `${i + 4}crate${i} v0.1.0`).join("\n")}\n10leaf v0.1.0`;
-  const outsideRmcp = `${viaRmcp}\n1chromium-bridge-core v0.0.0 (/repo/src/packages/core)`;
+  const outsideRmcp = `${viaRmcp}\n1genkan-core v0.0.0 (/repo/src/packages/core)`;
   test.each<[string, string, string[]]>([
     ["a depth-10 row is not a depth-1 row", deep, []],
     [
       "a direct dependent of schemars other than rmcp fails with the tree shown",
       outsideRmcp,
-      ["schemars reached the chromium-bridge binary graph outside rmcp:", outsideRmcp],
+      ["schemars reached the genkan binary graph outside rmcp:", outsideRmcp],
     ],
     [
       "an empty inverse tree did not resolve and fails instead of passing",

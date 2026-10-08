@@ -2,9 +2,9 @@
 // and Chrome kills the host process whenever the port closes, so we reconnect
 // automatically on startup and after any disconnect.
 
-import { parseBridgeReq } from "@chromium-bridge/shared/envelope";
-import { NATIVE_HOST_ID } from "@chromium-bridge/shared/generated/identity";
-import { unreachable } from "@chromium-bridge/shared/util";
+import { parseBridgeReq } from "@genkan/shared/envelope";
+import { NATIVE_HOST_ID } from "@genkan/shared/generated/identity";
+import { unreachable } from "@genkan/shared/util";
 import type { Browser } from "wxt/browser";
 import { browser } from "wxt/browser";
 import { inLife } from "../shared/in-life";
@@ -85,7 +85,7 @@ export function connectNative() {
     const port = browser.runtime.connectNative(NATIVE_HOST_ID);
     const conn = mintConnection(port);
     link.value = { state: "connected", port, conn };
-    console.log("[bb] native host connected", conn.generation);
+    console.log("[genkan] native host connected", conn.generation);
     port.onMessage.addListener((msg) => onNativeMessage(conn, msg));
     port.onDisconnect.addListener(() => onNativeDisconnect(conn));
     for (const c of collaborators) c.onAttach(conn);
@@ -100,7 +100,7 @@ export function connectNative() {
     void enrollment.onPortConnected();
   } catch (e) {
     teardownLink();
-    console.error("[bb] connectNative threw", e);
+    console.error("[genkan] connectNative threw", e);
     scheduleReconnect();
   }
 }
@@ -115,7 +115,7 @@ function mintConnection(port: Browser.runtime.Port): Connection {
         port.postMessage(frame);
         return true;
       } catch (e) {
-        console.warn("[bb] post failed", e);
+        console.warn("[genkan] post failed", e);
         return false;
       }
     },
@@ -129,7 +129,7 @@ function onNativeDisconnect(conn: Connection) {
   if (!isLive(conn)) return;
   teardownLink();
   const err = browser.runtime.lastError;
-  console.warn("[bb] native host disconnected:", err?.message || "unknown");
+  console.warn("[genkan] native host disconnected:", err?.message || "unknown");
   // Chrome kills the host process when the Port drops. Reconnect so a fresh
   // host is spawned - but back off to avoid a tight loop if the host is
   // genuinely unavailable (e.g. install not finished).
@@ -152,7 +152,7 @@ function onNativeMessage(conn: Connection, msg: unknown) {
   // the demux, so nothing queued on a dead port can reach a surface that
   // would act on it.
   if (!isLive(conn)) {
-    console.warn("[bb] dropping frame from a stale native port");
+    console.warn("[genkan] dropping frame from a stale native port");
     return;
   }
   // Control frames (ceremony, admin results, kill state, presence requests,
@@ -169,7 +169,7 @@ function onNativeMessage(conn: Connection, msg: unknown) {
   // here - answered when an id can be correlated, dropped otherwise.
   const parsed = parseBridgeReq(msg);
   if (!parsed.ok) {
-    console.warn("[bb] refusing bridge request:", parsed.error);
+    console.warn("[genkan] refusing bridge request:", parsed.error);
     if (parsed.id !== undefined) sendResponse(conn, parsed.id, false, undefined, parsed.error);
     return;
   }

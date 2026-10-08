@@ -4,9 +4,9 @@
 //! every critical section.
 //!
 //! ```text
-//! stderr via log::audit             -> hidden below BB_LOG=info; the FILE is the audit surface, not a diagnostic
-//! <runtime dir>/audit.log, 0600     -> one JSON line per record regardless of BB_LOG, rotated once to audit.log.1,
-//!                                      read back by [`read`] (behind `chromium-bridge audit`)
+//! stderr via log::audit             -> hidden below GENKAN_LOG=info; the FILE is the audit surface, not a diagnostic
+//! <runtime dir>/audit.log, 0600     -> one JSON line per record regardless of GENKAN_LOG, rotated once to audit.log.1,
+//!                                      read back by [`read`] (behind `genkan audit`)
 //! failed write                      -> bumps a process-local counter; the next written record carries dropped: n
 //! rotation                          -> its own NON-BLOCKING sidecar lock (audit.log.lock, see append_at), so it can
 //!                                      never entangle with the runtime lock
@@ -404,7 +404,7 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-// ---- Reading the trail, and the `chromium-bridge audit` CLI over it -------
+// ---- Reading the trail, and the `genkan audit` CLI over it -------
 
 /// The newest records of the on-disk trail, rotated file included, as read
 /// back for the `audit` subcommand and any other reader of the trail.
@@ -529,7 +529,7 @@ fn parse_record(line: &str) -> Option<AuditRecord> {
 }
 
 /// One human-facing line per record: UTC timestamp, kind, then the fields the record carries. The same
-/// line serves the `audit` subcommand and the `BB_LOG_FORMAT=text` stderr line; the options page shows the
+/// line serves the `audit` subcommand and the `GENKAN_LOG_FORMAT=text` stderr line; the options page shows the
 /// same three parts ([`kind_name`](AuditRecord::kind_name), [`fields_display`](AuditRecord::fields_display)),
 /// so the words a reader sees are spelled here alone.
 impl fmt::Display for AuditRecord {

@@ -20,9 +20,9 @@ The browser suites are TypeScript under bun, matching the extension. The protoco
 - **Stdlib `unittest`, discovered.** Each suite is a module of `TestCase` classes run with `python -m unittest discover`, so a new test cannot be left out of a hand-kept list. `protocol/harness.py` holds the shared isolation, spawners, wire helpers, and whole-reply expectations.
 - **Under [`uv`](https://docs.astral.sh/uv/)**, which provisions the interpreter pinned in the repo-root `.python-version`, the same locally and in CI (an unpinned PATH `python3` once let a 3.12/3.14 `subprocess` difference slip through).
 - **Stdlib-only; never add dependencies.** The no-deps independence is part of the strategy, and uv pins the interpreter without opening the door to packages. `uv run --no-project --isolated` keeps the run a plain script that no stray project or virtualenv can leak into.
-- **Isolated runtime dir.** Every server a suite spawns runs in a private per-run `XDG_RUNTIME_DIR` under the OS temp dir (`bb-<suite>-XXXXXXXX`, holding a `harness.pid` that names the run), so the lock, socket, and pairing state never touch the developer's real bridge. The suite refuses to run unless the binary's own `doctor --paths` reports its lock inside that dir.
+- **Isolated runtime dir.** Every server a suite spawns runs in a private per-run `XDG_RUNTIME_DIR` under the OS temp dir (`genkan-<suite>-XXXXXXXX`, holding a `harness.pid` that names the run), so the lock, socket, and pairing state never touch the developer's real bridge. The suite refuses to run unless the binary's own `doctor --paths` reports its lock inside that dir.
 - **Removed on every exit path.** The suite removes its dirs at teardown (a pass, a failure, SIGTERM, SIGINT) and fails on one that survives. At startup it sweeps its prefix's dirs whose recorded pid is dead, printing each removal; a live recorded pid is never touched, and a dir with no owner record older than 60 s is removed.
-- **Short `TMPDIR`.** The socket path `$TMPDIR/bb-adversarial-XXXXXXXX/chromium-bridge/run.sock` must fit `sun_path` (103 bytes on macOS, 107 on Linux), so `TMPDIR` can be at most 54 bytes (58 on Linux). Past that the binary refuses the runtime dir by name (`runtime dir refused: ... over the 103-byte sun_path limit`), its `doctor --paths` probe fails, and the harness refuses to run. Point `TMPDIR` at a short directory.
+- **Short `TMPDIR`.** The socket path `$TMPDIR/genkan-adversarial-XXXXXXXX/genkan/run.sock` must fit `sun_path` (103 bytes on macOS, 107 on Linux), so `TMPDIR` can be at most 59 bytes (63 on Linux). Past that the binary refuses the runtime dir by name (`runtime dir refused: ... over the 103-byte sun_path limit`), its `doctor --paths` probe fails, and the harness refuses to run. Point `TMPDIR` at a short directory.
 - **Re-pinning `protocol/tools_list.json`** (the whole tools/list the catalogue test asserts) after a catalogue change: `uv run --no-project --isolated python protocol/harness.py --capture-tools-list`, then `moon run fmt-ts`. Review the diff: it is the contract change.
 
 The protocol suites and the integration test's MCP leg track the MCP 2026-07-28 migration: modern-era cases speak the stateless protocol (per-request `_meta` protocol-version + client-capabilities keys, `server/discover` discovery), while bare requests on initialize-opened connections still exercise the temporary legacy era (pinned at the `2025-06-18` shapes) until it is removed.
@@ -35,7 +35,7 @@ The smoke and integration tests launch a **non-headless Chrome with `--load-exte
 - Inside a container (an engine marker file such as `/.dockerenv` or `/run/.containerenv` is present) the guard also accepts the distro Chromium the container image carries; on the host it never does.
 - If `CHROME_BIN` is unset (or points at the standard `Google Chrome.app` / `chrome.exe`), the tests and `run_all.ts` **skip** instead of running - they will not touch your daily Chrome.
 - The tests only ever terminate the browser instance they launched - never a broad/pattern process kill.
-- In CI that local skip must never turn the required browser job silently green, so `browser.yml` sets two independent switches for `browser/run_all.ts` (`browser-safety.ts`; unit tests in `browser-safety.test.ts`): `BB_REQUIRE_BROWSER=1` makes the guard's skip a hard failure, and a named `BB_BROWSER_CANARY_DIR` makes the runner require every suite's RAN marker and fail on its own skip. Neither variable is needed locally.
+- In CI that local skip must never turn the required browser job silently green, so `browser.yml` sets two independent switches for `browser/run_all.ts` (`browser-safety.ts`; unit tests in `browser-safety.test.ts`): `GENKAN_REQUIRE_BROWSER=1` makes the guard's skip a hard failure, and a named `GENKAN_BROWSER_CANARY_DIR` makes the runner require every suite's RAN marker and fail on its own skip. Neither variable is needed locally.
 
 ```sh
 export CHROME_BIN="/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
@@ -54,7 +54,7 @@ moon run test-e2e            # protocol - no browser needed (also test-adversari
 uv run --no-project --isolated python -m unittest discover -s protocol -p e2e.py -v   # the same suite by hand
 uv run --no-project --isolated python -m unittest discover -s protocol -p e2e.py -k KillSwitch   # one class or test
 bun run --cwd browser test:dom              # DOM      - bun + Chrome
-bun run --cwd browser test:smoke            # smoke    - bun + Chrome (BB_EXT_DIR overrides the loaded dir)
+bun run --cwd browser test:smoke            # smoke    - bun + Chrome (GENKAN_EXT_DIR overrides the loaded dir)
 bun run --cwd browser test:security         # security - bun + Chrome
 ```
 
@@ -82,12 +82,12 @@ On macOS the manifest goes inside the throwaway `--user-data-dir` profile, which
 On Windows the registration is an HKCU registry value shared by every Chrome instance of the account, so the test runs only where none exists (a real install's Chrome must never be pointed at the test host) and removes the one it wrote.
 
 ```sh
-BB_REAL_E2E=1 bun browser/integration_e2e.ts     # macOS/Linux shell
-$env:BB_REAL_E2E='1'; bun browser/integration_e2e.ts   # Windows PowerShell
+GENKAN_REAL_E2E=1 bun browser/integration_e2e.ts     # macOS/Linux shell
+$env:GENKAN_REAL_E2E='1'; bun browser/integration_e2e.ts   # Windows PowerShell
 ```
 
-- **Opt-in** (skips unless `BB_REAL_E2E=1`), macOS and Windows, and pops a non-headless window. Not in the default suite or CI. Use Chrome for Testing or Chromium: official Google Chrome 137+ ignores `--load-extension`.
-- **Isolated runtime dir, proved by the binary**: the MCP server and the host wrapper run with a throwaway `XDG_RUNTIME_DIR`/`HOME` (`LOCALAPPDATA` on Windows), and the suite asks `chromium-bridge doctor --paths` where the lock resolves under that environment; a lock outside the throwaway dir refuses the run, so the user's live broker, lock and socket are never touched.
+- **Opt-in** (skips unless `GENKAN_REAL_E2E=1`), macOS and Windows, and pops a non-headless window. Not in the default suite or CI. Use Chrome for Testing or Chromium: official Google Chrome 137+ ignores `--load-extension`.
+- **Isolated runtime dir, proved by the binary**: the MCP server and the host wrapper run with a throwaway `XDG_RUNTIME_DIR`/`HOME` (`LOCALAPPDATA` on Windows), and the suite asks `genkan doctor --paths` where the lock resolves under that environment; a lock outside the throwaway dir refuses the run, so the user's live broker, lock and socket are never touched.
 - **What it proves**: the chain reaches the extension's enrollment gate. Enrollment is required on every platform and a throwaway profile holds no pinned host key, so `tab_list` comes back refused with the enrollment reason; a served reply would mean the gate is gone and fails the test.
 
 (Historical note: the smoke test's comment claimed Chrome *forbids* `nativeMessaging` under automated launches - that was a misdiagnosis of a puppeteer `worker.evaluate` quirk. This test demonstrates it works.)

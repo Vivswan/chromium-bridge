@@ -17,18 +17,15 @@ import {
   type EnclaveInboundFrame,
   EnclaveInboundFrameSchema,
   type EnclavePin,
-} from "@chromium-bridge/shared/enclave";
-import {
-  type EnclaveReasonCode,
-  isEnclaveReasonCode,
-} from "@chromium-bridge/shared/generated/enclave";
+} from "@genkan/shared/enclave";
+import { type EnclaveReasonCode, isEnclaveReasonCode } from "@genkan/shared/generated/enclave";
 import {
   type EnclaveChallengeWire,
   EnclaveErrorFrameSchema,
   EnclaveProofFrameSchema,
   type EnclaveRevokeWire,
-} from "@chromium-bridge/shared/generated/envelope";
-import type { EnrollmentStatus, RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
+} from "@genkan/shared/generated/envelope";
+import type { EnrollmentStatus, RuntimeResponse } from "@genkan/shared/runtime-msg";
 import pLimit from "p-limit";
 import { browser } from "wxt/browser";
 import { inLife } from "../shared/in-life";
@@ -135,7 +132,7 @@ async function issueChallenge(
     clearOutstanding();
     return { ok: false, error: "failed to send the challenge to the native host" };
   }
-  console.log(`[bb] enclave ${mode} challenge issued`);
+  console.log(`[genkan] enclave ${mode} challenge issued`);
   return { ok: true };
 }
 
@@ -201,7 +198,7 @@ async function readGateState(): Promise<Gate> {
       reason:
         `enrollment failed closed: ${compromised.reason}. ` +
         "Bridge disabled until you revoke the pin in the extension options and re-pair " +
-        "(`chromium-bridge pair`).",
+        "(`genkan pair`).",
     };
   }
   if (await pinStore.getPin()) return { allowed: true };
@@ -210,13 +207,13 @@ async function readGateState(): Promise<Gate> {
       allowed: false,
       reason:
         "enrollment pending: open the extension options page and approve the host key " +
-        "fingerprint (compare it with the `chromium-bridge pair` output)",
+        "fingerprint (compare it with the `genkan pair` output)",
     };
   }
   return {
     allowed: false,
     reason:
-      "enrollment required: run `chromium-bridge pair` on this machine, then approve the " +
+      "enrollment required: run `genkan pair` on this machine, then approve the " +
       "fingerprint in the extension options page",
   };
 }
@@ -264,7 +261,7 @@ async function maybeSendPendingHostRevoke(): Promise<void> {
   if (!live) return;
   if (!(await pinStore.getHostRevokePending())) return;
   if (live.post({ type: "enclave_revoke" } satisfies EnclaveRevokeWire)) {
-    console.log("[bb] requested host enrollment-key deletion (pending ack)");
+    console.log("[genkan] requested host enrollment-key deletion (pending ack)");
   }
 }
 
@@ -283,14 +280,14 @@ async function maybePeriodicReverify(pin: EnclavePin): Promise<void> {
     // The connect path is NOT behind the dispatch barrier: resolving a blocked posture to the deny-baseline
     // defaults here would read hostReverifyMs 0 = never-re-verify and silently skip the user's opt-in check.
     // Skip LOUDLY instead; the barrier is refusing requests anyway.
-    console.warn("[bb] periodic host re-verification skipped:", effective.reason);
+    console.warn("[genkan] periodic host re-verification skipped:", effective.reason);
     return;
   }
   const interval = effective.values.hostReverifyMs;
   if (interval <= 0) return;
   const lastVerified = Math.max(pin.pinnedAt, (await pinStore.getLastVerifiedAt()) ?? 0);
   if (Date.now() - lastVerified < interval) return;
-  console.log("[bb] periodic host re-verification due");
+  console.log("[genkan] periodic host re-verification due");
   await issueChallenge("verify");
 }
 
@@ -321,12 +318,12 @@ const REASON_CLASS: Record<EnclaveReasonCode, "compromise" | "transient"> = {
 const REASON_HELP: Record<EnclaveReasonCode, (mode: CeremonyMode) => string> = {
   not_enrolled: () =>
     "not_enrolled: no enrollment key exists on this machine. " +
-    "Run `chromium-bridge pair` in a terminal, then return here.",
+    "Run `genkan pair` in a terminal, then return here.",
   invalid_challenge: () =>
     "invalid_challenge: the host rejected our challenge frame (version mismatch?).",
   key_invalid: () =>
     "key_invalid: the stored host key is not a usable P-256 key. " +
-    "Run `chromium-bridge pair --reset` to delete it and mint a fresh one.",
+    "Run `genkan pair --reset` to delete it and mint a fresh one.",
   keychain_error: () => "keychain_error: the host could not reach its credential store. Try again.",
   signing_failed: (mode) =>
     "signing_failed: the host produced no signature. " +
@@ -349,20 +346,20 @@ export function handleEnclaveFrame(msg: EnclaveInboundFrame): Promise<void> {
     if (msg.type === "enclave_revoked") return handleRevoked();
     // The host never sends a challenge (or a revoke request) toward the
     // browser; drop it.
-    console.warn("[bb] dropping unexpected", msg.type, "frame from native host");
+    console.warn("[genkan] dropping unexpected", msg.type, "frame from native host");
   });
 }
 
 /** The host says the enrollment key is gone: the acknowledgement of our own
  * `enclave_revoke`, or a host-originated push after an out-of-band
- * `chromium-bridge revoke --all` / `pair --reset`. Pure capability reduction, so the
+ * `genkan revoke --all` / `pair --reset`. Pure capability reduction, so the
  * (unauthenticated) frame is safe to honor: with a pin it fails the bridge
  * closed until the user re-pairs; without one it only settles the
  * pending-unpair bookkeeping. */
 async function handleRevoked(): Promise<void> {
   if (await pinStore.getHostRevokePending()) {
     await pinStore.setHostRevokePending(false);
-    console.log("[bb] host acknowledged the enrollment-key deletion");
+    console.log("[genkan] host acknowledged the enrollment-key deletion");
   }
   const pin = await pinStore.getPin();
   if (!pin) return; // nothing pinned: nothing to fail closed
@@ -370,7 +367,7 @@ async function handleRevoked(): Promise<void> {
     reason: "the host's enrollment key was revoked (host-originated notice)",
     at: Date.now(),
   });
-  console.error("[bb] host enrollment key revoked; bridge disabled until re-pair");
+  console.error("[genkan] host enrollment key revoked; bridge disabled until re-pair");
   await updateBadge();
 }
 
@@ -382,7 +379,7 @@ async function handleProof(frame: EnclaveInboundFrame): Promise<void> {
   if (!current) {
     // Unsolicited (a replay, or a frame injected on the server leg, which
     // never sees our nonces). Never verify, never touch state.
-    console.warn("[bb] dropping unsolicited enclave_proof");
+    console.warn("[genkan] dropping unsolicited enclave_proof");
     return;
   }
   const proofFrame = EnclaveProofFrameSchema.safeParse(frame);
@@ -404,13 +401,13 @@ async function handleProof(frame: EnclaveInboundFrame): Promise<void> {
     // Re-check inside the transition queue: a pin or fail-closed mark that
     // appeared since the challenge went out wins over this proof.
     if ((await pinStore.getPin()) || (await pinStore.getCompromised())) {
-      console.warn("[bb] dropping pairing proof; state changed while it was in flight");
+      console.warn("[genkan] dropping pairing proof; state changed while it was in flight");
       return;
     }
     await pinStore.setPending({ keyId: res.keyId, pubkeyB64: res.pubkeyB64, at: Date.now() });
     await pinStore.clearLastError();
     await updateBadge();
-    console.log("[bb] pairing proof verified; awaiting fingerprint approval:", res.keyId);
+    console.log("[genkan] pairing proof verified; awaiting fingerprint approval:", res.keyId);
     return;
   }
 
@@ -432,7 +429,7 @@ async function handleProof(frame: EnclaveInboundFrame): Promise<void> {
   if (res.ok) {
     await pinStore.setLastVerifiedAt(Date.now());
     await pinStore.clearLastError();
-    console.log("[bb] pinned key verified");
+    console.log("[genkan] pinned key verified");
   } else {
     // Positive cryptographic evidence that whatever answered does not hold
     // the pinned key. Fail closed until the user re-pairs.
@@ -440,7 +437,7 @@ async function handleProof(frame: EnclaveInboundFrame): Promise<void> {
       reason: `host failed pinned-key verification: ${res.reason}`,
       at: Date.now(),
     });
-    console.error("[bb] pinned-key verification FAILED; bridge disabled:", res.reason);
+    console.error("[genkan] pinned-key verification FAILED; bridge disabled:", res.reason);
   }
   await updateBadge();
 }
@@ -457,7 +454,7 @@ async function handleError(frame: EnclaveInboundFrame): Promise<void> {
   const raw = parsed.success ? parsed.data.reason : null;
   const reason: EnclaveReasonCode | null = raw !== null && isEnclaveReasonCode(raw) ? raw : null;
   if (!current) {
-    console.warn("[bb] dropping unsolicited enclave_error:", reason ?? "unknown_error");
+    console.warn("[genkan] dropping unsolicited enclave_error:", reason ?? "unknown_error");
     return;
   }
   if (current.mode === "verify" && reason && REASON_CLASS[reason] === "compromise") {
@@ -530,7 +527,7 @@ export function approvePending(): Promise<RuntimeResponse<"enroll_approve">> {
     // this connection's verified mark, and keeps the cutover flag.
     await onPinPinned(pending.keyId);
     await updateBadge();
-    console.log("[bb] enrollment pinned:", pending.keyId);
+    console.log("[genkan] enrollment pinned:", pending.keyId);
     auditEvent("enroll_approved", { name: fingerprintDisplay(pending.keyId) });
     return { ok: true };
   });
@@ -545,7 +542,7 @@ export function rejectPending(): Promise<RuntimeResponse<"enroll_reject">> {
     await pinStore.setPaused(true);
     await pinStore.setLastError(
       "fingerprint rejected; pairing halted. If the fingerprints really differed, " +
-        "something other than your `chromium-bridge pair` key answered the challenge; " +
+        "something other than your `genkan pair` key answered the challenge; " +
         "investigate before pairing again.",
     );
     await updateBadge();
@@ -580,7 +577,7 @@ export function revokePin(): Promise<RuntimeResponse<"enroll_revoke">> {
     await pinStore.setHostRevokePending(true);
     await maybeSendPendingHostRevoke();
     await updateBadge();
-    console.log("[bb] enrollment pin revoked; host key deletion requested");
+    console.log("[genkan] enrollment pin revoked; host key deletion requested");
     auditEvent("enroll_revoked", {});
     return { ok: true };
   });
@@ -657,6 +654,6 @@ async function updateBadge(): Promise<void> {
       await browser.action.setBadgeText({ text: "" });
     }
   } catch (e) {
-    console.warn("[bb] enrollment badge update failed", e);
+    console.warn("[genkan] enrollment badge update failed", e);
   }
 }

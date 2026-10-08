@@ -33,7 +33,7 @@ describe("isolatedBrowser", () => {
   // Debian's chromium reports "Chromium <ver> built on Debian ...", and the engines leave a marker
   // file in every container (/.dockerenv for Docker, /run/.containerenv for Podman). Each case runs a
   // stub browser that prints one such line, with the marker present or absent.
-  const dir = scratchDir("bb-isolated-");
+  const dir = scratchDir("genkan-isolated-");
   const marker = join(dir, "containerenv");
   writeFileSync(marker, "");
   const absentMarker = join(dir, "no-such-marker");
@@ -109,7 +109,7 @@ describe("suiteExitCode", () => {
 
 describe("writeRanMarker", () => {
   test("writes the per-suite marker with the pass/fail summary", () => {
-    const dir = scratchDir("bb-canary-");
+    const dir = scratchDir("genkan-canary-");
     const marker = writeRanMarker("ext_test", 9, 0, dir);
     expect(marker).toBe(join(dir, "ext_test"));
     expect(readFileSync(marker as string, "utf8")).toBe(`${ranMarkerBody("ext_test", 9, 0)}\n`);
@@ -122,7 +122,7 @@ describe("writeRanMarker", () => {
 
 describe("guard skip vs canary (real subprocess)", () => {
   // The drift the CI canary guards against: the isolation guard exits before
-  // any test runs (locally as a SKIP; in CI only BB_REQUIRE_BROWSER turns
+  // any test runs (locally as a SKIP; in CI only GENKAN_REQUIRE_BROWSER turns
   // that red, and only while both sides spell that variable the same way).
   // Run the REAL guard in a stub suite with no CHROME_BIN and prove the two
   // halves of the defense: the skip leaves NO marker for the CI canary step
@@ -141,28 +141,28 @@ describe("guard skip vs canary (real subprocess)", () => {
   const baseEnv = (): NodeJS.ProcessEnv => {
     const env = { ...process.env };
     delete env.CHROME_BIN;
-    delete env.BB_REQUIRE_BROWSER;
-    delete env.BB_BROWSER_CANARY_DIR;
+    delete env.GENKAN_REQUIRE_BROWSER;
+    delete env.GENKAN_BROWSER_CANARY_DIR;
     return env;
   };
 
   test("a local skip exits 0 and leaves no RAN marker behind", () => {
-    const dir = scratchDir("bb-canary-");
+    const dir = scratchDir("genkan-canary-");
     const out = execFileSync(process.execPath, [stubFor(dir)], {
       encoding: "utf8",
-      env: { ...baseEnv(), BB_BROWSER_CANARY_DIR: dir },
+      env: { ...baseEnv(), GENKAN_BROWSER_CANARY_DIR: dir },
     });
     expect(out).toContain("SKIP");
     expect(existsSync(join(dir, "stub_suite"))).toBe(false);
   });
 
-  test("BB_REQUIRE_BROWSER=1 turns the same skip into a hard failure", () => {
-    const dir = scratchDir("bb-canary-");
+  test("GENKAN_REQUIRE_BROWSER=1 turns the same skip into a hard failure", () => {
+    const dir = scratchDir("genkan-canary-");
     let status = 0;
     try {
       execFileSync(process.execPath, [stubFor(dir)], {
         encoding: "utf8",
-        env: { ...baseEnv(), BB_REQUIRE_BROWSER: "1", BB_BROWSER_CANARY_DIR: dir },
+        env: { ...baseEnv(), GENKAN_REQUIRE_BROWSER: "1", GENKAN_BROWSER_CANARY_DIR: dir },
       });
     } catch (err) {
       status = (err as { status?: number }).status ?? 0;
@@ -173,7 +173,7 @@ describe("guard skip vs canary (real subprocess)", () => {
 
   test("a suite that reaches its end writes the marker the CI step requires", () => {
     // Same stub without the guard: finishSuite alone must drop the marker.
-    const dir = scratchDir("bb-canary-");
+    const dir = scratchDir("genkan-canary-");
     const stub = join(dir, "finish_only.ts");
     const safety = join(import.meta.dir, "browser-safety.ts");
     writeFileSync(
@@ -182,7 +182,7 @@ describe("guard skip vs canary (real subprocess)", () => {
     );
     execFileSync(process.execPath, [stub], {
       encoding: "utf8",
-      env: { ...baseEnv(), BB_BROWSER_CANARY_DIR: dir },
+      env: { ...baseEnv(), GENKAN_BROWSER_CANARY_DIR: dir },
     });
     expect(readFileSync(join(dir, "finish_only"), "utf8")).toBe(
       "finish_only: 2 passed, 0 failed\n",
@@ -197,26 +197,26 @@ describe("runtimeDirIsolated", () => {
   // given (XDG_RUNTIME_DIR, HOME, LOCALAPPDATA), and a lock that resolves anywhere but inside the suite's
   // throwaway dir means the suite would run against the user's LIVE runtime dir, where the host unlinks the
   // existing socket before binding. The guard judges the path the binary reports, never the platform.
-  const work = join(tmpdir(), "bb-isolation-work");
+  const work = join(tmpdir(), "genkan-isolation-work");
   test.each([
     {
       name: "the lock inside the throwaway dir is isolated",
-      lock: join(work, "runtime", "chromium-bridge", "run.lock"),
+      lock: join(work, "runtime", "genkan", "run.lock"),
       isolated: true,
     },
     {
       name: "the user's macOS runtime dir is refused",
-      lock: join("/home/user", "Library/Application Support/chromium-bridge/run.lock"),
+      lock: join("/home/user", "Library/Application Support/genkan/run.lock"),
       isolated: false,
     },
     {
       name: "a sibling dir named like the throwaway dir is refused",
-      lock: join(`${work}-other`, "chromium-bridge", "run.lock"),
+      lock: join(`${work}-other`, "genkan", "run.lock"),
       isolated: false,
     },
     {
       name: "a path that climbs out of the throwaway dir is refused",
-      lock: join(work, "..", "chromium-bridge", "run.lock"),
+      lock: join(work, "..", "genkan", "run.lock"),
       isolated: false,
     },
   ])("$name", ({ lock, isolated }) => {
@@ -227,7 +227,7 @@ describe("runtimeDirIsolated", () => {
 describe("assertHostIsolated", () => {
   // The read-back a real-host suite refuses on: the binary's own `doctor --paths` report, which must name
   // exactly one run.lock, inside the throwaway dir. Each case runs a stub binary printing one such report.
-  const dir = scratchDir("bb-host-isolated-");
+  const dir = scratchDir("genkan-host-isolated-");
   const work = join(dir, "work");
   const stubBinary = (name: string, report: string): string => {
     const bin = join(dir, name);
@@ -235,8 +235,8 @@ describe("assertHostIsolated", () => {
     writeFileSync(bin, `#!/bin/sh\ncat "${bin}.report"\n`, { mode: 0o755 });
     return bin;
   };
-  const inside = join(work, "runtime", "chromium-bridge", "run.lock");
-  const outside = join("/home/user", ".local", "chromium-bridge", "run.lock");
+  const inside = join(work, "runtime", "genkan", "run.lock");
+  const outside = join("/home/user", ".local", "genkan", "run.lock");
 
   test("a lock inside the throwaway dir is returned", () => {
     const bin = stubBinary("inside", `runtime dir: x\nlock file: ${inside}`);

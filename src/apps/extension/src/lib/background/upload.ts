@@ -12,8 +12,8 @@
 // The path is shown UNMASKED in the confirmation on purpose: the user must see
 // exactly which local file would leave their disk.
 
-import { type OpArgs, TOOL_GRANTS } from "@chromium-bridge/shared/generated/ops";
-import type { PolicyValues } from "@chromium-bridge/shared/generated/policy";
+import { type OpArgs, TOOL_GRANTS } from "@genkan/shared/generated/ops";
+import type { PolicyValues } from "@genkan/shared/generated/policy";
 import { browser } from "wxt/browser";
 import { ensureAllowed } from "./allowlist-store";
 import { withCdpAttach } from "./cdp/attach";

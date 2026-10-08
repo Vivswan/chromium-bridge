@@ -42,3 +42,10 @@ regexes = [
 # Add further false-positive allowlists here; for a one-off finding,
 # prefer an inline "gitleaks:allow" comment on the flagged line -
 # line-scoped, so it only ever excuses the line it sits on.
+# The host key's credential-store entry label (src/packages/core/src/enclave/mod.rs KEY_LABEL) is a
+# public reverse-DNS name, not a credential; its entropy trips the generic rule. A regex rather than
+# an inline gitleaks:allow because the label also sits in a generated module no hand comment can mark.
+[[allowlists]]
+description = "the credential-store entry label of the host key (a public name)"
+targetRules = ["generic-api-key"]
+regexes = ['''^com\.vivswan\.genkan\.enclave\.signing\.v\d+$''']

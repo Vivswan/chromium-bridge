@@ -1,8 +1,8 @@
 [package]
-name = "chromium-bridge-core"
+name = "genkan-core"
 version.workspace = true
 edition.workspace = true
-description = "Chromium Bridge library: IPC, protocols, session, tools, host identity and presence"
+description = "Genkan library: IPC, protocols, session, tools, host identity and presence"
 license-file.workspace = true
 publish.workspace = true
 
@@ -75,7 +75,7 @@ name = "emit_enclave_contract"
 # This crate's own gen-only feature, on for test builds only: the control-frame tests derive the tag set
 # and the request shapes from the same JSON Schemas the contract emitter uses. A dev-dependency never
 # reaches `cargo tree -e normal`, so check-gen-isolation still keeps schemars out of the shipped binary.
-chromium-bridge-core = { path = ".", features = ["envelope-schema"] }
+genkan-core = { path = ".", features = ["envelope-schema"] }
 proc-macro2.workspace = true
 proptest.workspace = true
 syn = { workspace = true, features = ["visit"] }

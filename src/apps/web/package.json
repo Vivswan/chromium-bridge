@@ -1,8 +1,8 @@
 {
-  "name": "chromium-bridge-web",
+  "name": "genkan-web",
   "private": true,
   "type": "module",
-  "description": "Astro site: the Chromium Bridge landing page. The docs are the fleet site leg's, rendered from docs/ beside it.",
+  "description": "Astro site: the Genkan landing page. The docs are the fleet site leg's, rendered from docs/ beside it.",
   "scripts": {
     "dev": "astro dev stop; ASTRO_DEV_BACKGROUND=1 astro dev",
     "build": "astro build",

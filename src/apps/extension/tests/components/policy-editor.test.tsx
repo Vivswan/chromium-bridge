@@ -3,9 +3,9 @@
 // a control whose move relaxes posts the same overlay as a grant and signs the host's request, the history rows
 // roll back through the lane the host decides, and the blocked state renders without any field control.
 
-import type { PresenceRequestFrame } from "@chromium-bridge/shared/generated/envelope";
-import { POLICY_DEFAULTS, type PolicyValues } from "@chromium-bridge/shared/generated/policy";
-import type { PolicyPosture } from "@chromium-bridge/shared/runtime-msg";
+import type { PresenceRequestFrame } from "@genkan/shared/generated/envelope";
+import { POLICY_DEFAULTS, type PolicyValues } from "@genkan/shared/generated/policy";
+import type { PolicyPosture } from "@genkan/shared/runtime-msg";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";

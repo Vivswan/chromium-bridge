@@ -4,4 +4,4 @@
 set -eu
 user="$(stat -f %Su /dev/console)"
 test "$user" != root
-exec sudo -u "$user" -H /usr/local/bin/chromium-bridge doctor --fix
+exec sudo -u "$user" -H /usr/local/bin/genkan doctor --fix
