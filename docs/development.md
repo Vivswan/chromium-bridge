@@ -212,7 +212,7 @@ uv is pinned only in `.prototools`, and python is owned by uv: the protocol suit
 | `installers` | `installers.yml` builds the .pkg, .deb, and .msi and installs each on its runner | each platform's runner |
 | `audits` | `audits.yml`: cargo deny over the root and fuzz workspaces | ubuntu runner |
 
-`container-build.yml` is the one place CI touches Docker: it builds the `Containerfile` without pushing, only on a pull request or main push that changes the `Containerfile`, `compose.yaml`, `compose.podman.yaml`, `.prototools`, `rust-toolchain.toml`, or the workflow itself. It is not in all-green's needs, so its skip on every other change costs nothing.
+`container-build.yml` is the one place CI touches Docker: it builds the `Containerfile` without pushing, only on a pull request or main push that changes the `Containerfile`, `.dockerignore`, `compose.yaml`, `compose.podman.yaml`, `.prototools`, `rust-toolchain.toml`, or the workflow itself. It is not in all-green's needs, so its skip on every other change costs nothing.
 
 ## Working on the extension
 

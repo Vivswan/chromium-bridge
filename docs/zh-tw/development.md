@@ -212,7 +212,7 @@ uv 只固定於 `.prototools`, 而 python 由 uv 擁有: 協定測試套件透�
 | `installers` | `installers.yml` 建置 .pkg、.deb 與 .msi, 並在各自的執行器上安裝 | 各平台的執行器 |
 | `audits` | `audits.yml`: 對根工作區與模糊測試工作區執行 cargo deny | ubuntu 執行器 |
 
-`container-build.yml` 是 CI 唯一觸及 Docker 的地方: 它只建置 `Containerfile` 而不推送, 且只在拉取請求或 main 推送變更了 `Containerfile`、`compose.yaml`、`compose.podman.yaml`、`.prototools`、`rust-toolchain.toml` 或該工作流程本身時執行。它不在 all-green 的 needs 中, 所以在其他變更上被略過不花任何代價。
+`container-build.yml` 是 CI 唯一觸及 Docker 的地方: 它只建置 `Containerfile` 而不推送, 且只在拉取請求或 main 推送變更了 `Containerfile`、`.dockerignore`、`compose.yaml`、`compose.podman.yaml`、`.prototools`、`rust-toolchain.toml` 或該工作流程本身時執行。它不在 all-green 的 needs 中, 所以在其他變更上被略過不花任何代價。
 
 ## 開發擴充功能
 
