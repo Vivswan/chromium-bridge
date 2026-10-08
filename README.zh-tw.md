@@ -2,7 +2,7 @@
 
 你的 AI 在玄關等候。
 
-[![CI](https://github.com/Vivswan/chromium-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/Vivswan/chromium-bridge/actions/workflows/ci.yml) [![License](https://img.shields.io/badge/license-Individual%20and%20Small%20Organization%201.1.0-blue)](./LICENSE.md)
+[![CI](https://github.com/Vivswan/genkan/actions/workflows/ci.yml/badge.svg)](https://github.com/Vivswan/genkan/actions/workflows/ci.yml) [![License](https://img.shields.io/badge/license-Individual%20and%20Small%20Organization%201.1.0-blue)](./LICENSE.md)
 
 [English](./README.md) | [简体中文](./README.zh-cn.md) | 繁體中文
 
@@ -50,7 +50,7 @@ genkan 操作的是一個真實、已通過身分驗證的瀏覽器。它能讀�
 
 CLI 除了執行檔本身之外不需要任何東西, 在桌面、無頭機器與 CI 上都一樣。完整步驟, 包括各個安裝管道以及每個管道為你做了什麼, 寫在[快速入門](./docs/zh-tw/quickstart.md); 以下是簡短版:
 
-1. 從[最新發行版](https://github.com/Vivswan/chromium-bridge/releases/latest)安裝: `.pkg`、`.msi`、`.deb`、Homebrew (待 [tap](./docs/zh-tw/release.md#homebrew-tap) 建立後), 或壓縮檔。若要先驗證下載的檔案, 命令寫在 [SECURITY.md](./.github/SECURITY.md#release-artifact-integrity)。
+1. 從[最新發行版](https://github.com/Vivswan/genkan/releases/latest)安裝: `.pkg`、`.msi`、`.deb`、Homebrew (待 [tap](./docs/zh-tw/release.md#homebrew-tap) 建立後), 或壓縮檔。若要先驗證下載的檔案, 命令寫在 [SECURITY.md](./.github/SECURITY.md#release-artifact-integrity)。
 
 2. 將執行檔註冊到你的瀏覽器, 除非安裝程式已經做了: `.pkg`、`.msi` 與 Homebrew 會做, `.deb` 也替安裝當時已有的瀏覽器做了 ([快速入門步驟 3](./docs/zh-tw/quickstart.md#cli-macoslinuxwindows))。這個命令是冪等的: 全新安裝、修復, 以及搬移執行檔後的重新註冊:
 
@@ -131,17 +131,17 @@ MCP client B --stdio--> genkan ----attach----^   |
 
 ## 文件
 
-文件發布於 <https://vivswan.github.io/chromium-bridge/docs/zh-tw/>, 提供英文、簡體中文與繁體中文版本; 同樣的頁面也放在 [docs/](./docs/zh-tw/README.md) 之下。
+文件發布於 <https://vivswan.github.io/genkan/docs/zh-tw/>, 提供英文、簡體中文與繁體中文版本; 同樣的頁面也放在 [docs/](./docs/zh-tw/README.md) 之下。
 
 | 我想要 | 頁面 |
 |---|---|
-| 安裝並連接用戶端 | [快速入門](https://vivswan.github.io/chromium-bridge/docs/zh-tw/quickstart) |
-| 了解某個工具可能做什麼 | [工具風險矩陣](https://vivswan.github.io/chromium-bridge/docs/zh-tw/security/tool-risk-matrix) |
-| 執行 CLI: doctor、配對、受信任用戶端、緊急開關、策略、稽核 | [CLI](https://vivswan.github.io/chromium-bridge/docs/zh-tw/cli) |
-| 修復某個症狀 | 先執行 `genkan doctor`, 再看[疑難排解](https://vivswan.github.io/chromium-bridge/docs/zh-tw/troubleshooting); 若兩者都沒有問題, 則檢查你的 MCP 用戶端的伺服器介面 (Claude Code 中的 `/mcp`) 與擴充功能在 `chrome://extensions` 的 Service Worker 主控台 (`[genkan]` 日誌) |
-| 知道什麼受信任, 什麼不受信任 | [安全](https://vivswan.github.io/chromium-bridge/docs/zh-tw/security)、[信任邊界](https://vivswan.github.io/chromium-bridge/docs/zh-tw/security/trust-boundaries)、[設計依據](https://vivswan.github.io/chromium-bridge/docs/zh-tw/security/rationale) |
-| 看各部分如何組合 | [架構](https://vivswan.github.io/chromium-bridge/docs/zh-tw/architecture) |
-| 建置、測試或發行 | [開發](https://vivswan.github.io/chromium-bridge/docs/zh-tw/development)、[發行](https://vivswan.github.io/chromium-bridge/docs/zh-tw/release) |
+| 安裝並連接用戶端 | [快速入門](https://vivswan.github.io/genkan/docs/zh-tw/quickstart) |
+| 了解某個工具可能做什麼 | [工具風險矩陣](https://vivswan.github.io/genkan/docs/zh-tw/security/tool-risk-matrix) |
+| 執行 CLI: doctor、配對、受信任用戶端、緊急開關、策略、稽核 | [CLI](https://vivswan.github.io/genkan/docs/zh-tw/cli) |
+| 修復某個症狀 | 先執行 `genkan doctor`, 再看[疑難排解](https://vivswan.github.io/genkan/docs/zh-tw/troubleshooting); 若兩者都沒有問題, 則檢查你的 MCP 用戶端的伺服器介面 (Claude Code 中的 `/mcp`) 與擴充功能在 `chrome://extensions` 的 Service Worker 主控台 (`[genkan]` 日誌) |
+| 知道什麼受信任, 什麼不受信任 | [安全](https://vivswan.github.io/genkan/docs/zh-tw/security)、[信任邊界](https://vivswan.github.io/genkan/docs/zh-tw/security/trust-boundaries)、[設計依據](https://vivswan.github.io/genkan/docs/zh-tw/security/rationale) |
+| 看各部分如何組合 | [架構](https://vivswan.github.io/genkan/docs/zh-tw/architecture) |
+| 建置、測試或發行 | [開發](https://vivswan.github.io/genkan/docs/zh-tw/development)、[發行](https://vivswan.github.io/genkan/docs/zh-tw/release) |
 
 ## 貢獻與治理
 

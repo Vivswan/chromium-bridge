@@ -10,7 +10,7 @@ The extension needs Chrome 134 or later; an older browser refuses to load it.
 
 The CLI needs nothing but the binary, on desktops, headless machines, and CI alike.
 
-1. **Install it.** Pick one from the [latest release](https://github.com/Vivswan/chromium-bridge/releases/latest); to verify a download first, the commands are in [SECURITY.md](../.github/SECURITY.md#release-artifact-integrity).
+1. **Install it.** Pick one from the [latest release](https://github.com/Vivswan/genkan/releases/latest); to verify a download first, the commands are in [SECURITY.md](../.github/SECURITY.md#release-artifact-integrity).
 
    | Channel | Command or click | What it does |
    | --- | --- | --- |

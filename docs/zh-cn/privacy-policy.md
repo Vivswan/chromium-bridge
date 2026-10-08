@@ -59,4 +59,4 @@ Genkan **不**向任何人出售或共享你的数据。唯一会收到任何内
 ## 联系方式
 
 有问题或疑虑: 请在
-<https://github.com/Vivswan/chromium-bridge/issues> 提交 issue。
+<https://github.com/Vivswan/genkan/issues> 提交 issue。

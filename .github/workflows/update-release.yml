@@ -139,7 +139,7 @@ jobs:
           subject-path: ${{ steps.extzip.outputs.name }}.zip
 
       # The Sigstore bundle ships as a release asset next to the artifacts it
-      # covers, so `gh attestation verify <asset> --repo Vivswan/chromium-bridge
+      # covers, so `gh attestation verify <asset> --repo Vivswan/genkan
       # --bundle <file>` verifies against the frozen release without depending
       # on GitHub's attestations API. One bundle covers the archive, the bare
       # binary, and the installer - which is why it is named after the shared

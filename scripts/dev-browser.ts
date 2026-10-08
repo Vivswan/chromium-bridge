@@ -36,7 +36,7 @@ const devBrowserConfig = (): DevBrowserConfig => ({
   // Docs tab, started alongside dev by the [web] lane. Best-effort: on
   // extension-only dev, or when astro falls back off 4321, the tab just misses
   // it - it is a convenience, not something dev correctness depends on.
-  startUrl: ["http://localhost:4321/chromium-bridge/"],
+  startUrl: ["http://localhost:4321/genkan/"],
   // extensions.pinned_extensions is untracked, so a preseed survives Chrome's preference rewrite;
   // extensions.ui.developer_mode is hash-guarded and cannot be, and the CDP load path does not need it. The
   // devtools entry mirrors WXT's default and silences a self-XSS sync warning.

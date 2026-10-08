@@ -6,7 +6,7 @@ How to report a vulnerability, what is in scope, the defaults that fail safe, ho
 
 **Do not open a public issue for security problems.**
 
-Report vulnerabilities privately via [GitHub Security Advisories](https://github.com/Vivswan/chromium-bridge/security/advisories/new) ("Report a vulnerability"). If that page is unavailable, contact [@Vivswan](https://github.com/Vivswan) directly instead.
+Report vulnerabilities privately via [GitHub Security Advisories](https://github.com/Vivswan/genkan/security/advisories/new) ("Report a vulnerability"). If that page is unavailable, contact [@Vivswan](https://github.com/Vivswan) directly instead.
 
 A useful report includes:
 
@@ -153,16 +153,16 @@ Verification is yours to run, before you execute anything from an archive:
 
 ```sh
 shasum -a 256 -c genkan-<tag>-<platform>-<arch>.tar.gz.sha256
-gh attestation verify genkan-<tag>-<platform>-<arch>.tar.gz --repo Vivswan/chromium-bridge
+gh attestation verify genkan-<tag>-<platform>-<arch>.tar.gz --repo Vivswan/genkan
 # after extraction, the bare binary can be verified on its own:
-gh attestation verify genkan --repo Vivswan/chromium-bridge
+gh attestation verify genkan --repo Vivswan/genkan
 shasum -a 256 -c genkan-<tag>-<platform>-<arch>.binary.sha256
 ```
 
 Offline variants of the `gh attestation verify` calls:
 
 - `--bundle genkan-<tag>-<platform>-<arch>.attestation.jsonl` reads the attestation from the downloaded release asset instead of GitHub's attestations API. The one bundle covers the archive and the bare binary alike; verification picks the entry matching the asset's digest.
-- `gh attestation verify <asset> -R Vivswan/chromium-bridge --bundle attestation.json` works for any downloaded asset, through the release-level bundle.
+- `gh attestation verify <asset> -R Vivswan/genkan --bundle attestation.json` works for any downloaded asset, through the release-level bundle.
 
 Verifying the whole archive also covers the bundled `extension/dist`. Registration (`doctor --fix`) points browsers at the binary as it sits on disk; it downloads nothing and adds no verification step of its own. Verify first, then register.
 
