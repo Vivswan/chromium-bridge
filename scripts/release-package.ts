@@ -15,15 +15,8 @@
 import { createHash } from "node:crypto";
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import {
-  cargoVersion,
-  die,
-  type Env,
-  githubOutput,
-  repoRoot,
-  requiredEnv,
-  selectMode,
-} from "./lib.ts";
+import { setOutput } from "@actions/core";
+import { cargoVersion, die, repoRoot, requiredEnv, selectMode } from "./lib.ts";
 
 export interface ReleaseTag {
   tag: string;
@@ -94,13 +87,7 @@ export type RunTool = (argv: string[], cwd: string) => void;
 
 export const archiveOutputs = ["name", "archive", "sha256file", "binary", "binsha256file"] as const;
 
-export function packageArchive(
-  root: string,
-  env: Env,
-  plan: Plan,
-  releaseTxt: string,
-  run: RunTool,
-): void {
+export function packageArchive(root: string, plan: Plan, releaseTxt: string, run: RunTool): void {
   const stage = join(root, plan.name);
   mkdirSync(join(stage, "extension"), { recursive: true });
   cpSync(join(root, "build/extension/chrome-mv3"), join(stage, "extension/dist"), {
@@ -129,11 +116,11 @@ export function packageArchive(
     binary: `${plan.name}/${plan.binaryFile}`,
     binsha256file: binarySha256,
   };
-  for (const output of archiveOutputs) githubOutput(output, records[output], env);
+  for (const output of archiveOutputs) setOutput(output, records[output]);
 }
 
 /** The built bundle under a top-level `dist/`, so "Load unpacked" takes the extracted directory as is. */
-export function packageExtensionZip(root: string, env: Env, tag: string, run: RunTool): void {
+export function packageExtensionZip(root: string, tag: string, run: RunTool): void {
   const name = `genkan-extension-${tag}`;
   const staging = join(root, "dist-zip");
   rmSync(staging, { recursive: true, force: true });
@@ -144,7 +131,7 @@ export function packageExtensionZip(root: string, env: Env, tag: string, run: Ru
     join(root, `${name}.zip.sha256`),
     checksumLine(readFileSync(join(root, `${name}.zip`)), `${name}.zip`),
   );
-  githubOutput("name", name, env);
+  setOutput("name", name);
 }
 
 export interface InstallerPlan {
@@ -241,21 +228,20 @@ export function writeTapFormula(
   release: ReleaseTag,
   digests: () => Omit<FormulaInputs, "release">,
   path: string,
-  env: Env,
   write: (path: string, text: string) => void,
 ): boolean {
   if (release.prerelease) {
-    githubOutput("bump", "false", env);
+    setOutput("bump", "false");
     return false;
   }
   const inputs = digests();
   mkdirSync(dirname(path), { recursive: true });
   write(path, brewFormula({ release, ...inputs }));
-  githubOutput("bump", "true", env);
+  setOutput("bump", "true");
   return true;
 }
 
-export function packageInstaller(root: string, env: Env, plan: InstallerPlan, run: RunTool): void {
+export function packageInstaller(root: string, plan: InstallerPlan, run: RunTool): void {
   for (const [source, destination] of plan.staged) {
     mkdirSync(dirname(join(root, destination)), { recursive: true });
     cpSync(join(root, source), join(root, destination));
@@ -270,7 +256,7 @@ export function packageInstaller(root: string, env: Env, plan: InstallerPlan, ru
     installer: plan.installer,
     installersha256file: sha256File,
   };
-  for (const output of installerOutputs) githubOutput(output, records[output], env);
+  for (const output of installerOutputs) setOutput(output, records[output]);
 }
 
 /** The digest of a checksum file written by `checksumLine`; anything else is refused, never guessed. */
@@ -362,21 +348,21 @@ const modes: Record<string, () => void> = {
     const [platform, arch] = [requiredEnv("PLATFORM"), requiredEnv("ARCH")];
     const plan = packagingPlan(release.tag, platform, arch);
     const text = releaseText(requiredEnv("GITHUB_REPOSITORY"), release.tag, platform, arch);
-    packageArchive(repoRoot, process.env, plan, text, runTool);
+    packageArchive(repoRoot, plan, text, runTool);
   },
   "extension-zip"() {
     const release = verifyTag(requiredEnv("RELEASE_TAG"), cargoVersion());
-    packageExtensionZip(repoRoot, process.env, release.tag, runTool);
+    packageExtensionZip(repoRoot, release.tag, runTool);
   },
   installer() {
     const release = verifyTag(requiredEnv("RELEASE_TAG"), cargoVersion());
     const plan = installerPlan(release, requiredEnv("PLATFORM"), requiredEnv("ARCH"));
-    packageInstaller(repoRoot, process.env, plan, runTool);
+    packageInstaller(repoRoot, plan, runTool);
   },
   "installer-from-cargo"() {
     const release = parseTag(`v${cargoVersion()}`);
     const plan = installerPlan(release, requiredEnv("PLATFORM"), requiredEnv("ARCH"));
-    packageInstaller(repoRoot, process.env, plan, runTool);
+    packageInstaller(repoRoot, plan, runTool);
   },
   "brew-formula"() {
     const release = verifyTag(requiredEnv("RELEASE_TAG"), cargoVersion());
@@ -396,7 +382,6 @@ const modes: Record<string, () => void> = {
         linuxX64: digest("linux", "x64"),
       }),
       path,
-      process.env,
       writeFileSync,
     );
     console.log(

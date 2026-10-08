@@ -17,9 +17,10 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { setOutput } from "@actions/core";
 import { DockerfileParser, Property } from "dockerfile-ast";
 import { TextDocument } from "vscode-languageserver-textdocument";
-import { githubOutput, repoRoot } from "./lib.ts";
+import { repoRoot } from "./lib.ts";
 
 export const ownerFiles = [".prototools", "Containerfile"] as const;
 
@@ -48,8 +49,8 @@ function prototoolsPins(root: Record<string, unknown>, tool: string): string[] {
   if (typeof value !== "string" || value === "") {
     throw new Error(`pin: .prototools pins ${tool} to an empty or non-string value`);
   }
-  // A multi-line TOML string is two lines where every consumer expects one (a step output record, a build
-  // arg), so it is refused along with any other whitespace.
+  // A multi-line TOML string is two tokens where a build arg or a tool spec (cargo-deb@<pin>) takes one,
+  // so it is refused along with any other whitespace.
   if (/\s/.test(value)) {
     throw new Error(`pin: .prototools pins ${tool} to a value with whitespace`);
   }
@@ -142,7 +143,7 @@ if (import.meta.main) {
       for (const [name, version] of readAllPins()) console.log(`${name} ${version}`);
     } else {
       const pin = readPin(tool);
-      if (outputForm) githubOutput(outputName, pin);
+      if (outputForm) setOutput(outputName, pin);
       console.log(pin);
     }
   } catch (error) {

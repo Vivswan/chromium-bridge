@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -22,6 +22,7 @@ import {
   verifyTag,
   writeTapFormula,
 } from "../release-package.ts";
+import { stepOutputFile, stepOutputs } from "./step-outputs.ts";
 
 // What would drift silently: the release grammar that keeps a tag safe as a file name and a gh argument,
 // the checksum line `sha256sum -c` reads, the RELEASE.txt a user verifies by hand against SECURITY.md, and
@@ -29,6 +30,9 @@ import {
 
 const scratch = new Scratch();
 afterAll(() => scratch.remove());
+afterEach(() => {
+  delete process.env.GITHUB_OUTPUT;
+});
 
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
@@ -107,13 +111,12 @@ describe("packageArchive", () => {
     "%s-%s: the staged tree, RELEASE.txt, both checksum files, and the step outputs",
     (platform, arch, binaryFile, archiverHead) => {
       const root = builtCheckout(binaryFile);
-      const output = join(root, "output");
-      const env = { GITHUB_OUTPUT: output };
+      const output = stepOutputFile(root);
       const calls: { argv: string[]; cwd: string }[] = [];
       const plan = packagingPlan("v1.2.3", platform, arch);
       const text = releaseText("example-user/repo", "v1.2.3", platform, arch);
 
-      packageArchive(root, env, plan, text, fakeArchiver(calls));
+      packageArchive(root, plan, text, fakeArchiver(calls));
 
       const name = `genkan-v1.2.3-${platform}-${arch}`;
       const archive = platform === "windows" ? `${name}.zip` : `${name}.tar.gz`;
@@ -129,21 +132,20 @@ describe("packageArchive", () => {
         archiver: calls,
         archiveSha256: read(`${archive}.sha256`),
         binarySha256: read(`${name}.binary.sha256`),
-        outputs: read("output"),
+        outputs: stepOutputs(output),
       }).toEqual({
         staged: [true, true, true, true],
         releaseTxt: `repo=example-user/repo\ntag=v1.2.3\nplatform=${platform}\narch=${arch}\n`,
         archiver: [{ argv: [...archiverHead, archive, name], cwd: root }],
         archiveSha256: `${sha256(`archive of ${name}`)}  ${archive}\n`,
         binarySha256: `${sha256("binary bytes")}  ${binaryFile}\n`,
-        outputs: [
-          `name=${name}`,
-          `archive=${archive}`,
-          `sha256file=${archive}.sha256`,
-          `binary=${name}/${binaryFile}`,
-          `binsha256file=${name}.binary.sha256`,
-          "",
-        ].join("\n"),
+        outputs: {
+          name,
+          archive,
+          sha256file: `${archive}.sha256`,
+          binary: `${name}/${binaryFile}`,
+          binsha256file: `${name}.binary.sha256`,
+        },
       });
     },
   );
@@ -245,11 +247,11 @@ describe("packageInstaller", () => {
     "%s-%s: the staged binary, the tool calls, the checksum, and the outputs",
     (platform, arch, ext, tools) => {
       const root = builtCheckout(platform === "windows" ? "genkan.exe" : "genkan");
-      const output = join(root, "output");
+      const output = stepOutputFile(root);
       const calls: { argv: string[]; cwd: string }[] = [];
       const plan = installerPlan(release, platform, arch);
 
-      packageInstaller(root, { GITHUB_OUTPUT: output }, plan, fakeTool(calls));
+      packageInstaller(root, plan, fakeTool(calls));
 
       const installer = `genkan-v1.2.3-rc.1-${platform}-${arch}.${ext}`;
       const stagedBinary = join(root, "pkg-root/usr/local/bin/genkan");
@@ -258,12 +260,12 @@ describe("packageInstaller", () => {
           platform === "macos" ? readFileSync(stagedBinary, "utf8") : existsSync(stagedBinary),
         tools: calls,
         sha256: readFileSync(join(root, `${installer}.sha256`), "utf8"),
-        outputs: readFileSync(output, "utf8"),
+        outputs: stepOutputs(output),
       }).toEqual({
         staged: platform === "macos" ? "binary bytes" : false,
         tools: tools.map((argv) => ({ argv, cwd: root })),
         sha256: `${sha256(`installer from ${(tools.at(-1) as string[])[0]}`)}  ${installer}\n`,
-        outputs: `installer=${installer}\ninstallersha256file=${installer}.sha256\n`,
+        outputs: { installer, installersha256file: `${installer}.sha256` },
       });
     },
   );
@@ -293,7 +295,7 @@ describe("the Homebrew formula", () => {
     ["v1.2.3", true],
   ])("%s -> bump %p", (tag, bump) => {
     const root = scratch.dir("tap-formula");
-    const output = join(root, "output");
+    const output = stepOutputFile(root);
     const path = join(root, "Formula", "genkan.rb");
     // The tap excludes prereleases, so the digest reader must not run for one.
     const written = writeTapFormula(
@@ -303,14 +305,13 @@ describe("the Homebrew formula", () => {
         return { repository: "example-user/repo", macosArm64, linuxX64 };
       },
       path,
-      { GITHUB_OUTPUT: output },
       writeFileSync,
     );
     expect({
       written,
       formula: existsSync(path) ? readFileSync(path, "utf8").includes('version "1.2.3"') : "none",
-      output: readFileSync(output, "utf8"),
-    }).toEqual({ written: bump, formula: bump ? true : "none", output: `bump=${bump}\n` });
+      output: stepOutputs(output),
+    }).toEqual({ written: bump, formula: bump ? true : "none", output: { bump: String(bump) } });
   });
 
   test("every `steps.formula.outputs.<x>` update-release.yml reads is a record the brew-formula mode writes", () => {
@@ -340,22 +341,22 @@ describe("the Homebrew formula", () => {
 
 test("the extension zip stages the bundle under dist/, zips from the staging dir, and writes its checksum", () => {
   const root = builtCheckout("genkan");
-  const output = join(root, "output");
+  const output = stepOutputFile(root);
   const calls: { argv: string[]; cwd: string }[] = [];
 
-  packageExtensionZip(root, { GITHUB_OUTPUT: output }, "v1.2.3", fakeArchiver(calls));
+  packageExtensionZip(root, "v1.2.3", fakeArchiver(calls));
 
   const name = "genkan-extension-v1.2.3";
   expect({
     staged: existsSync(join(root, "dist-zip/dist/manifest.json")),
     zip: calls,
     sha256: readFileSync(join(root, `${name}.zip.sha256`), "utf8"),
-    outputs: readFileSync(output, "utf8"),
+    outputs: stepOutputs(output),
   }).toEqual({
     staged: true,
     zip: [{ argv: ["zip", "-r", `../${name}.zip`, "dist"], cwd: join(root, "dist-zip") }],
     sha256: `${sha256("archive of dist")}  ${name}.zip\n`,
-    outputs: `name=${name}\n`,
+    outputs: { name },
   });
 });
 

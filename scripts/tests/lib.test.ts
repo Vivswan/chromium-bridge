@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { gitEnv, githubOutput, runGit, Scratch, selectMode } from "../lib";
+import { gitEnv, runGit, Scratch, selectMode } from "../lib";
 
 // The incident: a pre-commit hook in a linked worktree exports GIT_DIR (that worktree's private gitdir) and
 // GIT_INDEX_FILE; a scratch `git init` inheriting them re-initialised the shared repository as bare.
@@ -49,24 +49,6 @@ describe("gitEnv", () => {
     expect(git(victim, clean, "config", "--get", "core.bare")).toBe("false");
     expect(readFileSync(join(victim, ".git", "HEAD"), "utf8")).toBe(headBefore);
     expect(git(safe, gitEnv(hookEnv), "rev-parse", "--git-dir")).toBe(".git");
-  });
-});
-
-// GitHub reads GITHUB_OUTPUT as one `name=value` record per line and keeps the last record for a name, a
-// format nothing on our side enforces: a value carrying a line break would silently become a second record.
-describe("githubOutput", () => {
-  test("records append in order as single lines, and a value with a line break is refused before any write", () => {
-    const dir = tempDir("output");
-    const file = join(dir, "output");
-    const env = { GITHUB_OUTPUT: file };
-    githubOutput("name", "example.invalid/example-user/repo", env);
-    githubOutput("tag", "0123456789ab", env);
-    expect(() => githubOutput("proto", "0.58.2\n9.9.9", env)).toThrow(/proto would span lines/);
-    expect(() => githubOutput("bad name", "x", env)).toThrow(/not a step output name/);
-    expect(readFileSync(file, "utf8")).toBe(
-      "name=example.invalid/example-user/repo\ntag=0123456789ab\n",
-    );
-    expect(() => githubOutput("name", "x", {})).toThrow(/GITHUB_OUTPUT is not set/);
   });
 });
 
