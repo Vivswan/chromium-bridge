@@ -501,17 +501,10 @@ fn spawn_trust_watch(
     });
 }
 
-/// One poll of the watch: push what changed since `last` and hand an observed release to the control-plane loop
-/// through `unkill_observed`. Returns the state the next poll compares against, `None` after an unreadable read
-/// so the next readable one re-runs the startup posture.
-///
-/// ```text
-/// unreadable                     -> once per gap: log, push the unknown kill state
-/// readable after unreadable      -> every watched state was unobservable across the gap: push all of them, and a
-///                                   released record hands over the release too (the documented recovery from an
-///                                   unreadable record is deleting it, which reads as the released bootstrap)
-/// kill marker moved, not killed  -> the release handoff, after the push so the mirror is not left engaged
-/// ```
+/// One poll of the watch. The release handoff comes after the pushes so the mirror is not left engaged, and a
+/// readable record after an unreadable one re-runs the startup posture: every watched state was unobservable
+/// across the gap, and a released record hands over the release too (the documented recovery from an
+/// unreadable record is deleting it, which reads as the released bootstrap).
 fn watch_tick<W: Write>(
     last: Option<Watched>,
     read: io::Result<TrustState>,
@@ -756,17 +749,13 @@ const UNKILL_DRAIN_SETTLE: Duration = Duration::from_millis(200);
 /// How often the loop wakes from an idle channel to check the unkill flag.
 const PLANE_TICK: Duration = Duration::from_millis(100);
 
-/// The unkill transition, taken only by the control-plane loop: drain the control frames already buffered on
-/// stdin, then re-read the kill state and exit only on an authoritative alive. The extension's panic path is
-/// told ok:true the moment a `kill_engage` is accepted for the pipe, so one that raced an in-flight release may
-/// still be sitting in our stdin when the watch observes the released state.
+/// The unkill transition, taken only by the control-plane loop. A `kill_engage` that raced an in-flight release
+/// may still sit in our stdin when the watch observes the released state (the extension's occupied-slot panic
+/// path can report ok:true before the host acknowledged it), so the buffered frames drain before the re-read,
+/// and an unreadable state stays killed: leaving on ambiguity would fail open.
 ///
-/// ```text
-/// drained frame re-engaged the switch  -> stay in control-plane mode
-/// state unreadable after the drain     -> stay; leaving killed mode on ambiguity would fail open
-/// frame lands after the settle window  -> dies with the process; the extension's latch stays engaged and it
-///                                         re-posts the engage on reconnect (at-least-once, idempotent here)
-/// ```
+/// A frame landing after the settle window dies with the process; the extension's latch stays engaged and it
+/// re-posts the engage on reconnect (at-least-once, idempotent here).
 fn drain_then_decide<H, K>(
     frames: &mpsc::Receiver<PlaneEvent>,
     handle: &mut H,
@@ -861,16 +850,10 @@ where
 }
 
 /// Control-plane-only mode: the bridge is killed or its state is unreadable, so nothing may flow between
-/// browser and broker, yet this host must stay up because the extension's SW-only kill mirror is fed by its pushes.
-/// stdin is read on its own thread feeding a channel so the loop can interleave frames with the unkill flag
-/// (see [`drain_then_decide`]).
-/// ```text
-/// control frame (kill_engage, kill_status, kill_release)  -> answered; kill_release opens the presence exchange
-/// bridge frame                                             -> dropped and logged; no socket is dialed
-/// release (CLI unkill, or the exchange) seen by the watch  -> queued frames drained, then exit if the kill is still
-///                                                            released (the extension reconnects into a bridge host);
-///                                                            a queued kill_engage or unreadable kill state stays here
-/// ```
+/// browser and broker, yet this host must stay up because the extension's SW-only kill mirror is fed by its
+/// pushes. stdin is read on its own thread feeding a channel so the loop can interleave frames with the unkill
+/// flag; on an observed release, leaving this mode is [`drain_then_decide`]'s decision, and the extension then
+/// reconnects into a bridge host.
 fn run_control_plane(mut exchange: Exchange) -> i32 {
     let stdout_writer = Arc::new(Mutex::new(BufWriter::new(io::stdout())));
     // The watch raises this flag on an observed release; leaving this mode
@@ -1133,17 +1116,10 @@ pub fn run(label: Option<BrowserLabel>) -> i32 {
     std::process::exit(0);
 }
 
-/// Pump NDJSON lines from the bridge socket to stdout as native-messaging frames. [`bridge_read`] bounds every
-/// line by `BRIDGE_MAX_LINE`: the server passed attestation, but even an attested peer must not exhaust memory
-/// with one newline-less line. The lock on `out` is taken per frame, never across the blocking read, so the
-/// stdin->socket thread's control replies can interleave while this pump waits on the socket.
-///
-/// ```text
-/// read error, an over-cap line included  -> fail closed: the pump ends, the process exits, Chrome tears the port down
-/// host control frame on the socket leg   -> an injection (a spurious `enclave_error` to burn the extension's nonce,
-///                                           an `enclave_revoked` to fake a compromise, a forged `client_list_result`):
-///                                           dropped and logged; a recognized, bounded frame, so the pump keeps going
-/// ```
+/// Pump the bridge socket's NDJSON lines to stdout. Even an attested peer must not exhaust memory with one
+/// newline-less line, so an over-cap read ([`bridge_read`], `BRIDGE_MAX_LINE`) ends the pump like any read
+/// error: fail closed, the process exits and Chrome tears the port down. The lock on `out` is taken per frame,
+/// never across the blocking read, so the stdin->socket thread's control replies can interleave.
 fn pump_socket_to_stdout<R: BufRead, W: Write>(reader: &mut R, out: &Mutex<W>) {
     loop {
         let value: Value = match bridge_read(reader) {
@@ -1157,6 +1133,8 @@ fn pump_socket_to_stdout<R: BufRead, W: Write>(reader: &mut R, out: &Mutex<W>) {
                 break;
             }
         };
+        // A spurious `enclave_error` would burn the extension's nonce, an `enclave_revoked` fake a compromise, a
+        // forged `client_list_result` lie to the UI; a recognized, bounded frame, so the pump keeps going.
         if let Some(kind) = host_control_type(&value) {
             log_warn!(
                 "native-host",

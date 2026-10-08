@@ -334,37 +334,25 @@ pub enum AttachRequest {
     },
 }
 
-/// The broker's reply to an [`AttachRequest`]. `Accepted` lets the peer proceed
-/// to session traffic. `Refused` names an authorization denial (allowlist miss)
-/// and the peer must fail closed. `Unavailable` names a transient condition
-/// (capacity, or the broker shutting down) and the peer should retry -- which,
-/// for a relay, may mean becoming the broker itself. Making these explicit
-/// (rather than a bare socket close) lets a relay tell "not admitted" apart
-/// from "broker went away" apart from "denied".
-///
-/// `Accepted` is an empty struct variant for the same serde reason as
-/// [`AttachRequest::Browser`]: unit variants ignore `deny_unknown_fields`.
+/// The broker's reply to an [`AttachRequest`]: typed rather than a bare socket close, so a relay can tell
+/// "denied" from "broker went away".
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "attach_reply", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AttachReply {
+    /// The peer proceeds to session traffic. An empty struct variant, not a unit variant, for the reason on
+    /// [`AttachRequest::Browser`].
     Accepted {},
+    /// An authorization denial (an allowlist miss); the peer fails closed.
     Refused { reason: String },
+    /// A transient condition (capacity, or the broker shutting down); the peer retries, which for a relay may
+    /// mean becoming the broker itself.
     Unavailable { reason: String },
 }
 
 /// A request from the MCP server to the extension, newline-delimited JSON over the bridge socket:
-/// `{ id, op, args, browser? }`. The whole frame fails the parse when any part is outside the contract, so
-/// a frame the reader accepts is a known tool with schema-valid arguments and nothing else on the envelope.
-///
-/// ```text
-/// op outside the catalogue, args outside its struct  -> refused by the flattened BridgeCommand (its own
-///                                                       deny_unknown_fields and the per-tool structs')
-/// a field outside the envelope                       -> refused by this struct's deny_unknown_fields, which serde
-///                                                       enforces across the flatten
-/// adding an envelope field                           -> a breaking protocol change an older peer rejects rather
-///                                                       than misreads; new per-op data belongs in the tool's args
-///                                                       struct, a new envelope field needs a version bump
-/// ```
+/// `{ id, op, args, browser? }`. serde enforces this struct's `deny_unknown_fields` across the flatten, so a
+/// field outside the envelope fails the whole frame. A new envelope field is a protocol version bump an older
+/// peer rejects rather than misreads; new per-op data belongs in the tool's args struct.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -425,36 +413,28 @@ impl BridgeResp {
 }
 
 /// Server->extension frames about a request already on the wire, relayed by the native host untouched like the
-/// request itself. Internally tagged on `type`, so a frame is told from a [`BridgeReq`] (which carries `op`) by
-/// shape; the extension reads each variant with a generated strict validator (`moon run gen`).
-///
-/// ```text
-/// cancel { id }  -> the server stopped waiting for `id`: the extension aborts the op and answers nothing. The
-///                   only writer is the session's in-flight guard, whose Drop sends exactly one per abandoned
-///                   request (`session.rs`); an id the extension does not hold is ignored (answered, or never seen)
-/// not a host control tag  -> the host's socket->stdout pump forwards it instead of dropping it as an injection;
-///                            a browser that bounces one back reaches the session's strict response parse, which
-///                            refuses it and severs that connection
-/// ```
+/// request itself; the extension reads each variant with a generated strict validator (`moon run gen`). A
+/// signal is not a host control tag, so the host's socket->stdout pump forwards it instead of dropping it as an
+/// injection; a browser that bounces one back meets the session's strict response parse, which severs that
+/// connection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BridgeSignal {
+    /// The server stopped waiting for `id`: the extension aborts the op and answers nothing. The only writer is
+    /// the session's in-flight guard, whose Drop sends at most one per abandoned request, while that browser's
+    /// connection still exists (`session.rs`); an id the extension does not hold (answered, or never seen) is
+    /// ignored.
     Cancel {
         /// The [`BridgeReq::id`] being abandoned.
         id: u64,
     },
 }
 
-/// A [`BridgeResp`] parsed into the two states a response can be in: success with data, or failure with an error.
-/// The flat `{ ok, data?, error? }` triple stays the pinned wire contract (the Zod validators and
-/// the envelope schema are derived from [`BridgeResp`]) but can spell contradictions, and the attested-but-untrusted extension
-/// must not hand the session a response it has to re-interpret.
-///
-/// ```text
-/// contradictory frame -> serde's try_from refuses it at the read boundary as InvalidData; the session drops that
-///                        connection, and everything downstream matches on `outcome` alone
-/// ```
+/// A [`BridgeResp`] parsed into the two states a response can be in. The flat `{ ok, data?, error? }` triple
+/// stays the pinned wire contract (the Zod validators and the envelope schema derive from [`BridgeResp`]) but
+/// can spell contradictions, which `try_from` refuses at the read boundary as InvalidData: the session drops
+/// that connection, and everything downstream matches on `outcome` alone.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(try_from = "BridgeResp")]
 pub struct ParsedResp {

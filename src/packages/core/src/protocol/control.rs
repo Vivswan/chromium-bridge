@@ -14,99 +14,52 @@ use serde_json::Value;
 /// signs any valid challenge, so freshness is the extension's job: a fresh single-use CSPRNG nonce per
 /// challenge, a proof accepted only for the outstanding nonce and verified against its PINNED key, never the
 /// `pubkey` field (trustworthy only during the user-verified pairing, when the user compares fingerprints).
-///
-/// ```text
-/// nonce            -> non-empty, NUL-free, at most 256 BYTES (MAX_NONCE_LEN)
-/// context          -> optional, NUL-free, at most 4096 BYTES (MAX_CONTEXT_LEN); absent and "" sign identically
-/// sig              -> base64 of the raw 64-byte IEEE P1363 r||s ECDSA P-256/SHA-256 signature over
-///                     UTF8(genkan-enclave-v1) || 0x00 || UTF8(nonce) || 0x00 || UTF8(context or "")
-/// key_id / pubkey  -> lowercase-hex SHA-256 of the 65-byte X9.63 public key / base64 of those bytes
-/// error reason     -> REASON_CODES
-/// enclave_revoke   -> deletes the host key, then best-effort clears the recorded policy baseline and bumps the
-///                     revocation epoch; not presence-gated (it only reduces capability). Answered
-///                     enclave_revoked once the key is gone (even when none existed, and even when the baseline clear
-///                     or epoch bump failed: those are only logged); enclave_error carries the key deletion's
-///                     reason code (keychain_error, also for an unavailable runtime lock)
-/// enclave_revoked  -> also PUSHED unprompted when the host sees the key revoked out-of-band (genkan
-///                     revoke, pair --reset), so a pinned extension flips to its fail-closed compromised state
-///                     without waiting for a reverify; without a pin it is a no-op
-/// ```
-///
-/// Every error is a denial: the extension fails closed, never falls back to a softer surface. User presence is
-/// not this family's business: it is the WebAuthn exchange ([`WebAuthnControl`]).
+/// Every error is a denial the extension fails closed on; user presence is [`WebAuthnControl`]'s business.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum EnclaveControl {
+    /// Extension -> host: sign this challenge. The bytes signed and both fields' bounds (NUL-free; the nonce
+    /// non-empty and at most `MAX_NONCE_LEN`; the context at most `MAX_CONTEXT_LEN`, absent and `""` signing
+    /// identically) are [`crate::enclave::challenge_message`]'s.
     EnclaveChallenge {
         nonce: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         context: Option<String>,
     },
+    /// Host -> extension: the proof. `sig` is base64 of the raw IEEE P1363 `r || s` ECDSA P-256/SHA-256
+    /// signature ([`crate::enclave::SIG_LEN`] bytes); `key_id` is the key's lowercase-hex fingerprint
+    /// ([`crate::enclave::EnclavePublicKey::fingerprint_hex`]) and `pubkey` the base64 of its X9.63 bytes.
     EnclaveProof {
         sig: String,
         key_id: String,
         pubkey: String,
     },
-    EnclaveError {
-        reason: String,
-    },
-    /// Extension -> host: delete the enrollment key.
+    /// Host -> extension: a denial; `reason` is one of [`crate::enclave::REASON_CODES`].
+    EnclaveError { reason: String },
+    /// Extension -> host: delete the host key. Not presence-gated, since it only reduces capability; what the
+    /// deletion clears with it, and when `enclave_revoked` still answers, is `revoke_host_key`'s
+    /// (`native_host.rs`).
     EnclaveRevoke {},
-    /// Host -> extension: the host key is gone (ack or proactive push).
+    /// Host -> extension: the host key is gone. The ack to `enclave_revoke`, and PUSHED unprompted when the
+    /// host sees the key revoked out-of-band (`genkan revoke`, `pair --reset`), so a pinned extension flips
+    /// to its fail-closed compromised state without waiting for a reverify; without a pin it is a no-op.
     EnclaveRevoked {},
 }
 
 /// Host-admin frames, answered by the native host itself exactly like [`EnclaveControl`]: never forwarded
-/// to the MCP server, and dropped if the server leg tries to inject one. They give the options UI the
-/// trusted-client allowlist, the global kill switch, the audit trail, and the host's own browser
-/// registrations, and arrive only from the extension Chrome connected to this host (`allowed_origins`).
-///
-/// List/revoke and `kill_engage` only reduce capability; `kill_release` and `client_pair` would RESTORE or GRANT
-/// it, so the host answers them with a presence request instead of acting (the [`WebAuthnControl`] roster;
-/// `native_host/presence.rs` decides).
-///
-/// ```text
-/// kill_release               -> presence_request naming this browser's credentials; an approved answer adds
-///                               kill_status_result to its presence_result, a refused one answers presence_result alone,
-///                               and a failure before the request exists (store, action, nonce) answers
-///                               kill_status_result { ok: false }, no request
-/// client_pair                -> presence_request the same way; an approved answer adds client_pair_result to its
-///                               presence_result (the allowlist write's verdict), a failure before the request exists
-///                               answers client_pair_result { ok: false, error }, no request; `error` is the sentence
-///                               `pair-client` prints for the same refusal
-/// client_list                -> client_list_result { ok, enrolled, clients, error? }; a load failure (including
-///                               the tamper case) is ok: false with the error text, the UI shows it and guesses nothing
-/// client_revoke              -> client_revoke_result { ok, error? }; the revocation-epoch bump shares the critical
-///                               section, so a live broker drops that client's connections
-/// kill_status/engage         -> kill_status_result { ok, killed?, error? }; also PUSHED unsolicited when the host's
-///                               revocation watch sees the kill marker move, and at startup only when killed or
-///                               unreadable (a healthy host waits for the extension's kill_status query), so the
-///                               SW-only mirror never polls; ok: false carries no killed claim (fail closed on unknown)
-/// audit_event                -> no reply; the host accepts only the extension-owned kinds
-///                               (crate::audit::extension_kind) and stamps the surface itself, so the frame cannot
-///                               forge host-side events like admissions or kills; cid joins a confirm_shown to its verdict
-/// registration_status/repair -> registration_status_result { ok, browsers, error? }: the per-browser manifest rows
-///                               `doctor` diagnoses, after `doctor --fix`'s repair for the repair frame; rows travel
-///                               exactly when ok (a repair that failed on any target answers ok: false and the
-///                               extension re-asks for the rows). repair { browsers? } names exactly the known
-///                               browsers to register (`--browser`), absent is every detected one; an empty
-///                               list or an unknown key is malformed
-/// doctor_report              -> doctor_report_result { ok, report?, error? }: the rows plain `doctor` prints (lock file,
-///                               mcp server, kill switch, policy baseline, the verdict) with the words the CLI uses,
-///                               plus the `key:` line of `enclave-status`; read-only, ok: false only for a malformed frame
-/// audit_read { limit? }      -> audit_read_result { ok, entries?, older?, path?, error? }: the newest records of the
-///                               host's audit.log, the page `genkan audit --limit <n>` prints (its default
-///                               when `limit` is absent; 1..=MAX_AUDIT_READ_LIMIT otherwise, out of range is
-///                               malformed); the page travels exactly when ok, an unreadable trail is ok: false
-/// ```
+/// to the MCP server, and dropped if the server leg tries to inject one. They arrive only from the extension
+/// Chrome connected to this host (`allowed_origins`). A frame that only reduces capability (list, revoke,
+/// `kill_engage`) is acted on at once; the two that would RESTORE or GRANT it (`kill_release`, `client_pair`)
+/// are answered with a presence request instead, and `native_host/presence.rs` decides the rest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AdminControl {
     /// Extension -> host: report the trusted-client allowlist.
     ClientList {},
-    /// Host -> extension: the allowlist (or the load error, fail closed).
+    /// Host -> extension: the allowlist. A load failure (the tamper case included) is `ok: false` with the
+    /// error text; the UI shows it and guesses nothing.
     ClientListResult {
         ok: bool,
         /// Whether admission is enforced (an allowlist exists). `false` with
@@ -125,7 +78,10 @@ pub enum AdminControl {
         error: Option<String>,
     },
     /// Extension -> host: trust an MCP client under `name`, keyed on `anchor`; the page names an explicit anchor
-    /// only, since a browser has no parent process to measure (`--this-parent` is the CLI's).
+    /// only, since a browser has no parent process to measure (`--this-parent` is the CLI's). Presence-gated:
+    /// the host answers with a `presence_request`, and an approved tap adds `client_pair_result` to its
+    /// `presence_result`; a refusal before any request exists answers `client_pair_result { ok: false, error }`
+    /// alone.
     ClientPair {
         name: crate::allowlist::ClientName,
         anchor: crate::allowlist::Anchor,
@@ -141,12 +97,14 @@ pub enum AdminControl {
     KillStatus {},
     /// Extension -> host: engage the global kill switch.
     KillEngage {},
-    /// Extension -> host: release the global kill switch.
+    /// Extension -> host: release the global kill switch. Presence-gated like `client_pair`: an approved tap
+    /// adds `kill_status_result` to its `presence_result`, a refused one answers `presence_result` alone, and
+    /// a failure before any request exists answers `kill_status_result { ok: false }` alone.
     KillRelease {},
     /// Host -> extension: the kill-switch state. The reply to `kill_status` and `kill_engage`, pushed
-    /// unsolicited on observed transitions, and part of a `kill_release` answer only when the
-    /// [`AdminControl`] roster says so. `killed` is absent when `ok` is false (the state could not be
-    /// read; the extension fails closed on unknown).
+    /// unsolicited on observed transitions (`native_host.rs` push_kill_status says when), and part of an
+    /// approved `kill_release` answer. `killed` is absent when `ok` is false (the state could not be read; the
+    /// extension fails closed on unknown).
     KillStatusResult {
         ok: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -154,8 +112,9 @@ pub enum AdminControl {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
-    /// Extension -> host: one extension-side decision for the audit trail.
-    /// Fire-and-forget; no reply frame.
+    /// Extension -> host: one extension-side decision for the audit trail. Fire-and-forget; no reply frame. The
+    /// host accepts only the extension-owned kinds (`crate::audit::extension_kind`) and stamps the surface
+    /// itself, so the frame cannot forge host-side events like admissions or kills.
     AuditEvent {
         kind: String,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -166,7 +125,7 @@ pub enum AdminControl {
         name: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         detail: Option<String>,
-        /// Per-confirmation correlation id; see the module docs.
+        /// Per-confirmation correlation id, joining a `confirm_shown` to its verdict ([`crate::audit::AuditRecord::cid`]).
         #[serde(skip_serializing_if = "Option::is_none")]
         cid: Option<String>,
     },
@@ -181,7 +140,8 @@ pub enum AdminControl {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
-    /// Extension -> host: read the newest records of the host's audit trail.
+    /// Extension -> host: read the newest records of the host's audit trail, the page `genkan audit --limit <n>`
+    /// prints; an absent `limit` is the CLI's default.
     AuditRead {
         #[serde(skip_serializing_if = "Option::is_none")]
         limit: Option<AuditReadLimit>,
@@ -202,7 +162,8 @@ pub enum AdminControl {
     /// Extension -> host: report every known browser's native-messaging registration.
     RegistrationStatus {},
     /// Extension -> host: re-register the detected browsers, or exactly the named ones (what `doctor --fix`
-    /// and `--browser` do), then report.
+    /// and `--browser` do), then report. A repair that failed on any target answers `ok: false`, and the
+    /// extension re-asks for the rows.
     RegistrationRepair {
         #[serde(skip_serializing_if = "Option::is_none")]
         browsers: Option<RepairBrowsers>,
@@ -653,30 +614,13 @@ impl PolicyStatus {
 /// forwarded to the MCP server, dropped when the server leg tries to inject one. The host pushes
 /// `policy_current` and `lang_current` unsolicited, at every connect and on every observed change, which is
 /// why those two are not requests: one arriving inbound is an injection.
-///
-/// ```text
-/// policy_get         -> policy_current; the extension sends it only on a connection where the host has
-///                       already pushed a policy frame (never speak first): a host that does not know the
-///                       frame would forward it, and the MCP server's strict `BridgeResp` parse would tear
-///                       the browser leg down
-/// policy_restrict    -> policy_restrict_result { ok, error? }: the unsigned restriction lane
-///                       (`crate::policy::restrict`), which refuses anything that relaxes the effective policy;
-///                       the written state reaches the extension as the watch's next policy_current push, so
-///                       the result frame carries the verdict alone
-/// policy_set         -> the signed GRANT lane behind a presence_request (`native_host/presence.rs`): an approved
-///                       answer adds policy_set_result and policy_current to its presence_result; a refusal before
-///                       the request exists (keyless host, invalid overlay) answers policy_set_result { ok: false,
-///                       error } alone, `error` being the sentence `policy set` prints for the same refusal
-/// policy_rollback    -> policy_rollback_result: a tightening rolls back free (then policy_current), a relaxation
-///                       opens a presence_request like policy_set, a no-op answers ok
-/// policy_history     -> policy_history_result { ok, entries?, error? }: the superseded-revision ring
-/// lang_get/lang_set  -> lang_current { value, seq }; `seq` suppresses the sender's own echo
-/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PolicyControl {
-    /// Extension -> host: request the current policy.
+    /// Extension -> host: request the current policy. Sent only on a connection where the host has already
+    /// pushed a policy frame (never speak first): a host that does not know the frame would forward it, and
+    /// the MCP server's strict `BridgeResp` parse would tear the browser leg down.
     PolicyGet {},
     /// Host -> extension: the policy state (connect/change push, and the
     /// reply to `policy_get`).
@@ -694,7 +638,10 @@ pub enum PolicyControl {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
-    /// Extension -> host: tighten the effective policy by this overlay (merged entry-wise over the stored one).
+    /// Extension -> host: tighten the effective policy by this overlay (merged entry-wise over the stored one),
+    /// the unsigned restriction lane (`crate::policy::restrict`). Answered with `policy_restrict_result`, then
+    /// `policy_current` when the restriction applied (`native_host.rs` restrict_replies says why the push is
+    /// not left to the watch).
     PolicyRestrict {
         overlay: crate::policy::PolicyOverlay,
     },
@@ -705,7 +652,10 @@ pub enum PolicyControl {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
-    /// Extension -> host: mint a fresh signed baseline carrying this overlay over the current one, behind a tap.
+    /// Extension -> host: mint a fresh signed baseline carrying this overlay over the current one, the GRANT
+    /// lane behind a `presence_request`. An approved tap adds `policy_set_result` to its `presence_result`, and
+    /// `policy_current` once the write committed; a refusal before any request exists (a keyless host, an
+    /// invalid overlay) answers `policy_set_result { ok: false, error }` alone.
     PolicySet {
         overlay: crate::policy::PolicyOverlay,
     },
@@ -727,7 +677,8 @@ pub enum PolicyControl {
         error: Option<String>,
     },
     /// Extension -> host: re-derive `revision`'s effective policy as a fresh write; `entry` names the listed
-    /// record where `revision` alone is ambiguous (`policy/plan.rs` find_history_effective says when).
+    /// record where `revision` alone is ambiguous (`policy/plan.rs` find_history_effective says when). A
+    /// tightening rolls back free, a relaxation opens a `presence_request` like `policy_set`.
     PolicyRollback {
         revision: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -848,29 +799,13 @@ impl HistoryReport {
 /// the relying party ([`crate::webauthn`]): it mints the statement and verifies the assertion; the extension
 /// is the WebAuthn client, running `navigator.credentials.create` / `.get` with RP ID = the extension id.
 /// Byte fields travel base64url, unpadded, as `PublicKeyCredential.toJSON()` spells them.
-///
-/// ```text
-/// enroll_begin      -> enroll_options { challenge, nonce, user_id, user_name, exclude_credential_ids } or
-///                      enroll_result { ok: false, reason }; the host binds the connection's browser label
-///                      into the statement, so the frame carries none
-/// enroll_finish     -> enroll_result { ok, credential_id?, reason? }: attestation "none" only, ES256 only
-/// presence_begin    -> presence_request for a page operation the policy routes to the authenticator: the
-///                      extension names the op and the page's origin, and the host binds both into the
-///                      statement; a refused one answers presence_result { ok: false }, minting no request and
-///                      leaving an outstanding one as it was
-/// presence_request  -> PUSHED by the host when a capability-granting act needs a tap: challenge =
-///                      base64url(sha256(statement)), the action the user is approving, the nonce, and the
-///                      credential ids enrolled from this browser (the allowCredentials list)
-/// presence_assert   -> presence_result { ok, reason? }; every refusal is a webauthn::Refusal code
-/// browser_revoke    -> browser_revoke_result { ok, reason? }: the enrollments under this host's label forgotten
-///                      (the frame names none, so the reach is the host's: one browser, or the browsers sharing
-///                      an unlabelled manifest); no proof, since it removes capability
-/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WebAuthnControl {
-    /// Extension -> host: start enrolling a credential for this browser.
+    /// Extension -> host: start enrolling a credential for this browser. The host binds the connection's
+    /// browser label into the statement, so the frame carries none; answered with `enroll_options`, or with
+    /// `enroll_result { ok: false }` when refused.
     EnrollBegin {},
     /// Host -> extension: the `PublicKeyCredentialCreationOptions` the host decides.
     EnrollOptions {
@@ -880,7 +815,8 @@ pub enum WebAuthnControl {
         user_name: String,
         exclude_credential_ids: Vec<String>,
     },
-    /// Extension -> host: the `navigator.credentials.create` response.
+    /// Extension -> host: the `navigator.credentials.create` response; attestation `none` and ES256 only
+    /// ([`crate::webauthn::parse_registration`]).
     EnrollFinish {
         attestation_object: String,
         client_data_json: String,
@@ -899,7 +835,10 @@ pub enum WebAuthnControl {
     /// origin. The host answers with a `presence_request`, or `presence_result { ok: false }` when either
     /// field is not one it mints statements for.
     PresenceBegin { action: String, origin: String },
-    /// Host -> extension: one capability-granting act awaits a tap.
+    /// Host -> extension: one capability-granting act awaits a tap. `challenge` is base64url(sha256(statement)),
+    /// `action` the act the user approves, and `allowed_credential_ids` the allowCredentials list, scoped as
+    /// [`crate::presence::request`] decides (this browser's credentials for an act, any enrolled one for an
+    /// enrollment).
     PresenceRequest {
         challenge: String,
         nonce: String,
@@ -917,7 +856,8 @@ pub enum WebAuthnControl {
     /// software confirmation: the host accepts it only when no enrolled credential could have answered.
     PresenceConfirm { nonce: String },
     /// Host -> extension: the presence verdict. `reason` travels exactly when not `ok`
-    /// ([`PresenceOutcome::into_frame`]).
+    /// ([`PresenceOutcome::into_frame`]): a [`crate::webauthn::Reason`] for a verdict the exchange decided,
+    /// the host's malformed-frame sentence for a frame that never reached it.
     PresenceResult {
         ok: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
