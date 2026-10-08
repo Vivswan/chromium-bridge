@@ -74,16 +74,10 @@ fn two_relays_racing_attach_and_detach_never_underflow() {
     });
 }
 
-/// The revocation-sweep registry must be empty by the time the
-/// broker's teardown decision latches, so no relay stream outlives the
-/// socket it hangs off. The code guarantees it by ordering: a relay's
-/// [`RelayAdmission`](super::RelayAdmission) deregisters BEFORE it
-/// decrements the ref-count (its field declaration order IS the drop
-/// order), and `wait_zero` only returns at count zero. This model mirrors
-/// exactly that shape (a loom-instrumented mutex around the slot map, the
-/// real `RefCount`), with a concurrent sweeper reading the registry the
-/// way the epoch watcher does. Loom exhausts the interleavings; the
-/// invariant is checked after the terminal decision.
+/// The revocation-sweep registry must be empty by the time the broker's teardown decision latches, so no
+/// relay stream outlives the socket it hangs off. [`RelayAdmission`](super::RelayAdmission) guarantees it by
+/// field order: it deregisters BEFORE it decrements the ref-count, and `wait_zero` returns only at count zero.
+/// Loom exhausts the interleavings of that shape against a sweeper reading the registry as the watcher does.
 #[test]
 fn registry_is_empty_once_the_shutdown_decision_latches() {
     use loom::sync::Mutex;

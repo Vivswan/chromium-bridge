@@ -19,15 +19,10 @@ use crate::runtime_record::{Ladder, Record, RuntimeRecord};
 /// The persisted policy state (`policy.json`): the signed baseline as the EXACT bytes the signature covers
 /// (base64, so the artifact survives the JSON hop byte-for-byte), its signature, and the restriction overlay.
 /// Storage, not authority: the extension verifies the signature against its own pin and the host re-derives
-/// everything from the bytes. An unreadable store means refuse at every caller, never a default that could
-/// mask a tamper.
+/// everything from the bytes.
 ///
-/// ```text
-/// load          -> the FILE authority: size cap, strict shape, store version; no base64 work
-/// baseline_doc  -> the BYTE authority: strict base64 and the strict PolicyDoc parse, the one place a damaged
-///                  baseline surfaces and fails closed; the doctor row and the policy_current push both reach it
-///                  through effective()
-/// ```
+/// An unreadable store means refuse at every caller, never a default that could mask a tamper; the file-level
+/// refusals are the shared loader's, the byte-level ones [`Self::baseline_doc`]'s.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyStore {
@@ -269,20 +264,14 @@ impl std::fmt::Display for PolicyWriteError {
     }
 }
 
-/// Write a new signed policy baseline, the one grant path every editing surface shares; `restrict` is the free
-/// lane. `attest` is the surface's presence prompt (the typed phrase on the CLI's terminal), run only after
-/// [`prepare_grant`] validated the request and found the host key, so a malformed request or a keyless machine
-/// never puts a prompt in front of the user; the host key then signs the exact document bytes. A surface whose
-/// prompt is asynchronous (the native host's presence request) calls the two halves itself.
-/// ```text
-/// presence refused       -> terminal, never downgraded to a softer prompt
-/// no host key            -> refused (`NoSigningKey`): the grant exists only as the signature, so a keyless
-///                           machine has no baseline-writing path on any surface
-/// retained overlay       -> survives minus its entries on the `touched` fields, which the attestation covers
-///                           (the touched set travels inside the signed bytes)
-/// ```
-/// Returns the presence path that authorized the write. Every outcome past validation is audited,
-/// log-after-decide, outside the lock.
+/// Write a new signed policy baseline, the one grant path every editing surface shares; [`restrict`] is the
+/// free lane. `attest` is the surface's presence prompt (the typed phrase on the CLI's terminal), run only
+/// after [`prepare_grant`] validated the request and found the host key, so a malformed request or a keyless
+/// machine never puts a prompt in front of the user.
+///
+/// A surface whose prompt is asynchronous (the native host's presence request) calls the two halves itself.
+///
+/// Every outcome past validation is audited, log-after-decide, outside the lock.
 pub fn set_signed(
     values: PolicyValues,
     touched: Vec<PolicyField>,

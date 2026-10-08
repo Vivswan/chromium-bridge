@@ -48,21 +48,7 @@ impl EnrollmentKey {
     /// Minting is a capability grant (the extension pins what the key signs), so it consumes a
     /// [`PresenceAttestation`] like every grant. The absence check and the mint share one lock hold, so two
     /// `pair` runs cannot both mint and silently replace a key an extension already pinned; `pair --reset`
-    /// disposes first.
-    ///
-    /// The leftover signed baseline is cleared under the same hold and AFTER the absence check: a baseline
-    /// signed by a dead key pushed as current is exactly the pin mismatch a genuine host must never produce,
-    /// and clearing before the check could remove a concurrent pairing's live policy. Each store is one
-    /// write, so nothing is left half-done.
-    ///
-    /// ```text
-    /// a file exists                          -> refused, whichever store was asked for
-    /// a store entry exists                   -> refused, whichever store was asked for
-    /// the store does not answer, File asked  -> minted into the file: lookup reads the file first, so an
-    ///                                           unseen store entry is superseded and a pin on it fails
-    ///                                           closed
-    /// the store does not answer, store asked -> the store's error
-    /// ```
+    /// disposes first. A key found in either place refuses, whichever store was asked for.
     pub fn mint(
         lock: &RuntimeLockToken,
         store: KeyStore,
@@ -77,12 +63,16 @@ impl EnrollmentKey {
             (_, Ok(Some(_))) => return Err(exists),
             (_, Ok(None)) => {}
             (KeyStore::CredentialStore, Err(e)) => return Err(e),
+            // lookup reads the file first, so an unseen store entry is superseded and a pin on it fails closed.
             (KeyStore::File, Err(e)) => log_warn!(
                 "enclave",
                 "the credential store did not answer ({e}); minting into the file as asked"
             ),
         }
         drop(auth);
+        // Cleared under the same hold and AFTER the absence check: a baseline signed by a dead key pushed as
+        // current is the pin mismatch a genuine host must never produce, and before the check it could still
+        // be a concurrent pairing's live policy.
         if let Err(e) = crate::policy::clear_baseline_locked(lock) {
             log_warn!(
                 "enclave",

@@ -244,14 +244,10 @@ fn next_request_id() -> u64 {
 /// Route and dispatch one tool call from its SINGLE boundary parse: the audit route and the dispatch both consume
 /// that one [`ToolCall`], so the trail can never record a default route for a call the parse refused. The kill
 /// verdict arrives computed and the policy gate injected so the fail-closed matrix is unit-testable without the
-/// runtime directory or the audit sink (both live in [`execute_tool_call`]). `deadline` is the call's whole
-/// budget; the dispatch hands it to the session, which cancels the browser op when it passes.
+/// runtime directory or the audit sink (both live in [`execute_tool_call`]).
 ///
-/// ```text
-/// route re-read after the dispatch -> a host may connect during the call's startup wait
-/// kill, then parse, then policy    -> the kill switch is the global brake, so it wins over every other refusal;
-///                                     the policy gate needs the parsed tool, so it runs after the parse
-/// ```
+/// `deadline` is the call's whole budget; the dispatch hands it to the session, which cancels the browser op
+/// when it passes.
 fn route_and_dispatch(
     session: &Session,
     call: Result<ToolCall, CallError>,
@@ -267,6 +263,8 @@ fn route_and_dispatch(
             .and_then(|browser| session.route_info(browser.as_deref()))
     };
     let route = route_now();
+    // The kill switch is the global brake, so it wins over every other refusal; the policy gate needs the
+    // parsed tool.
     let out = match kill {
         Err(e) => tools::error_outcome(&e),
         Ok(()) => match call {
@@ -277,6 +275,7 @@ fn route_and_dispatch(
             },
         },
     };
+    // Re-read after the dispatch: a host may connect during the call's startup wait.
     let route = route.or_else(route_now);
     (route, out)
 }

@@ -341,30 +341,15 @@ mod tests {
         ipc::with_runtime_lock(|lock| T::remove(lock)).unwrap();
     }
 
-    /// What one module's source says to the ladder rule, from a `syn` parse. The trait cannot enumerate
-    /// its implementors, so this is what ties the matrix to them. The visitor reaches items anywhere in
-    /// the file, fn bodies and `const _` blocks included; a `macro_rules!` body is tokens to it.
+    /// What one module's source says to the ladder rule, from a `syn` parse; the trait cannot enumerate its
+    /// implementors, so this ties the matrix to them. The visitor reaches fn bodies and `const _` blocks too; a
+    /// `macro_rules!` body is tokens to it, so the per-row `rename` inside `policy_fields!` and `catalogue!` is never judged.
     ///
     /// ```text
-    /// impl Record for T                    -> record: T joins the set the matrix must exercise
-    /// inherent fn load, const VERSION      -> shadow: hides the shared loader at a `T::load()` call site
-    /// serde(default = "f"), serde(alias)   -> compat: a value for an absent field, a second accepted name
-    /// serde(default) on a non-Option field -> compat: the type's Default fills the absent field; a genuine
-    ///                                         default lives in the type's constructor or on the consuming
-    ///                                         side (as `timeoutMs` does in the extension), never in serde
-    /// serde(default) on an Option field    -> compat: serde reads an absent Option as None by itself, so
-    ///                                         the attribute only reads as a compat hint
-    ///   .. in one list with deserialize_with -> allowed: under a custom parse serde refuses an absent field
-    ///                                         outright, so the pair is the one spelling of such a field
-    /// serde(rename = ..)                   -> compat: a wire name outside the type's own spelling; a raw
-    ///                                         identifier (`r#ref`) spells a keyword without it
-    /// serde(rename_all = ..)               -> allowed: the one spelling of every field
+    /// impl Record for T                -> record: T joins the set the matrix must exercise
+    /// inherent fn load, const VERSION  -> shadow: hides the shared loader at a `T::load()` call site
+    /// serde alias/rename/default       -> compat: an alias, a wire name not the type's own, or a filled absence
     /// ```
-    ///
-    /// Compat counts on types that derive `Deserialize`: on a Serialize-only type the same attributes name
-    /// output and read nothing. The two macros that emit wire types, `policy_fields!` (policy/mod.rs) and
-    /// `catalogue!` (tools/catalogue.rs), take one literal per row and feed it to every carrier's `rename`
-    /// and to the name lookups, so that `rename` is the type's own spelling; the parse never sees it.
     #[derive(Debug, Default, PartialEq)]
     struct ModuleScan {
         records: Vec<String>,
@@ -447,6 +432,8 @@ mod tests {
         }
     }
 
+    /// Compat counts only on a type that derives `Deserialize`: on a Serialize-only type the same attributes
+    /// name output and read nothing.
     fn derives_deserialize(attrs: &[syn::Attribute]) -> bool {
         let mut found = false;
         each_list(attrs, "derive", &mut |entries| {
@@ -461,14 +448,23 @@ mod tests {
 
     impl ModuleScan {
         /// The compat attributes of one container or field (`ty` is the field's type, `None` for the
-        /// container), by the rule in the type docs. The pair is judged within one `serde(..)` list.
+        /// container). The pair is judged within one `serde(..)` list.
         fn compat_attrs(&mut self, attrs: &[syn::Attribute], ty: Option<&syn::Type>) {
             each_list(attrs, "serde", &mut |entries| {
+                // Under a custom parse serde refuses an absent field outright, so `default` beside
+                // `deserialize_with` on an Option is the one spelling of such a field, not a compat hint.
                 let required_pair = ty.is_some_and(is_option)
                     && entries.iter().any(|e| e.key == "deserialize_with");
                 for e in entries {
                     let compat = match e.key.as_str() {
+                        // A second accepted name, or a wire name outside the type's own spelling (a raw
+                        // identifier spells a keyword without one); `rename_all` is the one spelling of
+                        // every field and passes.
                         "alias" | "rename" => true,
+                        // `default = "f"` is a value for an absent field; a genuine default lives in the
+                        // type's constructor or on the consuming side (as `timeoutMs` does in the extension).
+                        // Bare `default` fills a non-Option field from its Default, and on an Option field
+                        // serde reads absence as None by itself, so the attribute only reads as a compat hint.
                         "default" => e.has_value || !required_pair,
                         _ => false,
                     };

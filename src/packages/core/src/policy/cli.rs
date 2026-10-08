@@ -53,15 +53,9 @@ pub enum PolicyStoreState {
     Error,
 }
 
-/// The versioned, machine-readable policy status: the exact object `genkan policy show --json` prints,
-/// which the doctor row renders from. A sum tagged on `store` rather than
-/// a flat struct, so a `none` report smuggling an effective policy, or a `present` one missing its revision, cannot
-/// even deserialize.
-///
-/// ```text
-/// same `store` tag field and field spellings as the flat v1 shape -> wire form VALUE-identical to v1, no `v` bump
-/// serialized directly, not through this CLI's sorted-keys Value   -> key order may differ; no consumer reads key order
-/// ```
+/// The versioned, machine-readable policy status: the exact object `genkan policy show --json` prints, which
+/// the doctor row renders from. A sum tagged on `store` rather than a flat struct, so a `none` report smuggling
+/// an effective policy, or a `present` one missing its revision, cannot even deserialize.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "store", rename_all = "lowercase", deny_unknown_fields)]
 pub enum PolicyStatusReport {

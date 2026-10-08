@@ -15,17 +15,12 @@ use crate::trust::{Clients, Scope, Trust, TrustState};
 use crate::webauthn::Enrollment;
 
 /// Minting is a capability grant (the extension pins what it sees), so `pair` runs behind the terminal
-/// witness and the typed phrase: a background script's `pair` is refused before anything is read or
-/// written. A store that refuses or does not answer fails the command and says so, never a silent fallback
-/// to the file.
+/// witness and the typed phrase: a background script's `pair` is refused before anything is read or written.
+/// An existing key is never adopted, since a same-user process can plant one; `--reset` disposes it after the
+/// phrase.
 ///
-/// ```text
-/// a key already exists -> refused without --reset; `pair` never adopts a key it did not mint in this run,
-///                         since a same-user process can plant one
-/// --reset              -> disposes after the phrase, before minting; a store that does not answer stops a
-///                         store pairing and only warns a file pairing
-/// phrase declined      -> nothing disposed, nothing minted
-/// ```
+/// A store that refuses or does not answer stops a store pairing and only warns a file pairing, never a silent
+/// fallback to the file.
 pub fn run_pair(reset: bool, file_store: bool) -> i32 {
     let store = if file_store {
         KeyStore::File
