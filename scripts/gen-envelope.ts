@@ -1,52 +1,19 @@
 #!/usr/bin/env bun
 
-// Generate the extension's wire validators (src/packages/shared/generated/envelope.ts) from the Rust core's
-// schemars-derived JSON Schemas: the FAITHFUL base per envelope and control frame (strict objects, required
-// fields required, no defaults), and beside each reader base the ENFORCED validator, which is that base plus
-// exactly the asymmetries declared in src/packages/shared/src/envelope-asymmetries.ts. The extension runs the
-// enforced validators; the bases exist so the asymmetry gate (scripts/check-envelope.ts) can prove each entry.
-// Every validator is the Zod source json-schema-to-zod writes from its JSON Schema and every exported type is
-// json-schema-to-typescript's reading of the same schema; scripts/gen-schema.ts holds the emitted validator to
-// the schema rules R1-R4 before the file is written.
+// Generate src/packages/shared/generated/envelope.ts from the Rust core's schemars JSON Schemas. Per envelope
+// and control frame: the FAITHFUL base (strict objects, required fields required, no defaults) and, beside each
+// reader base, the ENFORCED validator the extension runs, which is that base plus exactly the asymmetries
+// declared in src/packages/shared/src/envelope-asymmetries.ts. The bases exist so scripts/check-envelope.ts
+// can prove each entry.
 //
-//   `moon run gen`   -> cargo example emit_envelope_schema (gen-only `envelope-schema` feature) -> dereference
-//                       -> prepare -> applyAsymmetries (readers only) -> gen-schema (rules, type, Zod source)
-//                       -> write
+//   `moon run gen` -> cargo example emit_envelope_schema (gen-only `envelope-schema` feature) -> dereference
+//                  -> prepare -> applyAsymmetries (readers only) -> gen-schema (rules, type, Zod source) -> write
 //
-// Fail-closed rules over the Rust input; a violation aborts, because shipping a weaker parser than the Rust
-// contract is never an option. The error messages cite them by number.
-//   G1  every object declares type: "object" + additionalProperties: false: an object claim is stated, never
-//       inferred, and a Rust type losing deny_unknown_fields fails here (the library's reading is then held
-//       closed by R1)
-//   G2  `default` is stripped: serde fills defaults on the Rust READ side; a .default() would hand consumers
-//       values the frame never carried (required-ness is unchanged: schemars already leaves defaulted fields optional)
-//   G3  oneOf only as a discriminated union (the same required const tag in every branch, values distinct), then
-//       rewritten to anyOf: the mutual exclusivity needs no exclusive-union check at runtime
-//   G4  every internal $ref dereferenced (json-schema-ref-parser) before emission, an external one left in
-//       place for prepare to refuse; nothing downstream resolves one
-//   G5  every keyword and type on the supported list below, in a position the library enforces (the keyword
-//       census in scripts/tests/gen-schema.test.ts says which it reads); an unlisted keyword aborts until
-//       support lands in that census AND in the adversarial tests. The empty schema {} is the contract's own
-//       free-form claim (BridgeResp.data, and the request envelope's args once G6 has split the command off),
-//       read as unknown so consumers must narrow
-//   G6  the request's command (serde `#[serde(flatten)]` of the adjacently tagged BridgeCommand) arrives as the
-//       envelope's own properties beside a `oneOf` of {op, args} branches under `unevaluatedProperties: false`.
-//       splitFlattenedCommand hands it back as the envelope (op: string, args: any) plus one args schema per op:
-//       the envelope base stays a strict object, and the per-op schemas are scripts/gen-ops.ts's
-//   G7  every variant of every Rust control-frame enum is planned exactly once below (a reader, a writer, or a
-//       bare classification tag), so an added or renamed variant fails generation until the plan says how the
-//       extension covers it
-//   A1  an asymmetry entry names a path the prepared Rust schema has, and its node is in the shape the change
-//       expects (a `string` change on a plain string, a `string-arm` on a number, ...); a stale or misplaced
-//       entry aborts instead of sitting inert
-//   A2  a `generated-schema` entry puts the schema another generated module exports in place of a node, imported
-//       by name; the imported schema is cross-checked against the Rust node it stands in for (same field
-//       inventory, same base type per field, strict where the Rust node refuses unknown fields), two Rust
-//       emitters held to each other
-//   A3  an `ok-split` entry (at `$`) names a required boolean discriminant and one arm per value; each arm's
-//       required and forbidden fields exist on the frame, and the reader is a union whose arms require and
-//       refuse exactly those fields, so a frame the typed producer cannot emit (ok with an error, a refusal
-//       without its reason) fails the reader rather than a consumer's re-check
+// The rules fail closed, since a weaker parser than the Rust contract is never shipped, and a refusal under
+// one cites its tag:
+//   G1-G7  over the Rust input         -> prepare, splitTaggedUnionSchema, splitFlattenedCommand, the frame plan
+//   A1-A3  over the asymmetry table    -> applyAsymmetries, applyChange, applyOkSplit, assertGeneratedMatches
+//   R1-R4  over the emitted validator  -> scripts/gen-schema.ts
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -221,6 +188,8 @@ export function splitFlattenedCommand(schema: unknown, path: string): FlattenedC
 
 // prepare (below) recurses only through positions that hold subschemas (property values, items, union
 // branches), so a FIELD merely named like an annotation ("description", "default") is never stripped.
+// G5: an unlisted keyword aborts generation; admitting one is three edits together: here, its census row in
+// scripts/tests/gen-schema.test.ts (the emitter reads it), and its placement refusals in gen-envelope.test.ts.
 const SUPPORTED_KEYWORDS = new Set([
   "type",
   "properties",
@@ -248,8 +217,9 @@ const SUPPORTED_TYPES = new Set([
 ]);
 
 export function prepare(node: unknown, path: string): unknown {
-  // The boolean schema `true` and the empty schema {} both mean "accept anything"; canonicalize to {} (read as
-  // unknown). `false` (accept nothing) and any other non-object form are outside the Rust input this admits.
+  // The boolean schema `true` and the empty schema {} both mean "accept anything"; canonicalize to {}, read as
+  // unknown so consumers narrow (BridgeResp.data is the contract's own free-form field). `false` (accept
+  // nothing) and any other non-object form are outside the Rust input this admits.
   if (node === true) return {};
   if (!isObject(node)) {
     throw new Error(`gen-envelope: unsupported schema form at ${path}: ${show(node)}`);
@@ -259,7 +229,7 @@ export function prepare(node: unknown, path: string): unknown {
   const out: JsonObject = {};
   for (const [key, value] of Object.entries(node)) {
     if (ANNOTATION_KEYS.has(key)) continue;
-    if (key === "default") continue; // G2
+    if (key === "default") continue; // G2: never a .default(); scripts/gen-schema.ts R2 says why
     if (!SUPPORTED_KEYWORDS.has(key)) {
       throw new Error(`gen-envelope: unsupported schema keyword "${key}" at ${path} (G5)`);
     }
@@ -1135,21 +1105,13 @@ async function main(): Promise<void> {
     }
   }
 
-  const out = `// GENERATED from the Rust core wire types (src/packages/core/src/protocol.rs and
-// protocol/control.rs; AdminControl embeds allowlist::ClientEntry, PolicyControl embeds
-// policy::PolicyOverlay, WebAuthnControl carries the WebAuthn ceremonies) by scripts/gen-envelope.ts -
-// DO NOT EDIT. Edit the Rust types or
+  const out = `// GENERATED from the Rust core wire types (src/packages/core/src/protocol.rs and protocol/control.rs)
+// by scripts/gen-envelope.ts - DO NOT EDIT. Edit the Rust types or
 // src/packages/shared/src/envelope-asymmetries.ts, then run \`moon run gen\`.
 //
-// Per envelope, per server->extension signal frame, and per host->extension control frame: the FAITHFUL base
-// (*WireSchema: strict objects, required fields required, no defaults; rules G1-G7 in scripts/gen-envelope.ts)
-// and the ENFORCED validator the extension runs, which is the base plus exactly the asymmetry table
-// (direction and reason per entry in envelope-asymmetries.ts; proved per entry by scripts/check-envelope.ts,
-// \`moon run check-envelope\`). Each validator is the Zod source json-schema-to-zod wrote from the Rust JSON
-// Schema and each type is json-schema-to-typescript's reading of the same schema. The request's \`args\` and
-// policy_current's \`overlay\` are the schemas ops.ts and policy.ts export, imported. The
-// extension->host writer schemas exist for their types only (constructor-site \`satisfies\`); the enforcing
-// reader for those frames is the Rust serde parser.
+// Per frame: the FAITHFUL base (*WireSchema, the Rust schema as it stands) and the ENFORCED validator the
+// extension runs (the base plus the asymmetry table, proved per entry by \`moon run check-envelope\`). The
+// extension->host writer schemas exist for their types only; the Rust serde parser is their enforcing reader.
 
 import { z } from "zod";
 ${importLines.join("\n")}

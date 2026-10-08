@@ -1,43 +1,15 @@
 /**
- * The WebAuthn exchange end to end, in ISOLATED Chrome for Testing instances against the REAL native host: the
- * options page drives the ceremonies against CDP virtual authenticators, the extension's service worker relays
- * the host's frames, and the host (src/packages/core/src/native_host/presence.rs) decides. Two browsers share
- * the host's trust store, as two browsers on one machine do, each fronted by its own host under its own label.
+ * The WebAuthn exchange end to end against the REAL native host (src/packages/core/src/native_host/presence.rs):
+ * two isolated Chrome for Testing instances, each fronted by its own host under its own label, share one trust
+ * store as two browsers on one machine do. The options page drives the ceremonies against CDP virtual
+ * authenticators, and each numbered step in main is proved by the record the host's audit trail must carry.
  *
- *   1  trust on first use           -> browser A's "Enroll this browser" enrolls its authenticator in one click;
- *                                     the panel shows the credential, the trail carries the enroll record
- *   2  the window on a bare browser  -> browser B (no credential) releases the kill switch from its panel through
- *                                     the software confirmation the host offers it; the trail names confirm_window
- *   3  a second browser's enrollment -> B's "Enroll this browser" is met with the approval step naming the host's
- *                                     action; its authenticator, holding A's credential as a shared platform
- *                                     authenticator would, approves it, and the enrollment continues on its own
- *   4  release behind a tap          -> A releases the kill switch from its panel with its enrolled authenticator;
- *                                     the trail names the credential
- *   5  a replayed assertion          -> an earlier assertion offered for a new request is refused
- *                                     (sign_count_not_increased: the counter already moved past it)
- *   6  an un-enrolled credential      -> a credential the host never saw is refused credential_not_enrolled
- *   7  a wrong challenge             -> an assertion over another challenge is refused challenge_mismatch
- *   8  the window on an enrolled browser -> presence_confirm is refused software_confirmation_not_allowed
- *   9  the refusals are audited       -> the host's audit.log names every refusal, under the extension surface
- *  10  a page operation behind a tap  -> A asks for page_eval's presence request on an origin over a raw native
- *                                     port (the frame the confirmation service posts); the request names the op
- *                                     and the origin, an assertion over a superseded request's challenge is
- *                                     refused, its own credential's tap approves, and the trail names all three
- *  11  a policy grant from the page   -> the host key is minted into the isolated runtime dir (`pair --file-store`
- *                                     on a Python pty), A loosens a setting in its Security policy section,
- *                                     its credential signs the host's request, and `policy show` in the same dir
- *                                     reads the signed revision back; the trail names the credential
- *  12  a browser forgets itself       -> A's "Forget this browser" removes its enrollment through its own host;
- *                                     the panel reads not enrolled, the trail names the credential, B's stays
+ * The hosts run in control-plane mode (the kill switch is engaged first), so no broker is needed and the control
+ * frames are the whole conversation. A release ends that mode (the host exits; the next one has no broker to
+ * dial), so each release is followed by the CLI's `kill`, and the reconnecting hosts push the engaged state back.
  *
- * The host runs in control-plane mode (the kill switch is engaged first in the isolated runtime dir), so no
- * broker is needed and the control frames are the whole conversation. A release ends that mode (the host exits
- * and the next one, with no broker to dial, cannot stay up), so each release is followed by the CLI's `kill`,
- * after which the reconnecting hosts push the engaged state back to both panels. The runtime dir is a throwaway
- * under XDG_RUNTIME_DIR that the host wrapper exports, so nothing touches the real one.
- *
- * SAFETY: this launches NON-HEADLESS Chromes with --load-extension, which can capture and close a real
- * session, so it refuses unless CHROME_BIN is an isolated Chrome for Testing / Chromium (tests/README.md).
+ * SAFETY: non-headless Chromes with --load-extension can capture and close a real session, so the run refuses
+ * unless CHROME_BIN is an isolated Chrome for Testing / Chromium (tests/README.md).
  *
  * Run:  CHROME_BIN=/path/to/chrome-for-testing bun tests/browser/presence_exchange_test.ts
  */
