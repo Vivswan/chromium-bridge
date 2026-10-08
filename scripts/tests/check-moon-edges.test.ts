@@ -389,7 +389,11 @@ const graph: TaskGraph = {
 };
 
 describe("auditGraph", () => {
-  test("names every rule a task breaks, sorted: no bunx anywhere, own-toolchain commands with --frozen and RUSTUP_AUTO_INSTALL=0 and no bun install inside the gate's closure, the same plus the three static-check binaries inside static's, and every named build/ path ordered after its writer", () => {
+  const everyRule =
+    "names every rule a task breaks, sorted: no bunx anywhere, own-toolchain commands with --frozen and " +
+    "RUSTUP_AUTO_INSTALL=0 and no bun install inside the gate's closure, the same plus the three static-check " +
+    "binaries inside static's, and every named build/ path ordered after its writer";
+  test(everyRule, () => {
     expect(auditGraph(graph)).toEqual(
       [
         "root:lints-shell: runs shellcheck inside root:static (not bun or a cargo toolchain verb, nor typos, actionlint, or uvx)",
