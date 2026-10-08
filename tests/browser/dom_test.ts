@@ -24,7 +24,7 @@ import { waitForPageTarget, withDeadline } from "./devtools-target";
 const REPO = path.resolve(import.meta.dir, "../..");
 // The built bundle (esbuild strips TS types from src/content.ts). Run
 // `bun run --cwd src/apps/extension build` first; `run_all.ts` / `moon run
-// test-browser` do this. BB_EXT_DIR overrides the bundle dir, same as the
+// test-browser` do this. GENKAN_EXT_DIR overrides the bundle dir, same as the
 // --load-extension suites (the one home is browser-safety.ts).
 const CONTENT_JS = path.join(extensionDir(), "content-scripts", "content.js");
 const FIXTURES_DIR = path.join(REPO, "tests", "fixtures");
@@ -72,7 +72,7 @@ class Chrome {
   constructor(port = 9444) {
     this.port = port;
     // Throwaway profile: never touch a real browser profile.
-    this.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "bb-dom-"));
+    this.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "genkan-dom-"));
     this.proc = spawn({
       cmd: [
         CHROME,
@@ -329,9 +329,9 @@ async function injectStub(page: Page, opts: { evalMask?: boolean } = {}): Promis
  * IIFE re-runs (enables per-test re-injection). */
 async function loadContentJs(page: Page): Promise<void> {
   const src = fs.readFileSync(CONTENT_JS, "utf8");
-  // Clear the load guard so the IIFE's `if (window.__chromiumBridgeLoaded) return`
+  // Clear the load guard so the IIFE's `if (window.__genkanLoaded) return`
   // doesn't short-circuit on re-injection between tests.
-  await page.evaluate("delete window.__chromiumBridgeLoaded;");
+  await page.evaluate("delete window.__genkanLoaded;");
   // Wrap in an IIFE-protecting eval so top-level `return` inside content.js's
   // own IIFE works. content.js is already an IIFE, so direct eval is fine.
   await page.evaluate(src);

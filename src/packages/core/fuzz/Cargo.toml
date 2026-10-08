@@ -1,5 +1,5 @@
 [package]
-name = "chromium-bridge-fuzz"
+name = "genkan-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2021"
@@ -71,7 +71,7 @@ arbitrary = { version = "1", features = ["derive"] }
 libfuzzer-sys = "0.4"
 serde = "1"
 serde_json = "1"
-chromium-bridge-core = { path = "..", features = ["fuzzing"] }
+genkan-core = { path = "..", features = ["fuzzing"] }
 
 [dev-dependencies]
 tempfile = "3.27"

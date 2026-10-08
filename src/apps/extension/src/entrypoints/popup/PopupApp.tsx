@@ -1,5 +1,5 @@
-import type { EnrollmentStatus, KillView } from "@chromium-bridge/shared/runtime-msg";
-import { PendingApprovalsSchema } from "@chromium-bridge/shared/storage";
+import type { EnrollmentStatus, KillView } from "@genkan/shared/runtime-msg";
+import { PendingApprovalsSchema } from "@genkan/shared/storage";
 import { useCallback, useEffect, useState } from "react";
 import { browser } from "wxt/browser";
 import { Button } from "@/components/ui/button";
@@ -414,7 +414,7 @@ export function PopupApp() {
                   {t("popup.start_pairing")}
                 </Button>
                 <p className="mt-1.5 text-[11px] text-text-3">
-                  {t("popup.pair_cli_hint")} <code className="chip-mono">chromium-bridge pair</code>
+                  {t("popup.pair_cli_hint")} <code className="chip-mono">genkan pair</code>
                 </p>
               </div>
             )}

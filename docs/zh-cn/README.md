@@ -1,6 +1,6 @@
-# Chromium Bridge
+# Genkan
 
-Chromium Bridge 让 MCP 客户端通过一个浏览器扩展和一个原生消息主机, 操作你已经登录的 Chromium 浏览器, 无需调试端口。代码是唯一事实来源: 凡是页面陈述了某个行为, 拥有该行为的文件才是权威。安全页面说明本桥接承诺什么、止步于何处; 其余页面说明如何使用、运行和修改它。
+Genkan 让 MCP 客户端通过一个浏览器扩展和一个原生消息主机, 操作你已经登录的 Chromium 浏览器, 无需调试端口。代码是唯一事实来源: 凡是页面陈述了某个行为, 拥有该行为的文件才是权威。安全页面说明本桥接承诺什么、止步于何处; 其余页面说明如何使用、运行和修改它。
 
 ## 我想要...
 
@@ -12,7 +12,7 @@ Chromium Bridge 让 MCP 客户端通过一个浏览器扩展和一个原生消�
 | 准入一个 MCP 客户端, 或吊销一个 | [CLI: 受信任客户端](cli.md#受信任客户端-pair-client--revoke-client--list-clients) |
 | 立刻停下一切, 稍后再解除 | [CLI: 紧急开关 (kill switch)](cli.md#紧急开关-kill--unkill) |
 | 改变工具被允许做什么 | [CLI: 主机持有的策略](cli.md#主机持有的策略-policy) |
-| 阅读日志与审计日志 | [CLI: 日志与审计](cli.md#日志与审计-bb_log--bb_log_format) |
+| 阅读日志与审计日志 | [CLI: 日志与审计](cli.md#日志与审计-genkan_log--genkan_log_format) |
 | 读懂一行意料之外的 `doctor` 输出, 或恢复不可读的紧急开关记录 | [故障排除](troubleshooting.md) |
 | 在 WSL 中使用本桥接 | [故障排除: 在 WSL 下运行](troubleshooting.md#在-wsl-下运行) |
 | 了解本桥接承诺攻击者做不到什么, 以及这一承诺止步于何处 | [安全: 标准线](security.md#一句话说清标准线) |

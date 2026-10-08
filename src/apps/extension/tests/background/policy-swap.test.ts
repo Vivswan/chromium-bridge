@@ -17,9 +17,9 @@
 // What only the CHROME_BIN isolated-browser suite can verify remains a REAL
 // mid-confirmation policy push surviving SW timing; flagged, not attempted.
 
-import { type ConfirmPayload, isPresenceGated } from "@chromium-bridge/shared/confirm";
-import type { BridgeReq } from "@chromium-bridge/shared/envelope";
-import { POLICY_DEFAULTS, type PolicyValues } from "@chromium-bridge/shared/generated/policy";
+import { type ConfirmPayload, isPresenceGated } from "@genkan/shared/confirm";
+import type { BridgeReq } from "@genkan/shared/envelope";
+import { POLICY_DEFAULTS, type PolicyValues } from "@genkan/shared/generated/policy";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { browser } from "wxt/browser";
 import { fakeBrowser } from "wxt/testing/fake-browser";

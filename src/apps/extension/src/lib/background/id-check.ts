@@ -1,8 +1,8 @@
 // Startup self-check: compare the running extension id to the pinned id and log
 // the result. A mismatch means the native-messaging host (which pins the id in
 // allowed_origins) will reject this extension - the single most common, and
-// most confusing, reason chromium-bridge "won't connect". Logging it at startup
-// turns a silent rejection into an obvious `[bb]` console error.
+// most confusing, reason genkan "won't connect". Logging it at startup
+// turns a silent rejection into an obvious `[genkan]` console error.
 
 import { browser } from "wxt/browser";
 import { diagnoseExtensionId } from "../shared/extension-id";
@@ -10,8 +10,8 @@ import { diagnoseExtensionId } from "../shared/extension-id";
 export function verifyExtensionId(): void {
   const d = diagnoseExtensionId(browser.runtime.id);
   if (d.ok) {
-    console.log("[bb]", d.message);
+    console.log("[genkan]", d.message);
   } else {
-    console.error("[bb] ⚠", d.message);
+    console.error("[genkan] ⚠", d.message);
   }
 }

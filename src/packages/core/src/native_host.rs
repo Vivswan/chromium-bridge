@@ -155,7 +155,7 @@ fn doctor_report_reply() -> AdminControl {
 }
 
 /// Handle an `audit_read` frame: the newest records of the host's trail through the reader behind
-/// `chromium-bridge audit`, the CLI's default page size when the frame names none. Read-only; an unreadable
+/// `genkan audit`, the CLI's default page size when the frame names none. Read-only; an unreadable
 /// trail answers its error and no entries.
 fn audit_read_reply(limit: Option<AuditReadLimit>) -> AdminControl {
     let limit = limit.map_or(crate::audit::DEFAULT_AUDIT_LIMIT, AuditReadLimit::get);

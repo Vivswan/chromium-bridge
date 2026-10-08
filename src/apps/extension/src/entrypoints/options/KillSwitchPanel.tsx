@@ -1,4 +1,4 @@
-import type { KillView } from "@chromium-bridge/shared/runtime-msg";
+import type { KillView } from "@genkan/shared/runtime-msg";
 import { useCallback, useEffect, useState } from "react";
 import { browser } from "wxt/browser";
 import { Button } from "@/components/ui/button";

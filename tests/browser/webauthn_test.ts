@@ -111,7 +111,7 @@ async function main(): Promise<void> {
     }
   }
 
-  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "bb-webauthn-"));
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "genkan-webauthn-"));
   let browser: Browser | null = null;
   try {
     browser = await puppeteer.launch({
@@ -157,7 +157,7 @@ async function main(): Promise<void> {
     const enrollChallenge = b64url(await sha256("enrollment statement"));
     const created = (await page.evaluate(async (challenge: string) => {
       const publicKey = PublicKeyCredential.parseCreationOptionsFromJSON({
-        rp: { id: chrome.runtime.id, name: "Chromium Bridge" },
+        rp: { id: chrome.runtime.id, name: "Genkan" },
         user: { id: "dXNlci1pZA", name: "brave", displayName: "brave" },
         challenge,
         pubKeyCredParams: [{ type: "public-key", alg: -7 }],

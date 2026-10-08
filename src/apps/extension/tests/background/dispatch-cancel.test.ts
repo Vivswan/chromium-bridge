@@ -3,7 +3,7 @@
 // cancel lands while the request waits for admission, before its op, or while the op runs (its late result or
 // late failure is discarded).
 
-import type { BridgeReq } from "@chromium-bridge/shared/envelope";
+import type { BridgeReq } from "@genkan/shared/envelope";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 

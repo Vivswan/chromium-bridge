@@ -1,9 +1,9 @@
-//! Minimal leveled logging to stderr, gated by the `BB_LOG` env var.
+//! Minimal leveled logging to stderr, gated by the `GENKAN_LOG` env var.
 //!
 //! Both binary modes speak framed / NDJSON protocols over *stdout*, so every
 //! diagnostic must go to *stderr* (Chrome captures the native host's stderr in
 //! its internal logs; the MCP client surfaces the MCP server's stderr). Levels let a
-//! user raise verbosity with `BB_LOG=debug` at launch without recompiling. The
+//! user raise verbosity with `GENKAN_LOG=debug` at launch without recompiling. The
 //! default threshold is `info`, so `debug` lines stay hidden unless requested.
 //!
 //! Prefer the `log_error!` / `log_warn!` / `log_info!` / `log_debug!` macros
@@ -15,10 +15,10 @@ use std::sync::OnceLock;
 use serde::Serialize;
 
 /// The env var that sets the stderr threshold: a [`Level::name`] in lower- or uppercase, anything else `info`.
-pub const LEVEL_ENV: &str = "BB_LOG";
+pub const LEVEL_ENV: &str = "GENKAN_LOG";
 
 /// The env var that picks the audit line format: a [`Format::name`] in lower- or uppercase, anything else `text`.
-pub const FORMAT_ENV: &str = "BB_LOG_FORMAT";
+pub const FORMAT_ENV: &str = "GENKAN_LOG_FORMAT";
 
 /// Severity, ordered least-verbose (`Error`) to most-verbose (`Debug`).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -30,10 +30,10 @@ pub enum Level {
 }
 
 impl Level {
-    /// Every level, least to most verbose: the accepted `BB_LOG` values in the order the docs list them.
+    /// Every level, least to most verbose: the accepted `GENKAN_LOG` values in the order the docs list them.
     pub const ALL: [Level; 4] = [Level::Error, Level::Warn, Level::Info, Level::Debug];
 
-    /// The lowercase spelling `BB_LOG` accepts; the docs state these through the generated contract.
+    /// The lowercase spelling `GENKAN_LOG` accepts; the docs state these through the generated contract.
     pub fn name(self) -> &'static str {
         match self {
             Level::Error => "error",
@@ -89,10 +89,10 @@ pub enum Format {
 }
 
 impl Format {
-    /// Every format, the default first: the accepted `BB_LOG_FORMAT` values in the order the docs list them.
+    /// Every format, the default first: the accepted `GENKAN_LOG_FORMAT` values in the order the docs list them.
     pub const ALL: [Format; 2] = [Format::Text, Format::Json];
 
-    /// The lowercase spelling `BB_LOG_FORMAT` accepts; the docs state these through the generated contract.
+    /// The lowercase spelling `GENKAN_LOG_FORMAT` accepts; the docs state these through the generated contract.
     pub fn name(self) -> &'static str {
         match self {
             Format::Text => "text",
@@ -151,7 +151,7 @@ struct Envelope<'a, T: Serialize> {
 }
 
 /// Emit one structured audit event to stderr. Gated at the `Info` threshold so
-/// `BB_LOG=warn`/`error` silences it, but on by default.
+/// `GENKAN_LOG=warn`/`error` silences it, but on by default.
 pub fn audit<T: Display + Serialize>(event: &T) {
     if !enabled(Level::Info) {
         return;

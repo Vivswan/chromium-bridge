@@ -51,7 +51,7 @@ pub fn base64_decode(input: &str) -> Result<Vec<u8>, base64::DecodeError> {
 
 /// Prefix of the credential-store entry name; store.rs appends the runtime directory's digest. Versioned so
 /// an algorithm change writes under a new prefix instead of colliding with old entries.
-pub const KEY_LABEL: &str = "com.vivswan.chromium-bridge.enclave.signing.v1";
+pub const KEY_LABEL: &str = "com.vivswan.genkan.enclave.signing.v1";
 
 /// The PUBLIC scalar the golden fixture is signed with (`examples/emit_enclave_contract.rs`), well-known so
 /// regeneration is deterministic. Anyone can sign with it, so it is never an enrollment identity:
@@ -84,7 +84,7 @@ pub fn ensure_not_fixture_key(public: &EnclavePublicKey) -> Result<(), EnclaveEr
 
 #[derive(Debug, thiserror::Error)]
 pub enum EnclaveError {
-    #[error("no host key found - run `chromium-bridge pair` first")]
+    #[error("no host key found - run `genkan pair` first")]
     NotEnrolled,
     #[error("invalid challenge: {0}")]
     InvalidChallenge(&'static str),

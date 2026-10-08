@@ -1,4 +1,4 @@
-import { DEFAULTS } from "@chromium-bridge/shared/settings";
+import { DEFAULTS } from "@genkan/shared/settings";
 import { beforeEach, describe, expect, test } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 import { getSetting, readSettings } from "@/lib/shared/settings";

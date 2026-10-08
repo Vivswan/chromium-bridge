@@ -2,4 +2,4 @@
 # dpkg runs this on removal AND before an upgrade; only a removal unregisters, or an upgrade would drop a
 # registration the user picked by hand (--browser) that the new postinst's detection does not restore.
 set -e
-test "$1" != remove || exec /usr/bin/chromium-bridge uninstall --system
+test "$1" != remove || exec /usr/bin/genkan uninstall --system

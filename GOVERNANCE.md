@@ -1,6 +1,6 @@
 # Governance
 
-How changes get made in chromium-bridge. Small project, light process - but the process that exists is enforced by CI, not by memory. See also [CONTRIBUTING.md](CONTRIBUTING.md) (dev workflow) and [SECURITY.md](.github/SECURITY.md) (security bar).
+How changes get made in genkan. Small project, light process - but the process that exists is enforced by CI, not by memory. See also [CONTRIBUTING.md](CONTRIBUTING.md) (dev workflow) and [SECURITY.md](.github/SECURITY.md) (security bar).
 
 ## Branching
 

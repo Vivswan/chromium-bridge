@@ -1,4 +1,4 @@
-"""End-to-end protocol tests for chromium-bridge.
+"""End-to-end protocol tests for genkan.
 
 Each case drives the release binary as real subprocesses: the MCP server over
 JSON-RPC/stdio, `--native-host` over Chrome Native-Messaging frames, and tool
@@ -31,7 +31,7 @@ from harness import (BridgeCase, McpClient, Served, nm_read, nm_read_raw, nm_rea
 
 def setUpModule():
     h.ensure_binary()
-    h.isolate("bb-e2e-")
+    h.isolate("genkan-e2e-")
 
 
 def tearDownModule():
@@ -259,7 +259,7 @@ class ControlFrames(E2ECase):
         """client_list and client_revoke are answered by the host from the
         trusted-client store, never forwarded; a stray result frame is dropped."""
         self.skip_unless_unix("the pty-driven pairing")
-        env = self.private_runtime("bb-e2e-admin-")
+        env = self.private_runtime("genkan-e2e-admin-")
         pytest = h.pair_client("pytest", "--this-parent", env=env)
         h.pair_client("codex", "--hash", "aa" * 32, env=env)
         codex = h.client_entry("codex", "hash", "aa" * 32)
@@ -276,7 +276,7 @@ class ControlFrames(E2ECase):
         """The host identifies itself unsolicited at connect (policy_current
         then lang_current), answers policy_get/lang_get/lang_set, and drops
         host-direction pushes injected from the browser leg."""
-        env = self.private_runtime("bb-e2e-policy-")
+        env = self.private_runtime("genkan-e2e-policy-")
         mcp = self.server(env=env)
         nh = self.host(env=env)
         absent = {"type": "policy_current", "ok": False, "error": "no policy baseline on this host"}
@@ -395,7 +395,7 @@ class Isolation(unittest.TestCase):
         """ipc/runtime_dir.rs reads LOCALAPPDATA on Windows and ignores XDG_RUNTIME_DIR,
         so a child pointed only at XDG there would run against the real
         per-user dir; the spawn guard must judge the variable the binary reads."""
-        rundir = h.new_runtime_dir("bb-e2e-nt-")
+        rundir = h.new_runtime_dir("genkan-e2e-nt-")
         env = h.runtime_env(rundir, platform="nt")
         expected = {"XDG_RUNTIME_DIR": rundir, "XDG_CONFIG_HOME": os.path.join(rundir, "config"),
                     "LOCALAPPDATA": rundir}
@@ -417,14 +417,14 @@ class Isolation(unittest.TestCase):
         removes a prefix dir whose recorded pid is gone and nothing else: a
         live owner's, a record that is not one positive pid, one still being
         created, a foreign prefix, a file, and a symlink stay."""
-        root = h.new_runtime_dir("bb-e2e-sweep-")
+        root = h.new_runtime_dir("genkan-e2e-sweep-")
         self.addCleanup(h.remove_runtime_dir, root)
         gone = subprocess.Popen([sys.executable, "-c", "pass"])
         gone.wait(timeout=30)
 
         def make(name, owner=None, old=False, dangling=False):
             path = os.path.join(root, name)
-            os.makedirs(os.path.join(path, "chromium-bridge"))
+            os.makedirs(os.path.join(path, "genkan"))
             if owner is not None:
                 with open(os.path.join(path, h.OWNER_FILE), "w") as f:
                     f.write(f"{owner}\n")
@@ -435,21 +435,21 @@ class Isolation(unittest.TestCase):
                 os.utime(path, (hour_ago, hour_ago))
             return path
 
-        dead = make("bb-sweep-dead", owner=gone.pid)
-        legacy = make("bb-sweep-legacy", old=True)
-        make("bb-sweep-live", owner=os.getpid())
-        make("bb-sweep-negative", owner=-1, old=True)
-        make("bb-sweep-overflow", owner=10**30, old=True)
-        make("bb-sweep-dangling", dangling=True, old=True)
-        make("bb-sweep-fresh")
+        dead = make("genkan-sweep-dead", owner=gone.pid)
+        legacy = make("genkan-sweep-legacy", old=True)
+        make("genkan-sweep-live", owner=os.getpid())
+        make("genkan-sweep-negative", owner=-1, old=True)
+        make("genkan-sweep-overflow", owner=10**30, old=True)
+        make("genkan-sweep-dangling", dangling=True, old=True)
+        make("genkan-sweep-fresh")
         make("other-dead", owner=gone.pid, old=True)
-        os.symlink(root, os.path.join(root, "bb-sweep-link"))
-        removed = h.sweep_stale_runtime_dirs("bb-sweep-", root)
+        os.symlink(root, os.path.join(root, "genkan-sweep-link"))
+        removed = h.sweep_stale_runtime_dirs("genkan-sweep-", root)
         self.assertEqual(
             (sorted(removed), sorted(os.listdir(root))),
             ([dead, legacy],
-             ["bb-sweep-dangling", "bb-sweep-fresh", "bb-sweep-link", "bb-sweep-live",
-              "bb-sweep-negative", "bb-sweep-overflow", h.OWNER_FILE, "other-dead"]))
+             ["genkan-sweep-dangling", "genkan-sweep-fresh", "genkan-sweep-link", "genkan-sweep-live",
+              "genkan-sweep-negative", "genkan-sweep-overflow", h.OWNER_FILE, "other-dead"]))
 
     def test_sigterm_removes_the_runtime_dir_before_exiting(self):
         """SIGTERM ends the interpreter without atexit (the path a tool timeout
@@ -457,7 +457,7 @@ class Isolation(unittest.TestCase):
         remove the dir, then exit by the signal so the parent still sees it."""
         if os.name == "nt":
             self.skipTest("Windows delivers no SIGTERM")
-        root = h.new_runtime_dir("bb-e2e-sigterm-")
+        root = h.new_runtime_dir("genkan-e2e-sigterm-")
         self.addCleanup(h.remove_runtime_dir, root)
         child = subprocess.Popen(
             [sys.executable, "-c", SIGTERM_CHILD, root],
@@ -478,7 +478,7 @@ import sys, tempfile, time
 tempfile.tempdir = sys.argv[1]
 import harness
 harness.guard_exit()
-print(harness.new_runtime_dir("bb-sigterm-"), flush=True)
+print(harness.new_runtime_dir("genkan-sigterm-"), flush=True)
 time.sleep(60)
 """
 
@@ -488,7 +488,7 @@ class Broker(E2ECase):
         """A lock left by a dead pid must not block the next server."""
         os.makedirs(os.path.dirname(h.LOCK), exist_ok=True)
         with open(h.LOCK, "w", encoding="utf-8") as f:
-            json.dump({"endpoint": "/nonexistent/chromium-bridge/run.sock",
+            json.dump({"endpoint": "/nonexistent/genkan/run.sock",
                        "secret": "0" * 32, "pid": 4294967295}, f)
         mcp = self.server(clear_lock=False)
         self.assertLock(mcp.lock, mcp, "the server replaced the dead pid's lock")

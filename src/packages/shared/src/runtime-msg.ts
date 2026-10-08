@@ -288,7 +288,7 @@ export const RUNTIME_CONTRACT = contract({
     req: z.strictObject({ type: z.literal("get_audit") }),
     res: z.object({ ok: z.literal(true), entries: z.array(AuditEntrySchema) }),
   },
-  // The host's durable trail (its audit_read_result): the newest records `chromium-bridge audit` prints,
+  // The host's durable trail (its audit_read_result): the newest records `genkan audit` prints,
   // newest first, with the count of older lines left out and the live file for the CLI's empty state. `limit`
   // is `--limit <n>`, bounded here by the frame's own schema so an over-cap read is refused before the wire.
   get_host_audit: {
@@ -412,7 +412,7 @@ export const RUNTIME_CONTRACT = contract({
     req: z.strictObject({ type: z.literal("webauthn_forget") }),
     res: Acknowledged,
   },
-  // The health report plain `chromium-bridge doctor` prints (its doctor_report_result), rows worded by the
+  // The health report plain `genkan doctor` prints (its doctor_report_result), rows worded by the
   // host, plus the `key:` line of `enclave-status`.
   get_doctor: {
     gate: "extension-page",

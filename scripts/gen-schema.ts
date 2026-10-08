@@ -355,7 +355,7 @@ export function emitFromRust(root: string, example: string, features?: string): 
       "--frozen",
       "-q",
       "-p",
-      "chromium-bridge-core",
+      "genkan-core",
       ...(features === undefined ? [] : ["--features", features]),
       "--example",
       example,

@@ -19,7 +19,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { NATIVE_HOST_ID } from "@chromium-bridge/shared/generated/identity";
+import { NATIVE_HOST_ID } from "@genkan/shared/generated/identity";
 import puppeteer, { type Browser } from "puppeteer-core";
 import { assertIsolatedBrowserOrSkip, extensionDir, finishSuite } from "./browser-safety";
 
@@ -95,7 +95,7 @@ async function main(): Promise<void> {
 
   // Everything after the mkdtemp runs under the one finally, so a failed registration or launch still removes
   // the profile, the wrapper, and the manifest.
-  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "bb-cancel-"));
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "genkan-cancel-"));
   const logFile = path.join(userDataDir, "fake-host.log");
   let browser: Browser | null = null;
   try {

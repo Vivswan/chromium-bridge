@@ -34,7 +34,7 @@ async function applyRestriction(): Promise<Hardening> {
     return { ok: true };
   } catch (e) {
     const reason = e instanceof Error ? e.message : String(e);
-    console.error("[bb] storage access hardening FAILED; bridge blocked:", reason);
+    console.error("[genkan] storage access hardening FAILED; bridge blocked:", reason);
     return { ok: false, reason };
   }
 }

@@ -3,10 +3,7 @@
 // the shapes the page hands the API and the frames it builds from the API's answers, both external
 // contracts: the host parses the frames, the WebAuthn client the options.
 
-import type {
-  EnrollOptionsFrame,
-  PresenceRequestFrame,
-} from "@chromium-bridge/shared/generated/envelope";
+import type { EnrollOptionsFrame, PresenceRequestFrame } from "@genkan/shared/generated/envelope";
 import { describe, expect, test } from "vitest";
 import {
   assert,
@@ -66,7 +63,7 @@ describe("creation and request options", () => {
     // The host verifies ES256 alone and never trusts attestation; an authenticator offered another
     // algorithm or asked for attestation would hand the host a credential it refuses.
     expect(creationOptions(enrollOptions, RP_ID)).toEqual({
-      rp: { id: RP_ID, name: "Chromium Bridge" },
+      rp: { id: RP_ID, name: "Genkan" },
       user: { id: "dXNlci1pZA", name: "brave", displayName: "brave" },
       challenge: "Y2hhbGxlbmdl",
       pubKeyCredParams: [{ type: "public-key", alg: -7 }],

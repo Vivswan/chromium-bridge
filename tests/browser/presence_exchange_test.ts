@@ -47,8 +47,8 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { NATIVE_HOST_ID } from "@chromium-bridge/shared/generated/identity";
-import { PRESENCE_REQUIRED } from "@chromium-bridge/shared/webauthn";
+import { NATIVE_HOST_ID } from "@genkan/shared/generated/identity";
+import { PRESENCE_REQUIRED } from "@genkan/shared/webauthn";
 import puppeteer, {
   type Browser,
   type CDPSession,
@@ -68,7 +68,7 @@ import {
 const EXTENSION_DIR = extensionDir();
 const CHROME = process.env.CHROME_BIN ?? "";
 const REPO = path.resolve(import.meta.dir, "../..");
-const BIN = path.join(REPO, "target", "release", "chromium-bridge");
+const BIN = path.join(REPO, "target", "release", "genkan");
 // The manifest key pins the extension id; the host manifest authorizes only it.
 const PINNED_ID = "mkjjlmjbcljpcfkfadfmhblmmddkdihf";
 const BROWSER_A = "brave";
@@ -131,7 +131,7 @@ interface AuditRecord {
 }
 
 function auditRecords(work: string): AuditRecord[] {
-  const file = path.join(work, "runtime", "chromium-bridge", "audit.log");
+  const file = path.join(work, "runtime", "genkan", "audit.log");
   if (!fs.existsSync(file)) return [];
   return fs
     .readFileSync(file, "utf8")
@@ -420,7 +420,7 @@ interface Asserted {
 function createCredential(page: Page, options: EnrollOptions): Promise<Created> {
   return page.evaluate(async (o: EnrollOptions) => {
     const publicKey = PublicKeyCredential.parseCreationOptionsFromJSON({
-      rp: { id: chrome.runtime.id, name: "Chromium Bridge" },
+      rp: { id: chrome.runtime.id, name: "Genkan" },
       user: { id: o.user_id, name: o.user_name, displayName: o.user_name },
       challenge: o.challenge,
       pubKeyCredParams: [{ type: "public-key", alg: -7 }],
@@ -584,7 +584,7 @@ async function main(): Promise<void> {
 
   // Everything after the mkdtemp runs under the one finally, so a failed step still removes the profiles, the
   // wrappers, the manifests, and the throwaway runtime dir.
-  const work = fs.mkdtempSync(path.join(os.tmpdir(), "bb-presence-"));
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), "genkan-presence-"));
   const profileA = path.join(work, "profile-a");
   const profileB = path.join(work, "profile-b");
   const instances: Instance[] = [];
@@ -935,7 +935,7 @@ async function main(): Promise<void> {
       forgot,
     );
     const trust = JSON.parse(
-      fs.readFileSync(path.join(work, "runtime", "chromium-bridge", "trust.json"), "utf8"),
+      fs.readFileSync(path.join(work, "runtime", "genkan", "trust.json"), "utf8"),
     ) as { enrollments: Array<{ label: string }> };
     check(
       trust.enrollments.map((e) => e.label).join(",") === BROWSER_B,

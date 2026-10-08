@@ -1,11 +1,11 @@
-//! chromium-bridge - thin binary entry point.
+//! genkan - thin binary entry point.
 //!
-//! All logic lives in the `chromium_bridge_core` library crate
+//! All logic lives in the `genkan_core` library crate
 //! (`src/packages/core`); this binary parses argv once into a typed command
-//! and dispatches it. `chromium-bridge --help` lists the modes.
+//! and dispatches it. `genkan --help` lists the modes.
 
-use chromium_bridge_core::cli::{parse, Command, RevokeTarget};
-use chromium_bridge_core::{
+use genkan_core::cli::{parse, Command, RevokeTarget};
+use genkan_core::{
     allowlist, audit, doctor, enclave, kill, lang, mcp_server, native_host, policy, registration,
     webauthn,
 };

@@ -12,10 +12,10 @@
 //! the resulting keys are not exactly the scoping fields plus the catalogue.
 //!
 //! Run:
-//!   cargo run -q -p chromium-bridge-core --example emit_policy_contract
+//!   cargo run -q -p genkan-core --example emit_policy_contract
 
-use chromium_bridge_core::enclave::POLICY_DOMAIN;
-use chromium_bridge_core::policy::{
+use genkan_core::enclave::POLICY_DOMAIN;
+use genkan_core::policy::{
     direction, BoolPole, Direction, FieldKind, MsOrder, PolicyDoc, PolicyField,
     DISABLED_TOOLS_MAX_ENTRIES, DISABLED_TOOL_NAME_MAX_BYTES, JS_SAFE_INT_MAX, POLICY_DOC_VERSION,
 };

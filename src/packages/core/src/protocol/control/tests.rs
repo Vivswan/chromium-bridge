@@ -963,13 +963,13 @@ fn doctor_outcome_maps_onto_the_pinned_wire_shapes() {
     let report = HealthReport {
         version: "1.2.3".into(),
         platform: "linux/x86_64".into(),
-        lock_file: DoctorRow::new("/run/user/1000/chromium-bridge/run.lock")
+        lock_file: DoctorRow::new("/run/user/1000/genkan/run.lock")
             .detail("present: no (MCP server not running?)"),
         mcp_server: DoctorRow::new("not probed (no lock file)"),
         kill_switch: DoctorRow::new("off (bridge activity permitted)"),
         policy_baseline: DoctorRow::new("revision 3, unsigned")
             .detail("restriction overlay: active"),
-        host_key: "none (run `chromium-bridge pair`)".into(),
+        host_key: "none (run `genkan pair`)".into(),
         summary: "server not running - is your MCP client started?".into(),
         healthy: false,
     };
@@ -981,13 +981,13 @@ fn doctor_outcome_maps_onto_the_pinned_wire_shapes() {
             "report": {
                 "version": "1.2.3",
                 "platform": "linux/x86_64",
-                "lock_file": { "value": "/run/user/1000/chromium-bridge/run.lock",
+                "lock_file": { "value": "/run/user/1000/genkan/run.lock",
                                "details": ["present: no (MCP server not running?)"] },
                 "mcp_server": { "value": "not probed (no lock file)", "details": [] },
                 "kill_switch": { "value": "off (bridge activity permitted)", "details": [] },
                 "policy_baseline": { "value": "revision 3, unsigned",
                                      "details": ["restriction overlay: active"] },
-                "host_key": "none (run `chromium-bridge pair`)",
+                "host_key": "none (run `genkan pair`)",
                 "summary": "server not running - is your MCP client started?",
                 "healthy": false,
             },
@@ -1067,7 +1067,7 @@ fn audit_report_maps_onto_the_pinned_wire_shapes() {
                     },
                 ],
                 older: 1,
-                path: "/run/user/1000/chromium-bridge/audit.log".into(),
+                path: "/run/user/1000/genkan/audit.log".into(),
             }
             .into_frame()
         )
@@ -1082,7 +1082,7 @@ fn audit_report_maps_onto_the_pinned_wire_shapes() {
                   "text": "UNRECOGNIZED RECORD (corrupt, tampered, or newer schema)" },
             ],
             "older": 1,
-            "path": "/run/user/1000/chromium-bridge/audit.log",
+            "path": "/run/user/1000/genkan/audit.log",
         })
     );
     assert_eq!(

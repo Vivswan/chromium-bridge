@@ -9,23 +9,23 @@
 //! contract.
 //!
 //! Run:
-//!   cargo run -q -p chromium-bridge-core --example emit_contract
+//!   cargo run -q -p genkan-core --example emit_contract
 
-use chromium_bridge_core::audit::{extension_kind_wire_names, DEFAULT_AUDIT_LIMIT};
-use chromium_bridge_core::browsers::Browser;
-use chromium_bridge_core::enclave::KEY_LABEL;
-use chromium_bridge_core::error::ERROR_SPECS;
-use chromium_bridge_core::identity::{EXTENSION_MANIFEST_KEY, NATIVE_HOST_ID, PINNED_EXTENSION_ID};
-use chromium_bridge_core::ipc::LOCK_FILENAME;
-use chromium_bridge_core::log::{Format, Level, FORMAT_ENV, LEVEL_ENV};
-use chromium_bridge_core::mcp_server::CLIENT_NAME_ENV;
-use chromium_bridge_core::protocol::control::MAX_AUDIT_READ_LIMIT;
-use chromium_bridge_core::protocol::{
+use genkan_core::audit::{extension_kind_wire_names, DEFAULT_AUDIT_LIMIT};
+use genkan_core::browsers::Browser;
+use genkan_core::enclave::KEY_LABEL;
+use genkan_core::error::ERROR_SPECS;
+use genkan_core::identity::{EXTENSION_MANIFEST_KEY, NATIVE_HOST_ID, PINNED_EXTENSION_ID};
+use genkan_core::ipc::LOCK_FILENAME;
+use genkan_core::log::{Format, Level, FORMAT_ENV, LEVEL_ENV};
+use genkan_core::mcp_server::CLIENT_NAME_ENV;
+use genkan_core::protocol::control::MAX_AUDIT_READ_LIMIT;
+use genkan_core::protocol::{
     BRIDGE_PROTOCOL_VERSION, MCP_META_CLIENT_CAPABILITIES, MCP_META_PROTOCOL_VERSION,
     MCP_META_SERVER_INFO, MCP_PROTOCOL_VERSION,
 };
-use chromium_bridge_core::tools::{all, capabilities};
-use chromium_bridge_core::webauthn::RefusalCode;
+use genkan_core::tools::{all, capabilities};
+use genkan_core::webauthn::RefusalCode;
 use serde_json::{json, Value};
 use strum::VariantArray;
 

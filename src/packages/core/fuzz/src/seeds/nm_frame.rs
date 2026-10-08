@@ -3,12 +3,10 @@
 
 use std::io::Cursor;
 
-use chromium_bridge_core::enclave::{base64_encode, SIG_LEN};
-use chromium_bridge_core::policy::{PolicyDoc, PolicyOverlay};
-use chromium_bridge_core::protocol::control::{
-    HostRequest, KillStatus, PolicyControl, PolicyStatus,
-};
-use chromium_bridge_core::protocol::{nm_read_frame, BridgeResp};
+use genkan_core::enclave::{base64_encode, SIG_LEN};
+use genkan_core::policy::{PolicyDoc, PolicyOverlay};
+use genkan_core::protocol::control::{HostRequest, KillStatus, PolicyControl, PolicyStatus};
+use genkan_core::protocol::{nm_read_frame, BridgeResp};
 use serde_json::json;
 
 use super::{compact, nm, Directory, Seed};

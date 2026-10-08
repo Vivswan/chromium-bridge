@@ -1,6 +1,6 @@
-# 架构: chromium-bridge
+# 架构: genkan
 
-> 本页描述 chromium-bridge 的组件结构、数据流、协议、安全模型与约束, 每个信任边界配一张图。安全决策背后的「为什么」见 [security/rationale.md](./security/rationale.md)。
+> 本页描述 genkan 的组件结构、数据流、协议、安全模型与约束, 每个信任边界配一张图。安全决策背后的「为什么」见 [security/rationale.md](./security/rationale.md)。
 
 > 图中每个标注了文件的方框都指向一个真实存在的文件, 对 TypeScript 而言还包括它导出的符号; 说明性方框则指代外部参与者。`moon run check-architecture` 只证明文件存在, 每张图的 `Demonstrated by:` 链接 (下文的「验证测试:」行) 指向覆盖该图的测试。
 
@@ -8,7 +8,7 @@
 
 ```
 MCP client A --stdio--> +--------------------------------------------------+
-MCP client B --stdio--> | chromium-bridge (MCP server instances)           |
+MCP client B --stdio--> | genkan (MCP server instances)           |
                         |                                                  |
                         |  first instance = BROKER                         |
                         |   - owns the bridge socket + lock file           |
@@ -24,14 +24,14 @@ MCP client B --stdio--> | chromium-bridge (MCP server instances)           |
                                                  | check + attestation + HMAC handshake
                                                  v
                         +--------------------------------------------------+
-                        | chromium-bridge --native-host  (one per browser, |
+                        | genkan --native-host  (one per browser, |
                         | spawned by that browser, label e.g. "chrome")    |
                         +------------------------+-------------------------+
                                                  | stdin/stdout, Chrome native
                                                  | messaging (4B LE len + JSON)
                                                  v
                         +--------------------------------------------------+
-                        | Chromium Bridge extension (MV3, WXT)             |
+                        | Genkan extension (MV3, WXT)             |
                         |  service worker: dispatch, allowlist, masking,   |
                         |    kill-switch mirror, enrollment pin            |
                         |  content script + CDP backend: one shared DOM    |
@@ -184,7 +184,7 @@ flowchart LR
 
 ### 4.1 Rust 核心 (`src/packages/core`) 与二进制 (`src/apps/host`)
 
-二进制是在 `chromium-bridge-core` 库之上的一层薄 argv 分发 (`src/apps/host/src/main.rs`):
+二进制是在 `genkan-core` 库之上的一层薄 argv 分发 (`src/apps/host/src/main.rs`):
 
 | 模块 | 职责 |
 |------|------|
@@ -208,7 +208,7 @@ flowchart LR
 | `registration.rs` + `browsers.rs` | `doctor --fix` 与 `uninstall` 背后的注册引擎与浏览器路径解析器 |
 | `doctor.rs` | 只读健康报告 (`doctor` / `status` / `doctor --list`) |
 | `error.rs` | 工具调用边界上带类型的 `CallError` 与稳定的 `ERROR_SPECS` 分类 |
-| `log.rs` | 分级 stderr 日志器 (`BB_LOG`) 与 `log_*!` 宏 |
+| `log.rs` | 分级 stderr 日志器 (`GENKAN_LOG`) 与 `log_*!` 宏 |
 | `identity.rs` | Native Messaging 主机 id 与固定的扩展密钥: 唯一的定义点 |
 
 ### 4.2 扩展 (`src/apps/extension`)
@@ -234,23 +234,23 @@ flowchart LR
 注册 (由 `doctor --fix` 通过 `registration.rs` 写入):
 
 ```
-macOS   ~/.chromium-bridge/run-host-<browser>.sh      # wrapper: exec <host> --native-host --label <browser>
-        ~/.chromium-bridge/run-host.sh                # unlabeled, for a manifest several browsers read
+macOS   ~/.genkan/run-host-<browser>.sh      # wrapper: exec <host> --native-host --label <browser>
+        ~/.genkan/run-host.sh                # unlabeled, for a manifest several browsers read
         ~/Library/Application Support/<Vendor>/NativeMessagingHosts/
-          com.vivswan.chromium_bridge.host.json       # manifest -> that browser's wrapper
+          com.vivswan.genkan.host.json       # manifest -> that browser's wrapper
 
-Linux   ${XDG_DATA_HOME:-~/.local/share}/chromium-bridge/run-host-<browser>.sh
+Linux   ${XDG_DATA_HOME:-~/.local/share}/genkan/run-host-<browser>.sh
         ${XDG_CONFIG_HOME:-~/.config}/<vendor>/NativeMessagingHosts/
-          com.vivswan.chromium_bridge.host.json
+          com.vivswan.genkan.host.json
 
-Windows %LOCALAPPDATA%\chromium-bridge\com.vivswan.chromium_bridge.host.json
-        HKCU\Software\<Vendor>\NativeMessagingHosts\com.vivswan.chromium_bridge.host
+Windows %LOCALAPPDATA%\genkan\com.vivswan.genkan.host.json
+        HKCU\Software\<Vendor>\NativeMessagingHosts\com.vivswan.genkan.host
           (Default) = absolute path of the manifest; manifest points at the exe
 ```
 
 清单的 `path` 就地指向执行注册的二进制 (Unix 上经由包装脚本, 因为清单格式没有 `args` 字段); 不构建、不下载、不复制任何东西。包装脚本只在只有一个浏览器会启动该清单时携带 `--label <browser>`; 多个浏览器共读的清单得到不带标签的 `run-host.sh`, 以 `registration.rs` 为准。在 Windows 上, Chrome 会把扩展的源追加到命令行, 由此选中原生消息主机模式。
 
-运行时状态, 位于 0700 的每用户运行时目录中 (macOS: `$XDG_RUNTIME_DIR/chromium-bridge` 或 `~/Library/Application Support/chromium-bridge`; Linux: `$XDG_RUNTIME_DIR/chromium-bridge`, 回退到 XDG 缓存目录; Windows: `%LOCALAPPDATA%\chromium-bridge`):
+运行时状态, 位于 0700 的每用户运行时目录中 (macOS: `$XDG_RUNTIME_DIR/genkan` 或 `~/Library/Application Support/genkan`; Linux: `$XDG_RUNTIME_DIR/genkan`, 回退到 XDG 缓存目录; Windows: `%LOCALAPPDATA%\genkan`):
 
 | 文件 | 内容 |
 |------|----------|
@@ -278,7 +278,7 @@ stored < FIRST_VERSION                  -> too old to climb: a host record is re
 
 底版本是让淘汰最旧一阶变得安全的关键。如果只从阶数推导, 那么删除第一阶的那一刻, 每个已存储的版本号都会悄然重新编号, 每个现有文件都会跑错阶。今天每条阶梯要么为空, 要么只有一个空操作阶: 这是形状, 不是数据。
 
-主机身份密钥保存在操作系统凭据存储 (Keychain、Credential Manager 或 Secret Service) 中, 条目名为 `com.vivswan.chromium-bridge.enclave.signing.v1`, 并以运行时目录加以限定, 因此两个目录绝不会共用一个密钥; `pair --file-store` 则把它放到 `host_key.json` 中。
+主机身份密钥保存在操作系统凭据存储 (Keychain、Credential Manager 或 Secret Service) 中, 条目名为 `com.vivswan.genkan.enclave.signing.v1`, 并以运行时目录加以限定, 因此两个目录绝不会共用一个密钥; `pair --file-store` 则把它放到 `host_key.json` 中。
 
 ## 5. 关键数据流
 
@@ -328,7 +328,7 @@ Broker accepts -> session re-attaches that label (generation-guarded:
 ### 5.3 第二个 MCP 客户端接入
 
 ```
-Client B spawns its own chromium-bridge process
+Client B spawns its own genkan process
   -> it finds a live broker via the lock file
   -> attests itself over the socket (kernel checks + HMAC + attach frame
      carrying its harness's attested identity)
@@ -407,7 +407,7 @@ flowchart LR
 
 选项页运行该仪式并作答: 它登记本浏览器的认证器, 解除紧急开关, 并签名第 11.3 节的各项授予 (一次策略 set、一次放宽的回滚、一次客户端配对)。一次解除或一次授予是在本浏览器已登记凭据上的一次轻触; 当主机的请求没有指名任何凭据时, 页面改为请求一次确认。
 
-它的「忘记此浏览器」操作发送 `browser_revoke`, 主机随即忘记在该连接自身标识下登记的凭据, 与 `chromium-bridge revoke <browser>` 是同一个操作。
+它的「忘记此浏览器」操作发送 `browser_revoke`, 主机随即忘记在该连接自身标识下登记的凭据, 与 `genkan revoke <browser>` 是同一个操作。
 
 只有在没有任何已登记凭据能够作答时, 才接受来自确认窗口的 `presence_confirm`, 因此已登记的浏览器绝不会被降级为一次点击。
 
@@ -438,7 +438,7 @@ flowchart LR
   host -->|the mirror in trusted storage| mirror
 ```
 
-没有任何东西会自行清除这个闩锁: 没有超时、重启或重连能做到。解除的方式是在终端上运行 `chromium-bridge unkill`, 或者使用扩展的 `kill_release`, 由在该浏览器下登记的凭据以 WebAuthn 触碰应答, 或者在该浏览器未登记任何凭据时由确认窗口应答。损坏的记录会拒绝两个方向的操作, 因为从未知状态执行解除将是失败即开放。
+没有任何东西会自行清除这个闩锁: 没有超时、重启或重连能做到。解除的方式是在终端上运行 `genkan unkill`, 或者使用扩展的 `kill_release`, 由在该浏览器下登记的凭据以 WebAuthn 触碰应答, 或者在该浏览器未登记任何凭据时由确认窗口应答。损坏的记录会拒绝两个方向的操作, 因为从未知状态执行解除将是失败即开放。
 
 验证测试: [kill.test.ts](../../src/apps/extension/tests/background/kill.test.ts), [deny-kill.test.ts](../../src/apps/extension/tests/background/confirm/deny-kill.test.ts), [broker/tests.rs](../../src/packages/core/src/broker/tests.rs), [native_host/tests.rs](../../src/packages/core/src/native_host/tests.rs)。
 
@@ -517,7 +517,7 @@ panic 消息默认输出到 stdout, 会破坏 NM 帧与 MCP NDJSON。缓解: rel
 - 夹具文件保存黄金向量: 由 Rust 构建的消息字节, 配上确定性的软件 P256 证明, 由 `src/apps/extension/tests/background/enclave-golden.test.ts` 通过扩展的 WebCrypto 校验器回放, 从而把签名消息的编码本身跨语言固定下来。夹具的签名密钥是公开的测试数据, 在两侧都被列入主机身份的拒绝名单 (核心中的 `ensure_not_fixture_key`, 扩展配对校验器与已存固定值校验器中的 `ENCLAVE_FIXTURE_KEY_ID`)。
 - **策略文档与方向** (`src/packages/core/src/policy/`): 主机持有的 `PolicyDoc`、十五个策略字段 (四项能力授予、确认策略、`disabledTools`、确认超时)、它们的默认拒绝值、逐字段的宽松方向表、`relaxes`/`restricts` 比较, 以及签名存储和 `set_signed`/`restrict` 写入接缝。
 - `moon run gen` 生成 `policy.ts`: 签名域常量、带方向的字段列表、默认值, 以及针对文档、取值与限制覆盖层的严格 Zod 校验器。扩展自己根据生成的表重新计算每一次方向比较; 它从不相信主机关于某次变更朝向哪边的说法。
-- 授予由主机密钥对 `UTF8("chromium-bridge-policy-v1") || 0x00 || doc_bytes` 签名, 这是与主机密钥质询域并列的一个以 NUL 分隔的签名域, 相对于它是单射的, 因此一个仪式的产物无法重放为另一个。
+- 授予由主机密钥对 `UTF8("genkan-policy-v1") || 0x00 || doc_bytes` 签名, 这是与主机密钥质询域并列的一个以 NUL 分隔的签名域, 相对于它是单射的, 因此一个仪式的产物无法重放为另一个。
 - 任何地方都没有规范化步骤: 主机签名并存储精确的文档字节, 扩展先对照其固定密钥验证收到的精确字节, 再对这些相同的字节做严格解析。第 11.3 节介绍承载这一切的帧。
 - **线路信封与控制帧** (`src/packages/core/src/protocol.rs` 中的 `BridgeReq` / `BridgeResp`; `src/packages/core/src/protocol/control.rs` 中的 `EnclaveControl`、`AdminControl` (它内嵌 `allowlist::ClientEntry`)、`PolicyControl` 与 `WebAuthnControl`): Rust 类型就是契约, `moon run gen` 据此为扩展生成校验器到 `envelope.ts`。下表列出每一层及其归属。
 
@@ -612,7 +612,7 @@ flowchart LR
 
 该检查是诚实主机路径上的纵深防御; 扩展的门禁在其边界上保持权威, 正是因为主机可能不是我们的。
 
-> 要在运行时排查这些链路 (连接是否可达; 锁文件、套接字与清单是否就位), 请使用只读的 `chromium-bridge doctor`; 见 [cli.md](./cli.md)。
+> 要在运行时排查这些链路 (连接是否可达; 锁文件、套接字与清单是否就位), 请使用只读的 `genkan doctor`; 见 [cli.md](./cli.md)。
 
 ## 12. TypeScript 模块图
 

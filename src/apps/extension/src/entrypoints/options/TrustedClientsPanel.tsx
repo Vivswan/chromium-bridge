@@ -1,11 +1,11 @@
-import type { TrustedClient } from "@chromium-bridge/shared/generated/envelope";
+import type { TrustedClient } from "@genkan/shared/generated/envelope";
 import {
   type AnchorFault,
   anchorFault,
   ClientAnchorSchema,
   ClientNameSchema,
   type RuntimeResponse,
-} from "@chromium-bridge/shared/runtime-msg";
+} from "@genkan/shared/runtime-msg";
 import { useCallback, useEffect, useId, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/hooks/useI18n";

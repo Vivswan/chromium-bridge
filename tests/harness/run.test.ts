@@ -110,12 +110,12 @@ test("fake-llm exits 2 with its usage on an unknown flag or a --portfile without
 // The fixture roots are owned dirs under the driver's own prefixes, so a cancelled test run leaves
 // nothing a later driver run cannot sweep.
 test("the sweep removes only a dead owner's dirs of its prefixes (the protocol suites' leaked runtime dirs, same class)", () => {
-  const root = ownedTempDir("bb-harness-sweep-");
+  const root = ownedTempDir("genkan-harness-sweep-");
   try {
     const gone = spawnSync(process.execPath, ["-e", ""]).pid;
     const make = (name: string, owner?: number | string): string => {
       const dir = join(root, name);
-      mkdirSync(join(dir, "chromium-bridge"), { recursive: true });
+      mkdirSync(join(dir, "genkan"), { recursive: true });
       if (owner !== undefined) writeFileSync(join(dir, OWNER_FILE), `${owner}\n`);
       return dir;
     };
@@ -123,18 +123,18 @@ test("the sweep removes only a dead owner's dirs of its prefixes (the protocol s
     make("bbh-live", process.pid);
     make("bbh-trailing-junk", `${gone}junk`);
     make("bbh-negative", -1);
-    make("bb-harness-unrecorded");
+    make("genkan-harness-unrecorded");
     make("other-dead", gone);
     symlinkSync(root, join(root, "bbh-link"));
-    const removed = sweepStaleDirs(["bb-harness-", "bbh-"], root);
+    const removed = sweepStaleDirs(["genkan-harness-", "bbh-"], root);
     expect({ removed, survivors: readdirSync(root).sort() }).toEqual({
       removed: [dead],
       survivors: [
-        "bb-harness-unrecorded",
         "bbh-link",
         "bbh-live",
         "bbh-negative",
         "bbh-trailing-junk",
+        "genkan-harness-unrecorded",
         OWNER_FILE,
         "other-dead",
       ],
@@ -152,7 +152,7 @@ test("the sweep removes only a dead owner's dirs of its prefixes (the protocol s
 // unreaped orphan is a zombie that still reads as alive.
 test("SIGTERM stops and reaps the owned child, removes the owned dirs, then exits by the signal, even when the kill completes the run or a second signal lands (a finally never runs on a signal)", async () => {
   if (process.platform === "win32") return;
-  const root = ownedTempDir("bb-harness-sigterm-");
+  const root = ownedTempDir("genkan-harness-sigterm-");
   const script = [
     `import { joinSignalTeardown, ownedChild, ownedTempDir, teardownOnSignals } from ${JSON.stringify(OWNED_DIRS)};`,
     'import { spawn } from "node:child_process";',

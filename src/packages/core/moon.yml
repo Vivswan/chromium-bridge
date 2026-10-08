@@ -46,7 +46,7 @@ tasks:
   test-loom:
     # Only the model: every other test the feature build could run is a rerun of core:test.
     description: 'Model-check the broker ref-count shutdown protocol with loom (the core `loom` feature)'
-    command: 'cargo test --frozen -p chromium-bridge-core --lib --features loom loom_model'
+    command: 'cargo test --frozen -p genkan-core --lib --features loom loom_model'
     inputs: ['@group(workspace-rust)', '$RUSTFLAGS']
 
   # The fuzz workspace is excluded from the root one, so a root-level cargo verb never reaches it. Plain

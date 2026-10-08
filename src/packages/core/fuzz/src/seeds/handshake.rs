@@ -4,8 +4,8 @@
 
 use std::io::Cursor;
 
-use chromium_bridge_core::ipc::{handshake_fuzz, validate_label};
-use chromium_bridge_core::protocol::{bridge_read, Handshake};
+use genkan_core::ipc::{handshake_fuzz, validate_label};
+use genkan_core::protocol::{bridge_read, Handshake};
 use serde_json::json;
 
 use super::{edited, ndjson, repeated_key, Directory, Seed};

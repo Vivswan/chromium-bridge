@@ -10,12 +10,7 @@
 // background/dispatch.ts so far. Wiring the rest is a separate, supervised
 // step.
 
-import {
-  type Confirmation,
-  isOpName,
-  type Risk,
-  TOOL_META,
-} from "@chromium-bridge/shared/generated/ops";
+import { type Confirmation, isOpName, type Risk, TOOL_META } from "@genkan/shared/generated/ops";
 
 /** How a call must be confirmed, as one value: "required over no channel" (and
  * its inverse) are unrepresentable. Every confirmation shows on the

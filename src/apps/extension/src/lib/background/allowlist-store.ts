@@ -3,8 +3,8 @@
 // The allowlist lives in browser.storage.local (survives SW restarts). A new
 // origin surfaces a badge + pending request that the popup resolves.
 
-import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
-import { AllowlistSchema, type PendingApproval } from "@chromium-bridge/shared/storage";
+import type { RuntimeResponse } from "@genkan/shared/runtime-msg";
+import { AllowlistSchema, type PendingApproval } from "@genkan/shared/storage";
 import pLimit from "p-limit";
 import { browser } from "wxt/browser";
 import {
@@ -26,7 +26,7 @@ export async function getAllowlist(): Promise<string[]> {
   // A record that fails the schema (not an array, or with non-string entries)
   // degrades to the empty allowlist: nothing is allowed - fail closed.
   if (stored.state === "corrupt") {
-    console.warn("[bb] stored allowlist is malformed; treating it as empty");
+    console.warn("[genkan] stored allowlist is malformed; treating it as empty");
   }
   return stored.state === "valid" ? stored.value : [];
 }
@@ -128,7 +128,7 @@ export function syncPendingMirror(): Promise<void> {
       }
     } catch (e) {
       // Display-only bookkeeping: the resolver map stays authoritative.
-      console.warn("[bb] pending-approval mirror update failed", e);
+      console.warn("[genkan] pending-approval mirror update failed", e);
     }
   });
 }

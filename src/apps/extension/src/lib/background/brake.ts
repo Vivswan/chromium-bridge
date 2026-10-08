@@ -10,8 +10,8 @@
 // Residual (docs/security/trust-boundaries.md): a cross-surface kill push already in flight at panic time counts as
 // its refusal one frame early; only a presence-gated release racing the brake can produce one.
 
-import type { KillMirror } from "@chromium-bridge/shared/enclave";
-import { unreachable } from "@chromium-bridge/shared/util";
+import type { KillMirror } from "@genkan/shared/enclave";
+import { unreachable } from "@genkan/shared/util";
 import { inLife } from "../shared/in-life";
 
 /** Watermarks are arrival stamps: `engage` is the latest engage's post (re-posted on reconnect until a killed frame

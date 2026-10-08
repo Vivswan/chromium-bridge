@@ -24,7 +24,7 @@ use crate::fsguard::{read_capped, write_private_atomic};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LockFile {
     /// Read by the native host: the socket path on Unix, the pipe name on Windows
-    /// (`\\.\pipe\chromium-bridge-<hash>-<pid>`).
+    /// (`\\.\pipe\genkan-<hash>-<pid>`).
     pub endpoint: String,
     /// Keys the HMAC handshake; readable by this user alone (0600), so a process that cannot read it cannot
     /// answer.
@@ -171,7 +171,7 @@ pub(super) fn read_lock_or_err() -> io::Result<LockFile> {
     LockFile::read()?.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
-            "chromium-bridge lock file not found - is the MCP server running?",
+            "genkan lock file not found - is the MCP server running?",
         )
     })
 }

@@ -124,7 +124,7 @@ class CapturingRunner {
     activeBrowser = this;
   }
   getName(): string {
-    return "chromium-bridge dev runner";
+    return "genkan dev runner";
   }
   async run(): Promise<void> {
     // chrome-launcher's default SIGINT handler killAll()s (signalling stale registry instances by a

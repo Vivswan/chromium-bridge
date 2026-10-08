@@ -3,8 +3,8 @@
 // request shows the "gone" state. Rendered with fakeBrowser stubbing the
 // confirm_ready/confirm_resolve round trip.
 
-import type { ConfirmPayload } from "@chromium-bridge/shared/confirm";
-import type { PolicyFieldName } from "@chromium-bridge/shared/generated/policy";
+import type { ConfirmPayload } from "@genkan/shared/confirm";
+import type { PolicyFieldName } from "@genkan/shared/generated/policy";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -34,7 +34,7 @@ beforeEach(() => {
   (fakeBrowser.i18n as unknown as Record<string, unknown>).getUILanguage = () => "en-US";
   (fakeBrowser.i18n as unknown as Record<string, unknown>).getMessage = () => "";
   const EN = {
-    confirm_title: { message: "Chromium Bridge" },
+    confirm_title: { message: "Genkan" },
     confirm_allow: { message: "Allow" },
     confirm_deny: { message: "Deny" },
     confirm_gone: { message: "This confirmation is no longer pending." },

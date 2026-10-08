@@ -16,7 +16,7 @@
 //! ```
 //!
 //! Nothing clears the latch on its own: no timeout, restart, or reconnect. Only [`release`], reached from
-//! `chromium-bridge unkill` and from the extension's `kill_release` behind a WebAuthn presence exchange, and it
+//! `genkan unkill` and from the extension's `kill_release` behind a WebAuthn presence exchange, and it
 //! demands a [`crate::presence::PresenceAttestation`], so presence must have been attested ([`crate::presence`]).
 //! Every attempt is audited: an attestation's grant or refusal with its auth path, a presence-gate refusal
 //! with its error ([`audit_refused_release`]). A corrupt record refuses BOTH directions
@@ -124,7 +124,7 @@ pub(crate) fn audit_refused_release(surface: Surface, err: &presence::PresenceEr
 
 // ---- CLI handlers ------------------------------------------------------------
 
-/// `chromium-bridge kill`: engage the switch. Returns a process exit code.
+/// `genkan kill`: engage the switch. Returns a process exit code.
 pub fn run_kill() -> i32 {
     match engage(Surface::Cli) {
         Ok(epoch) => {
@@ -132,7 +132,7 @@ pub fn run_kill() -> i32 {
             println!(
                 "all bridge activity is now refused: live browser connections are dropped \
                  within a second, every tool call fails with BRIDGE_KILLED, and the state \
-                 survives restarts until `chromium-bridge unkill`"
+                 survives restarts until `genkan unkill`"
             );
             0
         }
@@ -147,7 +147,7 @@ pub fn run_kill() -> i32 {
     }
 }
 
-/// `chromium-bridge unkill`: release the switch behind the CLI's presence path, an explicit typed confirmation
+/// `genkan unkill`: release the switch behind the CLI's presence path, an explicit typed confirmation
 /// on a real terminal. A piped stdin or a declined prompt leaves the switch exactly as engaged as it was,
 /// audited as a refused release. Returns a process exit code.
 pub fn run_unkill() -> i32 {

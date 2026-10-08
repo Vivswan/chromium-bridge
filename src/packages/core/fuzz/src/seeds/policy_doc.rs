@@ -7,13 +7,13 @@
 //! history_*  -> PolicyHistory::decode
 //! ```
 
-use chromium_bridge_core::enclave::{base64_encode, SIG_LEN};
-use chromium_bridge_core::policy::{
+use genkan_core::enclave::{base64_encode, SIG_LEN};
+use genkan_core::policy::{
     Ms, PolicyDoc, PolicyField, PolicyHistory, PolicyHistoryEntry, PolicyOverlay, PolicyStore,
     DISABLED_TOOLS_MAX_ENTRIES, JS_SAFE_INT_MAX,
 };
-use chromium_bridge_core::runtime_record::RuntimeRecord as _;
-use chromium_bridge_core::tools;
+use genkan_core::runtime_record::RuntimeRecord as _;
+use genkan_core::tools;
 use serde_json::{json, Value};
 
 use super::{compact, edited, repeated_key, without, Directory, Seed};

@@ -1,4 +1,4 @@
-"""Fault-injection / chaos suite for chromium-bridge's runtime paths.
+"""Fault-injection / chaos suite for genkan's runtime paths.
 
 The e2e suite drives the happy path. Real bugs hide in the other paths: a peer
 that vanishes mid-frame, a truncated length prefix at a process boundary, a
@@ -58,7 +58,7 @@ from harness import BridgeCase, McpClient, Served, rpc_result, tool_error, tool_
 
 def setUpModule():
     h.ensure_binary()
-    h.isolate("bb-chaos-")
+    h.isolate("genkan-chaos-")
 
 
 def tearDownModule():

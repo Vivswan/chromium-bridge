@@ -29,10 +29,10 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Chromium Bridge: your real browser, behind a gate you hold</title>
+    <title>Genkan: your real browser, behind a gate you hold</title>
     <meta
       name="description"
-      content="Chromium Bridge lets an MCP client drive the Chromium browser you are already signed into. Dangerous actions stop at confirmation gates no web page can see or press - on by default, relaxed only by your explicit choice. Restoring capability takes proof of your presence: a tap on your browser's authenticator, or a phrase typed on your terminal."
+      content="Genkan lets an MCP client drive the Chromium browser you are already signed into. Dangerous actions stop at confirmation gates no web page can see or press - on by default, relaxed only by your explicit choice. Restoring capability takes proof of your presence: a tap on your browser's authenticator, or a phrase typed on your terminal."
     />
     <link rel="icon" type="image/svg+xml" href={withBase("gatedeck-app-icon.svg")} />
   </head>
@@ -49,7 +49,7 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
           <path d="M58 134 L256 134" fill="none" stroke="var(--live)" stroke-width="48" stroke-linecap="round"></path>
           <path d="M454 134 L256 134" fill="none" stroke="var(--live)" stroke-width="48" stroke-linecap="round"></path>
         </svg>
-        <span class="wordmark">Chromium Bridge</span>
+        <span class="wordmark">Genkan</span>
         <span class="ver">v{version}</span>
         <nav aria-label="Site">
           <a href="#trust">How it works</a>
@@ -62,14 +62,15 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
 
     <main>
     <section class="hero wrap">
-      <svg class="gatedeck" viewBox="0 0 512 512" role="img" aria-label="Gatedeck: the Chromium Bridge mark, a graphite arch with a phosphor deck that opens">
+      <svg class="gatedeck" viewBox="0 0 512 512" role="img" aria-label="Gatedeck: the Genkan mark, a graphite arch with a phosphor deck that opens">
         <path d="M94 386 Q256 62 418 386" fill="none" stroke="#6b7a92" stroke-width="72" stroke-linecap="round" stroke-linejoin="round"></path>
         <path class="deck-l" d="M58 134 L256 134" fill="none" stroke="var(--live)" stroke-width="48" stroke-linecap="round"></path>
         <path class="deck-r" d="M454 134 L256 134" fill="none" stroke="var(--live)" stroke-width="48" stroke-linecap="round"></path>
       </svg>
-      <h1>Your real browser, behind a gate you hold.</h1>
+      <h1>Your AI waits at the genkan.</h1>
       <p class="lede">
-        Chromium Bridge lets an MCP client drive the browser you are already
+        Your real browser, behind a gate you hold.
+        Genkan lets an MCP client drive the browser you are already
         signed into: your tabs, your sessions, your cookies, no second browser,
         no debug port.
         <strong>Dangerous actions stop at confirmation gates no web page can
@@ -117,7 +118,7 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
           </div>
           <div class="gate lit">
             <div class="gate-role">Host</div>
-            <div class="gate-name"><span class="status-dot live"></span>chromium-bridge</div>
+            <div class="gate-name"><span class="status-dot live"></span>genkan</div>
             <div class="gate-meta">One Rust binary plays MCP server and
               native-messaging host. Its broker socket is private and portless:
               kernel peer-UID check, mutual attestation, HMAC handshake. Pairing
@@ -245,7 +246,7 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
       <h2 class="sec-title">Three steps, one binary.</h2>
       <p class="sec-sub">The release archive carries the host binary and the
         built extension. The full guide, with verification, is in the
-        <a href="https://github.com/Vivswan/chromium-bridge#quickstart-with-the-cli-macos-linux-windows">README</a>.</p>
+        <a href="https://github.com/Vivswan/chromium-bridge#quick-start">README</a>.</p>
 
       <ol class="steps">
         <li class="step">
@@ -256,7 +257,7 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
               binary somewhere that will not move, and let it write the
               native-messaging registrations. It registers only the browsers
               it detects and touches nothing else.</p>
-            <pre class="code-block"><code>./chromium-bridge doctor --fix</code></pre>
+            <pre class="code-block"><code>./genkan doctor --fix</code></pre>
           </div>
         </li>
         <li class="step">
@@ -267,7 +268,7 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
               <span class="mono-inline">chrome://extensions</span>, enable
               Developer mode, and Load unpacked from the archive's
               <span class="mono-inline">extension/dist</span> folder. Run
-              <span class="mono-inline">chromium-bridge pair</span>: it asks for
+              <span class="mono-inline">genkan pair</span>: it asks for
               a confirmation typed on the terminal, mints the host key into
               your OS credential store, and prints the key's fingerprint.
               Approve that fingerprint on the extension's options page, which
@@ -280,7 +281,7 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
             <h3>Register with your MCP client.</h3>
             <p>Point your client at the binary's absolute path; for Claude
               Code:</p>
-            <pre class="code-block"><code>claude mcp add chromium-bridge -- /absolute/path/to/chromium-bridge</code></pre>
+            <pre class="code-block"><code>claude mcp add genkan -- /absolute/path/to/genkan</code></pre>
             <p>Ask it to list your browser tabs. The first time it targets a new
               site, approve the site from the toolbar icon.</p>
           </div>
@@ -303,7 +304,7 @@ if (version === undefined) throw new Error("workspace version not found in Cargo
             <path d="M58 134 L256 134" fill="none" stroke="var(--live)" stroke-width="48" stroke-linecap="round"></path>
             <path d="M454 134 L256 134" fill="none" stroke="var(--live)" stroke-width="48" stroke-linecap="round"></path>
           </svg>
-          <span>Chromium Bridge</span>
+          <span>Genkan</span>
           <span class="mono footer-lic">Individual and Small Organization License 1.0.0</span>
         </div>
         <nav class="footer-nav" aria-label="Footer">

@@ -6,7 +6,7 @@
 
 import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { UI_LANGUAGES } from "@chromium-bridge/shared/settings";
+import { UI_LANGUAGES } from "@genkan/shared/settings";
 import { describe, expect, test } from "vitest";
 import { parse } from "yaml";
 

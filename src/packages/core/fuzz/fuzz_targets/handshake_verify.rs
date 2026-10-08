@@ -9,7 +9,7 @@ use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use std::io::Cursor;
 
-use chromium_bridge_core::ipc::{handshake_fuzz as hs, validate_label};
+use genkan_core::ipc::{handshake_fuzz as hs, validate_label};
 
 #[derive(Arbitrary, Debug)]
 struct Input {

@@ -38,7 +38,7 @@ export function showInfoToast(message: string, cancelLabel?: string): Promise<bo
     const head = document.createElement("div");
     head.style.cssText = "display:flex;align-items:center;gap:7px;margin-bottom:5px;";
     const title = document.createElement("div");
-    title.textContent = "CHROMIUM BRIDGE";
+    title.textContent = "GENKAN";
     title.style.cssText = `font-family:${MONO};font-size:10px;letter-spacing:0.08em;color:${p.textSecondary};`;
     head.appendChild(title);
     const text = document.createElement("div");

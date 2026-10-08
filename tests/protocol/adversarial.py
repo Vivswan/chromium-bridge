@@ -1,4 +1,4 @@
-"""Adversarial break-in regression suite for chromium-bridge.
+"""Adversarial break-in regression suite for genkan.
 
 The socket-level attacker's view: a hostile same-user process that connects
 straight to the bridge socket, replays or forges the handshake, floods the
@@ -64,7 +64,7 @@ from harness import (BridgeCase, McpClient, Served, nm_read, nm_write, normalize
 
 def setUpModule():
     h.ensure_binary()
-    h.isolate("bb-adversarial-")
+    h.isolate("genkan-adversarial-")
 
 
 def tearDownModule():
@@ -237,7 +237,7 @@ class Surface(AdversarialCase):
     def test_a12_secret_never_leaks(self):
         """Under maximum log verbosity the per-run secret appears in no stdout
         or stderr (server, host, doctor, tool reply), and doctor redacts it."""
-        env = dict(os.environ, BB_LOG="debug")
+        env = dict(os.environ, GENKAN_LOG="debug")
         srv = self.server(env=env)
         secret = srv.lock["secret"]
         c = self.legacy_client(srv)
@@ -254,8 +254,8 @@ class Surface(AdversarialCase):
         host_err = h.host_stderr(nh) if nh is not None else ""
         if nh is not None:
             # log.rs falls back silently to info on an unknown variable, so a
-            # renamed BB_LOG would quietly weaken the hunt: demand a debug line.
-            self.assertIn("[DEBUG] [", host_err, "BB_LOG=debug is live")
+            # renamed GENKAN_LOG would quietly weaken the hunt: demand a debug line.
+            self.assertIn("[DEBUG] [", host_err, "GENKAN_LOG=debug is live")
         captured = "".join([h.server_stderr(srv), host_err, doc.stdout, doc.stderr, reply])
         self.assertNotIn(secret, captured, "the secret appears in no captured output")
         self.assertRegex(doc.stdout, r"<redacted, \d+ chars>", "doctor prints the secret redacted")
@@ -279,8 +279,8 @@ class Admission(AdversarialCase):
         h.reset_enrollment()
         self.addCleanup(h.reset_enrollment)
         pair_client("trusted", "--hash", "11" * 20)
-        # BB_LOG pinned to info: an ambient warn/error level would hide the audit line.
-        env = dict(os.environ, CHROMIUM_BRIDGE_CLIENT_NAME="trusted", BB_LOG="info")
+        # GENKAN_LOG pinned to info: an ambient warn/error level would hide the audit line.
+        env = dict(os.environ, GENKAN_CLIENT_NAME="trusted", GENKAN_LOG="info")
         srv = self.server(env=env, wait=False)
         self.assertRefusedToStart(srv, ALLOWLIST_REFUSAL)
         self.assertIn("name=trusted", h.server_stderr(srv))

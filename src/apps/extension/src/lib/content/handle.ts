@@ -1,7 +1,7 @@
 // Dispatch an inbound { op, args } message to the shared page API.
 //
 // The message is parsed ONCE at this trust boundary against ContentMsgSchema
-// (@chromium-bridge/shared): a discriminated union in which every page-acting
+// (@genkan/shared): a discriminated union in which every page-acting
 // op carries a REQUIRED guard. A message outside the union - including a
 // page op with no guard - is refused outright; there is no "guard absent,
 // skip the check" state. The catalogue ops handled here are exactly the
@@ -18,8 +18,8 @@
 // (confirm/gate.ts + egress.ts). The content script reads NOTHING from
 // extension storage (trusted-storage.ts confines it to extension contexts).
 
-import { ContentMsgSchema } from "@chromium-bridge/shared/content-msg";
-import { unreachable } from "@chromium-bridge/shared/util";
+import { ContentMsgSchema } from "@genkan/shared/content-msg";
+import { unreachable } from "@genkan/shared/util";
 import { createPageApi, REF_ATTR } from "../dom/page-api";
 import { runEval } from "./eval";
 import { showInfoToast } from "./info-toast";

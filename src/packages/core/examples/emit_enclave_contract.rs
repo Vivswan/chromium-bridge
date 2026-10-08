@@ -19,16 +19,16 @@
 //!
 //! Run:
 //! ```text
-//! cargo run -q -p chromium-bridge-core --example emit_enclave_contract
+//! cargo run -q -p genkan-core --example emit_enclave_contract
 //! ```
 
-use chromium_bridge_core::enclave::{
+use genkan_core::enclave::{
     challenge_message, policy_message, EnclavePublicKey, CHALLENGE_DOMAIN, FIXTURE_KEY_BYTES,
     FIXTURE_KEY_ID, MAX_CONTEXT_LEN, POLICY_DOMAIN, PUBKEY_LEN, REASON_CODES, SIG_LEN,
 };
-use chromium_bridge_core::identity::PINNED_EXTENSION_ID;
-use chromium_bridge_core::policy::{Ms, PolicyDoc, PolicyField};
-use chromium_bridge_core::webauthn::MAX_NONCE_LEN;
+use genkan_core::identity::PINNED_EXTENSION_ID;
+use genkan_core::policy::{Ms, PolicyDoc, PolicyField};
+use genkan_core::webauthn::MAX_NONCE_LEN;
 use p256::ecdsa::signature::Signer;
 use p256::ecdsa::{Signature, SigningKey};
 use serde_json::{json, Value};
@@ -83,7 +83,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "nonce": nonce,
             "context": context,
             "messageHex": hex::encode(&message),
-            "sigB64": chromium_bridge_core::enclave::base64_encode(&raw),
+            "sigB64": genkan_core::enclave::base64_encode(&raw),
         }));
     }
 
@@ -116,9 +116,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let sig: Signature = signing_key.sign(&message);
         let raw: [u8; SIG_LEN] = sig.to_bytes().into();
         policy_vectors.push(json!({
-            "docB64": chromium_bridge_core::enclave::base64_encode(&doc_bytes),
+            "docB64": genkan_core::enclave::base64_encode(&doc_bytes),
             "messageHex": hex::encode(&message),
-            "sigB64": chromium_bridge_core::enclave::base64_encode(&raw),
+            "sigB64": genkan_core::enclave::base64_encode(&raw),
         }));
     }
 

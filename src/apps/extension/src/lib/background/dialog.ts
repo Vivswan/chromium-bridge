@@ -15,8 +15,8 @@
 // and may not be capturable - Page.handleJavaScriptDialog then errors, which we
 // surface honestly.
 
-import { type OpArgs, TOOL_GRANTS } from "@chromium-bridge/shared/generated/ops";
-import type { PolicyValues } from "@chromium-bridge/shared/generated/policy";
+import { type OpArgs, TOOL_GRANTS } from "@genkan/shared/generated/ops";
+import type { PolicyValues } from "@genkan/shared/generated/policy";
 import { ensureAllowed } from "./allowlist-store";
 import { withCdpAttach } from "./cdp/attach";
 import { dbgSend, isDebuggable } from "./cdp/session";

@@ -23,7 +23,7 @@ moon run setup   # installs the bun workspace, the pinned Rust toolchain, and th
 |------|----------|-------|
 | [proto](https://moonrepo.dev/proto) | 工具链引导 | 安装 `.prototools` 中固定的所有工具, 本地和 CI (`.github/actions/setup-moon`) 都是如此; 唯一一个还在别处出现的固定版本 (bun) 由 `moon run check-toolchain` 交叉核对 |
 | [moon](https://moonrepo.dev) | 任务运行器 | 规范的命令接口: 每个开发任务都是一个 moon 任务。`moon run help` 列出全部任务; `moon run <task>` 运行其中一个 |
-| Rust (cargo) | `chromium-bridge` 二进制 | 由 `rust-toolchain.toml` 固定 (权威的固定来源; rustup 和 IDE 都读它); `rustfmt` + `clippy` 组件, `cargo-nextest` 作为测试运行器 |
+| Rust (cargo) | `genkan` 二进制 | 由 `rust-toolchain.toml` 固定 (权威的固定来源; rustup 和 IDE 都读它); `rustfmt` + `clippy` 组件, `cargo-nextest` 作为测试运行器 |
 | bun | 所有 TypeScript 相关工作 | 包管理器、脚本运行器、扩展打包、TS 测试套件。固定在 `.prototools` 中 (并镜像到 `package.json` 的 `packageManager`) |
 | node | vitest 测试套件 (`extension:test`) | 只固定在 `.prototools` 中; 由 proto 安装, 所以没有任何作业或镜像自行安装 |
 | [`uv`](https://docs.astral.sh/uv/) | 协议 e2e 测试 | 安装仓库根目录 `.python-version` 中固定的那个 Python 版本, 所以本地运行和 CI 用同一个解释器。uv 自身只固定在 `.prototools` 中。这些测试套件只用标准库 |
@@ -38,11 +38,11 @@ Git 钩子由 [lefthook](https://lefthook.dev) 管理 (`lefthook.yml`), 由 `moo
 TypeScript 一侧是一个 bun 工作区, 根在仓库顶层 (`package.json` 的 `workspaces`), 只有一个 `bun.lock` 和一棵 node_modules 树。可构建的代码放在 `src/` 下 (apps 和 packages); 那里的每个目录都是 cargo 工作区或 bun 工作区的成员, 所以一个门禁就能编译整张图。TS 包把源码和测试分开放 (`src/` 和 `tests/`)。
 
 ```text
-src/apps/host/           Rust binary "chromium-bridge" (thin argv dispatch over the library)
+src/apps/host/           Rust binary "genkan" (thin argv dispatch over the library)
 src/apps/extension/      MV3 extension (WXT); builds to build/extension (gitignored)
 src/apps/web/            the Astro landing page (bun workspace member; moon run web:build; not part
                          of `moon run ci`); the docs site is the fleet's render of docs/
-src/packages/core/       Rust library "chromium-bridge-core": MCP server + native-host bridge
+src/packages/core/       Rust library "genkan-core": MCP server + native-host bridge
 src/packages/core/fuzz/  cargo-fuzz workspace: wire parsers + semantic validators
                          (nightly + libFuzzer; see the Fuzzing section below)
 src/packages/shared/     contract types / validators / i18n (bun workspace member)
@@ -235,7 +235,7 @@ moon run extension:build    # production bundle
 | 测试套件 | 证明的内容 |
 |-------|----------------|
 | `dom_test.ts` | 每个内容脚本操作, 使用构建出的内容脚本 (`build/extension/chrome-mv3` 下的 content-scripts/content.js), 通过 CDP 注入到无头页面中 |
-| `ext_test.ts` | 加载 `build/extension/chrome-mv3` 后 Service Worker 能启动 (puppeteer-core); `BB_EXT_DIR` 可指向另一个未打包的扩展 |
+| `ext_test.ts` | 加载 `build/extension/chrome-mv3` 后 Service Worker 能启动 (puppeteer-core); `GENKAN_EXT_DIR` 可指向另一个未打包的扩展 |
 | `security_browser_test.ts` | 安全模型的浏览器侧那一半, 针对同一个已加载的扩展 |
 | `webauthn_test.ts` | 主机的校验器所假设的关于 Chrome WebAuthn 客户端的事实, 用 CDP 虚拟认证器代替 Touch ID |
 | `cancel_test.ts` | 来自替身主机的 `cancel` 帧被消费且从不被应答; 不在 Windows 上运行 |
@@ -257,7 +257,7 @@ CHROME_BIN=/path/to/isolated/chrome bun tests/browser/run_all.ts
 | 任务 | 在容器内运行的内容 |
 |------|---------------------------|
 | `moon run ci-container` | `moon run ci` |
-| `moon run test-browser-container` | `xvfb-run -a moon run test-browser`, 并设置 `BB_REQUIRE_BROWSER=1` 和 `BB_BROWSER_CANARY_DIR=/work/tmp/browser-canary`, 这样跳过或空转的测试套件会像在 CI 中一样失败, 并且 RAN 标记在宿主机上仍可读取 |
+| `moon run test-browser-container` | `xvfb-run -a moon run test-browser`, 并设置 `GENKAN_REQUIRE_BROWSER=1` 和 `GENKAN_BROWSER_CANARY_DIR=/work/tmp/browser-canary`, 这样跳过或空转的测试套件会像在 CI 中一样失败, 并且 RAN 标记在宿主机上仍可读取 |
 | `moon run shell-container` | 位于 `/work` 的交互式 `bash` |
 
 Docker 是默认引擎; `CONTAINER_ENGINE=podman moon run ci-container` 可以切换。第一次运行会构建镜像 (需要几分钟, 只一次); 检出目录绑定挂载在 `/work`, 所以构建结果会像本地构建一样落在宿主机上被 gitignore 的 build 目录中。
@@ -353,15 +353,15 @@ moon run check-fuzz-smoke  # unit tests for the driver itself (in the ci gate)
 
 规定: 在 Rust 核心的信任边界上新增或修改定制解析器或语义校验器的 PR, 必须新增或扩展一个模糊测试目标, 或者把排除项连同理由加入上面的列表。确切的规则及其适用范围见 [SECURITY.md](../../.github/SECURITY.md#security-relevant-changes-review-bar)。
 
-供应链范围: 模糊测试工作区只在夜间 CI 中运行, 从不链接进发布的二进制, 其第三方直接依赖仅限于 `libfuzzer-sys`、`arbitrary` 和 `serde_json` (加上被测 crate `chromium-bridge-core` 自身); `derive_arbitrary` 通过 `arbitrary` 的 derive 特性传递引入。新的模糊测试依赖仍要经过审计工作流中对 `fuzz/Cargo.toml` 的 `cargo deny` 检查, 以及常规的 PR 评审。
+供应链范围: 模糊测试工作区只在夜间 CI 中运行, 从不链接进发布的二进制, 其第三方直接依赖仅限于 `libfuzzer-sys`、`arbitrary` 和 `serde_json` (加上被测 crate `genkan-core` 自身); `derive_arbitrary` 通过 `arbitrary` 的 derive 特性传递引入。新的模糊测试依赖仍要经过审计工作流中对 `fuzz/Cargo.toml` 的 `cargo deny` 检查, 以及常规的 PR 评审。
 
 ## 日志
 
-两种二进制模式都把日志写到 **stderr** (stdout 承载线路协议)。用 `BB_LOG` 设置级别:
+两种二进制模式都把日志写到 **stderr** (stdout 承载线路协议)。用 `GENKAN_LOG` 设置级别:
 
 ```sh
-BB_LOG=debug chromium-bridge          # verbose
-BB_LOG=error chromium-bridge          # quiet
+GENKAN_LOG=debug genkan          # verbose
+GENKAN_LOG=error genkan          # quiet
 # default is info
 ```
 

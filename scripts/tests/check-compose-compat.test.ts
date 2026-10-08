@@ -17,7 +17,7 @@ const portable = {
       working_dir: "/work",
       init: true,
       shm_size: "1gb",
-      environment: { BB_REQUIRE_BROWSER: "1" },
+      environment: { GENKAN_REQUIRE_BROWSER: "1" },
       command: ["moon", "run", "ci"],
       volumes: [
         "./:/work:z",

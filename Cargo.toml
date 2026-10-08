@@ -144,7 +144,7 @@ loom = "0.7"
 # 0.x) rather than the exact version, so 0.x release bumps of
 # workspace.package.version do not have to touch this line; the 1.0 bump
 # must widen it.
-chromium-bridge-core = { path = "src/packages/core", version = "0" }
+genkan-core = { path = "src/packages/core", version = "0" }
 
 # Workspace-wide lint tables; every member opts in via `[lints] workspace =
 # true`. The fuzz crate is its own workspace and carries a copy of this whole

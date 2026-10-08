@@ -19,7 +19,7 @@ use serde_json::Value;
 /// nonce            -> non-empty, NUL-free, at most 256 BYTES (MAX_NONCE_LEN)
 /// context          -> optional, NUL-free, at most 4096 BYTES (MAX_CONTEXT_LEN); absent and "" sign identically
 /// sig              -> base64 of the raw 64-byte IEEE P1363 r||s ECDSA P-256/SHA-256 signature over
-///                     UTF8(chromium-bridge-enclave-v1) || 0x00 || UTF8(nonce) || 0x00 || UTF8(context or "")
+///                     UTF8(genkan-enclave-v1) || 0x00 || UTF8(nonce) || 0x00 || UTF8(context or "")
 /// key_id / pubkey  -> lowercase-hex SHA-256 of the 65-byte X9.63 public key / base64 of those bytes
 /// error reason     -> REASON_CODES
 /// enclave_revoke   -> deletes the host key, then best-effort clears the recorded policy baseline and bumps the
@@ -27,7 +27,7 @@ use serde_json::Value;
 ///                     enclave_revoked once the key is gone (even when none existed, and even when the baseline clear
 ///                     or epoch bump failed: those are only logged); enclave_error carries the key deletion's
 ///                     reason code (keychain_error, also for an unavailable runtime lock)
-/// enclave_revoked  -> also PUSHED unprompted when the host sees the key revoked out-of-band (chromium-bridge
+/// enclave_revoked  -> also PUSHED unprompted when the host sees the key revoked out-of-band (genkan
 ///                     revoke, pair --reset), so a pinned extension flips to its fail-closed compromised state
 ///                     without waiting for a reverify; without a pin it is a no-op
 /// ```
@@ -96,7 +96,7 @@ pub enum EnclaveControl {
 ///                               mcp server, kill switch, policy baseline, the verdict) with the words the CLI uses,
 ///                               plus the `key:` line of `enclave-status`; read-only, ok: false only for a malformed frame
 /// audit_read { limit? }      -> audit_read_result { ok, entries?, older?, path?, error? }: the newest records of the
-///                               host's audit.log, the page `chromium-bridge audit --limit <n>` prints (its default
+///                               host's audit.log, the page `genkan audit --limit <n>` prints (its default
 ///                               when `limit` is absent; 1..=MAX_AUDIT_READ_LIMIT otherwise, out of range is
 ///                               malformed); the page travels exactly when ok, an unreadable trail is ok: false
 /// ```
@@ -288,7 +288,7 @@ impl DoctorOutcome {
 }
 
 /// One line of the host's audit trail as the options page shows it: the three parts of the line
-/// `chromium-bridge audit` prints, spelled by `audit.rs` alone (the kind's wire name and the `key=value`
+/// `genkan audit` prints, spelled by `audit.rs` alone (the kind's wire name and the `key=value`
 /// fields), with the timestamp left raw for the page to localize. An unparsable line keeps its position and
 /// carries the CLI's stand-in text; so does a record whose timestamp lies past the JS-safe bound the page's
 /// parser enforces, so one such line cannot sink the whole reply. The timestamp keeps both of the record's
@@ -448,7 +448,7 @@ impl<'de> Deserialize<'de> for RepairBrowsers {
 }
 
 /// The most records one `audit_read` may ask for. The page shows a list, not the whole trail; the whole
-/// trail is `chromium-bridge audit --limit <n>`.
+/// trail is `genkan audit --limit <n>`.
 pub const MAX_AUDIT_READ_LIMIT: usize = 1000;
 
 /// An `audit_read` limit, parsed once at the frame boundary into `1..=MAX_AUDIT_READ_LIMIT`: a zero or

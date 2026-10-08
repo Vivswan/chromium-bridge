@@ -227,8 +227,9 @@ impl Report {
     fn kill_row(&self) -> DoctorRow {
         DoctorRow::new(match &self.kill {
             Ok(false) => "off (bridge activity permitted)".to_string(),
-            Ok(true) => "ENGAGED - all bridge activity is refused until `chromium-bridge unkill`"
-                .to_string(),
+            Ok(true) => {
+                "ENGAGED - all bridge activity is refused until `genkan unkill`".to_string()
+            }
             Err(e) => format!(
                 "state UNREADABLE ({e}) - every enforcement point is failing closed; see \
                  docs/troubleshooting.md for recovery"
@@ -360,7 +361,7 @@ pub fn wire_report() -> HealthReport {
 /// Pure rendering of a gathered report into the printed health text.
 fn render(r: &Report) -> String {
     let mut out = String::new();
-    out.push_str(&format!("chromium-bridge doctor - v{}\n", r.version));
+    out.push_str(&format!("genkan doctor - v{}\n", r.version));
     out.push_str(&format!("platform:        {}\n", r.platform()));
     for (label, row) in [
         ("lock file:", r.lock_row()),
@@ -432,7 +433,7 @@ fn render(r: &Report) -> String {
     out.push_str(
         "\nnote: the checks above cover the MCP server + native-host bridge only.\n\
          They do NOT confirm the Chrome extension is loaded and connected. Verify\n\
-         that via the Chromium Bridge toolbar icon (approve the target site) and\n\
+         that via the Genkan toolbar icon (approve the target site) and\n\
          the extension's Service Worker console at chrome://extensions.\n",
     );
 
@@ -448,7 +449,7 @@ fn summary(r: &Report) -> &'static str {
         return "runtime dir refused - see the lock file line for the cause";
     };
     if r.kill == Ok(true) {
-        return "kill switch ENGAGED - release it with `chromium-bridge unkill`";
+        return "kill switch ENGAGED - release it with `genkan unkill`";
     }
     if r.kill.is_err() {
         return "kill state unreadable - failing closed; see docs/troubleshooting.md";
@@ -470,7 +471,7 @@ fn summary(r: &Report) -> &'static str {
         LockState::Present {
             reachable: true, ..
         } => {
-            "server reachable, but no detected browser has a healthy native-host registration - run `chromium-bridge doctor --fix`"
+            "server reachable, but no detected browser has a healthy native-host registration - run `genkan doctor --fix`"
         }
         LockState::Present { .. } => "server not reachable - is your MCP client running?",
     }
@@ -581,7 +582,7 @@ mod tests {
             lock: Ok(LockReport {
                 path: PathBuf::from("/tmp/run.lock"),
                 state: LockState::Present {
-                    endpoint: "/tmp/chromium-bridge/run.sock".into(),
+                    endpoint: "/tmp/genkan/run.sock".into(),
                     pid: 4242,
                     secret_len: 32,
                     reachable: true,
@@ -592,10 +593,10 @@ mod tests {
                     key: "chrome",
                     detected: true,
                     manifest: Scoped {
-                        user: slot(RegState::Ok, "/tmp/com.vivswan.chromium_bridge.host.json", None),
+                        user: slot(RegState::Ok, "/tmp/com.vivswan.genkan.host.json", None),
                         system: slot(
                             RegState::Missing,
-                            "/Library/Google/Chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json",
+                            "/Library/Google/Chrome/NativeMessagingHosts/com.vivswan.genkan.host.json",
                             None,
                         ),
                     },
@@ -619,12 +620,12 @@ mod tests {
                     manifest: Scoped {
                         user: slot(
                             RegState::Ok,
-                            "/tmp/com.vivswan.chromium_bridge.host.json",
+                            "/tmp/com.vivswan.genkan.host.json",
                             Some("chrome"),
                         ),
                         system: slot(
                             RegState::Missing,
-                            "/Library/Google/Chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json",
+                            "/Library/Google/Chrome/NativeMessagingHosts/com.vivswan.genkan.host.json",
                             Some("chrome"),
                         ),
                     },
@@ -681,23 +682,21 @@ mod tests {
         let text = render(&r);
         assert!(text.contains("v1.2.3"));
         assert!(text.contains("macos/aarch64"));
-        assert!(text.contains("endpoint: /tmp/chromium-bridge/run.sock"));
+        assert!(text.contains("endpoint: /tmp/genkan/run.sock"));
         assert!(text.contains("pid:     4242"));
         assert!(text.contains("<redacted, 32 chars>"));
         // The real secret value must never appear.
         assert!(!text.contains("deadbeef"));
         assert!(text.contains("reachable (socket connect OK)"));
         // Per-browser manifest lines from the shared resolver.
-        assert!(text.contains("host id com.vivswan.chromium_bridge.host"));
+        assert!(text.contains("host id com.vivswan.genkan.host"));
         // Both scopes per browser, and a shared directory named after its owner in either scope (Brave on
         // macOS reads Chrome's per-user directory too).
         assert!(text.contains("chrome    detected      user    manifest ok         /tmp/"));
         assert!(text.contains("system  manifest missing    /Library/Google/Chrome/"));
+        assert!(text.contains("NativeMessagingHosts/com.vivswan.genkan.host.json (reads chrome's)"));
         assert!(text.contains(
-            "NativeMessagingHosts/com.vivswan.chromium_bridge.host.json (reads chrome's)"
-        ));
-        assert!(text.contains(
-            "brave     not detected  user    manifest ok         /tmp/com.vivswan.chromium_bridge.host.json (reads chrome's)"
+            "brave     not detected  user    manifest ok         /tmp/com.vivswan.genkan.host.json (reads chrome's)"
         ));
         // The pointer rows beside each manifest: state and location per scope, or why Linux has none.
         assert!(text.contains("user    pointer  ok         /tmp/External Extensions/"));
@@ -730,7 +729,7 @@ mod tests {
                 platform: "macos/aarch64".into(),
                 lock_file: DoctorRow::new("/tmp/run.lock")
                     .detail("present: yes")
-                    .detail("endpoint: /tmp/chromium-bridge/run.sock")
+                    .detail("endpoint: /tmp/genkan/run.sock")
                     .detail("pid:     4242")
                     .detail("secret:  <redacted, 32 chars>"),
                 mcp_server: DoctorRow::new("reachable (socket connect OK)"),
@@ -738,7 +737,7 @@ mod tests {
                 policy_baseline: DoctorRow::new(
                     "revision 3, signed (the extension verifies it against its pinned key, not here)"
                 ),
-                host_key: "none (run `chromium-bridge pair`)".into(),
+                host_key: "none (run `genkan pair`)".into(),
                 summary: "OK".into(),
                 healthy: true,
             }
@@ -772,7 +771,7 @@ mod tests {
         let text = render(&r);
         assert!(text.contains("policy baseline: none yet"));
         // Both surfaces that can sign the first baseline are named, the same words `policy show` prints.
-        assert!(text.contains("`chromium-bridge policy set`"), "{text}");
+        assert!(text.contains("`genkan policy set`"), "{text}");
         assert!(text.contains("options page"), "{text}");
         assert!(text.trim_end().ends_with("OK"));
         assert_eq!(exit_code(&r), 0);
@@ -810,7 +809,7 @@ mod tests {
         let mut r = healthy_report();
         r.manifests.as_mut().unwrap()[0].detected = false;
         let text = render(&r);
-        assert!(text.contains("run `chromium-bridge doctor --fix`"));
+        assert!(text.contains("run `genkan doctor --fix`"));
         assert_eq!(exit_code(&r), 1);
     }
 
@@ -820,9 +819,9 @@ mod tests {
     #[test]
     fn verdict_follows_the_per_user_entry_first_then_the_system_one() {
         use crate::protocol::control::{RegistrationRow, RegistrationState};
-        let user_path = "/tmp/com.vivswan.chromium_bridge.host.json";
+        let user_path = "/tmp/com.vivswan.genkan.host.json";
         let system_path =
-            "/Library/Google/Chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json";
+            "/Library/Google/Chrome/NativeMessagingHosts/com.vivswan.genkan.host.json";
         let cases: Vec<(&str, RegState, RegState, Scope, i32, RegistrationRow)> = vec![
             (
                 "user ok shadows system missing",
@@ -908,7 +907,7 @@ mod tests {
             os: "linux",
             arch: "x86_64",
             lock: Ok(LockReport {
-                path: PathBuf::from("/run/user/1000/chromium-bridge.lock"),
+                path: PathBuf::from("/run/user/1000/genkan.lock"),
                 state: LockState::Absent,
             }),
             manifests: Ok(vec![ManifestStatus {
@@ -917,12 +916,12 @@ mod tests {
                 manifest: Scoped {
                     user: slot(
                         RegState::Missing,
-                        "/home/user/.config/google-chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json",
+                        "/home/user/.config/google-chrome/NativeMessagingHosts/com.vivswan.genkan.host.json",
                         None,
                     ),
                     system: slot(
                         RegState::Missing,
-                        "/etc/opt/chrome/native-messaging-hosts/com.vivswan.chromium_bridge.host.json",
+                        "/etc/opt/chrome/native-messaging-hosts/com.vivswan.genkan.host.json",
                         None,
                     ),
                 },
@@ -991,7 +990,7 @@ mod tests {
         let guard = crate::test_support::scratch_runtime_dir();
         let absent = guard.point_at_absent("never-made");
         let text = paths_report().unwrap();
-        let dir = absent.join("chromium-bridge");
+        let dir = absent.join("genkan");
         assert_eq!(
             text,
             format!(
@@ -1014,7 +1013,7 @@ mod tests {
 
         // A live Unix-domain listener: probe must succeed.
         let dir = tempfile::Builder::new()
-            .prefix("bb-doctor-probe-")
+            .prefix("genkan-doctor-probe-")
             .tempdir()
             .unwrap();
         let sock = dir.path().join("run.sock");

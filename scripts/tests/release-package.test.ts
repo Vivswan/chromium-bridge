@@ -100,9 +100,9 @@ function fakeArchiver(calls: { argv: string[]; cwd: string }[]): RunTool {
 
 describe("packageArchive", () => {
   test.each<[string, string, string, string[]]>([
-    ["linux", "x64", "chromium-bridge", ["tar", "czf"]],
-    ["macos", "arm64", "chromium-bridge", ["tar", "czf"]],
-    ["windows", "x64", "chromium-bridge.exe", ["7z", "a", "-tzip"]],
+    ["linux", "x64", "genkan", ["tar", "czf"]],
+    ["macos", "arm64", "genkan", ["tar", "czf"]],
+    ["windows", "x64", "genkan.exe", ["7z", "a", "-tzip"]],
   ])(
     "%s-%s: the staged tree, RELEASE.txt, both checksum files, and the step outputs",
     (platform, arch, binaryFile, archiverHead) => {
@@ -115,7 +115,7 @@ describe("packageArchive", () => {
 
       packageArchive(root, env, plan, text, fakeArchiver(calls));
 
-      const name = `chromium-bridge-v1.2.3-${platform}-${arch}`;
+      const name = `genkan-v1.2.3-${platform}-${arch}`;
       const archive = platform === "windows" ? `${name}.zip` : `${name}.tar.gz`;
       const read = (file: string) => readFileSync(join(root, file), "utf8");
       expect({
@@ -192,7 +192,7 @@ describe("packageInstaller", () => {
           "/",
           "--scripts",
           "packaging/pkg/scripts",
-          "chromium-bridge-v1.2.3-rc.1-macos-arm64.pkg",
+          "genkan-v1.2.3-rc.1-macos-arm64.pkg",
         ],
       ],
     ],
@@ -207,9 +207,9 @@ describe("packageInstaller", () => {
           "--no-build",
           "--no-strip",
           "--package",
-          "chromium-bridge",
+          "genkan",
           "--output",
-          "chromium-bridge-v1.2.3-rc.1-linux-x64.deb",
+          "genkan-v1.2.3-rc.1-linux-x64.deb",
         ],
       ],
     ],
@@ -224,10 +224,10 @@ describe("packageInstaller", () => {
           "-arch",
           "x64",
           "-dVersion=1.2.3",
-          "-dBinary=target/release/chromium-bridge.exe",
+          "-dBinary=target/release/genkan.exe",
           "-out",
-          "chromium-bridge.wixobj",
-          "packaging/msi/chromium-bridge.wxs",
+          "genkan.wixobj",
+          "packaging/msi/genkan.wxs",
         ],
         [
           "light.exe",
@@ -236,25 +236,23 @@ describe("packageInstaller", () => {
           "-ext",
           "WixUtilExtension",
           "-out",
-          "chromium-bridge-v1.2.3-rc.1-windows-x64.msi",
-          "chromium-bridge.wixobj",
+          "genkan-v1.2.3-rc.1-windows-x64.msi",
+          "genkan.wixobj",
         ],
       ],
     ],
   ])(
     "%s-%s: the staged binary, the tool calls, the checksum, and the outputs",
     (platform, arch, ext, tools) => {
-      const root = builtCheckout(
-        platform === "windows" ? "chromium-bridge.exe" : "chromium-bridge",
-      );
+      const root = builtCheckout(platform === "windows" ? "genkan.exe" : "genkan");
       const output = join(root, "output");
       const calls: { argv: string[]; cwd: string }[] = [];
       const plan = installerPlan(release, platform, arch);
 
       packageInstaller(root, { GITHUB_OUTPUT: output }, plan, fakeTool(calls));
 
-      const installer = `chromium-bridge-v1.2.3-rc.1-${platform}-${arch}.${ext}`;
-      const stagedBinary = join(root, "pkg-root/usr/local/bin/chromium-bridge");
+      const installer = `genkan-v1.2.3-rc.1-${platform}-${arch}.${ext}`;
+      const stagedBinary = join(root, "pkg-root/usr/local/bin/genkan");
       expect({
         staged:
           platform === "macos" ? readFileSync(stagedBinary, "utf8") : existsSync(stagedBinary),
@@ -296,7 +294,7 @@ describe("the Homebrew formula", () => {
   ])("%s -> bump %p", (tag, bump) => {
     const root = scratch.dir("tap-formula");
     const output = join(root, "output");
-    const path = join(root, "Formula", "chromium-bridge.rb");
+    const path = join(root, "Formula", "genkan.rb");
     // The tap excludes prereleases, so the digest reader must not run for one.
     const written = writeTapFormula(
       parseTag(tag),
@@ -325,7 +323,7 @@ describe("the Homebrew formula", () => {
   });
 
   test.each<[string, string | "refused"]>([
-    [`${linuxX64}  chromium-bridge-v1.2.3-linux-x64.tar.gz\n`, linuxX64],
+    [`${linuxX64}  genkan-v1.2.3-linux-x64.tar.gz\n`, linuxX64],
     [`${linuxX64.toUpperCase()}  file\n`, "refused"],
     [`${"b".repeat(63)}  file\n`, "refused"],
     [`${linuxX64} file\n`, "refused"],
@@ -341,13 +339,13 @@ describe("the Homebrew formula", () => {
 });
 
 test("the extension zip stages the bundle under dist/, zips from the staging dir, and writes its checksum", () => {
-  const root = builtCheckout("chromium-bridge");
+  const root = builtCheckout("genkan");
   const output = join(root, "output");
   const calls: { argv: string[]; cwd: string }[] = [];
 
   packageExtensionZip(root, { GITHUB_OUTPUT: output }, "v1.2.3", fakeArchiver(calls));
 
-  const name = "chromium-bridge-extension-v1.2.3";
+  const name = "genkan-extension-v1.2.3";
   expect({
     staged: existsSync(join(root, "dist-zip/dist/manifest.json")),
     zip: calls,

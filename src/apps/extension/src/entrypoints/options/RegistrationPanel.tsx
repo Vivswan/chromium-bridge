@@ -1,12 +1,12 @@
-import type { HealthReport, RegistrationRow } from "@chromium-bridge/shared/generated/envelope";
-import { BROWSER_KEYS } from "@chromium-bridge/shared/generated/host";
-import type { RuntimeRequest, RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
+import type { HealthReport, RegistrationRow } from "@genkan/shared/generated/envelope";
+import { BROWSER_KEYS } from "@genkan/shared/generated/host";
+import type { RuntimeRequest, RuntimeResponse } from "@genkan/shared/runtime-msg";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/hooks/useI18n";
 import { send } from "@/lib/messages";
 
-// The host-registration panel: the health report plain `chromium-bridge doctor` prints (rows worded by the
+// The host-registration panel: the health report plain `genkan doctor` prints (rows worded by the
 // host, labels localized here), then the registration rows over the SW router's two registration messages.
 // Repair covers every detected browser, as `doctor --fix` does; a browser the host did not detect gets its
 // own register action, as `--browser <key>` does. A failed repair re-asks for the rows instead of keeping

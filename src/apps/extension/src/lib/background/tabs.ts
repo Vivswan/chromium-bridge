@@ -1,7 +1,7 @@
 // Tab resolution, content-script injection, and the tab-level tools
 // (tab_list / tab_focus / tab_open / tab_close).
 
-import type { PolicyValues } from "@chromium-bridge/shared/generated/policy";
+import type { PolicyValues } from "@genkan/shared/generated/policy";
 import type { Browser } from "wxt/browser";
 import { browser } from "wxt/browser";
 import { getSetting } from "../shared/settings";
@@ -99,10 +99,10 @@ export async function pageReload() {
   return { reloaded: tab.id };
 }
 
-// Name + color of the tab group chromium-bridge collects its tabs into, so the
+// Name + color of the tab group genkan collects its tabs into, so the
 // AI's tabs are visually separated from the user's and can be collapsed/closed
 // as a unit.
-const WORKSPACE_TITLE = "Chromium Bridge";
+const WORKSPACE_TITLE = "Genkan";
 const WORKSPACE_COLOR = "blue";
 
 export async function tabOpen(url: string) {
@@ -115,7 +115,7 @@ export async function tabOpen(url: string) {
   return { opened: t.id, url, groupId };
 }
 
-// Add a tab to the "Chromium Bridge" workspace group in its window, creating the
+// Add a tab to the "Genkan" workspace group in its window, creating the
 // group (named + colored) if it doesn't exist yet. Best-effort: grouping is a
 // UX nicety, so a failure here never fails the underlying tab_open.
 async function addToWorkspaceGroup(
@@ -133,7 +133,7 @@ async function addToWorkspaceGroup(
     await browser.tabGroups.update(groupId, { title: WORKSPACE_TITLE, color: WORKSPACE_COLOR });
     return groupId;
   } catch (e) {
-    console.warn("[bb] tab grouping failed:", (e as Error)?.message || e);
+    console.warn("[genkan] tab grouping failed:", (e as Error)?.message || e);
     return undefined;
   }
 }

@@ -33,13 +33,13 @@
 
 在修補程式就緒之前, 使用者可以自行縮小影響範圍:
 
-1. **啟用緊急開關:** `chromium-bridge kill`, 或擴充功能的選項頁面。每一次工具呼叫都被拒絕, 每一條瀏覽器連線都在大約一秒內被切斷; 命令與其解除由 [CLI 頁面](../cli.md#緊急開關-kill--unkill)負責。
-2. **停用單一工具:** `chromium-bridge policy restrict --disabled-tools <list>` 把它加入主機策略的 `disabledTools`。這個旗標陳述的是完整的、以逗號分隔的停用清單, 所以要保留其中已有的工具。這次寫入是免費的 (沒有在場提示), 因為限制只會移除能力。
+1. **啟用緊急開關:** `genkan kill`, 或擴充功能的選項頁面。每一次工具呼叫都被拒絕, 每一條瀏覽器連線都在大約一秒內被切斷; 命令與其解除由 [CLI 頁面](../cli.md#緊急開關-kill--unkill)負責。
+2. **停用單一工具:** `genkan policy restrict --disabled-tools <list>` 把它加入主機策略的 `disabledTools`。這個旗標陳述的是完整的、以逗號分隔的停用清單, 所以要保留其中已有的工具。這次寫入是免費的 (沒有在場提示), 因為限制只會移除能力。
    - 主機隨後會在任何橋接流量之前, 以 [`ERROR_SPECS`](../../../src/packages/core/src/error.rs) 中穩定的 `TOOL_DISABLED` 代碼拒絕該工具, 擴充功能也會在自己的邊界上強制執行推送下來的策略。
    - 先停用 `page_eval` 這樣的高風險工具。之後重新啟用它屬於放寬, 需要付出一次在終端機確認之後的已簽章策略寫入, 這是刻意的設計 ([CLI 頁面](../cli.md#主機持有的策略-policy))。
 3. **撤銷允許清單, 或關閉所有網站:** 在選項頁面或彈出視窗中移除受影響來源的授權, 並確認 `allowAllSites` 已關閉。移除授權的同時也會撤銷該來源的主機權限。
 4. **停止擴充功能:** 在 `chrome://extensions` 停用或移除它。原生訊息主機的 stdin 收到 EOF 並結束, 橋接隨之切斷; 也結束 MCP 用戶端的工作階段, 讓 MCP 伺服器結束, 並用 `doctor` 確認 ([CLI 頁面](../cli.md#doctor--status-唯讀自我檢查))。
-5. **解除安裝主機資訊清單:** `chromium-bridge uninstall` 移除原生訊息註冊, 之後 Chrome 就無法再啟動主機 ([CLI 頁面](../cli.md#doctor---fix--uninstall-原生訊息註冊))。
+5. **解除安裝主機資訊清單:** `genkan uninstall` 移除原生訊息註冊, 之後 Chrome 就無法再啟動主機 ([CLI 頁面](../cli.md#doctor---fix--uninstall-原生訊息註冊))。
 
 ## 修復與驗證
 

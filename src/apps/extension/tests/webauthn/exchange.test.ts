@@ -3,7 +3,7 @@
 // The host side is the Rust verifier's own tests; the tag roster itself is held to the generated table by
 // tests/background/port-routing.test.ts and scripts/check-envelope.ts.
 
-import { WEBAUTHN_ENROLLMENT_KEY } from "@chromium-bridge/shared/runtime-msg";
+import { WEBAUTHN_ENROLLMENT_KEY } from "@genkan/shared/runtime-msg";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 import { HOST_REPLY_TIMEOUT_MS } from "@/lib/background/exchange";

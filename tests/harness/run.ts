@@ -61,16 +61,16 @@ import {
 const usage = "usage: bun tests/harness/run.ts [--mint-seeds <dir>] [--require-any]";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const BIN = resolve(REPO, "target", "release", "chromium-bridge");
+const BIN = resolve(REPO, "target", "release", "genkan");
 const FAKE_LLM = resolve(REPO, "tests", "harness", "fake-llm.ts");
 const CAPTURE_DIR = resolve(REPO, "build", "harness-captures");
 // The name the bridge is registered under in each harness's isolated config.
-const SERVER_NAME = "chromium-bridge";
+const SERVER_NAME = "genkan";
 // The temp dirs one run creates, by prefix; the startup sweep clears a killed run's.
-//   bb-harness-<name>-  -> a harness's isolated config home
+//   genkan-harness-<name>-  -> a harness's isolated config home
 //   bbh-                -> the server's runtime dir (short: the binary refuses one whose socket path overruns sun_path, ipc/runtime_dir.rs)
 //   bbf-                -> the fake LLM backend's portfile
-const SCRATCH_PREFIX = "bb-harness-";
+const SCRATCH_PREFIX = "genkan-harness-";
 const RUNTIME_PREFIX = "bbh-";
 const FAKE_LLM_PREFIX = "bbf-";
 // The bridge-side tool the live fake-LLM probes drive end to end.
@@ -230,13 +230,13 @@ function failure(step: string, r: RunResult): ProbeOutcome {
 }
 
 /**
- * Resolve a harness CLI to a real executable: BB_HARNESS_<NAME>_BIN wins,
+ * Resolve a harness CLI to a real executable: GENKAN_HARNESS_<NAME>_BIN wins,
  * then the first PATH hit that is not a terminal-mux proxy (cmux drops a
  * `claude` wrapper shim on PATH that breaks stdio MCP health checks), then
  * any PATH hit. Undefined means the harness is not installed.
  */
 function resolveCli(cli: string): string | undefined {
-  const override = process.env[`BB_HARNESS_${cli.toUpperCase()}_BIN`];
+  const override = process.env[`GENKAN_HARNESS_${cli.toUpperCase()}_BIN`];
   if (override) return override;
   const candidates: string[] = [];
   for (const dir of (process.env.PATH ?? "").split(":")) {
@@ -625,14 +625,14 @@ const HARNESSES: Harness[] = [
       const key = process.env.OPENAI_API_KEY;
       // An ambient API key alone must never launch an agent session: the
       // live probe runs real codex with shell tools. Explicit opt-in only.
-      if (!key || process.env.BB_HARNESS_CODEX_LIVE !== "1") {
+      if (!key || process.env.GENKAN_HARNESS_CODEX_LIVE !== "1") {
         return {
           kind: "configured",
           detail:
             "registered in the isolated config.toml; live connection skipped " +
             "(codex has no offline health check - the live probe runs a real " +
             "codex agent session, so it needs OPENAI_API_KEY plus the " +
-            "explicit BB_HARNESS_CODEX_LIVE=1 opt-in)",
+            "explicit GENKAN_HARNESS_CODEX_LIVE=1 opt-in)",
         };
       }
       const login = run([ctx.cliBin, "login", "--with-api-key"], {
@@ -901,7 +901,7 @@ async function runHarness(harness: Harness): Promise<HarnessReport> {
     frames: 0,
     methods: [],
   });
-  const overrideVar = `BB_HARNESS_${harness.cli.toUpperCase()}_BIN`;
+  const overrideVar = `GENKAN_HARNESS_${harness.cli.toUpperCase()}_BIN`;
   const cliBin = resolveCli(harness.cli);
   if (!cliBin) {
     const detail = `${harness.cli} not on PATH - install it to include this harness`;

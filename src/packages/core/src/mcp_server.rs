@@ -16,7 +16,7 @@ use crate::trust::{Admission, AdmittingSurface, Posture, TrustState};
 /// (claude-code/copilot/codex/...). Self-asserted and used for logs and the
 /// audit surface only; it is NEVER the authorization key -- admission keys on
 /// the harness's attested code identity (see [`crate::allowlist`]).
-pub const CLIENT_NAME_ENV: &str = "CHROMIUM_BRIDGE_CLIENT_NAME";
+pub const CLIENT_NAME_ENV: &str = "GENKAN_CLIENT_NAME";
 
 pub fn run() -> i32 {
     install_stderr_panic_hook();
@@ -146,7 +146,7 @@ fn admit_own_harness() -> Option<Harness> {
         log_error!(
             "mcp",
             "this harness is not in the trusted-client allowlist; refusing to serve \
-             (fail closed). Pair it first: `chromium-bridge pair-client --name <label>`."
+             (fail closed). Pair it first: `genkan pair-client --name <label>`."
         );
     }
     admission.announce(AdmittingSurface::Stdio, name.as_deref(), identity.as_ref());

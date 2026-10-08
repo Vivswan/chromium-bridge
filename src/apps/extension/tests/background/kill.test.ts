@@ -10,7 +10,7 @@
 // - the audit ring is bounded, strict on read, and appends survive
 //   interleaving.
 
-import { isKillStatusFrame } from "@chromium-bridge/shared/enclave";
+import { isKillStatusFrame } from "@genkan/shared/enclave";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { Browser } from "wxt/browser";
 import { fakeBrowser } from "wxt/testing/fake-browser";

@@ -1,4 +1,4 @@
-import { DEFAULTS, type Settings } from "@chromium-bridge/shared/settings";
+import { DEFAULTS, type Settings } from "@genkan/shared/settings";
 import { useEffect, useRef, useState } from "react";
 import { browser } from "wxt/browser";
 import { readSettings } from "@/lib/shared/settings";

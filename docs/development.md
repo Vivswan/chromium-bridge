@@ -23,7 +23,7 @@ Four tools have no first-party proto plugin and are installed once by hand: `car
 |------|----------|-------|
 | [proto](https://moonrepo.dev/proto) | toolchain bootstrap | provisions everything pinned in `.prototools`, locally and in CI (`.github/actions/setup-moon`); the one pin that also lives elsewhere (bun) is cross-checked by `moon run check-toolchain` |
 | [moon](https://moonrepo.dev) | task runner | the canonical command interface: every dev task is a moon task. `moon run help` lists them; `moon run <task>` runs one |
-| Rust (cargo) | the `chromium-bridge` binary | pinned by `rust-toolchain.toml` (the authoritative pin; rustup and IDEs read it); `rustfmt` + `clippy` components, `cargo-nextest` as the test runner |
+| Rust (cargo) | the `genkan` binary | pinned by `rust-toolchain.toml` (the authoritative pin; rustup and IDEs read it); `rustfmt` + `clippy` components, `cargo-nextest` as the test runner |
 | bun | everything TypeScript | package manager, script runner, extension bundling, TS test suites. Pinned in `.prototools` (and mirrored in `package.json` `packageManager`) |
 | node | the vitest suites (`extension:test`) | pinned only in `.prototools`; proto provisions it, so no job or image installs its own |
 | [`uv`](https://docs.astral.sh/uv/) | protocol e2e tests | provisions the exact Python pinned in the repo-root `.python-version`, so local runs and CI use the same interpreter. uv itself is pinned only in `.prototools`. The suites are stdlib-only |
@@ -38,11 +38,11 @@ Git hooks are managed by [lefthook](https://lefthook.dev) (`lefthook.yml`) and w
 The TypeScript side is one bun workspace rooted at the repo top level (`package.json` `workspaces`), with one `bun.lock` and one node_modules tree. Buildable code lives under `src/` (apps and packages); every directory there is a member of the cargo workspace or the bun workspace, so one gate compiles the whole graph. TS packages keep sources and tests apart (`src/` and `tests/`).
 
 ```text
-src/apps/host/           Rust binary "chromium-bridge" (thin argv dispatch over the library)
+src/apps/host/           Rust binary "genkan" (thin argv dispatch over the library)
 src/apps/extension/      MV3 extension (WXT); builds to build/extension (gitignored)
 src/apps/web/            the Astro landing page (bun workspace member; moon run web:build; not part
                          of `moon run ci`); the docs site is the fleet's render of docs/
-src/packages/core/       Rust library "chromium-bridge-core": MCP server + native-host bridge
+src/packages/core/       Rust library "genkan-core": MCP server + native-host bridge
 src/packages/core/fuzz/  cargo-fuzz workspace: wire parsers + semantic validators
                          (nightly + libFuzzer; see the Fuzzing section below)
 src/packages/shared/     contract types / validators / i18n (bun workspace member)
@@ -235,7 +235,7 @@ The browser suites listed in `tests/browser/run_all.ts` share one runner, which 
 | Suite | What it proves |
 |-------|----------------|
 | `dom_test.ts` | every content-script op, with the built content script (content-scripts/content.js under `build/extension/chrome-mv3`) injected into a headless page via CDP |
-| `ext_test.ts` | the service worker boots with `build/extension/chrome-mv3` loaded (puppeteer-core); `BB_EXT_DIR` points at another unpacked extension |
+| `ext_test.ts` | the service worker boots with `build/extension/chrome-mv3` loaded (puppeteer-core); `GENKAN_EXT_DIR` points at another unpacked extension |
 | `security_browser_test.ts` | the browser-side half of the security model, against the same loaded extension |
 | `webauthn_test.ts` | the facts about Chrome's WebAuthn client the host's verifier assumes, with a CDP virtual authenticator standing in for Touch ID |
 | `cancel_test.ts` | a `cancel` frame from a stand-in host is consumed and never answered; not run on Windows |
@@ -257,7 +257,7 @@ The container is the developer's isolated environment, never CI's: a sandbox on 
 | Task | Runs inside the container |
 |------|---------------------------|
 | `moon run ci-container` | `moon run ci` |
-| `moon run test-browser-container` | `xvfb-run -a moon run test-browser` with `BB_REQUIRE_BROWSER=1` and `BB_BROWSER_CANARY_DIR=/work/tmp/browser-canary`, so a skipped or vacuous suite fails as in CI and the RAN markers stay readable on the host |
+| `moon run test-browser-container` | `xvfb-run -a moon run test-browser` with `GENKAN_REQUIRE_BROWSER=1` and `GENKAN_BROWSER_CANARY_DIR=/work/tmp/browser-canary`, so a skipped or vacuous suite fails as in CI and the RAN markers stay readable on the host |
 | `moon run shell-container` | an interactive `bash` at `/work` |
 
 Docker is the default engine; `CONTAINER_ENGINE=podman moon run ci-container` switches. The first run builds the image (minutes, once); the checkout is bind-mounted at `/work`, so a build lands in the gitignored build directory on the host like a native one.
@@ -353,15 +353,15 @@ Deliberately not fuzzed, and why:
 
 Policy: a PR that adds or changes a bespoke parser or semantic validator at a trust boundary in the Rust core must add or extend a fuzz target, or add the exclusion, with its reason, to the list above. The exact rule, with its scoping, lives in [SECURITY.md](../.github/SECURITY.md#security-relevant-changes-review-bar).
 
-Supply-chain scope: the fuzz workspace runs in nightly CI only, is never linked into a shipped binary, and its third-party direct dependencies are limited to `libfuzzer-sys`, `arbitrary`, and `serde_json` (alongside `chromium-bridge-core` itself, the crate under test); `derive_arbitrary` comes in transitively through `arbitrary`'s derive feature. A new fuzz dependency still goes through the `cargo deny` pass over `fuzz/Cargo.toml` in the audits workflow, plus ordinary PR review.
+Supply-chain scope: the fuzz workspace runs in nightly CI only, is never linked into a shipped binary, and its third-party direct dependencies are limited to `libfuzzer-sys`, `arbitrary`, and `serde_json` (alongside `genkan-core` itself, the crate under test); `derive_arbitrary` comes in transitively through `arbitrary`'s derive feature. A new fuzz dependency still goes through the `cargo deny` pass over `fuzz/Cargo.toml` in the audits workflow, plus ordinary PR review.
 
 ## Logging
 
-Both binary modes log to **stderr** (stdout carries the wire protocols). Set the level with `BB_LOG`:
+Both binary modes log to **stderr** (stdout carries the wire protocols). Set the level with `GENKAN_LOG`:
 
 ```sh
-BB_LOG=debug chromium-bridge          # verbose
-BB_LOG=error chromium-bridge          # quiet
+GENKAN_LOG=debug genkan          # verbose
+GENKAN_LOG=error genkan          # quiet
 # default is info
 ```
 

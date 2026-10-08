@@ -5,12 +5,8 @@
 // messages only from the confirmation window itself; that gate is what makes the window's verdict count.
 //   service worker dies mid-request -> the in-flight request is lost, the op fails, nothing dangles
 
-import {
-  type ConfirmKind,
-  type ConfirmPayload,
-  isPresenceGated,
-} from "@chromium-bridge/shared/confirm";
-import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
+import { type ConfirmKind, type ConfirmPayload, isPresenceGated } from "@genkan/shared/confirm";
+import type { RuntimeResponse } from "@genkan/shared/runtime-msg";
 import pLimit from "p-limit";
 import { inLife } from "../../shared/in-life";
 import { auditEvent } from "../audit-log";
@@ -180,7 +176,7 @@ export function confirmWithUser(req: ConfirmRequest): Promise<boolean> {
         // request (the lane advances on its own, settled or rejected). Audit the denial like every other deny path:
         // a shown attempt already emitted its own verdict via settle, so at worst this is a second confirm_denied
         // under the same cid, never a missing trail.
-        console.error("[bb] confirmation step failed; denying", e);
+        console.error("[genkan] confirmation step failed; denying", e);
         auditEvent("confirm_denied", { tool: req.kind, name: req.origin, cid });
         resolve(false);
       });
@@ -213,7 +209,7 @@ async function presentOne(
     deadline: Date.now() + req.timeoutMs,
   });
   if (!present) {
-    console.error("[bb] no provider for this confirmation; denying", req.kind);
+    console.error("[genkan] no provider for this confirmation; denying", req.kind);
     resolve(false);
     return;
   }
@@ -222,7 +218,7 @@ async function presentOne(
   try {
     presentation = present();
   } catch (e) {
-    console.error("[bb] confirmation provider threw; denying", e);
+    console.error("[genkan] confirmation provider threw; denying", e);
     resolve(false);
     return;
   }
@@ -239,7 +235,7 @@ async function presentOne(
       } catch (e) {
         // A provider that cannot tear down must not block the verdict or
         // stall the queue.
-        console.warn("[bb] confirmation dismiss failed", e);
+        console.warn("[genkan] confirmation dismiss failed", e);
       }
       // Log-after-decide: the verdict is already settled; the audit ring and the host's audit file
       // record it, never gate it.
@@ -263,13 +259,13 @@ async function presentOne(
     });
     try {
       presentation.verdict.then(settle, (e: unknown) => {
-        console.error("[bb] confirmation presentation failed; denying", e);
+        console.error("[genkan] confirmation presentation failed; denying", e);
         settle(false);
       });
     } catch (e) {
       // A presentation whose verdict cannot even be observed: deny THROUGH
       // settle, so the timer, the active slot, and the queue all unwind.
-      console.error("[bb] confirmation verdict unobservable; denying", e);
+      console.error("[genkan] confirmation verdict unobservable; denying", e);
       settle(false);
     }
   });

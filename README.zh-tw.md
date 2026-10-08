@@ -1,10 +1,12 @@
-# chromium-bridge
+# Genkan
+
+你的 AI 在玄關等候。
 
 [![CI](https://github.com/Vivswan/chromium-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/Vivswan/chromium-bridge/actions/workflows/ci.yml) [![License](https://img.shields.io/badge/license-Individual%20and%20Small%20Organization%201.1.0-blue)](./LICENSE.md)
 
 [English](./README.md) | [简体中文](./README.zh-cn.md) | 繁體中文
 
-你安裝的程式無法在你不知情的情況下使用你的瀏覽器。在這條標準之下, chromium-bridge 讓任何 MCP 用戶端 (Claude Code、Claude Desktop、Codex, 或任何支援 Model Context Protocol 的程式) 操作你真實的 Chromium 瀏覽器: 你的分頁、你已登入的工作階段、你的 Cookie, 全部透過一個瀏覽器擴充功能與一個原生訊息主機完成。不需要第二個瀏覽器, 不需要 CDP 偵錯連接埠, 也不需要 `--remote-debugging` 旗標。
+你安裝的程式無法在你不知情的情況下使用你的瀏覽器。在這條標準之下, genkan 讓任何 MCP 用戶端 (Claude Code、Claude Desktop、Codex, 或任何支援 Model Context Protocol 的程式) 操作你真實的 Chromium 瀏覽器: 你的分頁、你已登入的工作階段、你的 Cookie, 全部透過一個瀏覽器擴充功能與一個原生訊息主機完成。不需要第二個瀏覽器, 不需要 CDP 偵錯連接埠, 也不需要 `--remote-debugging` 旗標。
 
 因為它操作的是你已經登入的瀏覽器, 代理程式能讀取需要你的身分驗證才能看到的頁面、在你已登入的應用程式裡逐步點擊, 或取出你的框架存放在 `localStorage` 裡的權杖。這份能力同時也是風險, 所以安裝前請先閱讀[安全優先](#安全優先)。這條標準止步之處寫在[安全頁面](./docs/zh-tw/security.md)。
 
@@ -18,7 +20,7 @@
 
 ## 安全優先
 
-chromium-bridge 操作的是一個真實、已通過身分驗證的瀏覽器。它能讀取頁面內容、Cookie (包含 `httpOnly`) 與網頁儲存空間, 也能在你的頁面中執行 JavaScript。護欄如下:
+genkan 操作的是一個真實、已通過身分驗證的瀏覽器。它能讀取頁面內容、Cookie (包含 `httpOnly`) 與網頁儲存空間, 也能在你的頁面中執行 JavaScript。護欄如下:
 
 - **核准每一個網站。** 頁面層級的工具只在你核准過的來源 (origin) 上執行, 新的來源會提示你; 只有分頁標題與 URL 不需核准 ([矩陣](./docs/zh-tw/security/tool-risk-matrix.md#橫切保護措施)、[標準線](./docs/zh-tw/security.md#一句話說清標準線))。
 - **確認高風險動作。** 送出與連結的點擊、按鍵、選取、關閉分頁、檔案上傳, 以及每一次 `page_eval`, 都要在一個頁面看不到也點不到的、由擴充功能持有的視窗上確認; `page_eval` 與 `page_upload` 每次呼叫都重新確認 ([你要確認什麼](./docs/zh-tw/security.md#你要確認什麼-以及什麼算在場))。同一使用者的程式在這個視窗前後仍能做到的事, 寫在[信任邊界帳冊](./docs/zh-tw/security/trust-boundaries.md#邊界-4-擴充功能---網頁-chrome-api--內容指令碼--dom)裡。
@@ -26,8 +28,8 @@ chromium-bridge 操作的是一個真實、已通過身分驗證的瀏覽器。�
 - **閘門預設開啟。** 每一道閘門都是有文件記載的設定, 放寬任何一道都是明確且知情的選擇 ([SECURITY.md](./.github/SECURITY.md#page_eval-and-confirmation-defaults-fail-safe))。
 - **Cookie 與網頁儲存空間唯讀。** `cookie_get` 與 `storage_get` 回傳遮罩後的值, 從不寫入 ([矩陣](./docs/zh-tw/security/tool-risk-matrix.md#橫切保護措施)); 遮罩能攔下什麼、會漏掉什麼, 由 [SECURITY.md](./.github/SECURITY.md#masking-is-heuristic-and-best-effort) 負責。
 - **經過驗證與證明的橋接。** 任何作業系統上都沒有監聽連接埠: macOS 與 Linux 上是一個私有的 Unix domain socket, Windows 上是只有你的使用者能開啟的具名管道。每一條連線都要通過同一使用者檢查、相互的執行檔證明, 以及以每次執行的秘密為基礎的 HMAC 挑戰; 各作業系統的機制見 [SECURITY.md 的平台表](./.github/SECURITY.md#platform-support)。
-- **受信任用戶端允許清單, 在你建立之後生效。** `chromium-bridge pair-client` 建立它; 之後只有程式碼身分經過證明且獲你核准的 MCP 用戶端才會獲得服務, 而且任何介面都能隨時撤銷其中一個 ([cli.md](./docs/zh-tw/cli.md#受信任用戶端-pair-client--revoke-client--list-clients))。
-- **全域緊急開關。** 從 CLI 或擴充功能執行一個動作, 就能停止一切, 直到你以在場證明解除它 (輕觸一次、在該瀏覽器未登記任何認證器時使用確認視窗, 或在終端機輸入指定的語句; [cli.md](./docs/zh-tw/cli.md#緊急開關-kill--unkill))。安全決策會記錄到磁碟上的稽核日誌 ([cli.md](./docs/zh-tw/cli.md#日誌與稽核-bb_log--bb_log_format) 負責事件清單及其兩個例外)。
+- **受信任用戶端允許清單, 在你建立之後生效。** `genkan pair-client` 建立它; 之後只有程式碼身分經過證明且獲你核准的 MCP 用戶端才會獲得服務, 而且任何介面都能隨時撤銷其中一個 ([cli.md](./docs/zh-tw/cli.md#受信任用戶端-pair-client--revoke-client--list-clients))。
+- **全域緊急開關。** 從 CLI 或擴充功能執行一個動作, 就能停止一切, 直到你以在場證明解除它 (輕觸一次、在該瀏覽器未登記任何認證器時使用確認視窗, 或在終端機輸入指定的語句; [cli.md](./docs/zh-tw/cli.md#緊急開關-kill--unkill))。安全決策會記錄到磁碟上的稽核日誌 ([cli.md](./docs/zh-tw/cli.md#日誌與稽核-genkan_log--genkan_log_format) 負責事件清單及其兩個例外)。
 
 完整細節: [SECURITY.md](./.github/SECURITY.md)、[安全頁面](./docs/zh-tw/security.md)、[信任邊界](./docs/zh-tw/security/trust-boundaries.md)、[各工具風險矩陣](./docs/zh-tw/security/tool-risk-matrix.md)。
 
@@ -53,25 +55,25 @@ CLI 除了執行檔本身之外不需要任何東西, 在桌面、無頭機器�
 2. 將執行檔註冊到你的瀏覽器, 除非安裝程式已經做了: `.pkg`、`.msi` 與 Homebrew 會做, `.deb` 也替安裝當時已有的瀏覽器做了 ([快速入門步驟 3](./docs/zh-tw/quickstart.md#cli-macoslinuxwindows))。這個命令是冪等的: 全新安裝、修復, 以及搬移執行檔後的重新註冊:
 
    ```sh
-   chromium-bridge doctor --fix          # every detected browser
-   chromium-bridge doctor --fix --browser chrome,brave
+   genkan doctor --fix          # every detected browser
+   genkan doctor --fix --browser chrome,brave
    ```
 
-   若使用壓縮檔, 請以 `./` 前綴從穩定的路徑執行解壓縮出來的執行檔: 它是就地註冊的, 而 `chromium-bridge uninstall` 會精確還原所註冊的內容。
+   若使用壓縮檔, 請以 `./` 前綴從穩定的路徑執行解壓縮出來的執行檔: 它是就地註冊的, 而 `genkan uninstall` 會精確還原所註冊的內容。
 
 3. 載入擴充功能: 透過 `chrome://extensions`, 開啟開發人員模式, 點「載入未封裝項目」, 選擇壓縮檔中的 `extension/dist` 目錄。重新啟動瀏覽器。擴充功能需要 Chrome 134 或更新版本; 更舊的瀏覽器會拒絕載入它。
 
-4. 配對, 然後登記 (建議): `chromium-bridge pair` 會印出主機金鑰的指紋; 在擴充功能的選項頁面核准它 ([docs/cli.md](./docs/zh-tw/cli.md#登記-pair--revoke--enclave-status))。在同一個頁面登記你瀏覽器的認證器是建議項, 而非必要; [快速入門的強化一節](./docs/zh-tw/quickstart.md#建議的強化)說明它帶來什麼。
+4. 配對, 然後登記 (建議): `genkan pair` 會印出主機金鑰的指紋; 在擴充功能的選項頁面核准它 ([docs/cli.md](./docs/zh-tw/cli.md#登記-pair--revoke--enclave-status))。在同一個頁面登記你瀏覽器的認證器是建議項, 而非必要; [快速入門的強化一節](./docs/zh-tw/quickstart.md#建議的強化)說明它帶來什麼。
 
 5. 將你的 MCP 用戶端連接到執行檔的絕對路徑。不帶參數執行時, 執行檔透過 stdio 使用 MCP 通訊。
 
    ```sh
-   claude mcp add chromium-bridge -- /absolute/path/to/chromium-bridge
+   claude mcp add genkan -- /absolute/path/to/genkan
    ```
 
-   Claude Desktop 與其他使用 `mcpServers` JSON 的用戶端接受 `"command": "/ABSOLUTE/PATH/TO/chromium-bridge"` 搭配 `"args": []`; Codex 則在 `~/.codex/config.toml` 的 `[mcp_servers.chromium-bridge]` 之下接受同樣的兩個鍵。
+   Claude Desktop 與其他使用 `mcpServers` JSON 的用戶端接受 `"command": "/ABSOLUTE/PATH/TO/genkan"` 搭配 `"args": []`; Codex 則在 `~/.codex/config.toml` 的 `[mcp_servers.genkan]` 之下接受同樣的兩個鍵。
 
-改為從原始碼建置: `cargo build --release`, 然後從 `target/release/chromium-bridge` 執行同樣的 `doctor --fix` ([docs/development.md](./docs/zh-tw/development.md))。在 WSL 上, 請安裝在瀏覽器執行的那一側 ([在 WSL 下執行](./docs/zh-tw/troubleshooting.md#在-wsl-下執行))。
+改為從原始碼建置: `cargo build --release`, 然後從 `target/release/genkan` 執行同樣的 `doctor --fix` ([docs/development.md](./docs/zh-tw/development.md))。在 WSL 上, 請安裝在瀏覽器執行的那一側 ([在 WSL 下執行](./docs/zh-tw/troubleshooting.md#在-wsl-下執行))。
 
 ## 你能做什麼: 26 個工具
 
@@ -96,18 +98,18 @@ Cookie 與網頁儲存空間刻意設計為唯讀: 沒有 `cookie_set` 或 `stor
 一個 Rust 執行檔, 兩種模式, 由一條經過驗證的本機 socket 連接; CLI 負責管理狀態。
 
 ```text
-MCP client A --stdio--> chromium-bridge (broker: first MCP server instance)
-MCP client B --stdio--> chromium-bridge ----attach----^   |
+MCP client A --stdio--> genkan (broker: first MCP server instance)
+MCP client B --stdio--> genkan ----attach----^   |
 (each client attested against the trusted-client         | bridge socket
  allowlist before it is served)                          | (Unix-domain socket,
                                                           | or a user-only named pipe
                                                           | on Windows; attestation + HMAC)
                                                           v
-                             chromium-bridge --native-host   <-- spawned by
+                             genkan --native-host   <-- spawned by
                                        |                         each browser
                                        | chrome.runtime.connectNative
                                        v
-                             Chromium Bridge extension (MV3) --> your page
+                             Genkan extension (MV3) --> your page
 ```
 
 - **MCP 伺服器 (預設模式):** 由你的 MCP 用戶端透過 stdio 啟動; JSON-RPC 2.0, MCP 協定 `2026-07-28`, 無狀態, 並為較舊的用戶端程式 (harness) 保留暫時的舊版相容性 ([architecture.md 3.2](./docs/zh-tw/architecture.md#32-mcp-json-rpc-mcp-伺服器---mcp-用戶端))。第一個實例擁有 socket 並成為中介 (broker); 之後的實例以中繼身分附接 ([5.3](./docs/zh-tw/architecture.md#53-第二個-mcp-用戶端接入))。
@@ -122,10 +124,10 @@ MCP client B --stdio--> chromium-bridge ----attach----^   |
 
 | 變數 | 值 | 預設 | 效果 |
 |-----|--------|---------|--------|
-| `BB_LOG` | `error` \| `warn` \| `info` \| `debug` | `info` | stderr 日誌 / 稽核門檻 |
-| `BB_LOG_FORMAT` | `text` \| `json` | `text` | 稽核行格式; `json` 每行輸出一個物件 |
+| `GENKAN_LOG` | `error` \| `warn` \| `info` \| `debug` | `info` | stderr 日誌 / 稽核門檻 |
+| `GENKAN_LOG_FORMAT` | `text` \| `json` | `text` | 稽核行格式; `json` 每行輸出一個物件 |
 
-持久的稽核日誌 (`chromium-bridge audit`) 獨立於這些變數記錄 ([docs/cli.md](./docs/zh-tw/cli.md#日誌與稽核-bb_log--bb_log_format))。
+持久的稽核日誌 (`genkan audit`) 獨立於這些變數記錄 ([docs/cli.md](./docs/zh-tw/cli.md#日誌與稽核-genkan_log--genkan_log_format))。
 
 ## 文件
 
@@ -136,7 +138,7 @@ MCP client B --stdio--> chromium-bridge ----attach----^   |
 | 安裝並連接用戶端 | [快速入門](https://vivswan.github.io/chromium-bridge/docs/zh-tw/quickstart) |
 | 了解某個工具可能做什麼 | [工具風險矩陣](https://vivswan.github.io/chromium-bridge/docs/zh-tw/security/tool-risk-matrix) |
 | 執行 CLI: doctor、配對、受信任用戶端、緊急開關、策略、稽核 | [CLI](https://vivswan.github.io/chromium-bridge/docs/zh-tw/cli) |
-| 修復某個症狀 | 先執行 `chromium-bridge doctor`, 再看[疑難排解](https://vivswan.github.io/chromium-bridge/docs/zh-tw/troubleshooting); 若兩者都沒有問題, 則檢查你的 MCP 用戶端的伺服器介面 (Claude Code 中的 `/mcp`) 與擴充功能在 `chrome://extensions` 的 Service Worker 主控台 (`[bb]` 日誌) |
+| 修復某個症狀 | 先執行 `genkan doctor`, 再看[疑難排解](https://vivswan.github.io/chromium-bridge/docs/zh-tw/troubleshooting); 若兩者都沒有問題, 則檢查你的 MCP 用戶端的伺服器介面 (Claude Code 中的 `/mcp`) 與擴充功能在 `chrome://extensions` 的 Service Worker 主控台 (`[genkan]` 日誌) |
 | 知道什麼受信任, 什麼不受信任 | [安全](https://vivswan.github.io/chromium-bridge/docs/zh-tw/security)、[信任邊界](https://vivswan.github.io/chromium-bridge/docs/zh-tw/security/trust-boundaries)、[設計依據](https://vivswan.github.io/chromium-bridge/docs/zh-tw/security/rationale) |
 | 看各部分如何組合 | [架構](https://vivswan.github.io/chromium-bridge/docs/zh-tw/architecture) |
 | 建置、測試或發行 | [開發](https://vivswan.github.io/chromium-bridge/docs/zh-tw/development)、[發行](https://vivswan.github.io/chromium-bridge/docs/zh-tw/release) |

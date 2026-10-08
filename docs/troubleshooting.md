@@ -3,7 +3,7 @@
 Every entry starts from the read-only self-check, which changes nothing:
 
 ```sh
-chromium-bridge doctor    # or: chromium-bridge status
+genkan doctor    # or: genkan status
 ```
 
 What each `doctor` row means is on the [CLI page](cli.md#doctor--status-read-only-self-check).
@@ -18,7 +18,7 @@ What each `doctor` row means is on the [CLI page](cli.md#doctor--status-read-onl
 
 - **You see:** a browser's registration row reads `missing` or `stale`.
 - **It means:** that browser cannot spawn the native host: nothing is registered for it, or what is registered is broken, and the row says which (a dangling launch path, or on Windows a missing registry key).
-- **Do:** run `chromium-bridge doctor --fix`, then restart the browser ([registration on the CLI page](cli.md#doctor---fix--uninstall-native-messaging-registration)).
+- **Do:** run `genkan doctor --fix`, then restart the browser ([registration on the CLI page](cli.md#doctor---fix--uninstall-native-messaging-registration)).
 
 ## Doctor says the kill state or the trust record is unreadable
 
@@ -26,16 +26,16 @@ What each `doctor` row means is on the [CLI page](cli.md#doctor--status-read-onl
 - **It means:** `trust.json` in the runtime directory (the kill latch and the trusted-client allowlist) cannot be read: corrupt JSON, unknown fields, or bad permissions. Every enforcement point reads it fail-closed, so tool calls are refused with `BRIDGE_KILLED`, browser connections are severed, and fresh instances refuse to start.
 - **Do:** recover by hand, in the order below. Releasing from a state you cannot read would fail open, and rebuilding the file silently would mask tampering, so nothing does either for you.
 
-1. Run `chromium-bridge doctor` to confirm the state and find the runtime directory.
+1. Run `genkan doctor` to confirm the state and find the runtime directory.
 2. Look at `trust.json` before touching it. A corruption you cannot explain (no crash mid-write, no disk incident) is a possible tampering indicator: read [incident response](security/incident-response.md) first.
 3. Delete `trust.json`. That is a factory reset of harness trust, back to the loudly logged unenrolled bootstrap; the paired clients go with it.
-4. Re-pair each trusted client (`chromium-bridge pair-client`) and re-engage the kill switch if you had it on. The extension's enrollment pin is unaffected: the host key never lived in this record.
+4. Re-pair each trusted client (`genkan pair-client`) and re-engage the kill switch if you had it on. The extension's enrollment pin is unaffected: the host key never lived in this record.
 
 ## Doctor reports `policy baseline: none yet`
 
 - **You see:** the `policy baseline:` row reads `none yet`.
 - **It means:** the healthy pre-cutover state. No signed baseline has been written, so the extension enforces the deny baseline: every capability grant off, every confirmation on. The row never flips `doctor`'s exit code.
-- **Do:** nothing, unless you want grants: `chromium-bridge policy set` or the options page's Security policy section writes the first baseline ([policy on the CLI page](cli.md#host-owned-policy-policy)). A present store reports its revision, `signed` or `unsigned`, and whether an unsigned restriction overlay is active; the host reports signed-ness and never claims "valid", since only the extension can verify the signature against its own pinned key.
+- **Do:** nothing, unless you want grants: `genkan policy set` or the options page's Security policy section writes the first baseline ([policy on the CLI page](cli.md#host-owned-policy-policy)). A present store reports its revision, `signed` or `unsigned`, and whether an unsigned restriction overlay is active; the host reports signed-ness and never claims "valid", since only the extension can verify the signature against its own pinned key.
 
 ## Doctor reports `policy baseline: UNREADABLE`
 
@@ -67,39 +67,39 @@ Chrome, the native host it launches, and the MCP server must all belong to the s
 
 The usual setup: the MCP client runs in WSL and the everyday browser is Windows Chrome. No Linux install and no Chrome in WSL.
 
-1. On Windows, extract the Windows release archive (or build from source), run `chromium-bridge.exe doctor --fix` there, and load the archive's `extension/dist` into Windows Chrome.
+1. On Windows, extract the Windows release archive (or build from source), run `genkan.exe doctor --fix` there, and load the archive's `extension/dist` into Windows Chrome.
 2. In the WSL MCP configuration, run the Windows `.exe` directly. WSL interop launches it as a Windows process, so it shares the registry, the `%LOCALAPPDATA%` lock file, and the native-messaging host with Windows Chrome.
 
 For Codex, in `~/.codex/config.toml`:
 
 ```toml
-[mcp_servers.chromium-bridge]
-command = "/mnt/c/Users/YOUR_WINDOWS_USER/AppData/Local/chromium-bridge/chromium-bridge.exe"
+[mcp_servers.genkan]
+command = "/mnt/c/Users/YOUR_WINDOWS_USER/AppData/Local/genkan/genkan.exe"
 args = []
 ```
 
-Replace `YOUR_WINDOWS_USER` and confirm the path exists; the example assumes the binary lives in `%LOCALAPPDATA%\chromium-bridge`.
+Replace `YOUR_WINDOWS_USER` and confirm the path exists; the example assumes the binary lives in `%LOCALAPPDATA%\genkan`.
 
 ### WSLg with Linux Chrome or Chromium
 
-When the browser itself runs inside WSLg, install natively in Linux: put the Linux `chromium-bridge` binary at a stable path in the WSL filesystem and register it.
+When the browser itself runs inside WSLg, install natively in Linux: put the Linux `genkan` binary at a stable path in the WSL filesystem and register it.
 
 ```sh
-./chromium-bridge doctor --fix                    # every detected browser
-./chromium-bridge doctor --fix --browser chrome   # Google Chrome only
-./chromium-bridge doctor --fix --browser chromium # Chromium only
+./genkan doctor --fix                    # every detected browser
+./genkan doctor --fix --browser chrome   # Google Chrome only
+./genkan doctor --fix --browser chromium # Chromium only
 ```
 
 | What | Where |
 | --- | --- |
-| manifests | `~/.config/google-chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json`, `~/.config/chromium/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json` |
-| lock file | `$XDG_RUNTIME_DIR/chromium-bridge/run.lock`; without `XDG_RUNTIME_DIR`, `$XDG_CACHE_HOME/chromium-bridge/run.lock` or `~/.cache/chromium-bridge/run.lock` |
+| manifests | `~/.config/google-chrome/NativeMessagingHosts/com.vivswan.genkan.host.json`, `~/.config/chromium/NativeMessagingHosts/com.vivswan.genkan.host.json` |
+| lock file | `$XDG_RUNTIME_DIR/genkan/run.lock`; without `XDG_RUNTIME_DIR`, `$XDG_CACHE_HOME/genkan/run.lock` or `~/.cache/genkan/run.lock` |
 
 Load the release archive's `extension/dist` (or a built `build/extension/chrome-mv3`) at `chrome://extensions` in the Linux browser, then point the MCP client at the Linux binary (Codex again, in `~/.codex/config.toml`):
 
 ```toml
-[mcp_servers.chromium-bridge]
-command = "/home/YOUR_WSL_USER/.local/lib/chromium-bridge/chromium-bridge"
+[mcp_servers.genkan]
+command = "/home/YOUR_WSL_USER/.local/lib/genkan/genkan"
 args = []
 ```
 
@@ -109,7 +109,7 @@ args = []
 - **Linux Chrome in WSLg** does not read the Windows registry and cannot use Windows Chrome's registration.
 - **Launching a Windows `.exe` from WSL is not mixing:** that process is still a Windows process, which is why the first mode works.
 
-When a connection fails under WSL, confirm Chrome, the native host, and the MCP server all land on the same side, then check the lock file: `%LOCALAPPDATA%\chromium-bridge\run.lock` on Windows, the XDG path above on Linux.
+When a connection fails under WSL, confirm Chrome, the native host, and the MCP server all land on the same side, then check the lock file: `%LOCALAPPDATA%\genkan\run.lock` on Windows, the XDG path above on Linux.
 
 ## A lock file is left behind after a crash
 

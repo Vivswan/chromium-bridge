@@ -220,7 +220,7 @@ pub fn pair_client_with_presence(
 ) -> Result<presence::PresencePath, PairClientError> {
     use crate::audit::{self, AuditKind, AuditRecord};
     let reason = format!(
-        "Pair '{name}' as a trusted client of chromium-bridge? A trusted \
+        "Pair '{name}' as a trusted client of genkan? A trusted \
          client can drive your browser through this bridge."
     );
     let auth = match attest(&reason) {

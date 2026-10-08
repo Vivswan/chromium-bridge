@@ -182,11 +182,11 @@ const HOST_MINTED: Asymmetry = {
 const DOCTOR_REPORT_PROBE = {
   version: "1.2.3",
   platform: "linux/x86_64",
-  lock_file: { value: "/run/user/1000/chromium-bridge/run.lock", details: ["present: no"] },
+  lock_file: { value: "/run/user/1000/genkan/run.lock", details: ["present: no"] },
   mcp_server: { value: "not probed (no lock file)", details: [] },
   kill_switch: { value: "off (bridge activity permitted)", details: [] },
   policy_baseline: { value: "revision 3, unsigned", details: [] },
-  host_key: "none (run `chromium-bridge pair`)",
+  host_key: "none (run `genkan pair`)",
   summary: "server not running - is your MCP client started?",
   healthy: false,
 };

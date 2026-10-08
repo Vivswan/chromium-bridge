@@ -16,8 +16,8 @@ yanked = "deny"
 
 [licenses]
 version = 2
-# Both our crates here are publish = false (chromium-bridge-fuzz directly,
-# chromium-bridge-core via root workspace inheritance) and source-available
+# Both our crates here are publish = false (genkan-fuzz directly,
+# genkan-core via root workspace inheritance) and source-available
 # (LICENSE.md, no SPDX id); skip them - this gate is about dependency licenses.
 private = { ignore = true }
 

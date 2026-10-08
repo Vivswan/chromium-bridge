@@ -69,12 +69,12 @@ impl PresencePath {
 ///
 /// ```compile_fail
 /// fn takes_copy<T: Copy>() {}
-/// takes_copy::<chromium_bridge_core::presence::PresenceAttestation>();
+/// takes_copy::<genkan_core::presence::PresenceAttestation>();
 /// ```
 ///
 /// ```compile_fail
 /// fn takes_clone<T: Clone>() {}
-/// takes_clone::<chromium_bridge_core::presence::PresenceAttestation>();
+/// takes_clone::<genkan_core::presence::PresenceAttestation>();
 /// ```
 #[derive(Debug)]
 pub struct PresenceAttestation {
@@ -175,7 +175,7 @@ impl fmt::Display for PresenceError {
 
 /// Proof that stdin was a real terminal when the CLI path was selected: the anti-tap-phishing precondition
 /// made structural. The private field keeps [`require`](TerminalStdin::require) the only constructor, and
-/// [`tty_confirm`] demands the witness, so `echo release | chromium-bridge unkill` is refused before any
+/// [`tty_confirm`] demands the witness, so `echo release | genkan unkill` is refused before any
 /// prompt can run at all.
 ///
 /// ```text

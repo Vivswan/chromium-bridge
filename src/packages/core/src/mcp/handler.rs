@@ -1,4 +1,4 @@
-//! The rmcp [`ServerHandler`]: chromium-bridge's tool surface on the SDK's
+//! The rmcp [`ServerHandler`]: genkan's tool surface on the SDK's
 //! protocol engine.
 //!
 //! rmcp owns the protocol semantics (lifecycle, version gate, `-32022`,
@@ -27,7 +27,7 @@ use crate::tools::{self, Tool, ToolCall};
 /// `server/discover` result's `_meta` (discover-only: other results carry no
 /// identity, a known gap against the spec's SHOULD).
 fn implementation() -> Implementation {
-    Implementation::new("chromium-bridge", env!("CARGO_PKG_VERSION"))
+    Implementation::new("genkan", env!("CARGO_PKG_VERSION"))
 }
 
 /// The catalogue in rmcp's tool model, in [`tools::all`]'s static order
@@ -80,7 +80,7 @@ fn call_tool_result(out: &tools::Outcome) -> CallToolResult {
     }
 }
 
-/// chromium-bridge as an rmcp server. One instance per harness connection
+/// genkan as an rmcp server. One instance per harness connection
 /// (cheap: [`Session`] is all-`Arc`, the catalogue is shared), created by
 /// [`super::connection::Connection::open`].
 #[derive(Clone)]

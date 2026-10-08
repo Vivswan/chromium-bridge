@@ -3,7 +3,7 @@
 // popup window; the isolated-browser suite proves the guarded page cannot
 // reach it.
 
-import { type ConfirmPayload, isPresenceGated } from "@chromium-bridge/shared/confirm";
+import { type ConfirmPayload, isPresenceGated } from "@genkan/shared/confirm";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { readRing } from "@/lib/background/audit-log";
 import { currentPanicEpoch } from "@/lib/background/brake";

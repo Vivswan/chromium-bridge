@@ -40,7 +40,7 @@ import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BIN = os.path.join(REPO, "target", "release",
-                   "chromium-bridge" + (".exe" if os.name == "nt" else ""))
+                   "genkan" + (".exe" if os.name == "nt" else ""))
 
 # Set by isolate(); every spawner re-checks them through require_isolated().
 RUNDIR = None
@@ -58,7 +58,7 @@ UNRECORDED_DIR_FRESH_SECS = 60
 def within(child, parent):
     """True when `child` resolves inside `parent`. realpath + commonpath, so a
     symlinked temp root (/var -> /private/var on macOS) and a lexical cousin
-    (/tmp/bb vs /tmp/bb-evil) are both handled."""
+    (/tmp/genkan vs /tmp/genkan-evil) are both handled."""
     try:
         p = os.path.realpath(parent)
         return os.path.commonpath([os.path.realpath(child), p]) == p
@@ -68,7 +68,7 @@ def within(child, parent):
 
 def lock_path(rundir):
     # Mirrors LockFile::path() in src/packages/core/src/ipc/lockfile.rs.
-    return os.path.join(rundir, "chromium-bridge", "run.lock")
+    return os.path.join(rundir, "genkan", "run.lock")
 
 
 def runtime_dir_var(platform=os.name):
@@ -393,7 +393,7 @@ META_SERVER_INFO_KEY = "io.modelcontextprotocol/serverInfo"
 SUPPORTED_VERSIONS = ["2024-11-05", "2025-03-26", "2025-06-18",
                       "2025-11-25", "2026-07-28"]
 CACHE_FIELDS = {"ttlMs": 3600000, "cacheScope": "private"}
-SERVER_INFO = {"name": "chromium-bridge", "version": "<semver>"}
+SERVER_INFO = {"name": "genkan", "version": "<semver>"}
 # The whole server/discover result, after normalized().
 DISCOVER_RESULT = {
     "resultType": "complete",
@@ -427,7 +427,7 @@ def normalized(obj):
     fails on a malformed version."""
     if isinstance(obj, dict):
         out = {k: normalized(v) for k, v in obj.items()}
-        if out.get("name") == "chromium-bridge" and SEMVER.match(str(out.get("version", ""))):
+        if out.get("name") == "genkan" and SEMVER.match(str(out.get("version", ""))):
             out["version"] = "<semver>"
         return out
     if isinstance(obj, list):
@@ -475,7 +475,7 @@ def unsupported_version(_id, requested):
 
 # The error displays the server renders as `Error [CODE]: <display>` text.
 BRIDGE_KILLED = ("the bridge kill switch is engaged - all bridge activity is refused until it is "
-                 "explicitly released (`chromium-bridge unkill`)")
+                 "explicitly released (`genkan unkill`)")
 CONNECTION_LOST = "extension connection lost while waiting for response"
 
 
@@ -639,7 +639,7 @@ HOST_READY = b"bridge handshake complete"
 
 
 def start_bridge_host(label=None, env=None, bin_path=None):
-    """Spawn `chromium-bridge --native-host` the way Chrome does: binary stdio
+    """Spawn `genkan --native-host` the way Chrome does: binary stdio
     (frames are raw bytes). It dials the server's socket and passes attestation
     because it is the same binary; this side plays the extension. `label` is
     the per-browser identity (`--label`); None lands in the "default" slot.
@@ -932,7 +932,7 @@ def pipe_endpoint(pid):
     pid. The harness sets LOCALAPPDATA itself, so the binary's runtime dir is
     dirname(LOCK) byte for byte and the name is pinned exactly."""
     leaf = hashlib.sha256(os.path.dirname(LOCK).encode()).hexdigest()[:32]
-    return rf"\\.\pipe\chromium-bridge-{leaf}-{pid}"
+    return rf"\\.\pipe\genkan-{leaf}-{pid}"
 
 
 def placeholders(obj, **volatile):
@@ -1064,7 +1064,7 @@ def capture_tools_list():
     """Re-pin tools_list.json from the binary's own tools/list reply (run
     `moon run fmt-ts` afterwards; the suite's catalogue test then pins it)."""
     ensure_binary()
-    isolate("bb-capture-")
+    isolate("genkan-capture-")
     try:
         remove_lock()
         srv = start_server()

@@ -46,18 +46,18 @@ import {
   type PresenceRequestFrame,
   PresenceRequestFrameSchema,
   PresenceResultFrameSchema,
-} from "@chromium-bridge/shared/generated/envelope";
+} from "@genkan/shared/generated/envelope";
 import {
   WEBAUTHN_ENROLLMENT_KEY,
   type WebAuthnEnrollment,
   WebAuthnEnrollmentSchema,
-} from "@chromium-bridge/shared/runtime-msg";
+} from "@genkan/shared/runtime-msg";
 import {
   type PresenceAnswer,
   type RegistrationResponse,
   type WebAuthnInboundFrame,
   WebAuthnInboundFrameSchema,
-} from "@chromium-bridge/shared/webauthn";
+} from "@genkan/shared/webauthn";
 import { browser } from "wxt/browser";
 import type { z } from "zod";
 import type { PortCollaborator } from "../background/connection";
@@ -199,7 +199,7 @@ function consumeOwed(tag: string, msg: object): boolean {
   owed.value.shift();
   const next = head.leaves?.(tag, ok);
   if (next) owed.value.unshift(next);
-  console.warn(`[bb] dropping the late ${tag} of a request given up on`);
+  console.warn(`[genkan] dropping the late ${tag} of a request given up on`);
   return true;
 }
 /** The refusal handler of a request whose timeout leaves `reply` owed. */
@@ -270,7 +270,7 @@ export async function finishEnrollment(response: RegistrationResponse): Promise<
   if (view.ok) {
     const note: WebAuthnEnrollment = { credentialId: view.credentialId, enrolledAt: Date.now() };
     await browser.storage.local.set({ [WEBAUTHN_ENROLLMENT_KEY]: note }).catch((e: unknown) => {
-      console.warn("[bb] could not note the enrolled credential", e);
+      console.warn("[genkan] could not note the enrolled credential", e);
     });
   }
   return view;
@@ -309,7 +309,7 @@ export async function forgetBrowser(): Promise<ForgetView> {
   if (view.ok) pendingRequest.value = null;
   if (view.ok || view.error === ("not_enrolled" satisfies BrowserRevokeResultFrame["reason"])) {
     await browser.storage.local.remove(WEBAUTHN_ENROLLMENT_KEY).catch((e: unknown) => {
-      console.warn("[bb] could not clear the enrollment note", e);
+      console.warn("[genkan] could not clear the enrollment note", e);
     });
   }
   return view;
@@ -477,7 +477,7 @@ export function abandonPresence(nonce: string): void {
  * moved on; a page op's confirmation waiting on the older one learns it ended without an approval. */
 function hold(next: PendingRequest): void {
   if (pendingRequest.value)
-    console.warn("[bb] a newer presence request replaces the unanswered one");
+    console.warn("[genkan] a newer presence request replaces the unanswered one");
   dropPending();
   pendingRequest.value = next;
 }
@@ -578,17 +578,17 @@ export function handleWebAuthnFrame(msg: WebAuthnInboundFrame): void {
   if (consumeOwed(msg.type, msg)) return;
   if (ceremony.answer(msg)) return;
   if (msg.type !== "presence_request") {
-    console.warn(`[bb] dropping unsolicited ${msg.type}`);
+    console.warn(`[genkan] dropping unsolicited ${msg.type}`);
     return;
   }
   const parsed = PresenceRequestFrameSchema.safeParse(msg);
   if (!parsed.success) {
-    console.warn("[bb] dropping malformed presence_request");
+    console.warn("[genkan] dropping malformed presence_request");
     return;
   }
   hold({ frame: parsed.data, asked: "nobody" });
   void browser.runtime.openOptionsPage().catch((e: unknown) => {
-    console.warn("[bb] could not open the options page for the presence request", e);
+    console.warn("[genkan] could not open the options page for the presence request", e);
   });
 }
 

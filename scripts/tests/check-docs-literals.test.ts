@@ -13,8 +13,8 @@ import {
   type Violation,
 } from "../check-docs-literals";
 
-const HOST_ID = "com.vivswan.chromium_bridge.host";
-const KEY_LABEL = "com.vivswan.chromium-bridge.enclave.signing.v1";
+const HOST_ID = "com.vivswan.genkan.host";
+const KEY_LABEL = "com.vivswan.genkan.enclave.signing.v1";
 const idFamily = /com\.vivswan\.[a-z0-9_](?:[a-z0-9._-]*[a-z0-9_])?/g;
 const ids = new Set([HOST_ID, `${HOST_ID}.json`, KEY_LABEL]);
 const BUNDLE = "release attestation bundle";
@@ -35,7 +35,7 @@ describe("familyViolations", () => {
     [
       "the stale release-level bundle name is flagged; per-asset bundles are not",
       [
-        "ships `chromium-bridge-v1-macos-arm64.attestation.jsonl` and `<asset>.attestation.jsonl` bundles",
+        "ships `genkan-v1-macos-arm64.attestation.jsonl` and `<asset>.attestation.jsonl` bundles",
         "verify with `--bundle attestation.json`, then read attestation.json.",
         "the release-level `attestation.jsonl` (one JSONL line per asset)",
       ].join("\n"),
@@ -121,7 +121,7 @@ describe("familyViolations", () => {
     ],
     [
       "a stale keychain label version is flagged",
-      "label `com.vivswan.chromium-bridge.enclave.signing.v2`",
+      "label `com.vivswan.genkan.enclave.signing.v2`",
       "bridge identifier",
       idFamily,
       ids,
@@ -129,7 +129,7 @@ describe("familyViolations", () => {
         {
           doc: "d.md",
           line: 1,
-          message: `stale bridge identifier "com.vivswan.chromium-bridge.enclave.signing.v2" (canonical: ${[...ids].join(", ")})`,
+          message: `stale bridge identifier "com.vivswan.genkan.enclave.signing.v2" (canonical: ${[...ids].join(", ")})`,
         },
       ],
     ],
@@ -142,16 +142,17 @@ describe("familyViolations", () => {
       [{ doc: "d.md", line: 1, message: 'stale lock "run.lock" (canonical: run.v2.lock)' }],
     ],
     [
-      "a stale BB_ env var name is flagged",
-      "set BB_LOG_LEVEL=debug",
-      "BB_LOG env var",
-      /\bBB_LOG[A-Z_]*/g,
-      new Set(["BB_LOG", "BB_LOG_FORMAT"]),
+      "a stale GENKAN_ env var name is flagged",
+      "set GENKAN_LOG_LEVEL=debug",
+      "GENKAN_LOG env var",
+      /\bGENKAN_LOG[A-Z_]*/g,
+      new Set(["GENKAN_LOG", "GENKAN_LOG_FORMAT"]),
       [
         {
           doc: "d.md",
           line: 1,
-          message: 'stale BB_LOG env var "BB_LOG_LEVEL" (canonical: BB_LOG, BB_LOG_FORMAT)',
+          message:
+            'stale GENKAN_LOG env var "GENKAN_LOG_LEVEL" (canonical: GENKAN_LOG, GENKAN_LOG_FORMAT)',
         },
       ],
     ],
@@ -266,23 +267,29 @@ test("a doc missing the canonical value is flagged; one naming it is not", () =>
 // code accepts and the table lacks is flagged by name, and a doc that stops mentioning the variable at all
 // fails rather than passing with nothing to compare.
 describe("envTableViolations", () => {
-  const table = "| `BB_LOG` | `error` \\| `warn` \\| `info` \\| `debug` | ... |";
+  const table = "| `GENKAN_LOG` | `error` \\| `warn` \\| `info` \\| `debug` | ... |";
   test.each<[name: string, text: string, values: string[], violations: Violation[]]>([
     ["a table listing every accepted value passes", table, ["error", "warn", "info", "debug"], []],
     [
       "a table lagging a new accepted value is flagged",
       table,
       ["error", "warn", "info", "trace"],
-      [{ doc: "d.md", line: 0, message: 'documents BB_LOG but not its accepted value "trace"' }],
+      [
+        {
+          doc: "d.md",
+          line: 0,
+          message: 'documents GENKAN_LOG but not its accepted value "trace"',
+        },
+      ],
     ],
     [
       "a doc that stops mentioning the env var at all is flagged",
       "nothing",
       ["debug"],
-      [{ doc: "d.md", line: 0, message: "must document the BB_LOG env var" }],
+      [{ doc: "d.md", line: 0, message: "must document the GENKAN_LOG env var" }],
     ],
   ])("%s", (_name, text, values, violations) => {
-    expect(envTableViolations("d.md", text, "BB_LOG", values)).toEqual(violations);
+    expect(envTableViolations("d.md", text, "GENKAN_LOG", values)).toEqual(violations);
   });
 });
 

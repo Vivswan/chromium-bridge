@@ -16,7 +16,7 @@
  * session, so it refuses unless CHROME_BIN is an isolated Chrome for Testing / Chromium (tests/README.md).
  *
  * Run:  CHROME_BIN=/path/to/chrome-for-testing bun tests/browser/security_browser_test.ts
- * BB_EXT_DIR overrides the loaded extension dir.
+ * GENKAN_EXT_DIR overrides the loaded extension dir.
  */
 
 import * as fs from "node:fs";
@@ -26,7 +26,7 @@ import puppeteer, { type Browser, type Target } from "puppeteer-core";
 import { assertIsolatedBrowserOrSkip, extensionDir, finishSuite } from "./browser-safety";
 
 const REPO = path.resolve(import.meta.dir, "../..");
-// BB_EXT_DIR overrides; the env var name and default path live in
+// GENKAN_EXT_DIR overrides; the env var name and default path live in
 // browser-safety.ts, shared by every suite.
 const EXTENSION_DIR = extensionDir();
 const HELPER_DIR = path.join(REPO, "tests", "fixtures", "access-level-probe");
@@ -102,7 +102,7 @@ async function findSwBy(browser: Browser, match: (w: Worker) => Promise<boolean>
 
 let lastUserDataDir = "";
 function launch(extDirs: string[]): Promise<Browser> {
-  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "bb-sec-"));
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "genkan-sec-"));
   lastUserDataDir = userDataDir;
   return puppeteer.launch({
     executablePath: CHROME,
@@ -144,7 +144,7 @@ async function main(): Promise<void> {
   const server = Bun.serve({
     port: 0,
     fetch: () =>
-      new Response("<!doctype html><title>bb-fixture</title><body>ok", {
+      new Response("<!doctype html><title>genkan-fixture</title><body>ok", {
         headers: { "content-type": "text/html" },
       }),
   });

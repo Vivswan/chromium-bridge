@@ -1,5 +1,5 @@
 {
-  "name": "@chromium-bridge/scripts",
+  "name": "@genkan/scripts",
   "version": "0.0.0",
   "private": true,
   "description": "Repo tooling scripts (contract codegen, version/extension-id checks), run via bun.",

@@ -149,7 +149,7 @@ const FRAMES: Readonly<Record<string, FrameArms>> = {
         { entry: "unrecognized", text: "UNRECOGNIZED RECORD (corrupt, tampered, or newer schema)" },
       ],
       older: 1,
-      path: "/run/user/1000/chromium-bridge/audit.log",
+      path: "/run/user/1000/genkan/audit.log",
     },
     { type: "audit_read_result", ok: false, error: "cannot read audit.log: permission denied" },
   ],

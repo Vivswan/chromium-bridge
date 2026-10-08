@@ -3,8 +3,8 @@
 // lane, and the host audit trail, the fail-closed deadline, and the unsolicited-frame drops. The host side (the
 // resolver read, the fix, the restriction seam, the trail reader) is covered by the Rust unit tests.
 
-import type { AuditTrailEntry, RegistrationRow } from "@chromium-bridge/shared/generated/envelope";
-import { POLICY_DEFAULTS } from "@chromium-bridge/shared/generated/policy";
+import type { AuditTrailEntry, RegistrationRow } from "@genkan/shared/generated/envelope";
+import { POLICY_DEFAULTS } from "@genkan/shared/generated/policy";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   collaborator,
@@ -75,7 +75,7 @@ const trailResult = {
   ok: true,
   entries: TRAIL,
   older: 1,
-  path: "/run/user/1000/chromium-bridge/audit.log",
+  path: "/run/user/1000/genkan/audit.log",
 };
 
 /** Narrow a discriminated view to its failure arm (throws if it succeeded). */
@@ -157,7 +157,7 @@ describe("host audit trail", () => {
         ok: true,
         entries: TRAIL,
         older: 1,
-        path: "/run/user/1000/chromium-bridge/audit.log",
+        path: "/run/user/1000/genkan/audit.log",
       });
     },
   );

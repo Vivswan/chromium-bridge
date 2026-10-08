@@ -22,7 +22,7 @@ mod real {
 
     /// `keyring` keys an entry on a service and a user; the project is the service, the versioned name plus
     /// the runtime directory's digest the user.
-    const SERVICE: &str = "chromium-bridge";
+    const SERVICE: &str = "genkan";
 
     pub(super) fn entry() -> Result<keyring::Entry, EnclaveError> {
         let dir = crate::ipc::RuntimeDir::resolve()

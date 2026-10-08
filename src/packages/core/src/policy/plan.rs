@@ -276,7 +276,7 @@ pub fn rollback_inputs(
         },
         Ok(None) => {
             return Err("there is no current policy baseline to roll back from; \
-                 sign one first with `chromium-bridge policy set`."
+                 sign one first with `genkan policy set`."
                 .to_string());
         }
         Err(e) => return Err(format!("the policy store is unreadable ({e}); refusing")),
@@ -322,7 +322,7 @@ fn find_history_effective(history: &PolicyHistory, revision: u64) -> Result<Poli
         Some(_) => Err(format!(
             "revision {revision} appears {} times in the history with different \
              effective policies (its restrictions changed while it was current), so \
-             rolling back \"to revision {revision}\" is ambiguous; run `chromium-bridge policy history`, \
+             rolling back \"to revision {revision}\" is ambiguous; run `genkan policy history`, \
              pick the record to restore by its `entry=` id, and retry with \
              `policy rollback --revision {revision} --entry <id>`.",
             matches.len()

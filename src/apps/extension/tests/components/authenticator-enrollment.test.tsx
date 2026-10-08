@@ -2,11 +2,8 @@
 // approval step continues on its own because the host holds the approval 60 s for exactly the next enroll_begin.
 // What the worker's note looks like once a real enrollment wrote it is tests/browser/presence_exchange_test.ts's.
 
-import type {
-  EnrollOptionsFrame,
-  PresenceRequestFrame,
-} from "@chromium-bridge/shared/generated/envelope";
-import { PRESENCE_REQUIRED } from "@chromium-bridge/shared/webauthn";
+import type { EnrollOptionsFrame, PresenceRequestFrame } from "@genkan/shared/generated/envelope";
+import { PRESENCE_REQUIRED } from "@genkan/shared/webauthn";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -186,7 +183,7 @@ describe("AuthenticatorEnrollment", () => {
     });
   });
 
-  // The "Forget this browser" action is the panel's half of `chromium-bridge revoke <browser>`: shown only
+  // The "Forget this browser" action is the panel's half of `genkan revoke <browser>`: shown only
   // with a note, behind a confirm, one message, and the host's sentence on refusal.
   test("an enrolled browser forgets itself: the confirm, one webauthn_forget, and the forgotten line", async () => {
     replies.webauthn_enrollment = () => ({

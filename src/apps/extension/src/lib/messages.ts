@@ -7,7 +7,7 @@ import {
   type RuntimeMsgType,
   type RuntimeResponse,
   runtimeResponseSchema,
-} from "@chromium-bridge/shared/runtime-msg";
+} from "@genkan/shared/runtime-msg";
 import { browser } from "wxt/browser";
 
 export async function send<K extends RuntimeMsgType>(
@@ -22,7 +22,7 @@ export async function send<K extends RuntimeMsgType>(
   }
   const parsed = runtimeResponseSchema(type).safeParse(raw);
   if (!parsed.success) {
-    console.error("[bb] malformed runtime response", type, parsed.error);
+    console.error("[genkan] malformed runtime response", type, parsed.error);
     return { ok: false, error: `malformed ${type} response from the service worker` };
   }
   return parsed.data;

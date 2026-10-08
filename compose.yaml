@@ -12,13 +12,13 @@
 # Podman rootless adds compose.podman.yaml.
 
 # One project name, so every checkout and worktree of the repository shares the named volumes.
-name: chromium-bridge
+name: genkan
 
 x-ci: &ci
   build:
     context: .
     dockerfile: Containerfile
-  image: chromium-bridge-ci
+  image: genkan-ci
   user: "${UID:-1000}:${GID:-1000}"
   working_dir: /work
   init: true
@@ -57,8 +57,8 @@ services:
     environment:
       # A skipped suite fails as in CI, and every finished suite leaves its RAN marker where the host
       # can read it after the run (tmp/ is gitignored); the runner requires all three.
-      BB_REQUIRE_BROWSER: "1"
-      BB_BROWSER_CANARY_DIR: /work/tmp/browser-canary
+      GENKAN_REQUIRE_BROWSER: "1"
+      GENKAN_BROWSER_CANARY_DIR: /work/tmp/browser-canary
     # Under a virtual display: the smoke and security suites load the extension non-headless.
     command: ["xvfb-run", "-a", "moon", "run", "test-browser"]
 

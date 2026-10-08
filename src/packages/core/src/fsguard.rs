@@ -132,7 +132,7 @@ mod tests {
 
     fn scratch() -> tempfile::TempDir {
         tempfile::Builder::new()
-            .prefix("chromium-bridge-fsguard-test-")
+            .prefix("genkan-fsguard-test-")
             .tempdir()
             .unwrap()
     }

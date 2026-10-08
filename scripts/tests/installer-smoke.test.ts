@@ -46,7 +46,7 @@ function conforming(overrides: Partial<Fake> = {}): Fake {
     run(argv) {
       fake.calls.push(argv);
       if (argv.includes("uninstall") || argv.includes("-r")) uninstalled = true;
-      if (argv.includes("--version")) return ok("chromium-bridge 1.2.3\n");
+      if (argv.includes("--version")) return ok("genkan 1.2.3\n");
       if (argv.includes("--list")) return ok(uninstalled ? unregistered : registered);
       if (argv[0] === "reg") return notFound;
       return ok();
@@ -63,10 +63,10 @@ function conforming(overrides: Partial<Fake> = {}): Fake {
 }
 
 const local = "C:\\Users\\example-user\\AppData\\Local";
-const exe = join(local, "Programs", "chromium-bridge", "chromium-bridge.exe");
+const exe = join(local, "Programs", "genkan", "genkan.exe");
 const home = "/home/user";
-const wrapper = join(home, ".chromium-bridge", "run-host.sh");
-const macBin = "/usr/local/bin/chromium-bridge";
+const wrapper = join(home, ".genkan", "run-host.sh");
+const macBin = "/usr/local/bin/genkan";
 const roots = { home, localAppData: local };
 
 describe("the command sequence per platform, against a conforming runner", () => {
@@ -77,7 +77,7 @@ describe("the command sequence per platform, against a conforming runner", () =>
       [
         ["sudo", "installer", "-pkg", "cb.pkg", "-target", "/"],
         ["stat", "-f", "%Su", "/dev/console"],
-        ["sudo", "grep", "-F", "chromium-bridge", "/var/log/install.log"],
+        ["sudo", "grep", "-F", "genkan", "/var/log/install.log"],
         [macBin, "--version"],
         ["pkgutil", "--pkg-info", pkgIdentifier],
         [macBin, "doctor", "--list"],
@@ -93,10 +93,10 @@ describe("the command sequence per platform, against a conforming runner", () =>
       "cb.deb",
       [
         ["sudo", "dpkg", "-i", "cb.deb"],
-        ["/usr/bin/chromium-bridge", "--version"],
-        ["dpkg", "-s", "chromium-bridge"],
-        ["/usr/bin/chromium-bridge", "doctor", "--list"],
-        ["sudo", "dpkg", "-r", "chromium-bridge"],
+        ["/usr/bin/genkan", "--version"],
+        ["dpkg", "-s", "genkan"],
+        ["/usr/bin/genkan", "doctor", "--list"],
+        ["sudo", "dpkg", "-r", "genkan"],
       ],
       [],
     ],
@@ -148,7 +148,7 @@ test("a failed pkg install still logs the console owner and the package's instal
   expect(fake.calls).toEqual([
     ["sudo", "installer", "-pkg", "cb.pkg", "-target", "/"],
     ["stat", "-f", "%Su", "/dev/console"],
-    ["sudo", "grep", "-F", "chromium-bridge", "/var/log/install.log"],
+    ["sudo", "grep", "-F", "genkan", "/var/log/install.log"],
   ]);
 });
 
@@ -157,16 +157,14 @@ describe("each check fails on the one wrong answer it exists to catch", () => {
     [
       "a binary from another build",
       "windows",
-      answering((argv) => (argv.includes("--version") ? ok("chromium-bridge 1.2.2\n") : undefined)),
-      /--version printed "chromium-bridge 1\.2\.2\\n", expected 1\.2\.3/,
+      answering((argv) => (argv.includes("--version") ? ok("genkan 1.2.2\n") : undefined)),
+      /--version printed "genkan 1\.2\.2\\n", expected 1\.2\.3/,
     ],
     [
       "a binary whose version merely starts with the expected one",
       "windows",
-      answering((argv) =>
-        argv.includes("--version") ? ok("chromium-bridge 1.2.30\n") : undefined,
-      ),
-      /--version printed "chromium-bridge 1\.2\.30\\n", expected 1\.2\.3/,
+      answering((argv) => (argv.includes("--version") ? ok("genkan 1.2.30\n") : undefined)),
+      /--version printed "genkan 1\.2\.30\\n", expected 1\.2\.3/,
     ],
     [
       "a list row without the pointer",
@@ -188,7 +186,7 @@ describe("each check fails on the one wrong answer it exists to catch", () => {
       "a wrapper the macOS uninstall left behind, outside doctor's view",
       "macos",
       { presence: (path) => (path === wrapper ? "present" : "absent") },
-      /^expected \/home\/user\/\.chromium-bridge\/run-host\.sh to be gone$/,
+      /^expected \/home\/user\/\.genkan\/run-host\.sh to be gone$/,
     ],
     [
       "an install that fails, with the log's tail quoted",
@@ -198,7 +196,7 @@ describe("each check fails on the one wrong answer it exists to catch", () => {
           argv[0] === "msiexec" ? { exitCode: 1603, stdout: "", stderr: "" } : undefined,
         ),
         readLog: () =>
-          "MSI (s) (A0:B4) Note: 1: 1708\nMSI (s) (A0:B4) Product: Chromium Bridge -- Installation failed.\n",
+          "MSI (s) (A0:B4) Note: 1: 1708\nMSI (s) (A0:B4) Product: Genkan -- Installation failed.\n",
       },
       /msiexec \/i cb\.msi .* exited 1603, expected 0; log tail:\nMSI \(s\) \(A0:B4\) Note: 1: 1708\nMSI .*Installation failed\.$/,
     ],

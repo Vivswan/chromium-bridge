@@ -1,5 +1,5 @@
 //! The bridge's identity constants: the values that make this deployment of
-//! chromium-bridge recognizably itself across every process boundary. This
+//! genkan recognizably itself across every process boundary. This
 //! module is the canonical source; the TypeScript side receives
 //! them through the generated `src/packages/shared/generated/identity.ts`
 //! (`moon run gen`, rebuilt by every task that reads it), the registration
@@ -11,7 +11,7 @@
 /// `connectNative`, what the host manifest declares as `name`, and the host
 /// manifest's filename stem (`<id>.json`). Chrome allows only dot-separated
 /// segments of `[a-z0-9_]`.
-pub const NATIVE_HOST_ID: &str = "com.vivswan.chromium_bridge.host";
+pub const NATIVE_HOST_ID: &str = "com.vivswan.genkan.host";
 
 /// The extension's pinned manifest `key`: the base64 DER public key the
 /// extension build injects into its manifest, from which Chrome derives the

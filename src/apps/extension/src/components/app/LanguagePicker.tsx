@@ -1,4 +1,4 @@
-import { UI_LANGUAGES } from "@chromium-bridge/shared/settings";
+import { UI_LANGUAGES } from "@genkan/shared/settings";
 import {
   Select,
   SelectContent,

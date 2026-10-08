@@ -8,9 +8,9 @@
 // confirm_resolve arm calls (messages.ts pins the confirm-window-only gating in
 // its own tests).
 
-import type { ConfirmPayload } from "@chromium-bridge/shared/confirm";
-import { POLICY_GOLDEN_FIXTURE } from "@chromium-bridge/shared/generated/enclave-fixture";
-import { POLICY_FIELDS } from "@chromium-bridge/shared/generated/policy";
+import type { ConfirmPayload } from "@genkan/shared/confirm";
+import { POLICY_GOLDEN_FIXTURE } from "@genkan/shared/generated/enclave-fixture";
+import { POLICY_FIELDS } from "@genkan/shared/generated/policy";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
 import type { Presentation } from "@/lib/background/confirm/service";

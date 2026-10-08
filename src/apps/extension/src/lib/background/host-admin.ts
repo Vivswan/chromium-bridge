@@ -1,6 +1,6 @@
 // The options page's host-admin exchanges that clients.ts and kill.ts do not own: the browser-registration
 // rows (status, and the repair that `doctor --fix` runs), the policy lanes, the host's audit trail (what
-// `chromium-bridge audit` reads), and the doctor report (what plain `doctor` prints). port.ts drives
+// `genkan audit` reads), and the doctor report (what plain `doctor` prints). port.ts drives
 // `collaborator`; messages.ts routes the options-page actions here. A repair writes manifests and wrapper
 // scripts for the detected browsers, or for the browsers the page names, still a local operation in this
 // account's scope.
@@ -25,13 +25,10 @@ import {
   type RegistrationRepairWire,
   RegistrationStatusResultSchema,
   type RegistrationStatusWire,
-} from "@chromium-bridge/shared/generated/envelope";
-import type { PolicyOverlay } from "@chromium-bridge/shared/generated/policy";
-import {
-  type HostAdminInboundFrame,
-  HostAdminInboundFrameSchema,
-} from "@chromium-bridge/shared/host-admin";
-import type { Refusal, RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
+} from "@genkan/shared/generated/envelope";
+import type { PolicyOverlay } from "@genkan/shared/generated/policy";
+import { type HostAdminInboundFrame, HostAdminInboundFrameSchema } from "@genkan/shared/host-admin";
+import type { Refusal, RuntimeResponse } from "@genkan/shared/runtime-msg";
 import { inLife } from "../shared/in-life";
 import { handOverVerdict } from "../webauthn/exchange";
 import type { PortCollaborator } from "./connection";
@@ -124,7 +121,7 @@ export function restrictPolicy(overlay: PolicyOverlay): Promise<RestrictView> {
   }).view;
 }
 
-/** Read the newest records of the host's audit trail, the page `chromium-bridge audit --limit <n>` prints (the
+/** Read the newest records of the host's audit trail, the page `genkan audit --limit <n>` prints (the
  * host applies the CLI's default page size when no limit travels). An unreadable trail is the host's error. */
 export function requestHostAudit(limit?: number): Promise<HostAuditView> {
   const frame: AuditReadWire =
@@ -153,7 +150,7 @@ export function requestPolicyHistory(): Promise<HistoryView> {
   }).view;
 }
 
-/** Read the health report plain `chromium-bridge doctor` prints, worded by the host, with the host key's
+/** Read the health report plain `genkan doctor` prints, worded by the host, with the host key's
  * `enclave-status` line. Concurrent readers share one round trip. */
 export function requestDoctorReport(): Promise<DoctorView> {
   const shared = doctorInFlight.value;
@@ -197,5 +194,5 @@ export function handleHostAdminFrame(msg: HostAdminInboundFrame): void {
       answered = slot.answer(msg);
     }
   }
-  if (!answered) console.warn(`[bb] dropping unsolicited ${msg.type}`);
+  if (!answered) console.warn(`[genkan] dropping unsolicited ${msg.type}`);
 }

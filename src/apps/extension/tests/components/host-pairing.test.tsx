@@ -1,10 +1,10 @@
 // The host-pairing block's render path over the SW contract for the host key line: beside the extension's
 // own pin state, the block shows where the host key lives in the host's words (the `key:` line of
-// `chromium-bridge enclave-status`), and shows no key line when the host report is unreadable, so the page
+// `genkan enclave-status`), and shows no key line when the host report is unreadable, so the page
 // never guesses a store the host did not name.
 
-import type { HealthReport } from "@chromium-bridge/shared/generated/envelope";
-import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
+import type { HealthReport } from "@genkan/shared/generated/envelope";
+import type { RuntimeResponse } from "@genkan/shared/runtime-msg";
 import { render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { fakeBrowser } from "wxt/testing/fake-browser";
@@ -12,7 +12,7 @@ import { fakeBrowser } from "wxt/testing/fake-browser";
 const REPORT: HealthReport = {
   version: "1.2.3",
   platform: "linux/x86_64",
-  lock_file: { value: "/run/user/1000/chromium-bridge/run.lock", details: [] },
+  lock_file: { value: "/run/user/1000/genkan/run.lock", details: [] },
   mcp_server: { value: "not probed (no lock file)", details: [] },
   kill_switch: { value: "off (bridge activity permitted)", details: [] },
   policy_baseline: { value: "revision 3, unsigned", details: [] },

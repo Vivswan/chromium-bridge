@@ -3,7 +3,7 @@
 每个条目都从只读自检开始, 它不会改变任何东西:
 
 ```sh
-chromium-bridge doctor    # or: chromium-bridge status
+genkan doctor    # or: genkan status
 ```
 
 `doctor` 每一行输出的含义见 [CLI 页面](cli.md#doctor--status-只读自检)。
@@ -18,7 +18,7 @@ chromium-bridge doctor    # or: chromium-bridge status
 
 - **你看到:** 某个浏览器的注册行显示 `missing` 或 `stale`。
 - **含义:** 那个浏览器无法启动原生消息主机: 没有为它注册任何内容, 或者已注册的内容已损坏, 该行会说明是哪一种 (悬空的启动路径, 或在 Windows 上缺失的注册表键)。
-- **怎么做:** 运行 `chromium-bridge doctor --fix`, 然后重启浏览器 ([CLI 页面上的注册说明](cli.md#doctor---fix--uninstall-原生消息注册))。
+- **怎么做:** 运行 `genkan doctor --fix`, 然后重启浏览器 ([CLI 页面上的注册说明](cli.md#doctor---fix--uninstall-原生消息注册))。
 
 ## doctor 显示紧急开关状态或信任记录不可读
 
@@ -26,16 +26,16 @@ chromium-bridge doctor    # or: chromium-bridge status
 - **含义:** 运行时目录中的 `trust.json` 无法读取; 这个文件保存着紧急开关 (kill switch) 的闩锁状态和受信任客户端白名单, 无法读取的原因可能是 JSON 损坏、未知字段或权限错误。每个执行点读取它时都失败即关闭, 因此工具调用会以 `BRIDGE_KILLED` 被拒绝, 浏览器连接被切断, 新实例拒绝启动。
 - **怎么做:** 按下面的顺序手动恢复。从一个你无法读取的状态解除开关会变成失败即开放, 而静默重建文件会掩盖篡改, 所以这两件事都不会替你自动完成。
 
-1. 运行 `chromium-bridge doctor` 确认状态并找到运行时目录。
+1. 运行 `genkan doctor` 确认状态并找到运行时目录。
 2. 在动手之前先查看 `trust.json`。无法解释的损坏 (没有写入途中的崩溃, 也没有磁盘故障) 可能是篡改的迹象: 先阅读[事件响应](security/incident-response.md)。
 3. 删除 `trust.json`。这相当于把客户端程序 (harness) 信任恢复出厂设置, 回到会大声记录日志的未登记引导状态; 已配对的客户端也随之清除。
-4. 重新配对每个受信任客户端 (`chromium-bridge pair-client`), 如果之前启用了紧急开关, 也重新启用它。扩展的登记固定不受影响: 主机密钥从未存放在这条记录里。
+4. 重新配对每个受信任客户端 (`genkan pair-client`), 如果之前启用了紧急开关, 也重新启用它。扩展的登记固定不受影响: 主机密钥从未存放在这条记录里。
 
 ## doctor 报告 `policy baseline: none yet`
 
 - **你看到:** `policy baseline:` 这一行显示 `none yet`。
 - **含义:** 这是切换前的健康状态。尚未写入任何已签名的基线, 因此扩展执行拒绝基线: 所有能力授予关闭, 所有确认开启。这一行从不改变 `doctor` 的退出码。
-- **怎么做:** 什么都不用做, 除非你想要授予: `chromium-bridge policy set` 或选项页的「安全策略」部分会写入第一个基线 ([CLI 页面上的策略说明](cli.md#主机持有的策略-policy))。已存在的策略存储会报告它的修订号、`signed` 或 `unsigned`, 以及是否有未签名的限制覆盖层处于活动状态; 主机只报告是否已签名, 从不声称「有效」, 因为只有扩展才能用自己固定的密钥验证签名。
+- **怎么做:** 什么都不用做, 除非你想要授予: `genkan policy set` 或选项页的「安全策略」部分会写入第一个基线 ([CLI 页面上的策略说明](cli.md#主机持有的策略-policy))。已存在的策略存储会报告它的修订号、`signed` 或 `unsigned`, 以及是否有未签名的限制覆盖层处于活动状态; 主机只报告是否已签名, 从不声称「有效」, 因为只有扩展才能用自己固定的密钥验证签名。
 
 ## doctor 报告 `policy baseline: UNREADABLE`
 
@@ -67,39 +67,39 @@ Chrome、它启动的原生消息主机和 MCP 服务器必须属于同一个操
 
 常见的配置: MCP 客户端运行在 WSL 中, 日常使用的浏览器是 Windows Chrome。不需要安装 Linux 版本, WSL 中也不需要 Chrome。
 
-1. 在 Windows 上解压 Windows 发布压缩包 (或从源码构建), 在那里运行 `chromium-bridge.exe doctor --fix`, 并把压缩包里的 `extension/dist` 加载到 Windows Chrome 中。
+1. 在 Windows 上解压 Windows 发布压缩包 (或从源码构建), 在那里运行 `genkan.exe doctor --fix`, 并把压缩包里的 `extension/dist` 加载到 Windows Chrome 中。
 2. 在 WSL 的 MCP 配置中直接运行 Windows 的 `.exe`。WSL 互操作会把它作为 Windows 进程启动, 因此它与 Windows Chrome 共享注册表、`%LOCALAPPDATA%` 锁文件和原生消息主机。
 
 对于 Codex, 在 `~/.codex/config.toml` 中:
 
 ```toml
-[mcp_servers.chromium-bridge]
-command = "/mnt/c/Users/YOUR_WINDOWS_USER/AppData/Local/chromium-bridge/chromium-bridge.exe"
+[mcp_servers.genkan]
+command = "/mnt/c/Users/YOUR_WINDOWS_USER/AppData/Local/genkan/genkan.exe"
 args = []
 ```
 
-替换 `YOUR_WINDOWS_USER` 并确认路径存在; 示例假定二进制位于 `%LOCALAPPDATA%\chromium-bridge`。
+替换 `YOUR_WINDOWS_USER` 并确认路径存在; 示例假定二进制位于 `%LOCALAPPDATA%\genkan`。
 
 ### WSLg 搭配 Linux Chrome 或 Chromium
 
-当浏览器本身运行在 WSLg 内时, 在 Linux 中原生安装: 把 Linux 版 `chromium-bridge` 二进制放到 WSL 文件系统中的稳定路径并注册它。
+当浏览器本身运行在 WSLg 内时, 在 Linux 中原生安装: 把 Linux 版 `genkan` 二进制放到 WSL 文件系统中的稳定路径并注册它。
 
 ```sh
-./chromium-bridge doctor --fix                    # every detected browser
-./chromium-bridge doctor --fix --browser chrome   # Google Chrome only
-./chromium-bridge doctor --fix --browser chromium # Chromium only
+./genkan doctor --fix                    # every detected browser
+./genkan doctor --fix --browser chrome   # Google Chrome only
+./genkan doctor --fix --browser chromium # Chromium only
 ```
 
 | 什么 | 在哪里 |
 | --- | --- |
-| 清单 | `~/.config/google-chrome/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json`, `~/.config/chromium/NativeMessagingHosts/com.vivswan.chromium_bridge.host.json` |
-| 锁文件 | `$XDG_RUNTIME_DIR/chromium-bridge/run.lock`; 没有 `XDG_RUNTIME_DIR` 时为 `$XDG_CACHE_HOME/chromium-bridge/run.lock` 或 `~/.cache/chromium-bridge/run.lock` |
+| 清单 | `~/.config/google-chrome/NativeMessagingHosts/com.vivswan.genkan.host.json`, `~/.config/chromium/NativeMessagingHosts/com.vivswan.genkan.host.json` |
+| 锁文件 | `$XDG_RUNTIME_DIR/genkan/run.lock`; 没有 `XDG_RUNTIME_DIR` 时为 `$XDG_CACHE_HOME/genkan/run.lock` 或 `~/.cache/genkan/run.lock` |
 
 在 Linux 浏览器的 `chrome://extensions` 中加载发布压缩包里的 `extension/dist` (或构建出的 `build/extension/chrome-mv3`), 然后把 MCP 客户端指向 Linux 二进制 (仍以 Codex 为例, 在 `~/.codex/config.toml` 中):
 
 ```toml
-[mcp_servers.chromium-bridge]
-command = "/home/YOUR_WSL_USER/.local/lib/chromium-bridge/chromium-bridge"
+[mcp_servers.genkan]
+command = "/home/YOUR_WSL_USER/.local/lib/genkan/genkan"
 args = []
 ```
 
@@ -109,7 +109,7 @@ args = []
 - **WSLg 中的 Linux Chrome** 不读取 Windows 注册表, 也无法使用 Windows Chrome 的注册。
 - **从 WSL 启动 Windows `.exe` 不算混用:** 那个进程仍然是 Windows 进程, 这正是第一种模式能工作的原因。
 
-当 WSL 下连接失败时, 先确认 Chrome、原生消息主机和 MCP 服务器都落在同一侧, 然后检查锁文件: Windows 上是 `%LOCALAPPDATA%\chromium-bridge\run.lock`, Linux 上是上面的 XDG 路径。
+当 WSL 下连接失败时, 先确认 Chrome、原生消息主机和 MCP 服务器都落在同一侧, 然后检查锁文件: Windows 上是 `%LOCALAPPDATA%\genkan\run.lock`, Linux 上是上面的 XDG 路径。
 
 ## 崩溃后留下了锁文件
 

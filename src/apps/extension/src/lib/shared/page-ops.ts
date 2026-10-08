@@ -9,7 +9,7 @@
 // backstop, and the roster drift test asserts SW_OPS + PAGE_OPS + the
 // server-scope ops partition the generated OP_NAMES exactly.
 
-import type { OpName } from "@chromium-bridge/shared/generated/ops";
+import type { OpName } from "@genkan/shared/generated/ops";
 
 export const PAGE_OPS = [
   "page_snapshot",

@@ -85,9 +85,9 @@ pub fn run_pair(reset: bool, file_store: bool) -> i32 {
             println!(
                 "pair: {e}\n\
                  pairing only completes with a freshly minted key, so to (re-)enroll run:\n\
-                 \n    chromium-bridge pair --reset\n\
+                 \n    genkan pair --reset\n\
                  \n\
-                 to inspect the current key, run: chromium-bridge enclave-status\n\
+                 to inspect the current key, run: genkan enclave-status\n\
                  if you never enrolled this machine yourself, treat the existing key as\n\
                  untrusted and run the reset."
             );
@@ -98,7 +98,7 @@ pub fn run_pair(reset: bool, file_store: bool) -> i32 {
             if store == KeyStore::CredentialStore {
                 println!(
                     "if this machine has no OS credential store (a headless Linux session), rerun with \
-                     `chromium-bridge pair --file-store` to keep the key in a 0600 file instead"
+                     `genkan pair --file-store` to keep the key in a 0600 file instead"
                 );
             }
             return 1;
@@ -182,7 +182,7 @@ pub fn run_revoke_all() -> i32 {
             println!("the next browser enrollment is first-time (trust on first use)");
             match forgotten.trust.clients() {
                 Clients::Paired(_) => println!(
-                    "no MCP client is admitted until `chromium-bridge pair-client` trusts one again"
+                    "no MCP client is admitted until `genkan pair-client` trusts one again"
                 ),
                 Clients::NeverPaired => {}
             }
@@ -217,7 +217,7 @@ pub fn run_revoke_all() -> i32 {
         StoreOutcome::Cleared { .. } => {}
     }
     if reset.revoked.existed() {
-        println!("host key revoked. re-run `chromium-bridge pair` to re-enroll.");
+        println!("host key revoked. re-run `genkan pair` to re-enroll.");
         // The host pushes the revocation only on a moved host-key marker (the record write that also forgets
         // the pairings) AND a store that confirms the key absent; short of either, the extension learns when
         // its next key verification fails.
@@ -354,10 +354,10 @@ pub fn audit_host_key_revoke(surface: crate::audit::Surface, revoked: &Revoked) 
     });
 }
 
-/// `chromium-bridge enclave-status`: read-only report on the host key. The `key:` line's first word is what
+/// `genkan enclave-status`: read-only report on the host key. The `key:` line's first word is what
 /// `tests/protocol/harness.py` reads to tell an enrolled machine from a fresh one.
 pub fn run_status() -> i32 {
-    println!("chromium-bridge enclave-status");
+    println!("genkan enclave-status");
     let report = key_report();
     println!("key:        {}", key_line(&report));
     if let EnclaveStatusReport::Present {
@@ -380,9 +380,9 @@ pub(crate) fn key_line(report: &EnclaveStatusReport) -> String {
         EnclaveStatusReport::Present { store, .. } => {
             format!("present ({KEY_LABEL}, {})", store_name(*store))
         }
-        EnclaveStatusReport::None { .. } => "none (run `chromium-bridge pair`)".into(),
+        EnclaveStatusReport::None { .. } => "none (run `genkan pair`)".into(),
         EnclaveStatusReport::Invalid { detail, .. } => format!(
-            "REJECTED - {detail}; treat it as untrusted and run `chromium-bridge pair --reset` to replace it"
+            "REJECTED - {detail}; treat it as untrusted and run `genkan pair --reset` to replace it"
         ),
         EnclaveStatusReport::Error { detail, .. } => format!("lookup failed: {detail}"),
     }

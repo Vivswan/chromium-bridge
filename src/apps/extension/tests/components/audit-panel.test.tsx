@@ -3,8 +3,8 @@
 // localized; an unreadable host trail renders the host's error, never an empty healthy-looking list; an empty
 // trail renders the CLI's empty state with the path the host looked in; Refresh re-asks the host alone.
 
-import type { AuditEntry } from "@chromium-bridge/shared/enclave";
-import type { AuditTrailEntry } from "@chromium-bridge/shared/generated/envelope";
+import type { AuditEntry } from "@genkan/shared/enclave";
+import type { AuditTrailEntry } from "@genkan/shared/generated/envelope";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -108,7 +108,7 @@ describe("AuditPanel", () => {
 
   test("Show older re-asks with a wider limit, as `audit --limit <n>` does, up to the frame's cap", async () => {
     const { AUDIT_DEFAULT_LIMIT, AUDIT_READ_MAX_LIMIT } = await import(
-      "@chromium-bridge/shared/generated/host"
+      "@genkan/shared/generated/host"
     );
     // The host holds more than the cap: every widened read still leaves older lines behind.
     hostReply = (limit = AUDIT_DEFAULT_LIMIT) => ({

@@ -1,11 +1,7 @@
-import {
-  type ConfirmKind,
-  type ConfirmPayload,
-  isPresenceGated,
-} from "@chromium-bridge/shared/confirm";
-import type { PresenceRequestFrame } from "@chromium-bridge/shared/generated/envelope";
-import type { OpName } from "@chromium-bridge/shared/generated/ops";
-import { isPolicyFieldName, type PolicyFieldName } from "@chromium-bridge/shared/generated/policy";
+import { type ConfirmKind, type ConfirmPayload, isPresenceGated } from "@genkan/shared/confirm";
+import type { PresenceRequestFrame } from "@genkan/shared/generated/envelope";
+import type { OpName } from "@genkan/shared/generated/ops";
+import { isPolicyFieldName, type PolicyFieldName } from "@genkan/shared/generated/policy";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/hooks/useI18n";

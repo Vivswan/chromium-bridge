@@ -5,9 +5,9 @@
 // detach within one handler so the infobar only flashes (~1s). The user is
 // warned via an informational toast before attach.
 
-import { InfoToastResultSchema, PageReplySchema } from "@chromium-bridge/shared/content-msg";
-import type { OpArgs } from "@chromium-bridge/shared/generated/ops";
-import type { PolicyValues } from "@chromium-bridge/shared/generated/policy";
+import { InfoToastResultSchema, PageReplySchema } from "@genkan/shared/content-msg";
+import type { OpArgs } from "@genkan/shared/generated/ops";
+import type { PolicyValues } from "@genkan/shared/generated/policy";
 import { browser } from "wxt/browser";
 import { initI18n, t } from "../i18n";
 import { ensureAllowed } from "./allowlist-store";
@@ -139,7 +139,7 @@ export async function snapshotPrecise(_args: OpArgs, policy: PolicyValues) {
         return { cancelled: true };
       case "unavailable":
         // Toast failed in-page (e.g. no DOM yet); proceed without warning.
-        console.warn("[bb] info toast failed:", outcome.reason);
+        console.warn("[genkan] info toast failed:", outcome.reason);
         break;
       case "proceed":
         break;
@@ -197,7 +197,7 @@ export async function snapshotPrecise(_args: OpArgs, policy: PolicyValues) {
         descriptor = callRes.result?.value ?? {};
       } catch (e) {
         // Node may have been removed between getFullAXTree and resolve.
-        console.warn("[bb] precise: skip node", ref, (e as Error).message);
+        console.warn("[genkan] precise: skip node", ref, (e as Error).message);
         continue;
       }
       out.push({

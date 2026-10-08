@@ -104,7 +104,7 @@ pub(super) fn loopback_pair() -> (BridgeStream, BridgeStream) {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let serial = NEXT.fetch_add(1, Ordering::Relaxed);
         let name = PipeName::for_broker(
-            &std::env::temp_dir().join(format!("chromium-bridge-pair-{serial}")),
+            &std::env::temp_dir().join(format!("genkan-pair-{serial}")),
             std::process::id(),
         );
         let listener = pipe::PipeListener::bind(&name).expect("bind a test pipe");

@@ -3,10 +3,10 @@ use crate::webauthn::{bounded_nul_free, FieldFault, MAX_NONCE_LEN};
 
 /// Domain separation for the pair / verify ceremony: a proof can never be replayed as a signature over
 /// another meaning of the same bytes.
-pub const CHALLENGE_DOMAIN: &str = "chromium-bridge-enclave-v1";
+pub const CHALLENGE_DOMAIN: &str = "genkan-enclave-v1";
 
 /// Distinct from [`CHALLENGE_DOMAIN`] so a policy signature is never a challenge proof, nor a proof a policy.
-pub const POLICY_DOMAIN: &str = "chromium-bridge-policy-v1";
+pub const POLICY_DOMAIN: &str = "genkan-policy-v1";
 
 /// Bounds on attacker-supplied challenge fields (the extension relays them
 /// from its own logic today, but zero trust says bound them anyway).

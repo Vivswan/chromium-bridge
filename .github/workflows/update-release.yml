@@ -212,7 +212,7 @@ jobs:
         with:
           path: .
           format: cyclonedx-json
-          output-file: chromium-bridge.cdx.json
+          output-file: genkan.cdx.json
           # Keep a CI artifact too; the release attach is the explicit step
           # below so the target tag is deterministic.
           upload-artifact: true
@@ -220,13 +220,13 @@ jobs:
 
       # The SBOM is a downloadable release asset like the archives, so it
       # gets the same provenance attestation: `gh attestation verify
-      # chromium-bridge.cdx.json --repo <this repo>` must work on it after
+      # genkan.cdx.json --repo <this repo>` must work on it after
       # download.
       - name: Attest SBOM provenance
         id: attest-sbom
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: chromium-bridge.cdx.json
+          subject-path: genkan.cdx.json
 
       - name: Attach SBOM to the draft release
         env:
@@ -234,9 +234,9 @@ jobs:
           BUNDLE: ${{ steps.attest-sbom.outputs.bundle-path }}
         shell: bash
         run: |
-          cp "$BUNDLE" chromium-bridge.cdx.json.attestation.jsonl
-          gh release upload "$RELEASE_TAG" chromium-bridge.cdx.json \
-            chromium-bridge.cdx.json.attestation.jsonl --clobber
+          cp "$BUNDLE" genkan.cdx.json.attestation.jsonl
+          gh release upload "$RELEASE_TAG" genkan.cdx.json \
+            genkan.cdx.json.attestation.jsonl --clobber
 
   # The Homebrew formula bump rides the release as a pull request on the tap repository, pushed with the
   # platform token (github.token cannot reach another repository). The tap is the owner's to create and
@@ -276,7 +276,7 @@ jobs:
       - name: Render the formula into the tap checkout (final tags alone)
         id: formula
         env:
-          FORMULA_PATH: tap/Formula/chromium-bridge.rb
+          FORMULA_PATH: tap/Formula/genkan.rb
         run: bun scripts/release-package.ts brew-formula
       - name: Open the bump pull request on the tap
         if: steps.formula.outputs.bump == 'true'
@@ -286,11 +286,11 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b "chromium-bridge-$RELEASE_TAG"
-          git add Formula/chromium-bridge.rb
-          git commit -m "chromium-bridge $RELEASE_TAG"
-          git push --force-with-lease origin "HEAD:chromium-bridge-$RELEASE_TAG"
-          gh pr create --head "chromium-bridge-$RELEASE_TAG" --title "chromium-bridge $RELEASE_TAG" \
+          git checkout -b "genkan-$RELEASE_TAG"
+          git add Formula/genkan.rb
+          git commit -m "genkan $RELEASE_TAG"
+          git push --force-with-lease origin "HEAD:genkan-$RELEASE_TAG"
+          gh pr create --head "genkan-$RELEASE_TAG" --title "genkan $RELEASE_TAG" \
             --body "Formula bump for https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG"
 
   # Any tag with a suffix (v0.1.0-dev, -rc.1, ...) is a prerelease. Set the

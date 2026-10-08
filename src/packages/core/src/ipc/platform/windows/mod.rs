@@ -43,7 +43,7 @@ impl PipeName {
     pub fn for_broker(runtime_dir: &Path, pid: u32) -> PipeName {
         let digest = Sha256::digest(runtime_dir.to_string_lossy().as_bytes());
         let leaf = hex::encode(digest.get(..16).unwrap_or_default());
-        PipeName(format!("{PIPE_NAMESPACE}chromium-bridge-{leaf}-{pid}"))
+        PipeName(format!("{PIPE_NAMESPACE}genkan-{leaf}-{pid}"))
     }
 
     pub fn as_str(&self) -> &str {
@@ -212,8 +212,8 @@ mod tests {
         // The lock's endpoint is read by another process, so what the server derives must parse on the
         // client; the namespace is machine-global, so two runtime dirs or two brokers must never share a
         // name.
-        let alice = Path::new(r"C:\Users\alice\AppData\Local\chromium-bridge");
-        let bob = Path::new(r"C:\Users\bob\AppData\Local\chromium-bridge");
+        let alice = Path::new(r"C:\Users\alice\AppData\Local\genkan");
+        let bob = Path::new(r"C:\Users\bob\AppData\Local\genkan");
         let a = PipeName::for_broker(alice, 4100);
         assert_eq!(PipeName::try_from(a.as_str()), Ok(a.clone()));
         assert_ne!(a, PipeName::for_broker(bob, 4100));
@@ -225,7 +225,7 @@ mod tests {
         // CreateFileW opens whatever path it is handed: a UNC pipe reaches another machine, a file path a
         // file.
         for (endpoint, why) in [
-            (r"\\evil\pipe\chromium-bridge", "remote pipe"),
+            (r"\\evil\pipe\genkan", "remote pipe"),
             (r"C:\Users\alice\run.lock", "file path"),
             (r"\\.\pipe\", "empty leaf"),
             (r"\\.\pipe\a\b", "nested leaf"),

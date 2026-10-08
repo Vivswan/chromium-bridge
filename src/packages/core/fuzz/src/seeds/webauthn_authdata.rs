@@ -2,10 +2,10 @@
 //! core's own encoder (the one its verifier tests sign over). The credential key is the P-256 generator:
 //! a point on the curve with no private scalar anywhere.
 
-use chromium_bridge_core::webauthn::encode::{
+use genkan_core::webauthn::encode::{
     authenticator_data, cose_ec2_key, flags, ES256, P256_GENERATOR_SEC1, RS256,
 };
-use chromium_bridge_core::webauthn::{AuthenticatorData, RpId};
+use genkan_core::webauthn::{AuthenticatorData, RpId};
 
 use super::{Directory, Seed};
 use crate::targets;

@@ -48,7 +48,9 @@ export class PresenceExchangeProvider implements PresenceProvider {
     const begin = beginPresence(ACTION[payload.kind], payload.origin, settle);
     const verdict = begin.view.then((view) => {
       if (!view.ok) {
-        console.warn(`[bb] the host refused a presence request for ${payload.kind}: ${view.error}`);
+        console.warn(
+          `[genkan] the host refused a presence request for ${payload.kind}: ${view.error}`,
+        );
         surfaceUp(false);
         return false;
       }

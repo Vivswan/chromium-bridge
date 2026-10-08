@@ -78,7 +78,7 @@ export function climb(ladder: Ladder, bag: Record<string, unknown>): Climb {
   return { outcome: "climbed", write: { ...write, [VERSION_KEY]: top } };
 }
 
-const LOCK = "chromium-bridge-settings-write";
+const LOCK = "genkan-settings-write";
 
 /** Run any pending migrations and stamp the current version. Idempotent: a
  * second call is a no-op once the store is at SETTINGS_VERSION. */

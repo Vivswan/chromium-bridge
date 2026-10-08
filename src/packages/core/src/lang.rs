@@ -127,7 +127,7 @@ pub fn set(value: UiLang) -> io::Result<(String, u64)> {
     ipc::with_runtime_lock(|lock| set_locked(lock, value.as_str()))
 }
 
-/// `chromium-bridge lang [show | set <value>]`: the shared display language, the twin of the options page's
+/// `genkan lang [show | set <value>]`: the shared display language, the twin of the options page's
 /// Display language picker. `show` reads it; `set` applies it through the same seam the page's `lang_set`
 /// frame uses, so a connected browser swaps on the host's next push. Returns the process exit code.
 pub fn run_lang(command: crate::cli::LangCommand) -> i32 {

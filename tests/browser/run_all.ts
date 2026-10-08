@@ -5,8 +5,8 @@
 // SAFETY: the suites launch CHROME_BIN non-headless with --load-extension, which can capture and close a
 // real browser session, so the shared guard decides once here (tests/README.md -> Safety).
 //
-// Two independent switches keep a silent skip from going green in CI: the guard's BB_REQUIRE_BROWSER, and a
-// caller-named BB_BROWSER_CANARY_DIR, for which the runner's own skip is a failure and every suite's RAN
+// Two independent switches keep a silent skip from going green in CI: the guard's GENKAN_REQUIRE_BROWSER, and a
+// caller-named GENKAN_BROWSER_CANARY_DIR, for which the runner's own skip is a failure and every suite's RAN
 // marker (finishSuite in browser-safety.ts) is required. Either alone suffices, so a renamed variable on
 // one side cannot green a run on the other.
 
@@ -28,11 +28,11 @@ export function suitesFor(platform: NodeJS.Platform): readonly string[] {
 }
 
 /** The caller-named canary dir, if any. An empty value is the shell's way of unsetting a variable
- * (`BB_BROWSER_CANARY_DIR= bun ...`), so it means "none", never a dir named "". A relative path is made
+ * (`GENKAN_BROWSER_CANARY_DIR= bun ...`), so it means "none", never a dir named "". A relative path is made
  * absolute here, since the suites write the markers from the repo root and the runner reads them from
  * wherever it was started. */
 export function callerCanaryDir(env: NodeJS.ProcessEnv): string | undefined {
-  const dir = env.BB_BROWSER_CANARY_DIR;
+  const dir = env.GENKAN_BROWSER_CANARY_DIR;
   return dir ? resolve(dir) : undefined;
 }
 
@@ -86,7 +86,7 @@ function main(): never {
     if (
       !run(["bun", join(here, `${suite}.ts`)], {
         CHROME_BIN: chromeBin,
-        BB_BROWSER_CANARY_DIR: canaryDir,
+        GENKAN_BROWSER_CANARY_DIR: canaryDir,
       })
     ) {
       console.error(`${suite} FAILED`);

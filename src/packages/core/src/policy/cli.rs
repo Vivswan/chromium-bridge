@@ -1,4 +1,4 @@
-//! CLI runners for `chromium-bridge policy`, and the versioned status/history reports
+//! CLI runners for `genkan policy`, and the versioned status/history reports
 //! `--json` prints. The reports follow the enclave-status precedent: a versioned, typed struct serialized
 //! through `serde_json::Value` (sorted keys, a frozen wire contract) with `deny_unknown_fields`.
 //!
@@ -29,8 +29,9 @@ use crate::runtime_record::RuntimeRecord as _;
 
 /// The store line for a machine with no baseline, printed by `policy show` and by the doctor row: the deny
 /// baseline holds until either grant surface signs the first one.
-pub const PRE_CUTOVER_STORE_NOTE: &str = "none yet (pre-cutover; the extension keeps enforcing its deny \
-                                          baseline until `chromium-bridge policy set` or the options page's \
+pub const PRE_CUTOVER_STORE_NOTE: &str =
+    "none yet (pre-cutover; the extension keeps enforcing its deny \
+                                          baseline until `genkan policy set` or the options page's \
                                           Security policy section signs a baseline)";
 
 // ---- The reports (typed, versioned) ------------------------------------------
@@ -52,7 +53,7 @@ pub enum PolicyStoreState {
     Error,
 }
 
-/// The versioned, machine-readable policy status: the exact object `chromium-bridge policy show --json` prints,
+/// The versioned, machine-readable policy status: the exact object `genkan policy show --json` prints,
 /// which the doctor row renders from. A sum tagged on `store` rather than
 /// a flat struct, so a `none` report smuggling an effective policy, or a `present` one missing its revision, cannot
 /// even deserialize.
@@ -121,7 +122,7 @@ impl PolicyStatusReport {
 }
 
 /// The versioned policy-history report: the superseded-revision ring, oldest
-/// first, as `chromium-bridge policy history --json` prints it.
+/// first, as `genkan policy history --json` prints it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyHistoryReport {
@@ -227,7 +228,7 @@ fn history_report(history: &PolicyHistory) -> PolicyHistoryReport {
 
 /// The human `policy show` text.
 fn render_status(r: &PolicyStatusReport) -> String {
-    let mut out = String::from("chromium-bridge policy\n");
+    let mut out = String::from("genkan policy\n");
     match r {
         PolicyStatusReport::None { .. } => {
             out.push_str(&format!("store:      {PRE_CUTOVER_STORE_NOTE}\n"));
@@ -295,9 +296,9 @@ fn render_values(v: &PolicyValues) -> String {
 /// The human `policy history` text.
 fn render_history(r: &PolicyHistoryReport) -> String {
     if r.entries.is_empty() {
-        return "chromium-bridge policy history\n  (empty)\n".to_string();
+        return "genkan policy history\n  (empty)\n".to_string();
     }
-    let mut out = String::from("chromium-bridge policy history (oldest first)\n");
+    let mut out = String::from("genkan policy history (oldest first)\n");
     for e in &r.entries {
         let (revision, effective) = match &e.held {
             Some(held) => (
@@ -336,7 +337,7 @@ fn cli_attest(
 
 // ---- The subcommand runners -------------------------------------------------
 
-/// Dispatch `chromium-bridge policy <sub>` to its lane. Returns the process
+/// Dispatch `genkan policy <sub>` to its lane. Returns the process
 /// exit code.
 pub fn run_policy(command: PolicyCommand) -> i32 {
     match command {

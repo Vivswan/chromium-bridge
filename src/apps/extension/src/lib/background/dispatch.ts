@@ -10,11 +10,11 @@
 // one under way stops at its next stage boundary, and either way the outcome is `cancelled`, which port.ts
 // posts nothing for.
 
-import type { BridgeReq } from "@chromium-bridge/shared/envelope";
-import { BridgeCancelSchema } from "@chromium-bridge/shared/generated/envelope";
-import { isOpName, type OpName } from "@chromium-bridge/shared/generated/ops";
-import type { PolicyValues } from "@chromium-bridge/shared/generated/policy";
-import { unreachable } from "@chromium-bridge/shared/util";
+import type { BridgeReq } from "@genkan/shared/envelope";
+import { BridgeCancelSchema } from "@genkan/shared/generated/envelope";
+import { isOpName, type OpName } from "@genkan/shared/generated/ops";
+import type { PolicyValues } from "@genkan/shared/generated/policy";
+import { unreachable } from "@genkan/shared/util";
 import { browser } from "wxt/browser";
 import { inLife } from "../shared/in-life";
 import { isPageOp } from "../shared/page-ops";
@@ -100,7 +100,7 @@ export const collaborator: PortCollaborator = {
     if ((frame as { type?: unknown }).type !== "cancel") return false;
     const parsed = BridgeCancelSchema.safeParse(frame);
     if (!parsed.success) {
-      console.warn("[bb] dropping malformed cancel:", parsed.error.issues[0]?.message);
+      console.warn("[genkan] dropping malformed cancel:", parsed.error.issues[0]?.message);
       return true;
     }
     inFlight.value.get(parsed.data.id)?.abort();

@@ -37,7 +37,7 @@ export default defineBackground(() => {
   // Run any pending settings migrations (versioned storage). Best-effort:
   // failure never blocks startup - the per-field salvage in shared/settings
   // keeps reads safe regardless.
-  void migrateSettings().catch((e) => console.warn("[bb] settings migration failed", e));
+  void migrateSettings().catch((e) => console.warn("[genkan] settings migration failed", e));
 
   // Loudly log if the running extension id is not the pinned id. A mismatch
   // means the native host rejects this extension (allowed_origins pins the
@@ -82,7 +82,7 @@ export default defineBackground(() => {
   const startUp = () => {
     void (async () => {
       await syncPendingMirror().catch((e) => {
-        console.warn("[bb] pending-approval sweep failed", e);
+        console.warn("[genkan] pending-approval sweep failed", e);
       });
       // Connect eagerly whenever the SW wakes. connectNative consumes any
       // previous link first, so repeated calls are safe.
