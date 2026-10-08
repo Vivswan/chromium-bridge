@@ -58,19 +58,13 @@ pub const DISABLED_TOOLS_MAX_ENTRIES: usize = 256;
 /// store's read cap and bound an audit detail naming entries; the generated Zod validator mirrors both.
 pub const DISABLED_TOOL_NAME_MAX_BYTES: usize = 128;
 
-/// The shared `disabledTools` bound check: [`PolicyDoc::validate`] applies it to documents, [`restrict`] to
-/// the merged overlay, so neither lane can persist a list the other side's parser or the store's read cap would refuse.
-/// It also refuses what the comma-joined argv transport (`cli::parse_tool_list` re-splits and trims) cannot
-/// round-trip, which the property test in `cli` pins.
+/// The `disabledTools` bound [`PolicyDoc::validate`] applies to documents and [`restrict`] to the merged
+/// overlay, so neither lane persists a list the other side's parser or the store's read cap would refuse. A
+/// comma or surrounding whitespace is refused because the comma-joined argv transport (`cli::parse_tool_list`
+/// re-splits and trims) cannot round-trip it, which the property test in `cli` pins.
 ///
-/// ```text
-/// name holding a comma    -> would silently become two names
-/// surrounding whitespace  -> would silently become its trimmed self
-/// ```
-///
-/// Running on the READ path too (`PolicyStore::baseline_doc` -> validate) is deliberate: a stored comma entry
-/// could re-split in a push built from the store and silently DROP a tool from the deny list (the permissive
-/// direction), so such a store reads present-but-UNREADABLE. No migration: nothing shipped could have stored one; re-sign to repair.
+/// The check runs on the READ path too (`PolicyStore::baseline_doc`): a stored comma entry re-split in a push
+/// built from the store would silently DROP a tool from the deny list, so such a store reads present-but-UNREADABLE.
 pub(crate) fn validate_disabled_tools(tools: &[String]) -> Result<(), &'static str> {
     if tools.len() > DISABLED_TOOLS_MAX_ENTRIES {
         return Err("disabledTools carries more than 256 entries");

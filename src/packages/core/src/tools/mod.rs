@@ -47,27 +47,20 @@ impl ToolCall {
         self.browser.as_deref()
     }
 
-    /// Parse one tool call at the MCP boundary, fail closed: an unknown tool,
-    /// a malformed `browser`, and an args object outside the tool's struct
-    /// (missing, mistyped, null, or unknown fields) are each a typed
-    /// `INVALID_ARGUMENT` refusal before any routing or bridge traffic.
-    ///
-    /// ```text
-    /// browser absent or null  -> unaddressed (how some clients serialize an unset optional)
-    /// browser a string        -> that label, removed from the args before the struct parse
-    /// browser anything else   -> refused: with one browser connected, a silently dropped target
-    ///                            would still route the call somewhere
-    /// server-local tool       -> `browser` is not peeled off, so its struct refuses it like any
-    ///                            other field it does not declare
-    /// ```
+    /// Parse one tool call at the MCP boundary, fail closed: an unknown tool, a malformed `browser`, and an
+    /// args object outside the tool's struct (missing, mistyped, null, or unknown fields) are each a typed
+    /// `INVALID_ARGUMENT` refusal before any routing or bridge traffic. A server-local tool keeps `browser`
+    /// in its args, so its struct refuses it like any other field it does not declare.
     pub fn parse(name: &str, mut args: serde_json::Map<String, Value>) -> Result<Self, CallError> {
         let id = ToolId::from_name(name).ok_or_else(|| CallError::UnknownTool(name.to_string()))?;
         let tool = id.tool();
         let browser = match tool.dispatch {
             Dispatch::ServerLocal(_) => None,
             Dispatch::Bridge { .. } => match args.remove("browser") {
+                // Null is how some clients serialize an unset optional.
                 None | Some(Value::Null) => None,
                 Some(Value::String(label)) => Some(label),
+                // With one browser connected, a silently dropped target would still route the call somewhere.
                 Some(other) => return Err(CallError::InvalidBrowserArg(other.to_string())),
             },
         };

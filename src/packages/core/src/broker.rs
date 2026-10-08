@@ -18,16 +18,10 @@
 //! The broker trusts a relay's harness hash/signer because the relay passed `attest_peer`: it is our binary,
 //! which measures its parent honestly. The harness *name* is a log label only; authorization keys on the hash/signer.
 //!
-//! Residual: `getppid` names who spawned the relay, not who writes its stdin, and it is measured ONCE at process
-//! start (mcp_server's `admit_own_harness`); the identity is then re-decided against the trust record on every
-//! request ([`crate::trust::TrustState::decide`]).
-//! ```text
-//! reparented before the measurement                         -> measured as the reaper: refused once clients are
-//!                                                              paired and the reaper is not allowlisted, admitted
-//!                                                              while unenrolled (decide ignores the identity)
-//! parent exits mid-session, another process holds the stdin -> continues under the admitted identity
-//! pid reused around the measurement                         -> the same race
-//! ```
+//! The identity is measured ONCE at process start (mcp_server's `admit_own_harness`) and re-decided against the
+//! trust record on every request ([`crate::trust::TrustState::decide`]). Residual, the threat model's
+//! (docs/security/trust-boundaries.md): `getppid` says who spawned the relay, not who writes its stdin, and a
+//! reparent or pid reuse before the measurement is measured as the process holding the pid then.
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
@@ -376,17 +370,12 @@ impl ClientRegistry {
     }
 }
 
-/// The watcher loop body, factored from the polling thread so the fail-closed matrix is testable: re-decide every
-/// live relay against the current record and enforce the kill switch on the browser leg. The re-decide is
-/// UNCONDITIONAL, not gated on an epoch change: the record is the authority, and a sweep gated on the counter
+/// The watcher loop body, factored from the polling thread so the fail-closed matrix is testable. The re-decide
+/// is UNCONDITIONAL, not gated on an epoch change: the record is the authority, and a sweep gated on the counter
 /// would serve a client delisted by a hand edit that left the counter alone.
 ///
-/// ```text
-/// sweeping every tick -> bounds an idle revoked relay's exposure to one poll interval
-/// drop_browsers       -> idempotent, so calling it every tick is harmless
-/// returned epoch      -> only deduplicates the "dropped N" log line; None on a failed read keeps the caller's
-///                        logging cursor
-/// ```
+/// Sweeping every tick bounds an idle revoked relay's exposure to one poll interval. The returned epoch only
+/// deduplicates the "dropped N" log line; `None` on a failed read keeps the caller's logging cursor.
 fn watch_tick(
     registry: &ClientRegistry,
     last_seen: u64,

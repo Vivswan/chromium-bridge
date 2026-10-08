@@ -7,23 +7,18 @@
 //! Connections are keyed by browser label (from the handshake `Response`, trusted only after the HMAC verifies;
 //! a missing label maps to [`crate::ipc::DEFAULT_LABEL`]). A new dial-in under the SAME label supersedes that
 //! connection: the registry severs the older socket, its host exits on the EOF, and that extension life redials
-//! on its own.
-//! Different labels coexist. [`resolve_target`] picks the connection for a request.
+//! on its own. Different labels coexist; [`resolve_target`] picks the connection for a request.
 //!
 //! Every connection carries a monotonic `generation` (global across labels), and a pending request is bound to
 //! the generation it was sent under at insert, under the registry lock, immediately before the write, so an
-//! unbound in-flight entry is unrepresentable. The pending entry is the one record of "no reply yet": the reader
-//! removes it when it delivers the reply, and the [`InFlight`] guard removes it on Drop, sending `cancel` through
-//! whatever connection holds the label by then. Nothing else removes an entry: a disconnect, a supersession, or
-//! the kill sweep only WAKES the caller ([`Delivery::Severed`]), so a request stranded by a host restart is still
-//! cancelled on the reconnected host, which reaches the same service worker.
+//! unbound in-flight entry is unrepresentable.
 //!
-//! ```text
-//! reader for generation G exits         -> clears its label's slot ONLY if it still holds G; a newer host that
-//!                                          attached in the race window is left alone
-//! same reader                           -> wakes every caller whose request went out on G, so they fail fast with
-//!                                          `CallError::Disconnected` instead of waiting out their deadline
-//! ```
+//! The pending entry is the one record of "no reply yet": the reader removes it when it delivers the reply, and
+//! the [`InFlight`] guard removes it on Drop, sending `cancel` through whatever connection holds the label by then.
+//!
+//! Nothing else removes an entry: a disconnect, a supersession, or the kill sweep only WAKES the caller
+//! ([`Delivery::Severed`]), so a request stranded by a host restart is still cancelled on the reconnected host,
+//! which reaches the same service worker.
 
 use std::collections::HashMap;
 use std::io::{BufReader, BufWriter};
@@ -155,15 +150,7 @@ fn sever_pending_all(pending: &HashMap<u64, (Generation, mpsc::Sender<Delivery>)
 
 /// Pick the connection a request runs over; `available` are the live labels, `want` the request's optional
 /// `browser` argument. Refusing to guess among several browsers is deliberate: acting in the wrong logged-in
-/// browser is worse than asking the caller to name one.
-///
-/// ```text
-/// `Some(label)`, live             -> that label
-/// `Some(label)`, not live         -> `CallError::BrowserNotFound` naming what IS connected
-/// `None`, exactly one connection  -> that one (no argument needed when there is nothing to choose)
-/// `None`, several                 -> `CallError::AmbiguousBrowser`
-/// nothing connected               -> `CallError::NotConnected`
-/// ```
+/// browser is worse than asking the caller to name one, and the refusals name what IS connected.
 fn resolve_target(available: &[&str], want: Option<&str>) -> Result<String, CallError> {
     let mut labels: Vec<&str> = available.to_vec();
     labels.sort_unstable();
@@ -440,16 +427,11 @@ impl Session {
 
     /// Sever every live browser connection (the kill switch's teeth on the browser leg) and do the
     /// registry bookkeeping synchronously here, not in the reader threads, so the kill does not wait on a
-    /// reader waking. Idempotent, so the broker's watcher may call it every tick while killed; returns how many
-    /// connections THIS call severed.
+    /// reader waking. A late-waking reader finds its slot gone or re-occupied (generation guard).
     ///
-    /// ```text
-    /// late-waking reader           -> its slot is gone or re-occupied (generation guard), so its cleanup is a no-op
-    /// EVERY caller woken           -> `sever_pending_all`, including callers of a replaced connection whose
-    ///                                 lingering reader could otherwise answer after the sweep; each gets
-    ///                                 `CallError::Disconnected` and its guard finds no connection left to cancel on
-    /// response claimed pre-sweep   -> a call that completed before the kill, not one that survived it
-    /// ```
+    /// EVERY caller is woken, those of a replaced connection included, whose lingering reader could otherwise
+    /// answer after the sweep. Idempotent, so the broker's watcher may call it every tick while killed; returns
+    /// how many connections THIS call severed.
     pub(crate) fn shutdown_all_browsers(&self) -> usize {
         // Both guards recover from poison: severing and waking are safe on inconsistent bookkeeping (callers
         // only fail faster), while refusing to sever would leave the bridge alive.
@@ -583,24 +565,14 @@ impl Session {
 }
 
 /// A request on the wire, owned by its caller until the reply or the deadline. Dropping it before the reply
-/// arrived sends `cancel` for its id to the browser the request was routed to, so the extension stops working
-/// on it and the two sides agree the id is dead; dropping it after the reply sends nothing.
+/// arrived sends `cancel` for its id; the pending entry (module docs) tells Drop whether the reply came.
 ///
-/// The pending entry is the one record of which case this is (module docs): the reader removes it when it
-/// delivers the reply, so Drop cancels exactly when it still finds the entry. The cancel goes to the
-/// connection that holds the label NOW: Chrome spawns a host process per port, but the extension's service
-/// worker (which runs the op and keys its in-flight table by id) outlives a reconnect, so after a same-label
-/// reconnect the new connection is the only way to reach it. A different browser that took the label ignores
-/// the unknown id.
+/// The cancel goes to the connection that holds the label NOW. Chrome spawns a host process per port, but the
+/// extension's service worker, which runs the op and keys its in-flight table by id, outlives a reconnect.
+/// After a same-label reconnect the new connection is therefore the only way to reach it.
 ///
-/// ```text
-/// reply delivered         -> wait() returns it; Drop finds no entry, sends nothing
-/// deadline passed         -> Timeout; Drop removes the entry and sends cancel to the label's connection
-/// connection severed      -> Disconnected (reader exit or kill sweep); Drop removes the entry and cancels
-///                            through the connection now holding the label, if any: after a host restart that
-///                            is the new host, and it reaches the same service worker
-/// label gone              -> nothing to write to; the op ends on its own in the extension
-/// ```
+/// A different browser that took the label ignores the unknown id. A label nobody holds has nothing to write
+/// to; the op ends on its own.
 #[must_use = "dropping the guard abandons the request and sends cancel"]
 pub struct InFlight<'s> {
     session: &'s Session,

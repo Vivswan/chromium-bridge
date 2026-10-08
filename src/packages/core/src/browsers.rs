@@ -365,20 +365,10 @@ pub struct BrowserEntry {
     /// Paths whose existence says the browser is installed, any one sufficing, per scope: the account's
     /// own signals decide a per-user repair, the machine-wide ones a `--system` repair, so an isolated
     /// account (the Linux registration smoke's XDG roots) sees nothing on a runner that ships Chrome under
-    /// `/opt`. Purely paths; the caller checks existence.
+    /// `/opt`. Purely paths; the caller checks existence, and the `presence` builder says why each is a signal.
     ///
-    /// ```text
-    /// macOS, user     -> the bundle under `/Applications` or `~/Applications`; the per-user config root is
-    ///                    NOT a signal (an uninstalled browser leaves it behind forever, dev tooling creates
-    ///                    a bare `Chromium` folder), so a fresh install counts before its first run and a
-    ///                    leftover root never lights the row
-    /// macOS, system   -> the bundle under `/Applications` alone
-    /// Linux, user     -> the per-user config root (the browser ran as this account)
-    /// Linux, system   -> the vendor package's install dir (installed for every account, as the .deb's
-    ///                    post-install sees it from root)
-    /// Windows         -> the per-user profile root in both; elevation keeps the account
-    /// macOS app elsewhere -> reads "not detected" (residual); the user can register it explicitly
-    /// ```
+    /// Residual: a macOS app outside the two standard roots reads "not detected"; the user can register it
+    /// explicitly.
     pub presence: Scoped<Vec<PathBuf>>,
     /// Where the browser's lookup lands per scope.
     pub manifest: Scoped<Lookup>,
@@ -708,6 +698,10 @@ fn pointers(
 /// The paths whose existence says the browser is installed, per scope ([`BrowserEntry::presence`]).
 fn presence(os: Os, dirs: &BaseDirs, browser: Browser) -> Scoped<Vec<PathBuf>> {
     match os {
+        // The bundle under `/Applications` (both scopes) or `~/Applications` (user). The per-user config root
+        // is NOT a signal: an uninstalled browser leaves it behind forever and dev tooling creates a bare
+        // `Chromium` folder, so a fresh install counts before its first run and a leftover root never lights
+        // the row.
         Os::MacOs => {
             let bundle = macos_app_bundle(browser);
             let machine_bundle = dirs.system_root.join("Applications").join(bundle);
@@ -719,6 +713,8 @@ fn presence(os: Os, dirs: &BaseDirs, browser: Browser) -> Scoped<Vec<PathBuf>> {
                 system: vec![machine_bundle],
             }
         }
+        // User: the per-user config root, so the browser ran as this account. System: the vendor package's
+        // install dir, installed for every account as the .deb's post-install sees it from root.
         Os::Linux => Scoped {
             user: vec![linux_user_root(dirs, browser)],
             system: linux_install_dirs(browser)
@@ -726,6 +722,7 @@ fn presence(os: Os, dirs: &BaseDirs, browser: Browser) -> Scoped<Vec<PathBuf>> {
                 .map(|dir| dirs.system_root.join(dir))
                 .collect(),
         },
+        // Elevation keeps the account, so both scopes read the per-user profile root.
         Os::Windows => {
             let profile = windows_profile_dir(dirs, browser);
             Scoped {
