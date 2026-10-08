@@ -104,6 +104,12 @@ const cases: Case[] = [
     outcome: { error: /more than once.*1\.4\.2, 9\.9\.9/ },
   },
   {
+    name: "a pair after a valueless argument on one ARG line is still an ARG to Docker, so still a second owner",
+    containerfile: [...containerfile, "ARG AUX BUN_VERSION=9.9.9"],
+    tool: "bun",
+    outcome: { error: /more than once.*1\.4\.2, 9\.9\.9/ },
+  },
+  {
     name: "a second ARG line, indented so Docker still reads it, is a duplicate",
     containerfile: [...containerfile, "  ARG CARGO_MACHETE_VERSION=0.9.1"],
     tool: "cargo-machete",
@@ -114,6 +120,24 @@ const cases: Case[] = [
     containerfile: [...containerfile, "ARG CARGO_MACHETE_VERSION="],
     tool: "cargo-machete",
     outcome: { error: /Containerfile pins cargo-machete to an empty value/ },
+  },
+  {
+    name: "a quoted ARG value is the pin without its quotes, as Docker reads it",
+    containerfile: ['ARG CARGO_MACHETE_VERSION="0.9.2"'],
+    tool: "cargo-machete",
+    outcome: { pin: "0.9.2" },
+  },
+  {
+    name: "a quoted ARG value with whitespace is refused, like a multi-line TOML string",
+    containerfile: ['ARG CARGO_MACHETE_VERSION="0.9 .2"'],
+    tool: "cargo-machete",
+    outcome: { error: /Containerfile pins cargo-machete to a value with whitespace/ },
+  },
+  {
+    name: "an escaped space is part of an ARG value to Docker, so a pin carrying one is refused the same way",
+    containerfile: ["ARG CARGO_MACHETE_VERSION=0.9.2\\  AUX"],
+    tool: "cargo-machete",
+    outcome: { error: /Containerfile pins cargo-machete to a value with whitespace/ },
   },
   {
     name: "a second key line is refused by the TOML parser",

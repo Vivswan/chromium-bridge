@@ -11,19 +11,20 @@
 //   the pin as a step output, `--output <name>`       -> bun scripts/pin.ts proto --output proto
 //
 // .prototools goes through Bun's TOML parser, which already refuses a repeated key (indented or not) and
-// keeps a key under [settings] out of the root. The Containerfile is scanned as text because Docker lets
-// the last of two ARG lines win silently, indented or not, and only a raw count can see the first.
+// keeps a key under [settings] out of the root. The Containerfile goes through dockerfile-ast, which returns
+// every ARG instruction where Docker lets the last of two win silently, indented or not, each value unquoted
+// as Docker reads it.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { DockerfileParser, Property } from "dockerfile-ast";
+import { TextDocument } from "vscode-languageserver-textdocument";
 import { githubOutput, repoRoot } from "./lib.ts";
 
 export const ownerFiles = [".prototools", "Containerfile"] as const;
 
 const toolName = /^[a-z][a-z0-9-]*$/;
-// Docker reads the instruction case-insensitively and takes several `name[=value]` pairs on one ARG line.
-const argInstruction = /^\s*arg\s+(.+?)\s*$/i;
-const versionPair = /^([A-Z][A-Z0-9_]*)_VERSION=(\S*)$/;
+const versionArg = /^([A-Z][A-Z0-9_]*)_VERSION$/;
 
 function owned(root: string, file: (typeof ownerFiles)[number]): string {
   try {
@@ -56,18 +57,27 @@ function prototoolsPins(root: Record<string, unknown>, tool: string): string[] {
 }
 
 // ARG pairs keyed by the tool they pin: CARGO_MACHETE_VERSION -> cargo-machete. A name with no `=` (the
-// Containerfile's own PROTO_VERSION build arg) declares a consumer, not a pin.
+// Containerfile's own PROTO_VERSION build arg) declares a consumer, not a pin. A value with whitespace is
+// refused for the reason the multi-line TOML string is. dockerfile-ast reads `ARG a b=c` as one property
+// a="b=c" (ENV's legacy form, which ARG has no counterpart of), so each argument token becomes a property of
+// its own through the library's own constructor over the same document; only the grouping is undone.
 function containerfileArgs(text: string): [string, string][] {
   const pins: [string, string][] = [];
-  for (const line of text.split("\n")) {
-    const instruction = line.match(argInstruction);
-    if (!instruction) continue;
-    for (const pair of (instruction[1] as string).split(/\s+/)) {
-      const match = pair.match(versionPair);
-      if (!match) continue;
+  const dockerfile = DockerfileParser.parse(text);
+  const document = TextDocument.create("", "dockerfile", 0, text);
+  for (const instruction of dockerfile.getARGs()) {
+    const properties = instruction
+      .getPropertyArguments()
+      .map((token) => new Property(document, dockerfile.getEscapeCharacter(), token));
+    for (const property of properties) {
+      const match = property.getName().match(versionArg);
+      const value = property.getValue();
+      if (!match || value === null) continue;
       const tool = (match[1] as string).toLowerCase().replaceAll("_", "-");
-      const value = match[2] as string;
       if (value === "") throw new Error(`pin: Containerfile pins ${tool} to an empty value`);
+      if (/\s/.test(value)) {
+        throw new Error(`pin: Containerfile pins ${tool} to a value with whitespace`);
+      }
       pins.push([tool, value]);
     }
   }
