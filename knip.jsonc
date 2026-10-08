@@ -44,7 +44,10 @@
       "ignoreUnresolved": ["#i18n"]
     },
     "src/packages/shared": {
-      "project": ["src/**/*.ts", "tests/**/*.ts"]
+      "project": ["src/**/*.ts", "tests/**/*.ts"],
+      // deep-freeze-es6 is imported only by generated/policy.ts, the build output `moon run gen` writes, which
+      // the fleet's knip run (a bare install) does not have.
+      "ignoreDependencies": ["deep-freeze-es6"]
     },
     // The e2e and the runner that chains the suites are launched by name from
     // moon tasks; the other suites are package scripts knip reads itself.
