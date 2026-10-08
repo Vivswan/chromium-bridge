@@ -66,13 +66,13 @@
 
 ## doctor --fix / uninstall (原生訊息註冊)
 
-下面的 CLI 透過單一引擎 (`registration.rs`) 從終端機註冊原生訊息主機。它只需要主機執行檔本身, 在桌面、無頭機器與 CI 上都一樣。
+下面的 CLI 透過單一引擎 (`registration/`) 從終端機註冊原生訊息主機。它只需要主機執行檔本身, 在桌面、無頭機器與 CI 上都一樣。
 
 `genkan doctor --fix` 將你用來呼叫它的那個執行檔 (重新) 註冊為原生訊息主機: 對每個目標瀏覽器, 它把 `com.vivswan.genkan.host.json` 資訊清單寫到該瀏覽器尋找它的位置, 並在旁邊寫入擴充功能指標 (見下文)。
 
 - **冪等的重新註冊:** 在全新機器上 `--fix` 同時也是首次註冊; 移動執行檔之後, 它會更新過期的註冊。
 - **不建置、不下載、不複製任何東西:** 資訊清單指向此執行檔自身解析出的路徑, 在 macOS/Linux 上經由一個小型的每瀏覽器包裝指令碼。
-- **該包裝指令碼** 內建了 `--native-host`, 因為 Chrome 的資訊清單格式沒有 `args` 欄位; 當只有一個瀏覽器會啟動該資訊清單時再加上 `--label <browser>` (`run-host-<browser>.sh`); 多個瀏覽器共讀的資訊清單得到不帶標籤的 `run-host.sh` (規則由 `registration.rs` 中的 `Target` 負責)。
+- **該包裝指令碼** 內建了 `--native-host`, 因為 Chrome 的資訊清單格式沒有 `args` 欄位; 當只有一個瀏覽器會啟動該資訊清單時再加上 `--label <browser>` (`run-host-<browser>.sh`); 多個瀏覽器共讀的資訊清單得到不帶標籤的 `run-host.sh` (規則由 `registration/mod.rs` 中的 `Target` 負責)。
 - **會覆寫另一個工具以我們的主機 id 寫下的資訊清單** (報告會指名它原本啟動的是什麼), 拒絕無法讀取的資訊清單, 也拒絕外來的指標; `uninstall` 會留下外來的資訊清單。
 
 選擇瀏覽器:

@@ -13,7 +13,7 @@
 //! ```
 //!
 //! Reads take plain opens that follow a symlink at the final component: a same-user symlink only redirects a read
-//! to something that user could already read. `registration::write_atomic` is the one replacement outside this
+//! to something that user could already read. `registration::files::write_atomic` is the one replacement outside this
 //! module, because its outputs are deliberately world-readable wrappers and manifests the browser must read. On
 //! non-Unix targets the hardening compiles to plain opens: no Unix modes, and the same-user boundary is not
 //! enforced there (SECURITY.md "Platform support").

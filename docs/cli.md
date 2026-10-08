@@ -66,13 +66,13 @@ If a registration is missing or stale for a browser you use, that browser cannot
 
 ## doctor --fix / uninstall (native-messaging registration)
 
-The CLI below registers the native-messaging host from a terminal through one engine (`registration.rs`). It needs nothing but the host binary itself, on desktops, headless machines, and CI alike.
+The CLI below registers the native-messaging host from a terminal through one engine (`registration/`). It needs nothing but the host binary itself, on desktops, headless machines, and CI alike.
 
 `genkan doctor --fix` (re-)registers the binary you invoke it from as the native-messaging host: for each targeted browser it writes the `com.vivswan.genkan.host.json` manifest where that browser looks for it, and beside it the extension pointer (below).
 
 - **Idempotent re-registration:** on a fresh machine `--fix` is also the first registration, and after moving the binary it refreshes a stale one.
 - **Nothing built, downloaded, or copied:** the manifest points at this binary's own resolved path, through a small per-browser wrapper script on macOS/Linux.
-- **That wrapper** bakes in `--native-host`, because Chrome's manifest format has no `args` field, plus `--label <browser>` when one browser alone launches the manifest (`run-host-<browser>.sh`); a manifest several browsers read gets the unlabeled `run-host.sh` (the rule is `Target`'s in `registration.rs`).
+- **That wrapper** bakes in `--native-host`, because Chrome's manifest format has no `args` field, plus `--label <browser>` when one browser alone launches the manifest (`run-host-<browser>.sh`); a manifest several browsers read gets the unlabeled `run-host.sh` (the rule is `Target`'s in `registration/mod.rs`).
 - **Overwrites a manifest another tool wrote at our host id** (the report names what it launched), refuses one it cannot read, and refuses a foreign pointer; `uninstall` leaves a foreign manifest.
 
 Selecting browsers:

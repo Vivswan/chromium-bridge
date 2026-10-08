@@ -205,7 +205,7 @@ flowchart LR
 | `webauthn/` | 作為 WebAuthn 信賴方 (relying party) 的主機: 輕觸所簽署的聲明、註冊與斷言解析器、驗證器, 以及保存在 `trust.json` 中的登記儲存 |
 | `enclave/` | 主機身分金鑰: `pair` 鑄造進 OS 憑證儲存區 (或以 `--file-store` 存成 0600 檔案) 的 P-256 金鑰, 擴充功能固定它並用它驗證簽章的策略基準 |
 | `audit.rs` | 持久的稽核日誌: 有上限的 0600 `audit.log`、嚴格解析的 JSON 記錄、`audit` 子命令讀取器 |
-| `registration.rs` + `browsers.rs` | `doctor --fix` 與 `uninstall` 背後的註冊引擎與瀏覽器路徑解析器 |
+| `registration/` + `browsers.rs` | `doctor --fix` 與 `uninstall` 背後的註冊引擎與瀏覽器路徑解析器 |
 | `doctor.rs` | 唯讀健康報告 (`doctor` / `status` / `doctor --list`) |
 | `error.rs` | 工具呼叫邊界上具型別的 `CallError`, 以及穩定的 `ERROR_SPECS` 錯誤分類 |
 | `log.rs` | 分級的 stderr 日誌器 (`GENKAN_LOG`) 與 `log_*!` 巨集 |
@@ -231,7 +231,7 @@ flowchart LR
 
 ### 4.3 磁碟上的產物
 
-註冊 (由 `doctor --fix` 透過 `registration.rs` 寫入):
+註冊 (由 `doctor --fix` 透過 `registration/` 寫入):
 
 ```
 macOS   ~/.genkan/run-host-<browser>.sh      # wrapper: exec <host> --native-host --label <browser>
@@ -248,7 +248,7 @@ Windows %LOCALAPPDATA%\genkan\com.vivswan.genkan.host.json
           (Default) = absolute path of the manifest; manifest points at the exe
 ```
 
-資訊清單的 `path` 就地指向進行註冊的執行檔 (在 Unix 上經由包裝指令碼, 因為資訊清單格式沒有 `args` 欄位); 不建置、不下載、不複製任何東西。包裝指令碼只在只有一個瀏覽器會啟動該資訊清單時帶上 `--label <browser>`; 多個瀏覽器共讀的資訊清單得到不帶標籤的 `run-host.sh`, 以 `registration.rs` 為準。在 Windows 上, Chrome 會把擴充功能來源附加到命令列, 藉此選擇原生主機模式。
+資訊清單的 `path` 就地指向進行註冊的執行檔 (在 Unix 上經由包裝指令碼, 因為資訊清單格式沒有 `args` 欄位); 不建置、不下載、不複製任何東西。包裝指令碼只在只有一個瀏覽器會啟動該資訊清單時帶上 `--label <browser>`; 多個瀏覽器共讀的資訊清單得到不帶標籤的 `run-host.sh`, 以 `registration/mod.rs` 為準。在 Windows 上, Chrome 會把擴充功能來源附加到命令列, 藉此選擇原生主機模式。
 
 執行階段狀態, 位於 0700 的每使用者執行階段目錄 (macOS: `$XDG_RUNTIME_DIR/genkan` 或 `~/Library/Application Support/genkan`; Linux: `$XDG_RUNTIME_DIR/genkan`, 退而求其次用 XDG 快取目錄; Windows: `%LOCALAPPDATA%\genkan`):
 
@@ -451,7 +451,7 @@ Chrome 約每 5 分鐘強制重啟 SW 一次, 記憶體中的狀態隨之丟失;
 任何 `chrome.debugger.attach` 在附加期間都會在每個分頁上顯示「Started debugging this browser」橫幅。緩解: 預設快照使用內容指令碼, 從不碰偵錯工具; `page_snapshot_precise` 在同一個處理常式中附加、讀取 a11y 樹、再分離 (在 finally 路徑上分離), 所以橫幅只會閃現約一秒。
 
 ### 7.3 Native Messaging 資訊清單沒有 args 欄位
-資訊清單的 `path` 必須是純執行檔。緩解: 一個包裝指令碼把 `--native-host` 寫死在裡面, 當只有一個瀏覽器會啟動該資訊清單時帶 `--label <browser>` (`run-host-<browser>.sh`), 多個瀏覽器共讀時則不帶 (`run-host.sh`), 以 `registration.rs` 為準; 標籤是中介連線登錄表的鍵。
+資訊清單的 `path` 必須是純執行檔。緩解: 一個包裝指令碼把 `--native-host` 寫死在裡面, 當只有一個瀏覽器會啟動該資訊清單時帶 `--label <browser>` (`run-host-<browser>.sh`), 多個瀏覽器共讀時則不帶 (`run-host.sh`), 以 `registration/mod.rs` 為準; 標籤是中介連線登錄表的鍵。
 
 ### 7.4 chrome.permissions.request 需要使用者手勢
 主機權限只能在使用者手勢的情境中請求。緩解: 允許清單的授權流程走彈出視窗; 「允許」一併請求權限並記錄項目。

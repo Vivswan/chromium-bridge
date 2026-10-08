@@ -205,7 +205,7 @@ The binary is a thin argv dispatch (`src/apps/host/src/main.rs`) over the `genka
 | `webauthn/` | The host as WebAuthn relying party: the statement a tap signs, the registration and assertion parsers, the verifier, and the enrollment store kept in `trust.json` |
 | `enclave/` | The host identity key: a P-256 key `pair` mints into the OS credential store (or a 0600 file with `--file-store`), which the extension pins and verifies the signed policy baseline against |
 | `audit.rs` | The durable audit trail: bounded 0600 `audit.log`, strict-parsed JSON records, `audit` subcommand reader |
-| `registration.rs` + `browsers.rs` | The registration engine and browser-path resolver behind `doctor --fix` and `uninstall` |
+| `registration/` + `browsers.rs` | The registration engine and browser-path resolver behind `doctor --fix` and `uninstall` |
 | `doctor.rs` | Read-only health report (`doctor` / `status` / `doctor --list`) |
 | `error.rs` | Typed `CallError` at the tool-call boundary and the stable `ERROR_SPECS` taxonomy |
 | `log.rs` | Leveled stderr logger (`GENKAN_LOG`) and the `log_*!` macros |
@@ -231,7 +231,7 @@ Trust-state isolation: the enrollment pin, kill mirror, allowlist, and audit rin
 
 ### 4.3 On-disk artifacts
 
-Registration (written by `doctor --fix` through `registration.rs`):
+Registration (written by `doctor --fix` through `registration/`):
 
 ```
 macOS   ~/.genkan/run-host-<browser>.sh      # wrapper: exec <host> --native-host --label <browser>
@@ -248,7 +248,7 @@ Windows %LOCALAPPDATA%\genkan\com.vivswan.genkan.host.json
           (Default) = absolute path of the manifest; manifest points at the exe
 ```
 
-The manifest's `path` points at the registering binary in place (through the wrapper on Unix, because the manifest format has no `args` field); nothing is built, downloaded, or copied. The wrapper carries `--label <browser>` only when one browser alone launches that manifest; one several browsers read gets the unlabeled `run-host.sh`, per `registration.rs`. On Windows, Chrome appends the extension origin to the command line, which selects native-host mode.
+The manifest's `path` points at the registering binary in place (through the wrapper on Unix, because the manifest format has no `args` field); nothing is built, downloaded, or copied. The wrapper carries `--label <browser>` only when one browser alone launches that manifest; one several browsers read gets the unlabeled `run-host.sh`, per `registration/mod.rs`. On Windows, Chrome appends the extension origin to the command line, which selects native-host mode.
 
 Runtime state, in the 0700 per-user runtime directory (macOS: `$XDG_RUNTIME_DIR/genkan` or `~/Library/Application Support/genkan`; Linux: `$XDG_RUNTIME_DIR/genkan` with XDG-cache fallback; Windows: `%LOCALAPPDATA%\genkan`):
 
@@ -451,7 +451,7 @@ Chrome force-restarts the SW about every 5 minutes, losing in-memory state; the 
 Any `chrome.debugger.attach` shows a "Started debugging this browser" banner on every tab while attached. Mitigation: the default snapshot uses a content script and never touches the debugger; `page_snapshot_precise` attaches, reads the a11y tree, and detaches in one handler (detach on the finally path), so the banner flashes for about a second.
 
 ### 7.3 The Native Messaging manifest has no args field
-The manifest's `path` must be a bare executable. Mitigation: a wrapper script bakes in `--native-host`, with `--label <browser>` (`run-host-<browser>.sh`) when one browser alone launches that manifest and none (`run-host.sh`) when several read it, per `registration.rs`; the label keys the broker's connection registry.
+The manifest's `path` must be a bare executable. Mitigation: a wrapper script bakes in `--native-host`, with `--label <browser>` (`run-host-<browser>.sh`) when one browser alone launches that manifest and none (`run-host.sh`) when several read it, per `registration/mod.rs`; the label keys the broker's connection registry.
 
 ### 7.4 chrome.permissions.request requires a user gesture
 Host permissions can only be requested from a user-gesture context. Mitigation: the allowlist authorization flow goes through the popup; Allow requests the permission and records the entry together.
