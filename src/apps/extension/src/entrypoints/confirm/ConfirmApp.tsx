@@ -10,26 +10,11 @@ import { send } from "@/lib/messages";
 import { ceremonyFailure, refusalSentence } from "@/lib/refusals";
 import { assert } from "@/lib/shared/webauthn-ceremony";
 
-// The confirmation window: an extension-owned page a guarded page cannot reach,
-// read, or click. It fetches the pending payload by the id in its URL, renders
-// WHAT is being approved (text only), and reports the verdict via
-// confirm_resolve - which the router accepts only from this exact document.
-// Escape / closing the window / timeout all deny; Allow arms after a short
-// delay so stray input cannot approve.
-//
-// A presence-gated payload (page_eval / page_upload under the presence route)
-// has no Allow of its own: the user answers the host's presence request from
-// here instead. With a credential enrolled from this browser the answer is the
-// authenticator's tap (navigator.credentials.get, posted as
-// webauthn_presence_assert); with none it is the software confirmation
-// (webauthn_presence_confirm). The host verifies and audits either, and the
-// service closes this window on the host's verdict, refused or approved. An
-// answer that never reached the host (the authenticator prompt dismissed, a
-// busy worker) is shown here and the request stays answerable.
-//
-// Control Tower restyle: the security behavior above is untouched. The exact
-// payload is the ONLY contained surface; Deny is the filled, easy default.
+// The confirmation window. The router (background/messages.ts) accepts confirm_ready and confirm_resolve from
+// this document alone, which is what makes its verdict count; the service (background/confirm/service.ts)
+// denies on the deadline and on a closed window whatever this page shows.
 
+/** Allow stays disabled for this long after the payload lands, so a stray click or key cannot approve. */
 const ARM_DELAY_MS = 600;
 
 const HEADLINE_KEY: Record<ConfirmKind, MessageKey> = {

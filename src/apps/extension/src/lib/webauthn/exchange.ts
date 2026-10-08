@@ -1,31 +1,10 @@
 // The service-worker half of the WebAuthn ceremonies: request/reply exchanges over the one Connection, and
 // the host-pushed presence request held for the options page. The WebAuthn calls themselves run in the page
-// (lib/shared/webauthn-ceremony.ts): a service worker has no `navigator.credentials`. port.ts drives
-// `collaborator`; messages.ts routes the page's actions here. This module never imports port.ts, so there is
-// no cycle.
+// (lib/shared/webauthn-ceremony.ts): a service worker has no `navigator.credentials`.
 //
-//   enroll_begin      -> enroll_options (the page runs create) or enroll_result { ok: false }; on a machine
-//                        with enrollments the host pushes presence_request and answers presence_required,
-//                        and the enroll_begin AFTER the approved presence_assert gets the options
-//   enroll_finish     -> enroll_result; an ok records the credential for the options page (recordedEnrollment)
-//   kill_release, policy_set, policy_rollback, client_pair (beginAct)
-//                     -> the pushed presence_request is the reply; the answer to that request is settled through
-//                        claimAct (the handoff from the collaborator that owns the act's result frame), not by
-//                        presence_result; a result frame arriving before any request is the host's early answer
-//   presence_begin    -> the pushed presence_request is the reply (a page operation's, asked by the confirmation
-//                        service), accepted only when it names the asked act; the answer's verdict reaches the
-//                        asker (beginPresence's onVerdict); a begin cancelled or timed out before the reply
-//                        leaves the exchange free and its late reply is dropped
-//   presence_request  -> held as the pending request; the page fetches it, runs get, answers
-//   presence_assert   -> presence_result
-//   presence_confirm  -> presence_result (the window's answer, for a browser with no enrolled credential)
-//   browser_revoke    -> browser_revoke_result; the host forgets this browser's credentials, and the note goes
-//
-// One exchange carries every request, each naming the reply tags that answer it: the host answers in order on
-// one pipe, so a second ceremony is refused, never queued behind the first. A request given up on (a timeout
-// after posting, a cancelled begin) leaves the host owing a reply that arrives before any reply to a later
-// request; it is recorded as owed and the first frame it could be is dropped, so it settles nothing. A detach
-// also drops the pending request and every debt, since the host that owed them is gone with the port.
+// The host answers in order on one pipe. That is why a second ceremony is refused rather than queued, and how
+// a reply the host still owes for a request given up on (OwedReply) is told from the next request's: the
+// oldest debt is paid first, before any correlation, and a detach drops every debt with the host that owed it.
 
 import {
   type BrowserRevokeResultFrame,
@@ -360,20 +339,15 @@ export function beginAct(frame: ActFrame): Promise<ActBegunView> {
   return view;
 }
 
-/** The handoff from the collaborator that owns an act's result frame (kill.ts, host-admin.ts, clients.ts), the
- * one statement of it. The host's reply to an act crosses two collaborators: a presence_request here; then,
- * when the page's answer passes presence, the host runs the act and emits presence_result ok followed by the
- * result frame that reports it there. Frame routing keeps claimers disjoint, so the owner calls this the moment
- * its frame ARRIVES, before its own lane and awaits, and later settles what it claimed: a handler still
- * writing an earlier frame's state must not settle an act that began after that frame. The slot itself is
- * held synchronously inside the presence_result's reader (answerPending), so the frame that follows cannot
- * find it empty.
+/** The handoff from the collaborator that owns an act's result frame (kill.ts, host-admin.ts, clients.ts): the
+ * host answers presence_result ok here and then the result frame there. Call it the moment the frame ARRIVES,
+ * before any await, and settle later: the slot is held synchronously in presence_result's reader
+ * (answerPending), and a handler still writing an earlier frame's state must not settle an act begun after it.
  *
- *   outcome held (presence passed)                 -> claimed; the returned settle delivers the frame's verdict
- *   this act awaiting its request                  -> the host answered before asking for presence: claimed, and the
- *                                                     settle resolves beginAct (a refusal, or a free rollback's ok);
- *                                                     an ok no lane answers early with is a push, left alone
- *   anything else (a push, another exchange open)  -> null; the frame is the owner's alone */
+ *   outcome held (presence passed)   -> claimed; the settle delivers the frame's verdict
+ *   this act awaiting its request    -> the host answered before asking: claimed, the settle resolves beginAct;
+ *                                       an ok on a tap-only lane is a push, left alone
+ *   anything else                    -> null; the frame is the owner's alone */
 export function claimAct(
   tag: ActResultTag,
   msg: { ok: boolean },

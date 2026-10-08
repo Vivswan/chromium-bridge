@@ -1,17 +1,11 @@
 import type { RefusalCode } from "@genkan/shared/generated/refusals";
 import type { MessageKey } from "@/lib/i18n";
 
-// The sentences the options page and the confirmation window show for a refused WebAuthn step. The host's presence_result and
-// enroll_result carry a code from the generated RefusalCode roster, sometimes followed by ": <detail>"; the
-// browser's own ceremony failures are the CeremonyCode names ceremonyFailure mints. Both end here as one
-// lowercase phrase that fits after "Enrollment refused:" or "Release refused:". The table is a Record over both
-// unions, so a code the host gains has no sentence until its row lands here, and that is a type error.
-//
-//   store_error: disk full          -> the store sentence, "(disk full)" appended
-//   authdata_reserved_flags         -> the malformed-answer sentence, naming the code
-//   some_future_code                -> "the host refused with code some_future_code" (a host newer than this
-//                                      extension; the two ship separately)
-//   native host not connected       -> as it came: the worker's own refusals are phrases already
+// The sentence the options page and the confirmation window show for a refused WebAuthn step: one lowercase
+// phrase that fits after "Enrollment refused:" or "Release refused:". The host's presence_result and
+// enroll_result carry a RefusalCode, sometimes followed by ": <detail>"; the browser's own ceremony failures
+// are the CeremonyCode names ceremonyFailure mints. tests/entrypoints/refusals.test.ts pins what each shape
+// renders as.
 
 /** The codes ceremonyCode mints for Chrome's WebAuthn client failures; a fourth literal there has no row here
  * until this union and the table gain it together. */

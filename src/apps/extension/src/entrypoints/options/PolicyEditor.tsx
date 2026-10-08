@@ -36,17 +36,9 @@ import { send } from "@/lib/messages";
 import { PresenceActStatus } from "./PresenceActStatus";
 import { usePresenceAct } from "./usePresenceAct";
 
-// The host-owned policy editor, both lanes. Direction is recomputed from the generated catalogue, never from a
-// control's own idea of which way it points, and the host's seams decide again regardless.
-//
-//   tightening   restrict_policy, applied at once (the free lane `policy restrict` runs)
-//   loosening    grant_policy behind this browser's tap (the grant lane `policy set` runs); the host refuses
-//                before any prompt on a keyless host, in the CLI's words
-//   history      the superseded-revision ring, each row with a roll-back that takes the lane its direction decides
-//
-// Before any policy is signed, the controls edit the deny baseline this browser enforces and every edit is a
-// grant, whichever way it points: the first baseline is a signed write (`policy restrict` has nothing to
-// restrict yet), so it can be signed from here as it can with `policy set`.
+// The host-owned policy editor, the twin of `genkan policy restrict` (the free lane) and `genkan policy set`
+// (the grant lane, behind this browser's tap). Direction is recomputed from the generated catalogue, never from
+// a control's own idea of which way it points, and the host's seams decide again regardless.
 export function PolicyEditor() {
   const { t } = useI18n();
   const [view, setView] = useState<RuntimeResponse<"get_policy"> | null>(null);
@@ -110,6 +102,8 @@ export function PolicyEditor() {
 
   const firstBaseline = view.posture.kind === "preCutover";
   const effective = view.posture.kind === "active" ? view.posture.effective : POLICY_DEFAULTS;
+  // The first baseline is a signed write (`policy restrict` has nothing to restrict yet), so before it every
+  // edit is a grant, whichever way it points.
   const needsTap = (overlay: PolicyOverlay) => firstBaseline || wouldRelax(effective, overlay);
   const grant = (overlay: PolicyOverlay) => {
     setActionError(null);

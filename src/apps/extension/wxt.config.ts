@@ -3,17 +3,9 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "wxt";
 import { MANIFEST_PERMISSIONS, MINIMUM_CHROME_VERSION } from "./src/lib/shared/manifest-surface";
 
-// The pinned manifest `key` comes from the Rust core's identity constants
-// (src/packages/core/src/identity.rs, via the generated identity.ts). The
-// extension ID Chrome derives from it is what the native-messaging host
-// manifest pins in `allowed_origins`, so the key ships in EVERY build (this
-// extension is distributed as load-unpacked, not through a store): a build
-// without it would get a path-derived ID and be rejected by the host.
-// scripts/check-extension-id.ts verifies the BUILT manifest keeps this key
-// and the permission surface. The generated module is a build output, so it
-// is read when the manifest is produced, not when this config loads: tools
-// that load the config on a bare install (the fleet's dead-code gate) see no
-// build output.
+// The extension ID Chrome derives from the manifest `key` is what the native-messaging host manifest pins in
+// `allowed_origins`, so the key ships in EVERY build (load-unpacked, never a store): a build without it would
+// get a path-derived ID and be rejected by the host. scripts/check-extension-id.ts checks the BUILT manifest.
 
 export default defineConfig({
   srcDir: "src",
@@ -76,6 +68,8 @@ export default defineConfig({
     },
   },
   manifest: async () => {
+    // A build output of the Rust core's identity constants, read when the manifest is produced: a tool that
+    // loads this config on a bare install has none.
     const { EXTENSION_MANIFEST_KEY } = await import("../../packages/shared/generated/identity");
     return {
       name: "Genkan",
