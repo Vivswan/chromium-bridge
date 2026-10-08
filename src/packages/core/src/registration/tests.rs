@@ -1,4 +1,10 @@
+use super::command::{browser_targets, fix_exit_code, select_targets, uninstall_exit_code};
+use super::files::launchable_by_every_account;
+use super::slot::{classify, registry_lookup_hit, ForeignShape, ManifestSlots, Slot};
+use super::wrapper::wrapper_is_ours;
 use super::*;
+use crate::browsers::{BaseDirs, Hive, Os};
+use crate::identity::PINNED_EXTENSION_ID;
 
 /// Tests only ever touch paths under this root -- never a real browser or user directory.
 struct TempTree(tempfile::TempDir);

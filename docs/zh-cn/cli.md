@@ -66,13 +66,13 @@
 
 ## doctor --fix / uninstall (原生消息注册)
 
-下面的 CLI 通过同一个引擎 (`registration.rs`) 从终端注册原生消息主机。它只需要主机二进制本身, 在桌面、无头机器和 CI 上都一样。
+下面的 CLI 通过同一个引擎 (`registration/`) 从终端注册原生消息主机。它只需要主机二进制本身, 在桌面、无头机器和 CI 上都一样。
 
 `genkan doctor --fix` 把你用来调用它的那个二进制 (重新) 注册为原生消息主机: 对每个目标浏览器, 它把 `com.vivswan.genkan.host.json` 清单写到该浏览器查找清单的位置, 并在旁边写入扩展指针 (见下文)。
 
 - **幂等的重新注册:** 在全新机器上 `--fix` 同时就是首次注册; 移动二进制之后它会刷新过期的注册。
 - **不构建、不下载、不复制任何东西:** 清单指向这个二进制自身解析出的路径, 在 macOS/Linux 上经由一个小的按浏览器区分的包装脚本。
-- **那个包装脚本** 把 `--native-host` 固化在内, 因为 Chrome 的清单格式没有 `args` 字段; 当只有一个浏览器会启动该清单时再加上 `--label <browser>` (`run-host-<browser>.sh`); 多个浏览器共读的清单得到不带标签的 `run-host.sh` (规则由 `registration.rs` 中的 `Target` 负责)。
+- **那个包装脚本** 把 `--native-host` 固化在内, 因为 Chrome 的清单格式没有 `args` 字段; 当只有一个浏览器会启动该清单时再加上 `--label <browser>` (`run-host-<browser>.sh`); 多个浏览器共读的清单得到不带标签的 `run-host.sh` (规则由 `registration/mod.rs` 中的 `Target` 负责)。
 - **会覆盖另一个工具以我们的主机 id 写下的清单** (报告会点名它原本启动的是什么), 拒绝读不了的清单, 也拒绝外来的指针; `uninstall` 会留下外来的清单。
 
 选择浏览器:

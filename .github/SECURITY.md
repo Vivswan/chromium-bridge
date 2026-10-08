@@ -287,7 +287,7 @@ Extra review care applies to these security-critical surfaces:
 - `src/packages/core/src/enclave/` (the host key)
 - `src/packages/core/src/webauthn/` (the WebAuthn verifier, the reason `p256` ships)
 - `src/packages/core/src/policy/`
-- `src/packages/core/src/registration.rs`
+- `src/packages/core/src/registration/`
 - `src/packages/core/src/mcp/` (the rmcp seam)
 - the extension's allowlist, eval, and confirmation code
 - `src/apps/extension/src/entrypoints/options/PolicyEditor.tsx` and `src/apps/extension/src/lib/background/host-admin.ts` (the options page's policy restriction lane and registration repair)

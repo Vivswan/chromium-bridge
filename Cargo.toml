@@ -36,7 +36,7 @@ hmac = "0.13"
 itertools = { version = "0.15", default-features = false, features = ["use_std"] }
 libc = "0.2.186"
 # Safe sigmask wrapper for the signal-cleanup thread (src/packages/core/src/sys.rs): `signal`; the
-# effective-uid read behind the registration scope gate (src/packages/core/src/registration.rs): `user`.
+# effective-uid read behind the registration scope gate (src/packages/core/src/registration/privilege.rs): `user`.
 nix = { version = "0.31", default-features = false, features = ["signal", "user"] }
 # The official MCP Rust SDK: the whole MCP protocol layer (lifecycle,
 # per-request version gate, wire model), a many-eyes library in place of
@@ -107,7 +107,7 @@ core-foundation = "0.10"
 security-framework = { version = "3", features = ["OSX_10_15"] }
 security-framework-sys = "2"
 # HKCU native-messaging registration on Windows
-# (src/packages/core/src/registration.rs). The vetted wrapper (rust-lang
+# (src/packages/core/src/registration/registry.rs). The vetted wrapper (rust-lang
 # community, windows-sys underneath) instead of hand-rolled Advapi32 FFI.
 winreg = "0.56"
 # Microsoft's binding for the named-pipe bridge transport, the pipe peer's

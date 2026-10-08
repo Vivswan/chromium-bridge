@@ -205,7 +205,7 @@ flowchart LR
 | `webauthn/` | 作为 WebAuthn 依赖方 (relying party) 的主机: 一次触碰所签署的声明、注册与断言解析器、校验器, 以及保存在 `trust.json` 中的登记存储 |
 | `enclave/` | 主机身份密钥: `pair` 铸造到操作系统凭据存储 (或使用 `--file-store` 时的 0600 文件) 中的 P-256 密钥, 扩展固定该密钥并据此验证签名的策略基线 |
 | `audit.rs` | 持久审计日志: 有界的 0600 `audit.log`、严格解析的 JSON 记录、`audit` 子命令读取器 |
-| `registration.rs` + `browsers.rs` | `doctor --fix` 与 `uninstall` 背后的注册引擎与浏览器路径解析器 |
+| `registration/` + `browsers.rs` | `doctor --fix` 与 `uninstall` 背后的注册引擎与浏览器路径解析器 |
 | `doctor.rs` | 只读健康报告 (`doctor` / `status` / `doctor --list`) |
 | `error.rs` | 工具调用边界上带类型的 `CallError` 与稳定的 `ERROR_SPECS` 分类 |
 | `log.rs` | 分级 stderr 日志器 (`GENKAN_LOG`) 与 `log_*!` 宏 |
@@ -231,7 +231,7 @@ flowchart LR
 
 ### 4.3 磁盘上的产物
 
-注册 (由 `doctor --fix` 通过 `registration.rs` 写入):
+注册 (由 `doctor --fix` 通过 `registration/` 写入):
 
 ```
 macOS   ~/.genkan/run-host-<browser>.sh      # wrapper: exec <host> --native-host --label <browser>
@@ -248,7 +248,7 @@ Windows %LOCALAPPDATA%\genkan\com.vivswan.genkan.host.json
           (Default) = absolute path of the manifest; manifest points at the exe
 ```
 
-清单的 `path` 就地指向执行注册的二进制 (Unix 上经由包装脚本, 因为清单格式没有 `args` 字段); 不构建、不下载、不复制任何东西。包装脚本只在只有一个浏览器会启动该清单时携带 `--label <browser>`; 多个浏览器共读的清单得到不带标签的 `run-host.sh`, 以 `registration.rs` 为准。在 Windows 上, Chrome 会把扩展的源追加到命令行, 由此选中原生消息主机模式。
+清单的 `path` 就地指向执行注册的二进制 (Unix 上经由包装脚本, 因为清单格式没有 `args` 字段); 不构建、不下载、不复制任何东西。包装脚本只在只有一个浏览器会启动该清单时携带 `--label <browser>`; 多个浏览器共读的清单得到不带标签的 `run-host.sh`, 以 `registration/mod.rs` 为准。在 Windows 上, Chrome 会把扩展的源追加到命令行, 由此选中原生消息主机模式。
 
 运行时状态, 位于 0700 的每用户运行时目录中 (macOS: `$XDG_RUNTIME_DIR/genkan` 或 `~/Library/Application Support/genkan`; Linux: `$XDG_RUNTIME_DIR/genkan`, 回退到 XDG 缓存目录; Windows: `%LOCALAPPDATA%\genkan`):
 
@@ -451,7 +451,7 @@ Chrome 大约每 5 分钟强制重启一次 SW, 内存状态随之丢失; Port �
 任何 `chrome.debugger.attach` 在附加期间都会在每个标签页上显示「Started debugging this browser」横幅。缓解: 默认快照使用内容脚本, 从不触碰调试器; `page_snapshot_precise` 在一个处理函数中完成附加、读取无障碍树、分离 (在 finally 路径上分离), 因此横幅只闪现大约一秒。
 
 ### 7.3 Native Messaging 清单没有 args 字段
-清单的 `path` 必须是一个裸可执行文件。缓解: 一个包装脚本把 `--native-host` 固化进去, 当只有一个浏览器会启动该清单时带 `--label <browser>` (`run-host-<browser>.sh`), 多个浏览器共读时则不带 (`run-host.sh`), 以 `registration.rs` 为准; 该标签是中介连接注册表的键。
+清单的 `path` 必须是一个裸可执行文件。缓解: 一个包装脚本把 `--native-host` 固化进去, 当只有一个浏览器会启动该清单时带 `--label <browser>` (`run-host-<browser>.sh`), 多个浏览器共读时则不带 (`run-host.sh`), 以 `registration/mod.rs` 为准; 该标签是中介连接注册表的键。
 
 ### 7.4 chrome.permissions.request 需要用户手势
 主机权限只能在用户手势上下文中请求。缓解: 白名单授权流程经由弹出窗口完成; 点击「允许」会同时请求权限并记录条目。
