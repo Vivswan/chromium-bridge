@@ -2,7 +2,6 @@
 
 // Smoke check for the cargo-fuzz targets: build each one and run it for a short bounded blast, proving the
 // harnesses build and survive hostile bytes. The nightly job stretches this same script over a persistent corpus.
-// node builtins only, no scripts/lib.ts import, so it runs without a `bun install`.
 //
 //   a target crashes                -> recorded, the pass continues, exit 1 at the end
 //   its report                      -> <failure-dir>/<target>/report.md, the shape the fleet repository's
@@ -26,9 +25,9 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { repoRoot } from "./lib.ts";
 
 const usage =
   "usage: bun scripts/fuzz-smoke.ts [--runs=N] [--max-total-time=SECONDS] [--cmin] [--seed=N] [--failure-dir=PATH] [--require-toolchain]";
@@ -275,10 +274,9 @@ export function buildReport(info: FailureInfo): string {
 
 function main(): number {
   const options = parseOptions(process.argv.slice(2));
-  const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   // cargo-fuzz resolves the fuzz workspace from the crate that contains fuzz/,
   // so run from the core package, not the repo root.
-  const core = resolve(repo, "src/packages/core");
+  const core = resolve(repoRoot, "src/packages/core");
   const failureRoot = resolve(core, options.failureDir);
   // The recursive delete below is where a bad path would destroy tracked files, so the resolved path is
   // checked once more here.

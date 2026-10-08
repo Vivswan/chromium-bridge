@@ -13,11 +13,12 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { localeOf } from "./check-docs-locales";
 import { gitEnv } from "./lib";
+import { toPosix } from "./lib.ts";
 import { linkFile, readPage } from "./markdown-page";
 import { realpath, withinRoot } from "./repo-paths";
 
@@ -301,8 +302,6 @@ function bases(root: string, pageDir: string, extra: readonly string[]): string[
     out.push(dirname(dir));
   return [...out, ...extra];
 }
-
-const toPosix = (path: string): string => path.split(sep).join("/");
 
 /** A file a slash path may name at one base; `query` is how git is asked about it, directory marker kept. */
 interface Candidate {

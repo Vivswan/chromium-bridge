@@ -247,17 +247,19 @@ export const formulaOutputs = ["bump"] as const;
  * tap at a version `brew upgrade` never leaves; the tap sees final releases alone.
  */
 export function writeTapFormula(
-  inputs: FormulaInputs,
+  release: ReleaseTag,
+  digests: () => Omit<FormulaInputs, "release">,
   path: string,
   env: Env,
   write: (path: string, text: string) => void,
 ): boolean {
-  if (inputs.release.prerelease) {
+  if (release.prerelease) {
     githubOutput("bump", "false", env);
     return false;
   }
+  const inputs = digests();
   mkdirSync(dirname(path), { recursive: true });
-  write(path, brewFormula(inputs));
+  write(path, brewFormula({ release, ...inputs }));
   githubOutput("bump", "true", env);
   return true;
 }
@@ -388,16 +390,6 @@ const modes: Record<string, () => void> = {
   "brew-formula"() {
     const release = verifyTag(requiredEnv("RELEASE_TAG"), cargoVersion());
     const path = requiredEnv("FORMULA_PATH");
-    if (release.prerelease) {
-      writeTapFormula(
-        { repository: "", release, macosArm64: "", linuxX64: "" },
-        path,
-        process.env,
-        writeFileSync,
-      );
-      console.log(`${release.tag} is a prerelease; the tap receives final releases alone`);
-      return;
-    }
     const digest = (platform: string, arch: string) =>
       checksumDigest(
         readFileSync(
@@ -405,18 +397,22 @@ const modes: Record<string, () => void> = {
           "utf8",
         ),
       );
-    writeTapFormula(
-      {
+    const written = writeTapFormula(
+      release,
+      () => ({
         repository: requiredEnv("GITHUB_REPOSITORY"),
-        release,
         macosArm64: digest("macos", "arm64"),
         linuxX64: digest("linux", "x64"),
-      },
+      }),
       path,
       process.env,
       writeFileSync,
     );
-    console.log(`formula written to ${path}`);
+    console.log(
+      written
+        ? `formula written to ${path}`
+        : `${release.tag} is a prerelease; the tap receives final releases alone`,
+    );
   },
   prerelease() {
     console.log(flagPrerelease(parseTag(requiredEnv("RELEASE_TAG")), repoRoot, runTool));

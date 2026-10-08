@@ -32,13 +32,14 @@ pub use authenticator_data::{
     AttestedCredential, AuthDataError, AuthenticatorData, BackupState, Flags,
     MAX_CREDENTIAL_ID_LEN, MIN_CREDENTIAL_ID_LEN,
 };
-pub use base64url::{decode as base64url_decode, encode as base64url_encode};
+pub use base64url::encode as base64url_encode;
 pub use cli::run_revoke_browser;
 pub use credential::{
     CosePublicKey, Credential, CredentialId, CredentialIdError, KeyRefusal, RpId,
 };
 pub use refusal::{Reason, Refusal, RefusalCode};
 pub use registration::{parse_registration, Registered, Registration};
+pub(crate) use statement::{bounded_nul_free, FieldFault};
 pub use statement::{
     Action, Challenge, Nonce, Origin, PageOp, Statement, StatementDomain, ENROLL_DOMAIN,
     MAX_ACTION_LEN, MAX_NONCE_LEN, MAX_ORIGIN_LEN, PRESENCE_DOMAIN,

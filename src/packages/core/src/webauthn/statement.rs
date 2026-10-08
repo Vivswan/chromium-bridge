@@ -40,7 +40,9 @@ pub struct Nonce(String);
 
 impl Nonce {
     pub fn parse(s: &str) -> Option<Self> {
-        nul_free_bounded(s, MAX_NONCE_LEN).then(|| Nonce(s.to_string()))
+        bounded_nul_free(s, MAX_NONCE_LEN)
+            .is_ok()
+            .then(|| Nonce(s.to_string()))
     }
 
     pub fn fresh() -> io::Result<Self> {
@@ -69,7 +71,9 @@ impl Action {
     }
 
     pub fn parse(s: &str) -> Option<Self> {
-        nul_free_bounded(s, MAX_ACTION_LEN).then(|| Action(s.to_string()))
+        bounded_nul_free(s, MAX_ACTION_LEN)
+            .is_ok()
+            .then(|| Action(s.to_string()))
     }
 
     /// The action of a page operation's request: `<op> on <origin>`, so the signature covers the page the
@@ -140,8 +144,27 @@ impl Origin {
     }
 }
 
-fn nul_free_bounded(s: &str, max: usize) -> bool {
-    !s.is_empty() && s.len() <= max && !s.contains('\0')
+/// Why a bounded text field was refused; enclave/challenge.rs maps each to its refusal text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FieldFault {
+    Empty,
+    TooLong,
+    Nul,
+}
+
+/// The one rule for a field the extension echoes back: non-empty, at most `max` BYTES, and NUL-free, since
+/// NUL is the separator of every signed statement.
+pub(crate) fn bounded_nul_free(s: &str, max: usize) -> Result<(), FieldFault> {
+    if s.is_empty() {
+        return Err(FieldFault::Empty);
+    }
+    if s.len() > max {
+        return Err(FieldFault::TooLong);
+    }
+    if s.contains('\0') {
+        return Err(FieldFault::Nul);
+    }
+    Ok(())
 }
 
 /// The statement one WebAuthn signature covers. Every field is a validated newtype, so a statement that

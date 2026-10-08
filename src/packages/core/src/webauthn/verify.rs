@@ -66,10 +66,8 @@ pub fn verify_assertion(
     if stored != received {
         return Err(Refusal::BackupEligibilityChanged { stored, received });
     }
-    // A zero on both sides is an authenticator that does not count; once either side counts, the value
-    // must move forward on every assertion.
     let (stored, received) = (credential.sign_count, auth.sign_count);
-    if (stored != 0 || received != 0) && received <= stored {
+    if !super::store::counter_advances(stored, received) {
         return Err(Refusal::SignCountNotIncreased { stored, received });
     }
     client_data::check(

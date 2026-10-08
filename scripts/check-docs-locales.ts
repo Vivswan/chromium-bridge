@@ -6,8 +6,9 @@
 // inline code), since those carry identifiers a translation must not drift from.
 
 import { readFileSync, statSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { toPosix } from "./lib.ts";
 
 export const LOCALES = ["zh-cn", "zh-tw"] as const;
 export type Locale = (typeof LOCALES)[number];
@@ -25,8 +26,6 @@ export type LocaleReport =
       readonly structureDrift: readonly string[];
       readonly readmeMissing: boolean;
     };
-
-const toPosix = (path: string): string => path.split(sep).join("/");
 
 export function localeOf(page: string): Locale | undefined {
   return LOCALES.find(

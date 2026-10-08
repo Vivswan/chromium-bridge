@@ -1,6 +1,5 @@
-// scripts/build-repro.ts and scripts/fuzz-smoke.ts deliberately do NOT import this file: they stay
-// self-contained on node builtins so they run before `bun install` (the release workflow builds the binary
-// first, and the nightly fuzz job never installs the workspace).
+// Imports node builtins only: the release workflow runs build-repro.ts and the nightly fuzz job runs
+// fuzz-smoke.ts before any `bun install`, so nothing here may need node_modules.
 
 import {
   appendFileSync,
@@ -12,10 +11,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+/** Repo-relative paths are compared and printed with forward slashes on every platform. */
+export const toPosix = (path: string): string => path.split(sep).join("/");
 
 // A build output: gitignored and rebuilt by every moon task that reads it.
 export const generatedDir = join(repoRoot, "src/packages/shared/generated");

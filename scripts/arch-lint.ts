@@ -14,6 +14,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { type Node, parseSync, type TemplateElement } from "oxc-parser";
 import { z } from "zod";
+import { toPosix } from "./lib.ts";
 import { realpath } from "./repo-paths";
 
 export const DEFAULT_CONFIG = "architecture.yml";
@@ -248,10 +249,6 @@ export function resolveEdge(
     join(root, dir, specifier.slice(prefix.length)),
     `${importer} imports "${specifier}" (alias ${prefix} -> ${dir})`,
   );
-}
-
-function toPosix(path: string): string {
-  return path.split("\\").join("/");
 }
 
 /** The top-level directories the layers live in, so a file beside them outside every layer is seen. */

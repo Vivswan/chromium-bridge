@@ -297,8 +297,13 @@ describe("the Homebrew formula", () => {
     const root = scratch.dir("tap-formula");
     const output = join(root, "output");
     const path = join(root, "Formula", "chromium-bridge.rb");
+    // The tap excludes prereleases, so the digest reader must not run for one.
     const written = writeTapFormula(
-      { repository: "example-user/repo", release: parseTag(tag), macosArm64, linuxX64 },
+      parseTag(tag),
+      () => {
+        if (!bump) throw new Error("digests read for a prerelease");
+        return { repository: "example-user/repo", macosArm64, linuxX64 };
+      },
       path,
       { GITHUB_OUTPUT: output },
       writeFileSync,

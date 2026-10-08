@@ -149,7 +149,7 @@ export function presenceViolation(
 /** Bounded so a copy that kept a retired key, or grew one, before or after the canonical run does not
  * count as current. */
 function boundedListRegex(items: readonly string[]): RegExp {
-  const escaped = items.join(", ").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escaped = RegExp.escape(items.join(", "));
   return new RegExp(`(?<![a-z0-9-], )${escaped}(?!, [a-z0-9-])`, "g");
 }
 

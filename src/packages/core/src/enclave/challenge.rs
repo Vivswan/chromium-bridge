@@ -1,4 +1,5 @@
 use super::EnclaveError;
+use crate::webauthn::{bounded_nul_free, FieldFault, MAX_NONCE_LEN};
 
 /// Domain separation for the pair / verify ceremony: a proof can never be replayed as a signature over
 /// another meaning of the same bytes.
@@ -9,7 +10,6 @@ pub const POLICY_DOMAIN: &str = "chromium-bridge-policy-v1";
 
 /// Bounds on attacker-supplied challenge fields (the extension relays them
 /// from its own logic today, but zero trust says bound them anyway).
-pub const MAX_NONCE_LEN: usize = 256;
 pub const MAX_CONTEXT_LEN: usize = 4096;
 
 /// The exact bytes a CHALLENGE signature covers; the extension rebuilds them byte for byte before WebCrypto
@@ -47,21 +47,17 @@ fn domain_message(
     nonce: &str,
     context: Option<&str>,
 ) -> Result<Vec<u8>, EnclaveError> {
-    if nonce.is_empty() {
-        return Err(EnclaveError::InvalidChallenge("empty nonce"));
-    }
-    if nonce.len() > MAX_NONCE_LEN {
-        return Err(EnclaveError::InvalidChallenge("nonce too long"));
-    }
-    if nonce.contains('\0') {
-        return Err(EnclaveError::InvalidChallenge("nonce contains NUL"));
+    match bounded_nul_free(nonce, MAX_NONCE_LEN) {
+        Ok(()) => {}
+        Err(FieldFault::Empty) => return Err(EnclaveError::InvalidChallenge("empty nonce")),
+        Err(FieldFault::TooLong) => return Err(EnclaveError::InvalidChallenge("nonce too long")),
+        Err(FieldFault::Nul) => return Err(EnclaveError::InvalidChallenge("nonce contains NUL")),
     }
     let context = context.unwrap_or("");
-    if context.len() > MAX_CONTEXT_LEN {
-        return Err(EnclaveError::InvalidChallenge("context too long"));
-    }
-    if context.contains('\0') {
-        return Err(EnclaveError::InvalidChallenge("context contains NUL"));
+    match bounded_nul_free(context, MAX_CONTEXT_LEN) {
+        Ok(()) | Err(FieldFault::Empty) => {}
+        Err(FieldFault::TooLong) => return Err(EnclaveError::InvalidChallenge("context too long")),
+        Err(FieldFault::Nul) => return Err(EnclaveError::InvalidChallenge("context contains NUL")),
     }
     let mut msg = Vec::with_capacity(
         domain

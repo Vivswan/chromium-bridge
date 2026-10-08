@@ -3,8 +3,8 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { findPlanningRefs, gitEnv, scanFiles } from "../check-planning-refs";
-import { Scratch } from "../lib";
+import { findPlanningRefs, scanFiles } from "../check-planning-refs";
+import { gitEnv, Scratch } from "../lib";
 
 const script = join(dirname(fileURLToPath(import.meta.url)), "..", "check-planning-refs.ts");
 const scratch = new Scratch();
