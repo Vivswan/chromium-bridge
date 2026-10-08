@@ -15,8 +15,8 @@ moon run setup   # installs the bun workspace, the pinned Rust toolchain, and th
 
 Four tools have no first-party proto plugin and are installed once by hand: `cargo install cargo-nextest` (the test runner `moon run gate` uses) and `brew install typos-cli cargo-machete actionlint` (tools only `moon run ci` runs; typos and cargo-machete also come from `cargo install`). Where CI gets them:
 
-- **The `Containerfile` pins all four plus cargo-deb** as `ARG <TOOL>_VERSION`. The CI image carries the four; cargo-deb is installed on the bare release and installer runners alone.
-- **A job that installs a tool itself reads the same pin** through `bun scripts/pin.ts <tool>`: checks.yml's tooling job for cargo-machete (inside the image, where that version is already present), `installers.yml` and `update-release.yml` for cargo-deb on their bare runners.
+- **The `Containerfile` pins all four plus cargo-deb** as `ARG <TOOL>_VERSION`. The container image carries the four for the isolated local runs; CI installs cargo-machete and cargo-deb on its runners at those pins and never runs cargo-nextest (the `rust` job uses the raw cargo verbs).
+- **A job that installs a tool itself reads the same pin** through `bun scripts/pin.ts <tool>`: checks.yml's tooling job for cargo-machete, `installers.yml` and `update-release.yml` for cargo-deb.
 - **typos and actionlint run through the managed ci.yml's fleet actions** at the platform's own pins, so a local skew can at worst surface a finding early.
 
 | Tool | Used for | Notes |
@@ -176,7 +176,7 @@ What stays out of every hash:
 3. That action installs proto, and `proto install` provisions the `.prototools` tools (its bun lands on top of the first, so a bare runner carries two).
 4. With `cargo: "true"`, `setup-rust-toolchain` installs rust from `rust-toolchain.toml`.
 
-The CI image (`Containerfile`) runs the same `proto install` at build time, with the proto version arriving as its one build arg (`container-image.yml` and `scripts/compose-run.ts` compute it with `bun scripts/pin.ts proto`). Inside it the action finds everything present and only re-runs `proto install`, a no-op unless a pin moved after the image was published.
+The container image (`Containerfile`) runs the same `proto install` at build time, with the proto version arriving as its one build arg (`scripts/compose-run.ts` computes it with `bun scripts/pin.ts proto`).
 
 `bun scripts/pin.ts <tool>` is the one reader of a pin needed before proto exists. It scans both owner files together and fails when a tool is pinned in both, twice, or nowhere; `bun scripts/pin.ts --all` sweeps every pin of both files through the same rule, and `moon run check-pins` (under `hygiene`) runs the sweep and the reader's unit tests:
 
@@ -193,27 +193,24 @@ uv is pinned only in `.prototools`, and python is owned by uv: the protocol suit
 
 ## CI layout
 
-`checks.yml` defines each concern once, called by the managed ci.yml inside the all-green gate. The Linux jobs run inside the published CI image (`ghcr.io/<owner>/<repo>-ci:latest`, built by `container-image.yml` from main).
-
-The workflow-level `CI_IMAGE_TAG` is the one switch: an empty value runs every job on the bare runner with the same composite action.
+`checks.yml` defines each concern once, called by the managed ci.yml inside the all-green gate. Every job runs on a GitHub-hosted runner, already isolated, so CI never uses the container; the Toolchain pinning section above says how a job provisions its tools.
 
 | Job | Runs | Where |
 |-----|------|-------|
-| `image` | resolves the image tag to its digest once, so every job pins the same content | bare runner |
-| `rust` | clippy and tests on ubuntu, macOS, and Windows; fmt, the loom model, rustdoc, and the fuzz workspace's fmt, clippy, and tests on Linux alone | image on Linux, bare elsewhere |
-| `build-release` | `moon run build-release`, uploaded for the suites below | bare runner, so the binary links against the runner's older glibc and runs in both environments |
-| `coverage` | `cargo llvm-cov`, informational (`continue-on-error`, no threshold) | image |
-| `extension` | `typecheck`, `check-ts`, `shared:test`, `extension:test`, `extension:build`, then `check-extension-id` against the built manifest | image |
-| `contract` | `check-envelope`, `check-gen-isolation`, `check-refresh-lockfiles` | image |
-| `hygiene` | `moon run hygiene` | image |
-| `tooling` | `machete`, with cargo-machete at the `Containerfile` pin | image |
-| `web` | `web:build` | image |
-| `linux-install` | downloads the `build-release` binary, then `scripts/linux-registration.ts`: `doctor --fix`, re-register, multi-browser, `uninstall` under isolated HOME and XDG directories | bare runner, with cargo and moon to build the generated identity module the scenario driver reads |
-| `protocol` | the `e2e`, `adversarial`, and `chaos` suites against the downloaded binary | image |
-| `interop` | the official MCP SDK client against the downloaded binary | image |
-| `browser` | the reusable `browser.yml` (input `chrome-version`), which `nightly.yml` calls too | bare runner, Chrome from `setup-chrome` |
+| `rust` | clippy and tests on ubuntu, macOS, and Windows; fmt, the loom model, rustdoc, and the fuzz workspace's fmt, clippy, and tests on Linux alone | each OS's runner |
+| `build-release` | `moon run build-release`, uploaded for the suites below | ubuntu runner |
+| `coverage` | `cargo llvm-cov`, informational (`continue-on-error`, no threshold) | ubuntu runner |
+| `extension` | `typecheck`, `check-ts`, `shared:test`, `extension:test`, `extension:build`, then `check-extension-id` against the built manifest | ubuntu runner |
+| `contract` | `check-envelope`, `check-gen-isolation`, `check-refresh-lockfiles` | ubuntu runner |
+| `hygiene` | `moon run hygiene` | ubuntu runner |
+| `tooling` | `machete`, with cargo-machete at the `Containerfile` pin | ubuntu runner |
+| `web` | `web:build` | ubuntu runner |
+| `linux-install` | downloads the `build-release` binary, then `scripts/linux-registration.ts`: `doctor --fix`, re-register, multi-browser, `uninstall` under isolated HOME and XDG directories | ubuntu runner, with cargo and moon to build the generated identity module the scenario driver reads |
+| `protocol` | the `e2e`, `adversarial`, and `chaos` suites against the downloaded binary | ubuntu runner |
+| `interop` | the official MCP SDK client against the downloaded binary | ubuntu runner |
+| `browser` | the reusable `browser.yml` (input `chrome-version`), which `nightly.yml` calls too | ubuntu runner, Chrome from `setup-chrome` |
 | `installers` | `installers.yml` builds the .pkg, .deb, and .msi and installs each on its runner | each platform's runner |
-| `audits` | `audits.yml`: cargo deny over the root and fuzz workspaces | bare runner |
+| `audits` | `audits.yml`: cargo deny over the root and fuzz workspaces | ubuntu runner |
 
 ## Working on the extension
 
@@ -251,7 +248,9 @@ Without an isolated `CHROME_BIN` the runner skips; the two CI switches that make
 
 ## Running the gate and the browser suites in a container
 
-The container is the isolation: it carries every gate tool at the repository's pins plus a distro Chromium, and no browser or process on the host is in its reach. `Containerfile` builds it; `compose.yaml` runs it, within the Compose Specification subset both `docker compose` and `podman compose` implement (`moon run check-compose`, in the gate, holds it there).
+The container is the developer's isolated environment, never CI's (the CI layout section above says where CI runs): it carries every gate tool at the repository's pins plus a distro Chromium, and no browser or process on the host is in its reach.
+
+`Containerfile` builds it; `compose.yaml` runs it, within the Compose Specification subset both `docker compose` and `podman compose` implement (`moon run check-compose`, in the gate, holds it there).
 
 | Task | Runs inside the container |
 |------|---------------------------|

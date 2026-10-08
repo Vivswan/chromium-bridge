@@ -1,4 +1,5 @@
-# The CI image compose.yaml runs. Every input is pinned (repository pin files read at build time, a
+# The developer's isolated environment, which compose.yaml runs; CI provisions its runners directly and
+# never uses this image. Every input is pinned (repository pin files read at build time, a
 # digest, a Debian snapshot, the ARGs below), so the hash of the build inputs identifies the image.
 # OCI instructions only, so buildah builds it too.
 FROM docker.io/library/debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
@@ -9,14 +10,14 @@ ARG CARGO_BINSTALL_VERSION=1.25.1
 ARG CARGO_NEXTEST_VERSION=0.9.146
 ARG TYPOS_VERSION=1.50.3
 ARG ACTIONLINT_VERSION=1.7.12
-# checks.yml's tooling job installs the same cargo-machete on a bare runner, read from this line by
+# checks.yml's tooling job installs the same cargo-machete on its runner, read from this line by
 # scripts/pin.ts.
 ARG CARGO_MACHETE_VERSION=0.9.2
-# Declared here as the one pin owner; installed on the release and installers legs alone (bare ubuntu
-# runners, read by scripts/pin.ts), never in this image.
+# Declared here as the one pin owner; installed on the release and installers legs alone (read by
+# scripts/pin.ts), never in this image.
 ARG CARGO_DEB_VERSION=3.8.0
-# No default: proto's own pin is .prototools's, and no script runs in here to read it. container-image.yml
-# and scripts/compose-run.ts compute it with `bun scripts/pin.ts proto` and pass it in.
+# No default: proto's own pin is .prototools's, and no script runs in here to read it. scripts/compose-run.ts
+# computes it with `bun scripts/pin.ts proto` and passes it in.
 ARG PROTO_VERSION
 
 # Chrome for Testing ships no Linux arm64 build; Debian's chromium does, and the isolation guard
@@ -26,8 +27,8 @@ ARG PROTO_VERSION
 # signatures regardless).
 #
 # The snapshot's updates and security Release files lapse a week after the pin. Check-Valid-Until is
-# off in apt.conf.d rather than per command because whatever runs apt-get in the finished image
-# (checks.yml's taiki-e/install-action) reads the same lapsed files.
+# off in apt.conf.d rather than per command because whatever runs apt-get in the finished image (a
+# `shell-container` session installing a package) reads the same lapsed files.
 RUN sed -i \
         -e "s|http://deb.debian.org/debian-security|http://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}|" \
         -e "s|http://deb.debian.org/debian|http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}|" \

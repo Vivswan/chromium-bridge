@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
 const ISOLATED_VERSION = /Chrome for Testing|HeadlessShell/;
 
 // Inside a container no browser can hold the user's session, so a distro Chromium (`Chromium <ver>
-// built on Debian ...`, the CI image's browser) is isolated by construction there, and only there.
+// built on Debian ...`, the container image's browser) is isolated by construction there, and only there.
 // The engines' own marker files are the evidence (Docker, then Podman); the host has neither, so the
 // host-side rule above is unchanged, and no env var or path can stand in for the marker.
 const CONTAINER_MARKERS: readonly string[] = ["/.dockerenv", "/run/.containerenv"];
