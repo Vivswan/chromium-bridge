@@ -1,15 +1,11 @@
 # proto's own version is the one pin moonrepo/setup-toolchain cannot read from .prototools (it looks in
 # .moon/toolchains.yml), so scripts/pin.ts supplies it, which needs a bun first: setup-bun installs the
-# .bun-version one, and proto then installs the .prototools one on top (two bun installs on a bare
-# runner, by design). rust is rustup's alone: proto's rust plugin registers a toolchain without a rustc,
-# which makes setup-rust-toolchain believe rust-toolchain.toml is already installed. The CI image
-# (Containerfile) already carries proto and moon, so `proto install` there only catches a pin that moved
-# after the image was published.
+# .bun-version one, and proto then installs the .prototools one on top (two bun installs, by design).
+# rust is rustup's alone: proto's rust plugin registers a toolchain without a rustc, which makes
+# setup-rust-toolchain believe rust-toolchain.toml is already installed.
 name: Set up moon
 description: |
-  Installs proto, moon, and every tool .prototools pins, on a bare runner or inside the CI image.
-
-  On a bare runner it bootstraps the toolchain itself. Inside the CI image it only re-runs the install, which catches a pin moved after the image was published. The step order lives in docs/development.md, "Toolchain pinning".
+  Installs proto, moon, and every tool .prototools pins on the runner. The step order lives in docs/development.md, "Toolchain pinning".
 
   With cargo set to "true" it also installs rust from rust-toolchain.toml through rustup and restores the cargo cache for both cargo workspaces.
 
@@ -29,30 +25,19 @@ inputs:
 runs:
   using: composite
   steps:
-    # The probe's outcome is the branch: success means the image's preinstalled toolchain, failure a bare runner.
-    - id: present
-      shell: bash
-      continue-on-error: true
-      run: command -v proto && command -v moon
-    - if: steps.present.outcome == 'failure'
-      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+    - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       with:
         bun-version-file: .bun-version
         # Nothing worth caching runs under this bun (proto's own bun does the installs), and a publishing
         # caller must not restore a cache into what it ships.
         no-cache: true
-    - if: steps.present.outcome == 'failure'
-      id: pin
+    - id: pin
       shell: bash
       run: bun scripts/pin.ts proto --output proto
-    - if: steps.present.outcome == 'failure'
-      uses: moonrepo/setup-toolchain@261c62cb5b0f580c7be7c8cd0f023a2e96756095 # v0.6.4
+    - uses: moonrepo/setup-toolchain@261c62cb5b0f580c7be7c8cd0f023a2e96756095 # v0.6.4
       with:
         proto-version: ${{ steps.pin.outputs.proto }}
         auto-install: "true"
-    - if: steps.present.outcome == 'success'
-      shell: bash
-      run: proto install
     - if: inputs.cargo == 'true'
       uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
       with:

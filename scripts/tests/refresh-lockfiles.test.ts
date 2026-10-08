@@ -68,7 +68,7 @@ function lockedExits(dir: string): number[] {
 function lockedRepo(): string {
   const dir = scratch.dir("refresh-lockfiles");
   writeTree(dir, manifests("0.1.0"));
-  // The CI image installs rustup with no default toolchain, so outside the repo tree cargo has nothing to
+  // The container image installs rustup with no default toolchain, so outside the repo tree cargo has nothing to
   // run ("rustup could not choose a version of cargo"); the scratch workspace carries the repo's pin.
   writeFileSync(
     join(dir, "rust-toolchain.toml"),
