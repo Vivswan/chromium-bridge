@@ -99,6 +99,12 @@ pub fn release(surface: Surface, auth: PresenceAttestation) -> io::Result<u64> {
     result
 }
 
+/// The words a release refuses with when the trust record fails it, read or written: `unkill` prints them and
+/// the `kill_status_result` the options page reads carries them. Spelled here alone so the two cannot drift.
+pub fn record_failure_sentence(e: &io::Error) -> String {
+    format!("the trust record could not be read or written: {e}")
+}
+
 fn set_killed(killed: bool) -> io::Result<u64> {
     ipc::with_runtime_lock(|lock| Trust::mutate_locked(lock, Scope::Kill, |t| t.set_killed(killed)))
         .map(|trust| trust.epoch())
@@ -168,7 +174,7 @@ pub fn run_unkill() -> i32 {
             0
         }
         Err(e) => {
-            eprintln!("unkill: refusing - the trust record could not be read: {e}");
+            eprintln!("unkill: refusing - {}", record_failure_sentence(&e));
             eprintln!(
                 "releasing the kill switch from an unknown state would fail open; \
                  see docs/troubleshooting.md for the recovery path"

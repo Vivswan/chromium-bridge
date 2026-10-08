@@ -449,6 +449,7 @@ const HostSchema = z.strictObject({
   logFormatEnv: envName,
   logFormats: lowerWords,
   auditDefaultLimit: z.int().positive(),
+  auditReadMaxLimit: z.int().positive(),
   browserKeys: lowerWords,
 });
 const hostParsed = HostSchema.safeParse(contract.host);
@@ -466,14 +467,15 @@ const {
   logFormatEnv,
   logFormats,
   auditDefaultLimit,
+  auditReadMaxLimit,
   browserKeys,
 } = hostParsed.data;
 const wordList = (words: string[]): string => words.map((w) => JSON.stringify(w)).join(", ");
 
 const hostOut = `// GENERATED from the Rust core (enclave/mod.rs KEY_LABEL, ipc/lockfile.rs
 // LOCK_FILENAME, mcp_server.rs CLIENT_NAME_ENV, log.rs, audit.rs
-// DEFAULT_AUDIT_LIMIT, browsers.rs Browser::ALL) by scripts/gen-ops.ts - DO NOT
-// EDIT. Run \`moon run gen\`.
+// DEFAULT_AUDIT_LIMIT, protocol/control.rs MAX_AUDIT_READ_LIMIT, browsers.rs
+// Browser::ALL) by scripts/gen-ops.ts - DO NOT EDIT. Run \`moon run gen\`.
 //
 // The host's user-facing constants. scripts/check-docs-literals.ts holds the docs to these, so a rename in the Rust
 // core fails the docs gate instead of leaving a troubleshooting page quietly wrong.
@@ -497,6 +499,9 @@ export const LOG_FORMATS = [${wordList(logFormats)}] as const;
 
 // How many records \`audit\` prints without \`--limit\`.
 export const AUDIT_DEFAULT_LIMIT = ${auditDefaultLimit};
+
+// The most records one \`audit_read\` frame may ask for; the whole trail is \`audit --limit <n>\`.
+export const AUDIT_READ_MAX_LIMIT = ${auditReadMaxLimit};
 
 // The browser CLI keys (\`--browser\`), in report order.
 export const BROWSER_KEYS = [${wordList(browserKeys)}] as const;

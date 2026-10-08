@@ -230,18 +230,18 @@ impl Exchange {
         self.pending = None;
         // A refusal before the request exists is audited like one at the gate, so every release attempt
         // leaves a trail entry.
-        let refused_early = |e: std::io::Error| {
-            let detail = e.to_string();
+        let refused_early = |sentence: String, e: std::io::Error| {
             crate::kill::audit_refused_release(Surface::Extension, &PresenceError::Store(e));
-            vec![kill_unreadable(detail)]
+            vec![kill_unreadable(sentence)]
         };
+        // The record read refuses in `unkill`'s words; a request the host could not mint (no entropy) is its own fault.
         let enrolled = match enrollments() {
             Ok(enrolled) => enrolled,
-            Err(e) => return refused_early(e),
+            Err(e) => return refused_early(crate::kill::record_failure_sentence(&e), e),
         };
         match PresenceRequest::for_browser(&self.label, Action::release_kill_switch(), &enrolled) {
             Ok(request) => self.await_presence(request, PendingAct::KillRelease),
-            Err(e) => refused_early(e),
+            Err(e) => refused_early(e.to_string(), e),
         }
     }
 
@@ -481,7 +481,7 @@ impl Exchange {
                         KillStatus::Read { killed: false }
                     }
                     Err(e) => KillStatus::Unreadable {
-                        error: e.to_string(),
+                        error: crate::kill::record_failure_sentence(&e),
                     },
                 };
                 replies.push(status.into_frame().into());

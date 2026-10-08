@@ -191,6 +191,12 @@ describe("RuntimeMsgSchema", () => {
       { name: "with a non-object overlay", msg: { type: "restrict_policy", overlay: "deny" } },
     ],
     lang_choose: [{ name: "outside the enum", msg: { type: "lang_choose", value: "fr" } }],
+    // The host's frame parse refuses these too, after the exchange slot is taken; here they never post.
+    get_host_audit: [
+      { name: "with a zero limit", msg: { type: "get_host_audit", limit: 0 } },
+      { name: "with a limit over the frame's cap", msg: { type: "get_host_audit", limit: 1001 } },
+      { name: "with a fractional limit", msg: { type: "get_host_audit", limit: 2.5 } },
+    ],
   };
 
   test("every field-bearing request has a malformed-field case, and only those", () => {

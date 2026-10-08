@@ -124,10 +124,12 @@ export function restrictPolicy(overlay: PolicyOverlay): Promise<RestrictView> {
   }).view;
 }
 
-/** Read the newest records of the host's audit trail, the page `chromium-bridge audit` prints by default (the
+/** Read the newest records of the host's audit trail, the page `chromium-bridge audit --limit <n>` prints (the
  * host applies the CLI's default page size when no limit travels). An unreadable trail is the host's error. */
-export function requestHostAudit(): Promise<HostAuditView> {
-  return auditTrail.request({ type: "audit_read" } satisfies AuditReadWire, {
+export function requestHostAudit(limit?: number): Promise<HostAuditView> {
+  const frame: AuditReadWire =
+    limit === undefined ? { type: "audit_read" } : { type: "audit_read", limit };
+  return auditTrail.request(frame, {
     read(frame): HostAuditView {
       const parsed = AuditReadResultSchema.safeParse(frame);
       if (!parsed.success) return refusal("malformed audit_read_result from host");

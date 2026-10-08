@@ -19,6 +19,7 @@ use chromium_bridge_core::identity::{EXTENSION_MANIFEST_KEY, NATIVE_HOST_ID, PIN
 use chromium_bridge_core::ipc::LOCK_FILENAME;
 use chromium_bridge_core::log::{Format, Level, FORMAT_ENV, LEVEL_ENV};
 use chromium_bridge_core::mcp_server::CLIENT_NAME_ENV;
+use chromium_bridge_core::protocol::control::MAX_AUDIT_READ_LIMIT;
 use chromium_bridge_core::protocol::{
     BRIDGE_PROTOCOL_VERSION, MCP_META_CLIENT_CAPABILITIES, MCP_META_PROTOCOL_VERSION,
     MCP_META_SERVER_INFO, MCP_PROTOCOL_VERSION,
@@ -95,6 +96,7 @@ fn main() -> Result<(), serde_json::Error> {
             "logFormatEnv": FORMAT_ENV,
             "logFormats": Format::ALL.map(Format::name),
             "auditDefaultLimit": DEFAULT_AUDIT_LIMIT,
+            "auditReadMaxLimit": MAX_AUDIT_READ_LIMIT,
             "browserKeys": Browser::ALL.map(Browser::key),
         },
     });
