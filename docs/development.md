@@ -10,10 +10,10 @@ Rust is rustup's alone, from `rust-toolchain.toml`, so a fresh machine needs [ru
 
 ```sh
 proto install    # provisions bun, moon, node, uv at the pinned versions (rustup owns rust)
-moon run setup   # installs the bun workspace, the pinned Rust toolchain, and the crates; wires the git hooks (lefthook); the gate itself never installs
+moon run setup   # installs the bun workspace, the pinned Rust toolchain, and the crates; wires the git hooks (lefthook); the hooks install no project dependency
 ```
 
-Four tools have no first-party proto plugin and are installed once by hand: `cargo install cargo-nextest` (the test runner `moon run gate` uses) and `brew install typos-cli cargo-machete actionlint` (tools only `moon run ci` runs; typos and cargo-machete also come from `cargo install`). Where CI gets them:
+Four tools have no first-party proto plugin and are installed once by hand: `cargo install cargo-nextest` (the test runner `moon run gate` uses) and `brew install typos-cli cargo-machete actionlint` (typos and actionlint run in the pre-commit hook, `moon run static`; cargo-machete only in `moon run ci`; typos and cargo-machete also come from `cargo install`). Where CI gets them:
 
 - **The `Containerfile` pins all four plus cargo-deb** as `ARG <TOOL>_VERSION`. The container image carries the four for the isolated local runs; CI installs cargo-machete and cargo-deb on its runners at those pins and never runs cargo-nextest (the `rust` job uses the raw cargo verbs).
 - **A job that installs a tool itself reads the same pin** through `bun scripts/pin.ts <tool>`: checks.yml's tooling job for cargo-machete, `installers.yml` and `update-release.yml` for cargo-deb.
@@ -31,7 +31,7 @@ Four tools have no first-party proto plugin and are installed once by hand: `car
 | [`typos`](https://github.com/crate-ci/typos) + [`cargo-machete`](https://github.com/bnjbvr/cargo-machete) | spelling + unused-dependency gates | `moon run typos` / `moon run machete`; CI gates typos in the managed ci.yml and machete in checks.yml |
 | [`actionlint`](https://github.com/rhysd/actionlint) | GitHub Actions workflow lint gate | `moon run check-actions`; CI runs it in the managed ci.yml's actionlint job |
 
-Git hooks are managed by [lefthook](https://lefthook.dev) (`lefthook.yml`): `moon run setup` wires hooks that run `moon run gate`, the checks the repository's own toolchain provides, before a commit and after a rebase; `moon run ci` adds the tools only CI provisions.
+Git hooks are managed by [lefthook](https://lefthook.dev) (`lefthook.yml`) and wired by `moon run setup`; what they run before a commit and after a rebase is in [CONTRIBUTING.md](../CONTRIBUTING.md#workflow).
 
 ## Layout
 
@@ -72,6 +72,8 @@ moon run build     # build everything (see below)
 moon run dev       # dev everything: extension (WXT) + the landing page (Astro) + a dev browser
 moon run test      # rust tests (nextest + doctests) + protocol e2e
 moon run ci        # THE GATE: the cross-platform CI steps (see below for what CI adds)
+moon run static    # the pre-commit hook's checks: formatting, lint, types, spelling, yaml + workflow lint, hygiene
+moon run gate      # every check the repository's own toolchain provides: static's cargo and bun members + tests + builds
 moon run release   # pre-release gate: version checks + full ci
 moon run install   # build the release binary, then register it (doctor --fix)
 moon run lint      # lint everything: clippy -D warnings + biome lint

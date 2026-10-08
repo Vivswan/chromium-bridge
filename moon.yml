@@ -7,9 +7,11 @@
 #   runs a package binary                               -> `bun run <bin>` (node_modules/.bin, then PATH; never bun's
 #                                                          global cache, which is where bunx finds a bare name when
 #                                                          node_modules is absent)
-#   reachable from `gate` (the pre-commit hook's task)  -> only bun, the toolchain's cargo verbs, the shell's set, and
+#   reachable from `gate` (the own-toolchain gate)      -> only bun, the toolchain's cargo verbs, the shell's set, and
 #                                                          moon's noop, never a bun install; a tool another runtime or
-#                                                          a separate install provides runs in `ci`
+#                                                          a separate install provides runs in `ci`, or in `static`
+#                                                          (the pre-commit hook's task) when it is one of the three
+#                                                          static-check binaries named there
 #   a cargo verb reachable from `gate`                  -> takes --frozen (a missing crate fails, never fetches; fmt
 #                                                          reads no crates and has no such flag) and carries
 #                                                          RUSTUP_AUTO_INSTALL=0 in its env (rustup would otherwise
@@ -25,13 +27,16 @@
 #                                                          a fresh checkout) and options.mutex 'generated-contract', shared
 #                                                          with the writers, so one invocation never overlaps a reader with
 #                                                          the rewrite
-# Nothing reachable from `gate` installs or fetches; `setup` is the one bootstrap, and nothing depends on it
-# (`ci` adds tools CI provisions in its own steps, such as uv's). A missing package or crate fails its task
-# with the tool's own message; CI is the source of truth for a tree that drifted from its lockfiles. The
-# per-project moon.yml files follow the same rules.
+# Nothing reachable from `gate` installs or fetches; `setup` is the one bootstrap, and nothing depends on it.
+# `static` adds three static-check binaries from outside the toolchain, one of which uvx provisions into uv's
+# own tool cache on its first run (yamllint; uv's feature, as bun's fetch is bun's); `ci` adds tools CI
+# provisions in its own steps, such as uv's. A missing package or crate fails its task with the tool's own
+# message; CI is the source of truth for a tree that drifted from its lockfiles. The per-project moon.yml
+# files follow the same rules.
 #
-# The build, ci, test, test-rust, test-ts, release, and gen aggregates set `runDepsInParallel: false`, so their
-# steps run in the listed order. lint's two deps still run in parallel: clippy reads nothing gen-shared writes.
+# The build, static, gate, ci, test, test-rust, test-ts, release, and gen aggregates set
+# `runDepsInParallel: false`, so their steps run in the listed order. lint's two deps still run in parallel:
+# clippy reads nothing gen-shared writes.
 #
 # `runInCI: false` marks a task `moon ci` must never pick up: tree-mutating ones, user-run ceremonies, and
 # suites that need a browser, a release binary, or a harness CLI. moon resolves none of them when CI=true, so
@@ -77,8 +82,26 @@ tasks:
       mutex: 'generated-contract'
       runDepsInParallel: false
 
+  static:
+    # Three members run a binary from outside the toolchain (typos, actionlint, and yamllint, which uvx
+    # provisions on its first run); the hook accepts those three. The hygiene checks ship with their own bun
+    # unit tests and build the extension once for check-extension-id's manifest read; the project's test
+    # suites, its builds for their own sake, and fuzz are gate's and ci's.
+    description: 'THE PRE-COMMIT CHECK (lefthook.yml runs it): the static checks alone, formatting, lint, types, spelling, the YAML and workflow lints, and the bun-side hygiene checks; the test suites and builds are `gate` and `ci`, which CI runs on every pull request'
+    deps:
+      - 'core:fmt-check'
+      - 'core:lint'
+      - '~:typecheck'
+      - '~:check-ts'
+      - '~:typos'
+      - '~:check-yaml'
+      - '~:check-actions'
+      - '~:hygiene'
+    options:
+      runDepsInParallel: false
+
   gate:
-    description: "THE PRE-COMMIT GATE (lefthook.yml runs it): every check the repository's own toolchain provides (bun, biome, tsc, vitest, cargo verbs); uncached, sequential, always full; `ci` adds the CI-only tools"
+    description: "THE OWN-TOOLCHAIN GATE: every check the repository's own toolchain provides (bun, biome, tsc, vitest, cargo verbs), tests and builds included; uncached, sequential, always full; `static`, the pre-commit hook's task, takes its static members and adds three static-check binaries, `ci` adds the rest of the CI-only tools"
     deps:
       - 'core:fmt-check'
       - 'core:lint'
@@ -221,7 +244,7 @@ tasks:
       mutex: 'generated-contract'
 
   typos:
-    description: 'Source-code spell check (CI gate; config in _typos.toml)'
+    description: 'Source-code spell check (the pre-commit hook and CI; config in _typos.toml)'
     command: 'typos'
     options:
       mutex: 'generated-contract'
