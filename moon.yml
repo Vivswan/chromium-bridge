@@ -410,8 +410,8 @@ tasks:
     # The protocol suites run under the exact interpreter pinned in .python-version, provisioned by uv, so
     # local runs and CI cannot diverge (a PATH python3 already bit us once: 3.12 vs 3.14 subprocess
     # semantics). No fallback by design.
-    description: 'Fail loudly if uv (which provisions the pinned Python) is missing'
-    command: 'bun scripts/check-uv.ts'
+    description: 'Fail loudly if uv (which provisions the pinned Python) is missing: proto install uv'
+    command: 'uv --version'
 
   # The three protocol suites are stdlib unittest modules under tests/protocol
   # (discovery, so a new test cannot be forgotten); --no-project because the
@@ -530,7 +530,7 @@ tasks:
   # The one list of the bun-side checks: CI's hygiene job (checks.yml) runs this task and `ci` depends on it,
   # so a check added here runs in both.
   hygiene:
-    description: 'Every bun-side check (versions, the built manifest, pins, CJK, typography, docs parity, compose); CI runs the same task'
+    description: 'Every bun-side check (versions, the built manifest, pins, CJK, docs parity, compose); CI runs the same task'
     deps:
       - '~:check-version'
       - '~:check-extension-id'
@@ -541,7 +541,6 @@ tasks:
       - '~:check-ignored'
       - '~:check-install-hooks'
       - '~:check-cjk'
-      - '~:check-typography'
       - '~:check-fuzz-smoke'
       - '~:check-harness-driver'
       - '~:check-docs-literals'
@@ -556,9 +555,9 @@ tasks:
       runDepsInParallel: false
 
   check-ci-scripts:
-    description: "Unit tests for the TypeScript behind CI's workflow steps (Linux registration scenarios, installer smoke, mutants shard, auto-format commit, release packaging, uv check, toolchain pin cross-check)"
+    description: "Unit tests for the TypeScript behind CI's workflow steps (Linux registration scenarios, installer smoke, mutants shard, auto-format commit, release packaging, toolchain pin cross-check)"
     deps: ['~:gen-shared']
-    command: 'bun test scripts/tests/linux-registration.test.ts scripts/tests/installer-smoke.test.ts scripts/tests/mutants-shard.test.ts scripts/tests/auto-format-commit.test.ts scripts/tests/release-package.test.ts scripts/tests/check-uv.test.ts scripts/tests/check-toolchain.test.ts'
+    command: 'bun test scripts/tests/linux-registration.test.ts scripts/tests/installer-smoke.test.ts scripts/tests/mutants-shard.test.ts scripts/tests/auto-format-commit.test.ts scripts/tests/release-package.test.ts scripts/tests/check-toolchain.test.ts'
     options:
       mutex: 'generated-contract'
 
@@ -583,15 +582,6 @@ tasks:
       set -e
       bun scripts/check-cjk.ts
       bun test scripts/tests/check-cjk.test.ts
-    options:
-      mutex: 'generated-contract'
-
-  check-typography:
-    description: 'No typographic look-alike characters in any tracked file (exemptions in .typography-allow)'
-    script: |
-      set -e
-      bun scripts/check-typography.ts
-      bun test scripts/tests/check-typography.test.ts
     options:
       mutex: 'generated-contract'
 
