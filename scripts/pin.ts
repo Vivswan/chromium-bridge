@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // The one reader of a toolchain pin for the consumers that run before proto exists (the setup-moon
-// composite on a bare runner, the container-image workflow computing the image's build arg, the compose
-// launcher building the image locally) and for checks.yml's tooling job. Each tool is pinned in exactly
+// composite on the runner, the compose launcher building the image locally) and for the jobs that
+// install a cargo tool themselves (checks.yml's tooling job, the cargo-deb legs). Each tool is pinned in exactly
 // one of two owner files, and a pin found in both, twice, or nowhere is refused instead of one consumer
 // quietly picking a copy.
 //
