@@ -98,6 +98,7 @@ beforeEach(() => {
     policy_history_differs: { message: "would change on roll-back" },
     policy_history_same: { message: "Same as now" },
     policy_history_damaged: { message: "Unreadable entry, superseded $1" },
+    policy_history_damaged_undated: { message: "Unreadable entry" },
     policy_rollback: { message: "Roll back" },
     presence_asking: { message: "asking" },
     presence_tapping: { message: "tapping" },
@@ -315,11 +316,17 @@ describe("PolicyEditor lanes", () => {
           held: { revision: 2, effective: EFFECTIVE },
         },
         { id: "b2", signed: false, overlay_active: false, superseded_unix: 1_700_000_100 },
+        // The host omits a timestamp it could not put on the wire, with what the record held.
+        { id: "c3", signed: false, overlay_active: false },
+        // A JS-safe integer past Date's range: the row shows the raw seconds, never "Invalid Date".
+        { id: "d4", signed: false, overlay_active: false, superseded_unix: 8_700_000_000_000 },
       ],
     });
     await mount();
     await screen.findByText(/^Revision 2, superseded /);
-    await screen.findByText(/^Unreadable entry, superseded /);
+    expect(await screen.findAllByText(/^Unreadable entry, superseded /)).toHaveLength(2);
+    await screen.findByText("Unreadable entry");
+    await screen.findByText("Unreadable entry, superseded 8700000000000");
     expect(screen.getByText("signed, with restrictions")).toBeInTheDocument();
     expect(screen.getByText("Same as now")).toBeInTheDocument();
     expect(marked(screen.getAllByRole("listitem")[0] as HTMLElement)).toEqual([]);

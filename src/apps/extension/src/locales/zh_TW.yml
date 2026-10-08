@@ -150,7 +150,7 @@ presence:
   surface_security_key: "安全金鑰: 由 FIDO2 金鑰為每次核准簽章, 未在本裝置偵測到內建驗證器。"
   surface_software_confirmation: "軟體確認: 此瀏覽器無法執行 WebAuthn 流程, 核准只是一次點擊, 不是硬體驗證。"
   asking: "正在詢問主機..."
-  tapping: "等待此瀏覽器的驗證器..."
+  tapping: "等待此瀏覽器的驗證器批准:"
   confirming: "正在把你的確認傳送給主機..."
   window_title: "此瀏覽器尚未註冊驗證器"
   window_desc: "主機改為接受來自本頁的確認。這是軟體確認, 不是硬體輕觸, 主機會如實稽核。"
@@ -324,6 +324,7 @@ policy:
   history_differs: "回復後會改變"
   history_same: "與目前生效的原則相同"
   history_damaged: "無法讀取的項目, 於 $1 被取代"
+  history_damaged_undated: "無法讀取的項目"
   rollback: "回復"
 
 kill:

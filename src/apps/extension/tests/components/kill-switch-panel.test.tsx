@@ -143,6 +143,9 @@ describe("KillSwitchPanel release", () => {
     await screen.findByText("tapping");
     expect(onScreenAtGet).toBe(true);
     expect(screen.getByText(REQUEST.action)).toBeInTheDocument();
+    // The authenticator's prompt takes the focus, so the live region is what a screen reader hears: it
+    // names what the tap approves, not only that one is awaited.
+    expect(screen.getByRole("status")).toHaveTextContent(REQUEST.action);
     expect(sent.map((m) => m.type)).toEqual(["get_kill", "kill_release"]);
     tapped();
     await waitFor(() =>

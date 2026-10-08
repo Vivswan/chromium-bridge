@@ -152,7 +152,7 @@ presence:
   surface_security_key: "Security key: a FIDO2 key signs each approval; no built-in authenticator was detected on this device."
   surface_software_confirmation: "Software confirmation: this browser cannot run the WebAuthn ceremony, so approvals are a click, not a hardware tap."
   asking: "Asking the host..."
-  tapping: "Waiting for this browser's authenticator..."
+  tapping: "Waiting for this browser's authenticator to approve:"
   confirming: "Sending your confirmation to the host..."
   window_title: "No authenticator is enrolled from this browser"
   window_desc: "The host accepts a confirmation from this page instead. It is a software confirmation, not a hardware tap, and the host audits it as such."
@@ -326,6 +326,7 @@ policy:
   history_differs: "Changes on roll-back"
   history_same: "Same as the policy enforced now"
   history_damaged: "Unreadable entry, superseded $1"
+  history_damaged_undated: "Unreadable entry"
   rollback: "Roll back"
 
 kill:

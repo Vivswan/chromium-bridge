@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useI18n } from "@/hooks/useI18n";
+import { localTime } from "@/lib/local-time";
 import { send } from "@/lib/messages";
 import { PresenceActStatus } from "./PresenceActStatus";
 import { usePresenceAct } from "./usePresenceAct";
@@ -379,19 +380,22 @@ function HistoryBlock({
 }
 
 /** One ring entry as the page renders it, decided once where the wire row enters: a readable revision with the
- * policy it held and its roll-back, or a damaged entry (the host omits what it held) that offers none. The
- * roll-back names the record's content identity, since a revision alone can be ambiguous
- * (policy/plan.rs find_history_effective says when). Two identical records (one restriction repeated within a
- * second) share an id and a state, so the row key adds the occurrence. */
-type HistoryEntry = { id: string; key: string; supersededAt: string } & (
+ * policy it held and its roll-back, or a damaged entry (a field the host omitted) that offers none. The
+ * roll-back names the record's content identity, since a revision alone can be ambiguous (policy/plan.rs
+ * find_history_effective says when).
+ *
+ * Two identical records (one restriction repeated within a second) share an id and a state, so the row key adds
+ * the occurrence. */
+type HistoryEntry = { id: string; key: string } & (
   | {
       kind: "revision";
+      supersededAt: string;
       revision: number;
       effective: PolicyValues;
       signed: boolean;
       overlayActive: boolean;
     }
-  | { kind: "damaged" }
+  | { kind: "damaged"; supersededAt: string | undefined }
 );
 
 /** The row a roll-back names: the revision for the plan, the record's identity for the row. */
@@ -402,16 +406,15 @@ function historyEntries(rows: PolicyHistoryRow[]): HistoryEntry[] {
   return rows.map((row) => {
     const nth = seen.get(row.id) ?? 0;
     seen.set(row.id, nth + 1);
-    const shared = {
-      id: row.id,
-      key: `${row.id}-${nth}`,
-      supersededAt: new Date(row.superseded_unix * 1000).toLocaleString(),
-    };
-    return row.held === undefined
-      ? { ...shared, kind: "damaged" }
+    const shared = { id: row.id, key: `${row.id}-${nth}` };
+    const supersededAt =
+      row.superseded_unix === undefined ? undefined : localTime(row.superseded_unix, "s");
+    return row.held === undefined || supersededAt === undefined
+      ? { ...shared, kind: "damaged", supersededAt }
       : {
           ...shared,
           kind: "revision",
+          supersededAt,
           revision: row.held.revision,
           effective: row.held.effective,
           signed: row.signed,
@@ -470,7 +473,9 @@ function HistoryRowItem({
     return (
       <li className="flex items-center gap-3 border-b border-edge py-2 last:border-b-0">
         <div className="min-w-0 flex-1 text-xs font-medium text-text-1">
-          {t("policy.history_damaged", [entry.supersededAt])}
+          {entry.supersededAt === undefined
+            ? t("policy.history_damaged_undated")
+            : t("policy.history_damaged", [entry.supersededAt])}
         </div>
       </li>
     );
