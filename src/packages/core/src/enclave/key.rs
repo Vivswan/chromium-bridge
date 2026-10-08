@@ -1,5 +1,3 @@
-//! The host key handle and the native-host challenge responder.
-
 use p256::ecdsa::signature::Signer as _;
 use p256::ecdsa::{Signature, SigningKey};
 
@@ -47,21 +45,22 @@ impl EnrollmentKey {
         }
     }
 
-    /// Mint a fresh key into `store` under the caller's lock. Minting is a capability grant (the extension
-    /// will pin what the key signs), so it consumes a [`PresenceAttestation`] like every other grant. The
-    /// absence of a key is decided here under the lock, so two `pair` runs cannot both mint and the second
-    /// silently replace the key an extension already pinned; `pair --reset` disposes first. The same lock
-    /// hold clears a leftover signed policy baseline (a disposal's best-effort clear can fail), since a
-    /// baseline signed by a dead key pushed as current is exactly the pin mismatch a genuine host must never
-    /// produce, and clearing it before the absence check could remove a concurrent pairing's live policy.
-    /// Each store is one write, so nothing is left half-done to roll back.
+    /// Minting is a capability grant (the extension pins what the key signs), so it consumes a
+    /// [`PresenceAttestation`] like every grant. The absence check and the mint share one lock hold, so two
+    /// `pair` runs cannot both mint and silently replace a key an extension already pinned; `pair --reset`
+    /// disposes first.
+    ///
+    /// The leftover signed baseline is cleared under the same hold and AFTER the absence check: a baseline
+    /// signed by a dead key pushed as current is exactly the pin mismatch a genuine host must never produce,
+    /// and clearing before the check could remove a concurrent pairing's live policy. Each store is one
+    /// write, so nothing is left half-done.
     ///
     /// ```text
-    /// a file exists                         -> refused, whichever store was asked for
-    /// a store entry exists                  -> refused, whichever store was asked for
-    /// the store does not answer, File asked -> minted into the file (that is what `--file-store` is for; a
-    ///                                          store entry this cannot see would be superseded by the file,
-    ///                                          which lookup reads first, and a pin on it fails closed)
+    /// a file exists                          -> refused, whichever store was asked for
+    /// a store entry exists                   -> refused, whichever store was asked for
+    /// the store does not answer, File asked  -> minted into the file: lookup reads the file first, so an
+    ///                                           unseen store entry is superseded and a pin on it fails
+    ///                                           closed
     /// the store does not answer, store asked -> the store's error
     /// ```
     pub fn mint(
@@ -100,12 +99,15 @@ impl EnrollmentKey {
         Ok(key)
     }
 
-    /// Delete the key under the caller's lock, from both places, and report what each place confirmed. The
-    /// file goes first and unconditionally (one that cannot be read is removed too: `pair --reset` names this
-    /// path as the recovery from a damaged record, and revocation only removes capability); the store entry
-    /// is confirmed gone by read-back. A store that does not answer is reported, not hidden, and the caller
-    /// decides: a `--file-store` machine must stay able to revoke and re-pair, while a store machine must not
-    /// claim its key gone. Only the file removal itself can fail this call.
+    /// Removes the key from both places and reports what each confirmed; only the file removal can fail this
+    /// call.
+    ///
+    /// ```text
+    /// file, even unreadable  -> removed: `pair --reset` is the advertised recovery from a damaged record
+    /// store entry            -> gone only when the read-back says so (store.rs)
+    /// store does not answer  -> reported, never hidden: a `--file-store` machine must still revoke and
+    ///                           re-pair, a store machine must not claim its key gone
+    /// ```
     pub fn revoke(lock: &RuntimeLockToken) -> Result<Revoked, EnclaveError> {
         let file = match HostKeyFile::load() {
             Ok(Some(_)) => true,
@@ -149,7 +151,6 @@ impl EnrollmentKey {
         self.store
     }
 
-    /// Sign an enrollment challenge; raw `r || s`.
     pub fn sign_challenge(
         &self,
         nonce: &str,
@@ -158,7 +159,6 @@ impl EnrollmentKey {
         self.sign_message(&challenge_message(nonce, context)?)
     }
 
-    /// Sign a policy document under the policy domain; the exact stored bytes, no canonicalization.
     pub fn sign_policy(&self, doc_bytes: &[u8]) -> Result<[u8; SIG_LEN], EnclaveError> {
         self.sign_message(&policy_message(doc_bytes))
     }
@@ -172,7 +172,6 @@ impl EnrollmentKey {
     }
 }
 
-/// What [`EnrollmentKey::revoke`] did to each place.
 #[derive(Debug)]
 pub struct Revoked {
     /// Whether a file key was in use (and is now removed).
@@ -195,7 +194,6 @@ impl Revoked {
         self.file || matches!(self.store, StoreOutcome::Cleared { .. })
     }
 
-    /// Whether anything existed to revoke, as far as the places that answered say.
     pub fn existed(&self) -> bool {
         self.file || matches!(self.store, StoreOutcome::Cleared { existed: true })
     }
@@ -205,9 +203,8 @@ fn record_error(e: std::io::Error) -> EnclaveError {
     EnclaveError::Keychain(format!("host key record: {e}"))
 }
 
-/// Answer an `enclave_challenge` control frame: look the key up, sign the challenge, and build the proof,
-/// or a typed error frame. Never leaks key material; detailed failure context goes to stderr, the extension
-/// only sees the stable reason code.
+/// Never leaks key material: the failure detail goes to stderr and the extension sees only the stable reason
+/// code.
 pub fn respond_to_challenge(nonce: &str, context: Option<&str>) -> EnclaveControl {
     match challenge_proof(nonce, context) {
         Ok(frame) => frame,

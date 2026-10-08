@@ -1,9 +1,7 @@
 #!/usr/bin/env bun
 
 // Smoke check for the cargo-fuzz targets: build each one and run it for a short bounded blast, proving the
-// harnesses build and survive hostile bytes. Not a fuzzing campaign: the nightly job stretches this same script
-// over a persistent corpus, and continuous (OSS-Fuzz scale) fuzzing is out of scope.
-// node builtins only, no scripts/lib.ts import, so it runs without a `bun install`.
+// harnesses build and survive hostile bytes. The nightly job stretches this same script over a persistent corpus.
 //
 //   a target crashes                -> recorded, the pass continues, exit 1 at the end
 //   its report                      -> <failure-dir>/<target>/report.md, the shape the fleet repository's
@@ -27,9 +25,9 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { repoRoot } from "./lib.ts";
 
 const usage =
   "usage: bun scripts/fuzz-smoke.ts [--runs=N] [--max-total-time=SECONDS] [--cmin] [--seed=N] [--failure-dir=PATH] [--require-toolchain]";
@@ -118,22 +116,17 @@ export function parseOptions(argv: string[]): Options {
 const noDictionary = new Set(["handshake_verify", "enclave_challenge"]);
 const jsonDictionary = "fuzz/dictionaries/json_protocol.dict";
 
-// The structured targets take Arbitrary-derived input whose byte encoding is
-// unstable across `arbitrary` versions, so a pinned seed file can silently
-// stop meaning what it meant; their reports steer to a regression unit test
-// instead of a seed.
+// Arbitrary-derived input has no stable byte encoding across `arbitrary` versions, so these targets' reports
+// steer to a unit test, never a seed file.
 const structuredTargets = noDictionary;
 
-/** The dictionary a target's run passes libFuzzer, repo-relative to the core package; none for structured targets. */
 function dictionaryFor(target: string): string | undefined {
   return noDictionary.has(target) ? undefined : jsonDictionary;
 }
 
 /**
- * Why the pass cannot run on this checkout, or undefined when every input is present: each byte target's
- * seed directory and the dictionary its run passes. The seeds and the JSON dictionary are generated
- * (`moon run fuzz-seeds`) and gitignored, so a fresh checkout has neither; skipping them silently would
- * fuzz without the corpus the nightly had and still print the same green line.
+ * The seeds and the JSON dictionary are generated (`moon run fuzz-seeds`) and gitignored, so a fresh checkout has
+ * neither; skipping them silently would fuzz without the corpus the nightly had and still print the same green line.
  */
 export function generatedInputsError(core: string, targets: string[]): string | undefined {
   const missing = new Set<string>();
@@ -150,16 +143,14 @@ export function generatedInputsError(core: string, targets: string[]): string | 
   ].join("\n");
 }
 
-/** The filenames in `dir` with their mtimes (empty map when it is absent). */
 export function snapshotDir(dir: string): Map<string, number> {
   if (!existsSync(dir)) return new Map();
   return new Map(readdirSync(dir).map((name) => [name, statSync(resolve(dir, name)).mtimeMs]));
 }
 
 /**
- * The names in `after` that are new or rewritten since `before`, sorted.
- * mtimes matter: libFuzzer names crash files by input hash, so a rerun of a
- * known crash OVERWRITES an existing file instead of adding one.
+ * libFuzzer names crash files by input hash, so a rerun of a known crash OVERWRITES its file: mtimes, not names,
+ * tell new from old.
  */
 export function newFiles(before: Map<string, number>, after: Map<string, number>): string[] {
   return [...after.entries()]
@@ -168,23 +159,19 @@ export function newFiles(before: Map<string, number>, after: Map<string, number>
     .sort();
 }
 
-/** How the crashed run ended, for the report ("status 77" / "signal SIGABRT"). */
 export function describeExit(status: number | null, signal: string | null): string {
   return signal ? `signal ${signal}` : `status ${status ?? "unknown"}`;
 }
 
 export interface FailureInfo {
   target: string;
-  /** "status N" or "signal SIG..." from describeExit. */
   exit: string;
-  /** What crashed: the fuzz run itself, or the corpus minimization pass. */
   phase: "run" | "cmin";
   seed: number;
   runs: number;
   maxTotalTime: number;
-  /** New files cargo-fuzz left in fuzz/artifacts/<target>/, repo-relative names only. */
+  /** Bare names under fuzz/artifacts/<target>/, never paths. */
   crashFiles: string[];
-  /** Single-line base64 of the first crash file, when it is small enough. */
   crashBase64: string | undefined;
 }
 
@@ -199,8 +186,7 @@ export const MAX_EMBED_BYTES = 3000;
  * command in a fenced block, near the top so head-truncation keeps it.
  */
 export function buildReport(info: FailureInfo): string {
-  // cmin takes neither the seed nor -runs/-max_total_time, so its sentence
-  // claims no configuration.
+  // cmin takes neither the seed nor -runs/-max_total_time, so its sentence claims no configuration.
   const configuration = `seed ${info.seed}, -runs=${info.runs}, -max_total_time=${info.maxTotalTime}`;
   const lines: string[] = [
     `# fuzz: ${info.target} crashed`,
@@ -211,9 +197,7 @@ export function buildReport(info: FailureInfo): string {
     "",
   ];
 
-  // Pin --target to the nightly host triple, same as the script does: a
-  // musl-prebuilt cargo-fuzz (taiki-e/install-action) defaults to a triple
-  // ASan cannot link, and the substitution is correct on any machine.
+  // The same --target pin main() computes, so the replay links under ASan on a musl-prebuilt cargo-fuzz.
   const hostArg = `--target "$(rustc +nightly -vV | sed -n 's/^host: //p')"`;
 
   const primary = info.crashFiles[0];
@@ -290,24 +274,19 @@ export function buildReport(info: FailureInfo): string {
 
 function main(): number {
   const options = parseOptions(process.argv.slice(2));
-  const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   // cargo-fuzz resolves the fuzz workspace from the crate that contains fuzz/,
   // so run from the core package, not the repo root.
-  const core = resolve(repo, "src/packages/core");
+  const core = resolve(repoRoot, "src/packages/core");
   const failureRoot = resolve(core, options.failureDir);
-  // parseOptions already constrains --failure-dir; this is the last line of
-  // defense in front of the recursive delete below.
+  // The recursive delete below is where a bad path would destroy tracked files, so the resolved path is
+  // checked once more here.
   if (!failureRoot.startsWith(`${core}/`) || failureRoot === core) {
     console.error(`error: failure dir escapes ${core}: ${failureRoot}`);
     return 2;
   }
 
-  // Run one cargo +nightly fuzz subcommand. A spawn error (cargo itself
-  // missing/broken) is fatal; the run's own exit status/signal is returned
-  // for the caller to record as a target failure. `timeoutMs` bounds
-  // subcommands with no wall-clock flag of their own (cmin): a hang there
-  // would otherwise ride to the JOB timeout, which cancels the run and
-  // skips the if:failure() reporting steps entirely.
+  // `timeoutMs` bounds subcommands with no wall-clock flag of their own (cmin): a hang there rides to the JOB
+  // timeout, which cancels the run and skips the if:failure() reporting steps.
   function cargoFuzz(
     args: string[],
     timeoutMs?: number,
@@ -317,8 +296,7 @@ function main(): number {
       stdio: "inherit",
       timeout: timeoutMs,
     });
-    // A timeout kill surfaces as an error (ETIMEDOUT) plus the kill signal;
-    // that is a recordable failure of the subcommand, not a broken cargo.
+    // A timeout kill surfaces as an ETIMEDOUT error plus the kill signal: a recordable failure, not a broken cargo.
     const timedOut =
       run.error &&
       /ETIMEDOUT|TimeoutError/i.test(
@@ -331,17 +309,14 @@ function main(): number {
     return { status: run.status, signal: run.signal ?? (timedOut ? "SIGTERM" : null) };
   }
 
-  // Stale reports from an earlier run must never end up in a filed issue;
-  // clear before the toolchain probes so even a skipping run cannot leave
-  // yesterday's reports looking current.
+  // Cleared before the toolchain probes, so even a skipping run cannot leave yesterday's reports looking
+  // current to the issue filer.
   rmSync(failureRoot, { recursive: true, force: true });
 
   const toolchains = spawnSync("rustup", ["toolchain", "list"], {
     cwd: core,
     encoding: "utf8",
   });
-  // A missing or failing rustup skips like a missing nightly does. Under --require-toolchain a skip is a
-  // FAILURE: in the nightly job an exit-0 skip would read as a green night and auto-close the tracking issue.
   if (toolchains.error || toolchains.status !== 0 || !toolchains.stdout?.includes("nightly")) {
     if (options.requireToolchain) {
       console.error("error: nightly toolchain required (--require-toolchain) but missing");
@@ -367,10 +342,9 @@ function main(): number {
     return 0;
   }
 
-  // cargo-fuzz defaults --target to its own compile-time host triple, which is
-  // wrong when it was installed as a prebuilt musl binary (taiki-e/install-action
-  // in CI passes x86_64-unknown-linux-musl): ASan cannot link a statically
-  // linked libc. Pin the target to the nightly toolchain's real host triple.
+  // cargo-fuzz defaults --target to its own compile-time host triple, a musl triple when installed prebuilt
+  // (taiki-e/install-action in CI), and ASan cannot link a static libc. The nightly toolchain's real host triple
+  // is pinned instead.
   const rustcInfo = spawnSync("rustc", ["+nightly", "-vV"], { cwd: core, encoding: "utf8" });
   const host =
     rustcInfo.status === 0 ? /^host: (\S+)$/m.exec(rustcInfo.stdout ?? "")?.[1] : undefined;
@@ -379,8 +353,7 @@ function main(): number {
     return 1;
   }
 
-  // The target list comes from cargo-fuzz itself so it cannot silently drift
-  // from fuzz/Cargo.toml; an empty list means the fuzz workspace is broken.
+  // The target list comes from cargo-fuzz itself, so it cannot drift from fuzz/Cargo.toml.
   const list = spawnSync("cargo", ["+nightly", "fuzz", "list"], { cwd: core, encoding: "utf8" });
   if (list.error || list.status !== 0) {
     console.error("error: `cargo +nightly fuzz list` failed");
@@ -395,9 +368,7 @@ function main(): number {
     return 1;
   }
 
-  // Record one failure: write the contract report and copy the crash files
-  // beside it, so the report survives even if the artifacts dir is not
-  // uploaded whole.
+  // Crash files are copied beside the report so it survives when the artifacts dir is not uploaded whole.
   function recordFailure(info: FailureInfo): void {
     const dir = resolve(failureRoot, info.target);
     mkdirSync(dir, { recursive: true });
@@ -410,9 +381,6 @@ function main(): number {
     );
   }
 
-  // The crash evidence for a target: the new/rewritten artifact files, plus
-  // a base64 embed of the first one when it is small enough to ride in the
-  // report.
   function crashEvidence(
     artifactsDir: string,
     before: Map<string, number>,
@@ -438,8 +406,7 @@ function main(): number {
   console.log(`[fuzz-smoke] seed ${seed}`);
   for (const target of targets) {
     console.log(`[fuzz-smoke] ${target}: ${options.runs} runs (target ${host})`);
-    // Pass the corpus dir explicitly (libFuzzer needs it to exist) so the
-    // generated seeds (moon run fuzz-seeds) ride along as a second corpus dir libFuzzer merges in.
+    // libFuzzer needs the corpus dir to exist; the generated seeds ride along as a second corpus dir it merges in.
     const corpus = `fuzz/corpus/${target}`;
     mkdirSync(resolve(core, corpus), { recursive: true });
     const runArgs = ["run", "--target", host, target, corpus];
@@ -479,8 +446,8 @@ function main(): number {
       console.log(`[fuzz-smoke] ${target}: minimizing corpus`);
       const artifactsDir = resolve(core, "fuzz/artifacts", target);
       const before = snapshotDir(artifactsDir);
-      // cmin has no wall-clock flag of its own; normally seconds, so three
-      // minutes is a hang, and a killed cmin is a recorded failure below.
+      // cmin has no wall-clock flag; it normally takes seconds, so three minutes is a hang and a killed cmin is
+      // recorded below.
       const run = cargoFuzz(["cmin", "--target", host, target], 180_000);
       // cargo-fuzz has exited 0 while printing "Failed to minimize corpus"
       // after its libFuzzer child died, so a new crash artifact counts as a

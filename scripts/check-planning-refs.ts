@@ -14,8 +14,8 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { parse } from "@babel/parser";
+import { gitEnv, repoRoot } from "./lib.ts";
 
 export const COVERED: readonly string[] = [
   "src/apps/extension/**",
@@ -36,7 +36,8 @@ export const COVERED: readonly string[] = [
 export const FIXTURES: readonly string[] = ["scripts/tests/check-planning-refs.test.ts"];
 
 /** Line patterns, one per artifact kind. Each is written so this file's own text never matches it (the
- * record prefix goes through a character class, the examples carry no digit), which its test pins. A tag
+ * record prefix goes through a character class, the examples carry no digit); the gate scans scripts/** and
+ * so holds this file to that. A tag
  * may be hyphenated. A bare audit code (a letter or two and a digit) is flagged on a line only inside
  * parentheses, the shape the audit left behind; in prose the same letters name a heading or a key. */
 export const PATTERNS: ReadonlyArray<readonly [name: string, re: RegExp]> = [
@@ -155,16 +156,6 @@ export function findPlanningRefs(path: string, text: string): Hit[] {
     }));
 }
 
-/** The environment for a git child aimed at a repository OTHER than the one a running git hook is
- * committing: the caller's, minus the GIT_* variables the hook exports (GIT_DIR, GIT_INDEX_FILE, ...).
- * Inherited, they would make `git -C <root>` read and WRITE the hook's repository instead of root. The
- * hook's own repository keeps them, so a commit built on an alternate index is scanned as staged; the
- * hook itself is still detected from the caller's GIT_INDEX_FILE, so an explicit root under a hook is
- * judged by its own index too. */
-export function gitEnv(): NodeJS.ProcessEnv {
-  return Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_")));
-}
-
 /** The git-tracked files under COVERED minus FIXTURES, repo-relative, sorted. git does the
  * glob matching, so an ignored build output or an untracked scratch file is never scanned. */
 export function coveredFiles(root: string, env: NodeJS.ProcessEnv = process.env): string[] {
@@ -233,7 +224,10 @@ export function scanFiles(
 }
 
 function main(rootArg: string | undefined): number {
-  const root = rootArg ? resolve(rootArg) : resolve(fileURLToPath(import.meta.url), "../..");
+  const root = rootArg ? resolve(rootArg) : repoRoot;
+  // A root the caller named is another repository, so the hook's GIT_* variables (GIT_DIR, GIT_INDEX_FILE)
+  // are scrubbed or `git -C <root>` would read the hook's repository and index instead; this checkout keeps
+  // them, so a commit on an alternate index is scanned as staged.
   const env = rootArg ? gitEnv() : process.env;
   // git's pre-commit hook exports GIT_INDEX_FILE (GIT_DIR only in some layouts), so that one variable is
   // the hook signal; a developer who exported it by hand is judged by that index, which is what they named.

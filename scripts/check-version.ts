@@ -20,8 +20,6 @@ for (const relativePath of versionedJsonFiles) {
   }
 }
 
-// Parsed once: the bootstrap tie below reads initial-version, the coverage
-// check below reads extra-files.
 const configPath = "release-please-config.json";
 const config = JSON.parse(readFileSync(join(repoRoot, configPath), "utf8")) as {
   "initial-version"?: unknown;
@@ -67,12 +65,9 @@ if (manifestVersion === undefined) {
   }
 }
 
-// The release PR bumps only the files listed in extra-files, and
-// release-please fails soft on a wrong updater (a bad type or jsonpath logs
-// "No entries modified" and leaves the file unchanged), so each expected
-// entry must both be present and carry the exact updater shape that hits its
-// version field. Every entry matching an expected path is validated, and
-// duplicates are rejected outright.
+// The release PR bumps only the files listed in extra-files, and release-please fails soft on a wrong
+// updater (a bad type or jsonpath logs "No entries modified" and leaves the file unchanged), so each
+// expected entry must both be present and carry the exact updater shape that hits its version field.
 const extraFiles = config.packages?.["."]?.["extra-files"] ?? [];
 const expectedUpdaters: [string, { type: string; jsonpath: string }][] = [
   ["Cargo.toml", { type: "toml", jsonpath: "$.workspace.package.version" }],

@@ -1,6 +1,5 @@
-//! The published runtime state: the lock file naming the live server (endpoint + per-run secret + pid), and
-//! the cross-process [`RuntimeMutex`] that serializes every mutation of that shared state. The directory both
-//! live in is [`RuntimeDir`].
+//! Every mutation of the published runtime state (lock file, socket) runs under [`RuntimeMutex`];
+//! [`LockFile`] is the cross-build on-disk contract.
 
 use std::fs;
 use std::io;
@@ -13,38 +12,30 @@ use super::runtime_dir::RuntimeDir;
 use super::socket::{listen, BridgeListener};
 use crate::fsguard::{read_capped, write_private_atomic};
 
-/// Per-process runtime info the MCP server publishes for the native host.
-///
-/// Deliberately NOT `deny_unknown_fields`, unlike the other on-disk records: an older build still installed
-/// during an upgrade reads the lock a newer one wrote, and a strict parser would take the bridge down.
-/// Safe because the lock file is DISCOVERY, not authorization: every connection still passes the same-user gate
-/// (the peer-UID check on Unix, the pipe's descriptor on Windows), image attestation, and the HMAC handshake, so an
-/// unknown field admits nobody.
+/// Not `deny_unknown_fields`, unlike the other on-disk records: during an upgrade an older build may read the
+/// lock a newer one wrote. Safe because the lock is discovery, not authorization: every connection still
+/// passes the same-user gate, attestation, and the HMAC handshake. docs/security/rationale.md records the
+/// decision.
 ///
 /// ```text
-/// adding a field                         -> only such that old readers stay correct ignoring it
-/// a change old readers must NOT survive  -> a NEW filename (run.lock -> run.v2.lock); old binaries see no lock
-///                                           and fail closed instead of misreading
+/// adding a field                         -> old readers must stay correct ignoring it
+/// a change old readers must not survive  -> a new filename, so old binaries see no lock and fail closed
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LockFile {
-    /// How the native host reaches the server. On Unix this is the filesystem
-    /// path of the 0600 Unix-domain socket; on Windows it is the pipe's name
-    /// in the local pipe namespace (`\\.\pipe\chromium-bridge-<hash>-<pid>`).
+    /// Read by the native host: the socket path on Unix, the pipe name on Windows
+    /// (`\\.\pipe\chromium-bridge-<hash>-<pid>`).
     pub endpoint: String,
-    /// Random token the native host must echo back on connect. The lock file
-    /// and (on Unix) the socket are 0600, so this guards against another local
-    /// user's stray process connecting.
+    /// Keys the HMAC handshake; readable by this user alone (0600), so a process that cannot read it cannot
+    /// answer.
     pub secret: String,
-    /// PID of the MCP server process that owns the socket, for diagnostics.
+    /// The owner: liveness, takeover attestation, and the ownership check before any cleanup key on it.
     pub pid: u32,
 }
 
-/// Read cap for the lock file (a few hundred bytes of JSON); see [`read_capped`].
 const LOCK_MAX_BYTES: usize = 64 * 1024;
 
-/// The lock file's name under the runtime directory. The docs state it (check-docs-literals holds them to
-/// this value through the generated contract), and a wire change old readers must not survive renames it.
+/// The docs state this name; check-docs-literals holds them to it through the generated contract.
 pub const LOCK_FILENAME: &str = "run.lock";
 
 impl LockFile {
@@ -53,14 +44,12 @@ impl LockFile {
         Ok(Self::path_in(&RuntimeDir::ensure()?))
     }
 
-    /// The lock's place inside whatever runtime dir it is handed, resolved or created.
     pub(crate) fn path_in(runtime_dir: &RuntimeDir) -> PathBuf {
         runtime_dir.join(LOCK_FILENAME)
     }
 
-    /// Module-private on purpose: the lock file is mutated only inside this module's [`RuntimeMutex`] critical
-    /// sections ([`listen_and_publish`]), after ownership is established. A wider visibility would allow lock-free
-    /// writes, the interleaving class [`cleanup_stale_lock`] exists to prevent.
+    /// Private so no write can happen outside a [`RuntimeMutex`] section; [`cleanup_stale_lock`] exists for
+    /// exactly that interleaving.
     fn write(&self) -> io::Result<()> {
         let bytes = serde_json::to_vec(self)?;
         write_private_atomic(&Self::path()?, &bytes)
@@ -76,12 +65,9 @@ impl LockFile {
         Ok(Some(lf))
     }
 
-    /// Remove the lock file and (on Unix) the socket, unconditionally.
-    /// Module-private on purpose, like [`write`](Self::write): every caller
-    /// must first prove under the [`RuntimeMutex`] that the on-disk state is
-    /// its own to clear ([`remove_if_owned`](Self::remove_if_owned),
-    /// [`cleanup_stale_lock`], [`listen_and_publish`]); an unguarded remove
-    /// once deleted a live server's files.
+    /// Private like [`write`](Self::write): reached only under the [`RuntimeMutex`], after the caller read the
+    /// lock and judged it (its own, a dead owner's, one it supersedes, or unreadable), so no path removes a
+    /// live server's files without having looked.
     fn remove() {
         let Ok(dir) = RuntimeDir::ensure() else {
             return;
@@ -91,11 +77,9 @@ impl LockFile {
         let _ = fs::remove_file(Self::path_in(&dir));
     }
 
-    /// Remove the lock file (and on Unix the socket) ONLY if the on-disk lock still names this process: after a
-    /// takeover the paths belong to the successor, and an exiting server must never clean up its successor's files.
-    /// The check-then-remove runs under the [`RuntimeMutex`] so a successor's [`listen_and_publish`] cannot slip
-    /// between the read and the remove; anything unprovable (a missing or unreadable lock, an unacquirable mutex) is
-    /// left alone for the next server start to clear.
+    /// After a takeover the paths belong to the successor, so an exiting server removes them only while the
+    /// lock still names it, checked and removed under the [`RuntimeMutex`]; anything unprovable is left for
+    /// the next start to clear.
     pub fn remove_if_owned() {
         let Ok(_guard) = RuntimeMutex::acquire() else {
             return;
@@ -106,14 +90,9 @@ impl LockFile {
     }
 }
 
-/// Cross-process serialization of every mutation of the shared runtime state
-/// (lock file + socket): kernel-enforced advisory file locking (`flock` on
-/// Unix, `LockFileEx` on Windows via std's `File::lock`), so read-decide-remove
-/// sequences in different processes cannot interleave. This protects our own
-/// processes from clobbering each other during takeovers and reconnects; it is
-/// NOT a defense against a hostile same-user process, which could always
-/// delete these files directly (the boundary against other users is the 0700
-/// directory).
+/// Keeps our own processes from clobbering each other during takeovers and reconnects. Not a defense against
+/// a hostile same-user process, which can delete the files directly; the boundary against other users is the
+/// 0700 directory.
 struct RuntimeMutex(
     #[expect(
         dead_code,
@@ -122,11 +101,10 @@ struct RuntimeMutex(
     fs::File,
 );
 
-/// Witness that the cross-process [`RuntimeMutex`] is held: zero-sized and constructible only in this module, minted
-/// by [`with_runtime_lock`] while its guard is alive and lent by reference under a higher-ranked closure signature, so
-/// a token cannot outlive the hold it proves. Mutators of lock-guarded trust state (the `*_locked` family in
-/// `crate::revocation`, `Allowlist::write`) demand `&RuntimeLockToken`, so "caller must hold the runtime lock" is a
-/// compile error to violate, not a comment.
+/// Witness that the [`RuntimeMutex`] is held, minted only by [`with_runtime_lock`] and lent by reference so
+/// it cannot outlive the hold. Every mutator of a runtime record takes it (the `*_locked` functions in
+/// trust.rs, policy/store.rs, lang.rs, and enclave, plus the record's own write and remove), so a record
+/// write outside the hold does not compile; the lock file and socket are written only inside this module.
 pub struct RuntimeLockToken(());
 
 impl RuntimeMutex {
@@ -138,18 +116,14 @@ impl RuntimeMutex {
     }
 }
 
-/// Result of [`listen_and_publish`]: either we now own the bridge (listener
-/// bound and lock published), or another live server published while we were
-/// preparing and the caller must decide whether to supplant it too.
 pub enum PublishOutcome {
     Published(BridgeListener, LockFile),
     LostRace(LockFile),
 }
 
-/// Bind the bridge socket and publish the lock file as one critical section under the [`RuntimeMutex`], re-checking
-/// the on-disk lock first: if another live server published since the caller last looked (two servers starting at
-/// once), nothing is touched and `LostRace` names the owner, since binding anyway would unlink that server's
-/// freshly-bound socket. Stale state (a dead owner, or a pid reused by an unrelated process) is cleared first.
+/// One critical section under the [`RuntimeMutex`]: if another live server published since the caller last
+/// looked, nothing is touched and `LostRace` names it, since binding anyway would unlink that server's fresh
+/// socket.
 pub fn listen_and_publish() -> io::Result<PublishOutcome> {
     let _guard = RuntimeMutex::acquire()?;
     if let Ok(Some(cur)) = LockFile::read() {
@@ -185,13 +159,7 @@ pub fn listen_and_publish() -> io::Result<PublishOutcome> {
     Ok(PublishOutcome::Published(listener, lf))
 }
 
-/// Run `f` while holding the cross-process [`RuntimeMutex`], so a
-/// read-modify-write of shared runtime state (the lock file, the client
-/// allowlist) cannot interleave with another of our processes doing the same.
-/// `f` receives a [`RuntimeLockToken`] proving the hold, to pass on to the
-/// lock-requiring mutators it calls.
-/// Not a defense against a hostile same-user process (it can delete the files
-/// directly); the boundary against other users is the 0700 directory.
+/// See [`RuntimeMutex`]; the token lent to `f` proves the hold to the mutators it calls.
 pub(crate) fn with_runtime_lock<T>(
     f: impl FnOnce(&RuntimeLockToken) -> io::Result<T>,
 ) -> io::Result<T> {
@@ -208,10 +176,9 @@ pub(super) fn read_lock_or_err() -> io::Result<LockFile> {
     })
 }
 
-/// After a failed connect: remove the lock (and socket) ONLY when, re-checked under the [`RuntimeMutex`], the on-disk
-/// lock is still the one we dialed and its owner is dead; anything ambiguous is left alone for the next server start
-/// to clear. An unconditional remove once deleted a LIVE server's files on a transient connect failure, and without
-/// the mutex + re-read a new server could publish between the liveness check and the remove.
+/// The lock goes only when, re-read under the [`RuntimeMutex`], it is still the one dialed and its owner is
+/// dead: an unconditional remove on a transient connect failure deletes a LIVE server's files, and without
+/// the re-read a new server could publish between the liveness check and the remove.
 pub(super) fn cleanup_stale_lock(dialed: &LockFile) {
     let Ok(_guard) = RuntimeMutex::acquire() else {
         return;

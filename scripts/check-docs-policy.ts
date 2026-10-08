@@ -1,25 +1,13 @@
 #!/usr/bin/env bun
 
-// Docs-policy parity gate: the security tables users read before trusting or
-// relaxing a gate must match the canonical policy sources.
+// The security tables a user reads before trusting or relaxing a gate are diffed against the sources the
+// Rust core emits (generated/ops.ts <- catalogue.rs, generated/policy.ts <- policy/mod.rs) and the
+// browser-owned settings schema (src/packages/shared/src/settings.ts), so a renamed or re-risked tool, or
+// a flipped default, cannot leave the security pitch advertising the old policy with every check green.
 //
-//   - docs/security/tool-risk-matrix.md: its per-tool rows (name, Risk, Chrome
-//     perm), its "off by default" claims, and every gate field it names are
-//     diffed against the generated catalogue metadata
-//     (src/packages/shared/generated/ops.ts <- catalogue.rs via `moon run gen`,
-//     rebuilt before this gate runs) and the canonical defaults: the
-//     GENERATED host-owned policy contract (POLICY_DEFAULTS in
-//     src/packages/shared/generated/policy.ts <- policy/mod.rs) for
-//     the 15 policy fields, and the settings schema
-//     (src/packages/shared/src/settings.ts) for the browser-owned keys.
-//   - SECURITY.md: the fail-safe-defaults table's Default cells are diffed
-//     against the same two canonical sources.
-//   - The "N tools" headline in README.md and docs/architecture.md is
-//     diffed against the catalogue's tool count.
-//
-// Without this gate the audit's finding stands: add, rename, or re-risk a
-// tool (or flip a default) and the project's primary security pitch keeps
-// advertising the old policy with every check green.
+//   docs/security/tool-risk-matrix.md  -> per-tool rows (name, Risk, Chrome perm), "off by default" claims, gate fields
+//   .github/SECURITY.md                -> the fail-safe-defaults table's Default cells
+//   README.md, docs/architecture.md    -> the "N tools" headline against the catalogue's count
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -28,12 +16,8 @@ import { OP_NAMES, TOOL_META } from "../src/packages/shared/generated/ops";
 import { POLICY_DEFAULTS, POLICY_FIELDS } from "../src/packages/shared/generated/policy";
 import { DEFAULTS } from "../src/packages/shared/src/settings";
 
-/** Every canonical default a doc may pin, from BOTH contracts: the generated
- * host-owned policy deny baseline (generated/policy.ts, the 15 migrated fields)
- * and the browser-owned settings schema (settings.ts). The two key sets are
- * disjoint by construction (the policy fields left
- * settings.ts); the loop enforces that so a re-added duplicate key cannot
- * silently shadow one contract's default with the other's. */
+// The two contracts' key sets must stay disjoint, or a re-added duplicate key would let one contract's
+// default silently shadow the other's in the merge below.
 for (const field of POLICY_FIELDS) {
   if (field in DEFAULTS) {
     throw new Error(
@@ -76,7 +60,6 @@ export function parseRiskMatrix(md: string): MatrixRow[] {
   return rows;
 }
 
-/** Diff the matrix rows against the catalogue: exact name set, risk, perm. */
 export function riskMatrixViolations(
   rows: MatrixRow[],
   names: readonly string[] = OP_NAMES,
@@ -105,11 +88,8 @@ export function riskMatrixViolations(
   return out;
 }
 
-/** The opt-in tools' rows must claim "off by default" exactly when their gate
- * field defaults to false (and never claim it when it defaults to true). The
- * gates are HOST-OWNED policy fields, so this pin reads the
- * GENERATED policy contract (POLICY_DEFAULTS <- generated/policy.ts), not the
- * settings schema. */
+/** The gates are host-owned policy fields, so the claim is pinned to the generated policy contract, never
+ * the settings schema. */
 export function offByDefaultViolations(
   rows: MatrixRow[],
   matrixMd: string,
@@ -170,11 +150,8 @@ export function offByDefaultViolations(
  * loosening the scan. */
 export const MATRIX_NON_SETTINGS_TOKENS: ReadonlySet<string> = new Set();
 
-/** Every backticked camelCase token in the matrix must be a canonical gate
- * name (they are how the doc names the configurable gates): a HOST-OWNED
- * policy field (the generated POLICY_FIELDS catalogue) or a remaining
- * browser-owned settings key (settings.ts). Same strength as before the policy split
- * - the expectation moved contracts, it did not loosen. */
+/** A backticked camelCase token is how the matrix names a configurable gate, so each must be a policy field
+ * or a settings key. */
 export function settingsKeyViolations(
   md: string,
   defaults: Readonly<Record<string, unknown>> = CANONICAL_DEFAULTS,
@@ -193,12 +170,8 @@ export function settingsKeyViolations(
   return out;
 }
 
-/** The fields SECURITY.md's fail-safe-defaults table documents - all six are
- * HOST-OWNED policy fields, so their Default cells pin the
- * generated deny baseline (POLICY_DEFAULTS <- generated/policy.ts). A pinned
- * list, like the repo's other pin tests: dropping (or reformatting away) a
- * row must fail here and force a conscious edit, not vanish silently. Adding
- * a row needs no code change; removing one means updating this pin. */
+/** Pinned so dropping a row, or reformatting it past the row parser, fails here and forces a conscious edit;
+ * adding a row needs no code change. */
 export const REQUIRED_SECURITY_DEFAULT_ROWS = [
   "confirmPageEval",
   "pageEvalEnabled",
@@ -208,10 +181,6 @@ export const REQUIRED_SECURITY_DEFAULT_ROWS = [
   "confirmGraceMs",
 ] as const;
 
-/** Parse SECURITY.md's fail-safe-defaults table (`| \`key\` | \`default\` | ...`)
- * and diff each Default cell against the canonical defaults - the generated
- * policy contract for policy fields, the settings schema for browser-owned
- * keys; the pinned row set must all be present. */
 export function securityDefaultsViolations(
   securityMd: string,
   defaults: Readonly<Record<string, unknown>> = CANONICAL_DEFAULTS,
@@ -251,7 +220,6 @@ export function securityDefaultsViolations(
   return out;
 }
 
-/** The "N tools" headline claims, per doc. Returns violations. */
 export function toolCountViolations(
   texts: Readonly<Record<string, string>>,
   count: number = OP_NAMES.length,

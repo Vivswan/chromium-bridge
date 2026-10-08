@@ -6,11 +6,12 @@ import { Scratch, writeTree } from "../lib";
 const scratch = new Scratch();
 afterEach(() => scratch.remove());
 
-// A tree shaped like this repository's: the extension reaches the shared package only through an
-// alias the bundler resolves, a stylesheet import sits beside the module imports, two scripts load
-// modules through type-asserted `require` and `module.require` receivers, a dependency store and a
-// generated dot-directory live under src/ with imports that resolve nowhere, and docs/ holds no
-// source file.
+// A tree shaped like this repository's, with the four imports the lint must read or skip.
+//   "@shared/util"                         -> the only ext -> shared edge, visible through the alias alone
+//   "./style.css"                          -> a stylesheet beside the module imports
+//   (require as NodeRequire)(...) and      -> type-asserted receivers are still loads
+//     (module as NodeModule).require(...)
+//   node_modules/ and .wxt/ under src/     -> pruned, their imports resolve nowhere
 function tree(declaration: string): string {
   const root = scratch.dir("arch-lint");
   writeTree(root, {
@@ -53,11 +54,9 @@ const EDGES = "edges:\n  ext: [shared]\n  scripts: [ext, shared]\n";
 const lint = (root: string) =>
   lintArchitecture(root, readArchitecture(join(root, "architecture.yml")));
 
-// The lint fails in both directions, and three facts the source cannot state: the alias is what
-// makes the shared edge visible (without `aliases` the same import is a bare specifier and the
-// declared edge reads as stale), a type-asserted `require` or `module.require` is still a load, and
-// a layer owning no source file is a problem rather than a vacuous match. Pruned directories are
-// never parsed, or their unresolvable imports would throw.
+// The lint fails in both directions, and pruned directories are never parsed (their imports would throw).
+//   no `aliases`                   -> the aliased import is a bare specifier, the declared edge reads stale
+//   a layer owning no source file  -> a problem, never a vacuous match
 describe("lintArchitecture", () => {
   const cases: ReadonlyArray<readonly [name: string, declaration: string, problems: string[]]> = [
     ["the declaration equal to the tree is clean", `${LAYERS}\n${ALIASES}${EDGES}`, []],

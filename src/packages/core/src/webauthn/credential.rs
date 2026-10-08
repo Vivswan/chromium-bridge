@@ -1,5 +1,4 @@
-//! The enrolled credential: its id, its ES256 public key, and the sign counter; plus the one relying-party
-//! id this host serves. Every constructor validates, so a value that exists is one the verifier can use.
+//! Every constructor validates, so a credential value that exists is one the verifier can use.
 
 use std::fmt;
 
@@ -37,7 +36,6 @@ impl RpId {
     }
 }
 
-/// Why a byte string is not a credential id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum CredentialIdError {
     #[error("credential id is not base64url")]
@@ -48,8 +46,6 @@ pub enum CredentialIdError {
     Length { len: usize },
 }
 
-/// An authenticator's credential id, [`MIN_CREDENTIAL_ID_LEN`]..=[`MAX_CREDENTIAL_ID_LEN`] bytes (the WebAuthn
-/// client's own ceiling, and the floor below which an id stops being a probabilistically unique handle).
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct CredentialId(Vec<u8>);
 
@@ -95,14 +91,13 @@ impl<'de> Deserialize<'de> for CredentialId {
     }
 }
 
-/// Why a COSE key is not a credential public key this host accepts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum KeyRefusal {
     #[error("credential public key is not a CBOR COSE_Key")]
     Cbor,
     #[error("credential public key is not an EC2 key")]
     NotEc2,
-    /// `alg` is the COSE algorithm identifier when it was an integer; the only accepted one is ES256 (-7).
+    /// `alg` is `None` when the key carried a text algorithm or none at all.
     #[error("credential public key algorithm {alg:?} is not ES256 (-7)")]
     Algorithm { alg: Option<i64> },
     #[error("credential public key curve is not P-256")]
@@ -202,9 +197,8 @@ impl<'de> Deserialize<'de> for CosePublicKey {
     }
 }
 
-/// One enrolled credential as the store keeps it. `sign_count` is the last value an accepted assertion
-/// carried; the verifier demands strictly more whenever either side is nonzero. `backup_eligible` is the
-/// BE flag at creation; an assertion whose flag differs is refused.
+/// One enrolled credential as trust.json keeps it. `sign_count` and `backup_eligible` are what the next
+/// assertion is held to (verify.rs).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Credential {

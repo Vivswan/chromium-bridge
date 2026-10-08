@@ -72,7 +72,6 @@ fn sign(sk: &SigningKey, authenticator_data: &[u8], client_data_json: &[u8]) -> 
     sig.to_der().to_bytes().into_vec()
 }
 
-/// The pieces of a valid assertion, each mutable before signing.
 struct Parts {
     rp_id_hash: [u8; 32],
     flags: u8,
@@ -85,7 +84,6 @@ struct Parts {
     signer: SigningKey,
     /// Applied to the signed bytes AFTER signing: a tamper the signature cannot cover.
     post_sign: fn(&mut Assertion),
-    /// The enrolled credential's backup eligibility the assertion is verified against.
     enrolled_eligible: bool,
 }
 
@@ -806,11 +804,9 @@ fn registration_checks_each_refuse_with_their_named_variant() {
 
 #[test]
 fn client_data_outside_the_spec_object_shape_is_refused_not_read_leniently() {
-    // The spec's clientDataJSON is one object with distinct members; JSON readers are lenient in three ways
-    // a signed frame could exploit: a repeated member read last-wins (`"challenge": 0, "challenge": "<good>"`
-    // reads as the good challenge), a present `null` read as an absent member, and a positional array read
-    // as the struct. Each must be refused, for the assertion and the registration alike; the row names
-    // which refusal.
+    // The spec's clientDataJSON is one object with distinct members, and JSON readers are lenient in ways
+    // a signed frame could exploit (a repeated member read last-wins, a present null read as absent, a
+    // positional array read as the struct). Each is refused for the assertion and the registration alike.
     let good = statement().challenge().to_base64url();
     let rp_id = RpId::pinned();
     let origin = rp_id.origin();
@@ -916,7 +912,6 @@ fn statement_fields_refuse_what_would_break_injectivity() {
     // field, two different statements encode to the same bytes.
     assert!(Nonce::parse("a\0b").is_none());
     assert!(Action::parse("a\0b").is_none());
-    // A fresh nonce is 32 bytes of base64url: 43 chars, NUL-free, and never repeats.
     let (a, b) = (Nonce::fresh().unwrap(), Nonce::fresh().unwrap());
     assert_eq!(a.as_str().len(), 43);
     assert_ne!(a, b);
@@ -924,11 +919,8 @@ fn statement_fields_refuse_what_would_break_injectivity() {
 
 #[test]
 fn a_page_op_action_names_the_op_and_an_origin_shaped_like_one() {
-    // The action a page operation's tap signs: the op's tool name (the catalogue's spelling) and the page's
-    // origin, so the signature covers where the act lands. The origin is admitted only when the WHATWG
-    // parser's own serialization of it is the exact text (a default port, a path, a query, userinfo, an
-    // uppercase scheme, a non-ASCII host, an opaque origin all serialize differently or to `null`), within
-    // the bound, and free of the audit trail's field delimiters, which the parser alone would admit.
+    // The origin rows are the ones statement.rs's `Origin::parse` promises; a url-crate serialization change
+    // fails here, not in a user's prompt. The op spelling is the tool catalogue's.
     let origin = Origin::parse("https://example.com").unwrap();
     assert_eq!(
         Action::page_op(PageOp::PageEval, &origin).as_str(),
@@ -1064,8 +1056,6 @@ fn credential_storage_spelling_round_trips_and_validates_on_read() {
     );
 }
 
-// ---- Forgetting a browser's enrollments -------------------------------------------------------------------
-
 mod revoke_browser {
     use super::*;
     use crate::audit::{AuditKind, AuditRecord, Surface};
@@ -1086,7 +1076,6 @@ mod revoke_browser {
         }
     }
 
-    /// Plant `(label, seed)` enrollments as the store writes them: the first on first use, the rest approved.
     fn plant(enrollments: &[(&str, u8)]) {
         for (i, (browser, seed)) in enrollments.iter().enumerate() {
             let authority = if i == 0 {
@@ -1111,7 +1100,6 @@ mod revoke_browser {
             .collect()
     }
 
-    /// `(name, detail)` of every RevokeBrowser record in the trail, in order.
     fn revoke_records() -> Vec<(String, String)> {
         std::fs::read_to_string(crate::audit::audit_path().unwrap())
             .unwrap()

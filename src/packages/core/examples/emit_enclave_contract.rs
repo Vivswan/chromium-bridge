@@ -24,11 +24,11 @@
 
 use chromium_bridge_core::enclave::{
     challenge_message, policy_message, EnclavePublicKey, CHALLENGE_DOMAIN, FIXTURE_KEY_BYTES,
-    FIXTURE_KEY_ID, MAX_CONTEXT_LEN, MAX_NONCE_LEN, POLICY_DOMAIN, PUBKEY_LEN, REASON_CODES,
-    SIG_LEN,
+    FIXTURE_KEY_ID, MAX_CONTEXT_LEN, POLICY_DOMAIN, PUBKEY_LEN, REASON_CODES, SIG_LEN,
 };
 use chromium_bridge_core::identity::PINNED_EXTENSION_ID;
 use chromium_bridge_core::policy::{Ms, PolicyDoc, PolicyField};
+use chromium_bridge_core::webauthn::MAX_NONCE_LEN;
 use p256::ecdsa::signature::Signer;
 use p256::ecdsa::{Signature, SigningKey};
 use serde_json::{json, Value};

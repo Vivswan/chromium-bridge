@@ -1,25 +1,20 @@
 #!/usr/bin/env bun
-// One layering declaration (architecture.yml), two readers: this lint and the
-// module map (render-architecture-map.ts). The lint fails in both directions so
-// the declaration cannot rot:
+// One layering declaration (architecture.yml), two readers: this lint and render-architecture-map.ts.
+// The lint fails in both directions so the declaration cannot rot:
 //   import between layers with no declared edge  -> "forbidden import", exit 1
 //   declared edge no file draws                  -> "stale allowance", exit 1
 //   layer that owns no source file               -> exit 1, never a declaration that matches any tree
 //   computed import() or require()               -> exit 2, never a silently dropped edge
 //
-// An edge is any way one file names another: runtime imports, type-only
-// imports, re-exports, `import("./x").T` in a type position, and
-// `import X = require("./x")`. A specifier is followed when it is relative or
-// starts with a prefix the declaration's `aliases` map to a directory; the
-// extension reaches the shared package only through such aliases
-// (`@chromium-bridge/shared/`, WXT's `@/`), so without them those edges would
-// be invisible and an undeclared dependency would pass.
+// The extension reaches the shared package only through the declaration's `aliases` (`@chromium-bridge/shared/`,
+// WXT's `@/`); a bare specifier with no alias is not followed, so without them an undeclared dependency would pass.
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { type Node, parseSync, type TemplateElement } from "oxc-parser";
 import { z } from "zod";
+import { toPosix } from "./lib.ts";
 import { realpath } from "./repo-paths";
 
 export const DEFAULT_CONFIG = "architecture.yml";
@@ -40,7 +35,7 @@ export type Architecture = z.infer<typeof Declaration>;
 
 export const SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
 
-/** A repository-relative path has no leading slash and no `.` or `..` segment; the scanner emits `src/main.ts`, never `./src/main.ts`. */
+/** The scanner emits `src/main.ts`, never `./src/main.ts`, so a `.` segment in the declaration would match no file. */
 function checkRepoRelative(label: string, owner: string, path: string): void {
   if (path.startsWith("/") || path.split("/").includes("..")) {
     throw new Error(
@@ -115,8 +110,6 @@ export function layerOf(arch: Architecture, path: string): string | undefined {
   )?.[0];
 }
 
-// --- source scanning ---------------------------------------------------------
-
 export function* nodesOf(value: unknown): Generator<Node> {
   if (Array.isArray(value)) {
     for (const item of value) yield* nodesOf(item);
@@ -158,10 +151,8 @@ function literalSpecifier(node: Node | null | undefined): string | undefined {
 }
 
 /**
- * Every module specifier `text` names, runtime and type-level alike, bare
- * package names included (the caller decides which are edges). A computed
- * `import(x)` or `require(x)` throws, naming file and line: a missing edge is
- * the one failure this lint exists to catch, so the file is rewritten, not skipped.
+ * A computed `import(x)` or `require(x)` throws instead of being skipped: a missing edge is the one failure
+ * this lint exists to catch. Bare package names are returned too; the caller decides which are edges.
  */
 export function importSpecifiers(text: string, file: string): string[] {
   const { program, module, errors } = parseSync(file, text);
@@ -223,10 +214,6 @@ function isFile(path: string): boolean {
   return existsSync(path) && statSync(path).isFile();
 }
 
-/**
- * The file at `target` as a bundler resolves it: as written, with a source extension, or as an
- * index file; nothing found throws with `importLabel`.
- */
 function resolveTarget(target: string, importLabel: string): string {
   if (isFile(target)) return target;
   const stem = target.replace(/\.(?:[mc]?[jt]sx?)$/, "");
@@ -264,12 +251,6 @@ export function resolveEdge(
   );
 }
 
-// --- the lint ----------------------------------------------------------------
-
-function toPosix(path: string): string {
-  return path.split("\\").join("/");
-}
-
 /** The top-level directories the layers live in, so a file beside them outside every layer is seen. */
 function scanRoots(arch: Architecture): string[] {
   const roots = new Set<string>();
@@ -298,10 +279,6 @@ function* sourceFiles(root: string, dir: string): Generator<string> {
   }
 }
 
-/**
- * The lint verdict for the tree at `root`. Empty means the declaration is
- * exactly the tree. `configLabel` is how the messages name the declaration file.
- */
 export function lintArchitecture(
   root: string,
   arch: Architecture,
@@ -390,11 +367,6 @@ export function lintArchitecture(
   return problems;
 }
 
-/**
- * The module map over the DECLARED edges. A hyphen or slash in a layer name is edge syntax to
- * mermaid, so ids use underscores; two names that collapse to one id (api-v1, api_v1) get a
- * numbered suffix, so no node is drawn over another.
- */
 const MERMAID_KEYWORDS = new Set([
   "end",
   "graph",
@@ -408,6 +380,8 @@ const MERMAID_KEYWORDS = new Set([
   "direction",
 ]);
 
+// A hyphen or slash in a layer name is edge syntax to mermaid, so ids use underscores; two names that collapse
+// to one id (api-v1, api_v1) get a numbered suffix, so no node is drawn over another.
 export function renderArchitectureMermaid(arch: Architecture): string {
   const ids = new Map<string, string>();
   const taken = new Set<string>();
@@ -430,8 +404,6 @@ export function renderArchitectureMermaid(arch: Architecture): string {
   ].join("\n");
 }
 
-// --- CLI ---------------------------------------------------------------------
-
 const USAGE = [
   "usage: arch-lint.ts [--config <architecture.yml>] [--root <dir>] [--mermaid]",
   "  --config   the layering declaration (default: <root>/architecture.yml)",
@@ -446,7 +418,6 @@ export interface CliOptions {
   mermaid: boolean;
 }
 
-/** How messages name `path`: relative to `root` when it lives inside, absolute otherwise. */
 export function pathLabel(root: string, path: string): string {
   const rel = toPosix(relative(realpath(root), realpath(path)));
   return rel === "" || rel.startsWith("..") || isAbsolute(rel) ? toPosix(path) : rel;

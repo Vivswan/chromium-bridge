@@ -1,11 +1,5 @@
-// The fail-closed generation rules (G1-G7, A1-A3) of scripts/gen-envelope.ts,
-// exercised against inputs that would otherwise turn into WEAKER validators
-// than the Rust contract: objects without an explicit type, unconstrained
-// arrays, keywords the generator does not admit, undiscriminated oneOf,
-// unresolved $refs, an unplanned Rust frame, an asymmetry entry on a node it
-// cannot apply to. Every one of these must abort generation, never emit. The
-// happy paths mirror the real schemars output shapes, and the prepared JSON
-// Schema is pinned where prepare rewrites it.
+// The fail-closed rules of scripts/gen-envelope.ts, each shown aborting on an input that would otherwise
+// turn into a WEAKER validator than the Rust contract. The happy paths mirror schemars' real output shapes.
 
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
@@ -149,14 +143,14 @@ describe("prepare aborts on anything that would convert weaker (G1/G3/G4/G5)", (
   });
 
   test("G5: degenerate unions (no single faithful Zod form)", () => {
-    // An empty union claims nothing.
+    //   anyOf: [] / oneOf: []                 -> an empty union claims nothing
+    //   a constraint beside a combinator      -> it would have to be dropped
+    //   anyOf and oneOf on one node           -> one wins, the other is lost
     expect(() => prepare({ anyOf: [] }, "$")).toThrow("G5");
     expect(() => prepare({ oneOf: [] }, "$")).toThrow("G5");
-    // Sibling constraints beside a combinator would have to be dropped.
     expect(() =>
       prepare({ type: "number", minimum: 5, anyOf: [{ type: "number", maximum: 10 }] }, "$"),
     ).toThrow("G5");
-    // Two combinators on one node: one of them wins, the other is lost.
     expect(() =>
       prepare({ anyOf: [{ type: "string" }], oneOf: [{ type: "integer" }] }, "$"),
     ).toThrow("G5");
@@ -244,7 +238,6 @@ describe("splitFlattenedCommand (G6)", () => {
     });
     expect([...commands.keys()]).toEqual(["tab_list", "tab_focus"]);
     expect(commands.get("tab_focus")).toEqual(tabFocusArgs);
-    // The envelope then prepares exactly as the untyped request always did.
     expect(prepare(envelope, "$")).toEqual({
       type: "object",
       properties: {
@@ -678,9 +671,8 @@ describe("assertFramePlan (G7)", () => {
     );
   });
 
-  // The cross-language roster: the Rust test holds HostRequest to the direction table, this rule holds the
-  // writer plan to the same table, so a frame the host accepts without a writer type, or a writer type for a
-  // frame the host never parses as a request, aborts generation instead of surfacing at runtime.
+  // The Rust test holds HostRequest to the direction table and this rule holds the writer plan to it, so a
+  // frame the host accepts without a writer type, or a writer for a frame it never parses, aborts generation.
   test("a plan that disagrees with the direction table is refused: a writer that travels host->browser, a reader that travels browser->host, a tag the table lacks", () => {
     expect(() =>
       assertFramePlan("enclave", planned, { ...directions, enclave_revoke: "host_to_browser" }),

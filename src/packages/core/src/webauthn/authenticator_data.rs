@@ -1,5 +1,3 @@
-//! The fixed-layout `authenticatorData` byte string, parsed once into typed fields.
-//!
 //! ```text
 //! rpIdHash 32 | flags 1 | signCount 4 BE | [aaguid 16 | credIdLen 2 BE | credId | COSE_Key]   (AT flag)
 //! ```
@@ -27,7 +25,6 @@ const RESERVED_FLAGS: u8 = !(FLAG_USER_PRESENT
     | FLAG_ATTESTED_CREDENTIAL
     | FLAG_EXTENSIONS);
 
-/// Why a byte string is not authenticator data this host accepts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum AuthDataError {
     #[error("authenticator data is {len} bytes, shorter than the 37-byte header")]
@@ -60,8 +57,8 @@ pub struct Flags {
     pub backup: BackupState,
 }
 
-/// The BE/BS pair as the spec allows it: eligibility is fixed at creation and the verifier refuses an
-/// assertion whose eligibility differs from the enrolled one; backed-up without eligible is refused.
+/// The BE/BS pair as the spec allows it. Eligibility is fixed at creation, so verify.rs refuses an assertion
+/// whose BE differs from the enrolled one; BS without BE is refused by the parser.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackupState {
     NotEligible,
@@ -158,7 +155,6 @@ fn parse_attested(bytes: &[u8]) -> Result<(AttestedCredential, &[u8]), AuthDataE
     ))
 }
 
-/// Split a fixed-size prefix off `bytes`, or `None` when it is shorter than `N`.
 fn take<const N: usize>(bytes: &[u8]) -> Option<([u8; N], &[u8])> {
     let (head, rest) = bytes.split_at_checked(N)?;
     let head: [u8; N] = head.try_into().ok()?;

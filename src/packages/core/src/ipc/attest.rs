@@ -1,10 +1,5 @@
-//! Executable-identity attestation: policy for accepting a peer or a pid, and
-//! for measuring the harness (parent) that spawned an MCP-server instance. The
-//! per-OS identity measurement (Linux `/proc/<pid>/exe` SHA256, macOS
-//! code-directory hash + Team ID, Windows image-file SHA256 + Authenticode
-//! publisher) lives in [`super::platform`]; this module owns the trust
-//! decision - the same-binary allowlist is exactly `{our own binary}` for a
-//! bridge peer, and every ambiguity fails closed.
+//! The trust decision over the per-OS identity measurement in [`super::platform`]: a bridge peer is accepted
+//! only as our own binary, and every ambiguity fails closed.
 
 use std::io;
 
@@ -12,10 +7,8 @@ use super::identity::{ClientIdentity, HashDigest};
 use super::platform::os;
 use super::socket::BridgeStream;
 
-/// This process's own executable identity, computed once and cached: a peer is accepted only when its running
-/// image yields the same value by the same measurement. [`ensure_own_identity`] primes the cache at startup,
-/// before any connection is accepted or dialed, so "self" is fixed from the genuine binary and a later on-disk
-/// replacement cannot redefine it.
+/// Cached for the process lifetime, failure included: a self that could not be measured at startup is never
+/// re-measured against a possibly replaced image.
 fn own_identity() -> io::Result<&'static HashDigest> {
     use std::sync::OnceLock;
 
@@ -26,29 +19,21 @@ fn own_identity() -> io::Result<&'static HashDigest> {
         .ok_or_else(|| io::Error::other(os::OWN_IDENTITY_ERROR))
 }
 
-/// Prime and validate our own executable identity. Call once at startup, before
-/// accepting or dialing the bridge: it fixes the self identity at a known-good
-/// time and fails loudly (rather than silently degrading later) if we cannot
-/// measure our own image, so the caller can refuse to run. Returns the digest's
-/// hex for logging convenience.
+/// Runs once at startup, before any bridge connection is accepted or dialed, so "self" is fixed from the
+/// genuine image and a later on-disk replacement cannot redefine it.
 pub fn ensure_own_identity() -> io::Result<&'static str> {
     own_identity().map(HashDigest::as_str)
 }
 
-/// Measure our **harness**, the MCP client that spawned this MCP-server-mode instance: the input to the trusted-client
-/// allowlist ([`crate::allowlist`]). stdin is an anonymous pipe with no kernel peer credentials, so on Unix the
-/// attestable peer is the spawner `getppid` names; on Windows it is the process that created our stdin pipe, since a
-/// Windows launcher can record any process it can open as the parent.
+/// Measure the harness that spawned this MCP-server instance, the input to [`crate::allowlist`]. stdin is an
+/// anonymous pipe with no kernel peer credentials, so the attestable process is the spawner: `getppid` on
+/// Unix, the creator of our stdin pipe on Windows (a Windows launcher can record any process it can open as
+/// the parent). docs/security/trust-boundaries.md carries the residuals.
 ///
 /// ```text
-/// real parent already dead  -> Unix: measures the reaper (commonly pid 1), refused by an enforced allowlist unless it
-///                              names that binary; unenrolled admission ignores the identity (allowlist::decide)
-/// who writes our stdin      -> Unix: unproven, the pipe's write end can be inherited or passed on; Windows: the pipe's
-///                              creator, but a child the harness spawned with a piped stdin holds the read end by
-///                              inheritance and can run a server that only reads the harness's own requests, and
-///                              PROCESS_DUP_HANDLE on the harness yields the write end too, so that holder can inject
-/// pid-keyed measurement     -> the same pid-reuse race as attest_pid; on macOS pid_client_identity still validates
-///                              the running image via SecCodeCheckValidity
+/// parent already dead (Unix)  -> the reaper is measured; an enforced allowlist refuses it unless it names it
+/// who writes our stdin        -> unproven: a pipe end can be inherited or duplicated
+/// pid-keyed measurement       -> the pid-reuse race of [`attest_pid`]; macOS still validates the image
 /// ```
 pub fn attest_parent() -> io::Result<ClientIdentity> {
     #[cfg(unix)]
@@ -59,10 +44,8 @@ pub fn attest_parent() -> io::Result<ClientIdentity> {
     os::pid_client_identity(harness)
 }
 
-/// Verify the peer on `stream` runs the same executable image as us; the trusted-identity allowlist is exactly
-/// `{our own binary}`, and the caller drops the connection on any error. Both ends run it (the server on the native
-/// host right after accept, the native host on the server right after connect). The digests are not secrets, so a
-/// plain comparison is fine.
+/// Both ends run this right after accept/connect and drop the connection on any error. The digests are
+/// public, so the comparison need not be constant-time.
 pub fn attest_peer(stream: &BridgeStream) -> io::Result<()> {
     if os::peer_identity(stream)? == *own_identity()? {
         Ok(())
@@ -74,14 +57,8 @@ pub fn attest_peer(stream: &BridgeStream) -> io::Result<()> {
     }
 }
 
-/// [`attest_peer`] keyed by pid instead of a connected socket, so it carries the pid-reuse race noted on
-/// `peercred::peer_pid`: a positive match is the only signal that grants trust.
-///
-/// ```text
-/// same image           -> Ok: listen_and_publish defers to the lock's live owner
-/// different image      -> PermissionDenied: a reused or foreign pid, the stale lock is superseded
-/// unmeasurable target  -> its own error, read the same way as a mismatch
-/// ```
+/// [`attest_peer`] keyed by pid, so it carries the pid-reuse race noted on `peercred::peer_pid`: only a
+/// positive match grants trust, and an unmeasurable target reads as a mismatch.
 pub fn attest_pid(pid: u32) -> io::Result<()> {
     if os::pid_identity(pid)? == *own_identity()? {
         Ok(())
@@ -98,22 +75,11 @@ mod tests {
     use super::super::socket::loopback_pair;
     use super::*;
 
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn peer_identity_of_own_pid_matches_own_identity() {
-        // Hashing our own pid by the peer mechanism must equal the cached self
-        // identity: self and peer are measured the identical way, so an identical
-        // binary produces an identical digest.
-        let by_pid = os::pid_identity(std::process::id()).unwrap();
-        assert_eq!(&by_pid, own_identity().unwrap());
-    }
-
     #[test]
     fn attest_peer_accepts_our_own_process() {
-        // The peer of a local pair is this very process, so attestation must accept it; on macOS this exercises
-        // the real audit-token -> SecCode -> cdhash path end to end, on Windows the pipe pid -> image path -> hash
-        // path. The foreign-binary rejection lives in tests/protocol/e2e.py: a single process cannot become a
-        // different binary.
+        // The peer of a local pair is this process, so the real OS path runs end to end (macOS: audit
+        // token -> SecCode -> cdhash; Windows: pipe pid -> image hash). Foreign-binary rejection lives in
+        // tests/protocol/e2e.py: one process cannot become another binary.
         let (a, _b) = loopback_pair();
         assert!(attest_peer(&a).is_ok());
     }
@@ -162,16 +128,12 @@ mod tests {
 
     #[test]
     fn attest_pid_accepts_self_and_rejects_a_foreign_binary() {
-        // Self: the pid-keyed measurement of this very process must match the
-        // cached self identity.
         assert!(attest_pid(std::process::id()).is_ok());
 
-        // Foreign: a child WE spawned (a specific, verified pid, never a pattern match) running a different binary
-        // must be rejected with PermissionDenied.
+        // A child WE spawned: a verified pid, never a pattern match.
         let mut child = foreign_child();
         let attested = attest_pid(child.id());
-        // Reap the child BEFORE asserting: a failed assertion must not leave
-        // the blocked child running.
+        // Reap before asserting, so a failed expectation cannot leave the blocked child running.
         let _ = child.kill();
         let _ = child.wait();
         let err = attested.expect_err("a foreign binary must not attest");
@@ -184,9 +146,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn attest_parent_measures_the_spawning_process() {
-        // The parent here is the test runner (cargo / a shell), a real signed or ad-hoc-signed image: an external
-        // fact the measurement must resolve on every supported host. The value varies by host, and its shape is
-        // carried by the type, so only resolution is asserted.
+        // The parent is the test runner, an image the measurement must resolve on every supported host (on
+        // macOS a real ad-hoc or Team-ID signature); the value varies per host, so only resolution is asserted.
         attest_parent().expect("parent must be measurable");
     }
 }

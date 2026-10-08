@@ -6,8 +6,9 @@
 // inline code), since those carry identifiers a translation must not drift from.
 
 import { readFileSync, statSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { toPosix } from "./lib.ts";
 
 export const LOCALES = ["zh-cn", "zh-tw"] as const;
 export type Locale = (typeof LOCALES)[number];
@@ -17,9 +18,7 @@ export type LocaleReport =
   | {
       readonly locale: Locale;
       readonly present: true;
-      /** English pages with no mirror under docs/<locale>/. */
       readonly missing: readonly string[];
-      /** Pages under docs/<locale>/ that mirror no English page. */
       readonly extra: readonly string[];
       /** Mirrored pages whose generated region (`<!-- BEGIN GENERATED: name -->`) differs from the English one, each `<page>: generated region <name>` under its root-relative path. */
       readonly generatedDrift: readonly string[];
@@ -28,9 +27,6 @@ export type LocaleReport =
       readonly readmeMissing: boolean;
     };
 
-const toPosix = (path: string): string => path.split(sep).join("/");
-
-/** The locale a root-relative posix page label is a translation for: under docs/<locale>/, or the root README.<locale>.md. */
 export function localeOf(page: string): Locale | undefined {
   return LOCALES.find(
     (locale) => page.startsWith(`docs/${locale}/`) || page === `README.${locale}.md`,
@@ -55,11 +51,10 @@ function generatedRegions(file: string): Map<string, string> {
   return regions;
 }
 
-// A translation keeps the English page's shape: the same headings, fences, and table rows, and the same
-// inline code spans, which are identifiers and never translated. A count or a span that differs is a page
-// that drifted from its English, a missing row or a renamed flag, which no reader of one language sees.
-// Bun's Markdown renderer reads the page, so the constructs' edge cases (a span holding backticks or
-// wrapping a line, a fence inside a list item, a quoted heading) are the parser's, not this check's.
+// A translation keeps the English page's headings, fences, table rows, and inline code spans: the spans are
+// identifiers, never translated, and a differing count is a missing row or a renamed flag no reader of one
+// language sees. Bun's Markdown renderer reads the page, so a span holding backticks, a fence inside a list
+// item, or a quoted heading is the parser's edge case, not this check's.
 interface Structure {
   readonly headings: number;
   readonly fences: number;

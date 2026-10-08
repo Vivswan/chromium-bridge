@@ -1,13 +1,5 @@
 #!/usr/bin/env bun
-// Render the Gatedeck extension icon rasters from the committed SVG sources
-// (assets/icon/). The PNG rasters are build artifacts: they are generated
-// here, gitignored, and never committed (the SVGs are the single source of
-// truth).
-//
-//   bun scripts/gen-icons.ts   # extension toolbar/store icons
-//
-// Rendering uses @resvg/resvg-js (resvg compiled to a native module): pure
-// build tooling, no runtime or security surface.
+// The PNG rasters are build artifacts (gitignored, never committed); the SVGs under assets/icon are the source.
 
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

@@ -1,7 +1,5 @@
-// Shapes for the remaining chrome.storage.local records the extension reads
-// back at runtime. Storage is same-extension-private but still an input: a
-// corrupted or unexpectedly-shaped record must degrade to a safe default,
-// never be interpreted as-is.
+// chrome.storage.local records read back at runtime: same-extension-private but still an input, so a malformed
+// record degrades to a safe default.
 
 import { z } from "zod";
 

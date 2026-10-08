@@ -151,13 +151,12 @@ const unalias = (words: Word[]): Word[] => {
   return x === -1 ? words : [asWord("bunx"), ...words.slice(x + 1)];
 };
 
-// A launcher runs one of its arguments as a command, and which one depends on options this rule does not model
-// (`env -i X=1`, `nice -n 5`, `exec -a name`, `env -u bun`), so, as with bun's own options, the bunx rule reads
-// every word after the launcher: a bunx, or a bun with an x after it. A command's name is its basename, so
-// `/usr/bin/env` is env and `/opt/homebrew/bin/bunx` is bunx, and a bun by path, which unalias leaves as the
-// gate's rules refuse it, has its x read here; an argument keeps its path, so `fixtures/x` is no alias. Bare
-// `time` is a keyword the parser opens itself. The gate's rules see the launcher as the command, and refuse it
+// A launcher runs one of its arguments, and which one depends on options this rule does not model (`env -i X=1`,
+// `nice -n 5`, `exec -a name`), so the bunx rule reads every word after it; the gate's own rules refuse a launcher
 // by name.
+//   /usr/bin/env, /opt/homebrew/bin/bunx  -> a command's name is its basename
+//   fixtures/x as an argument             -> keeps its path, so it is no alias
+//   bare time                             -> a keyword the parser opens itself
 const LAUNCHERS = new Set([
   "builtin",
   "command",
@@ -200,10 +199,8 @@ const parser = syntax.NewParser();
 const NOT_A_FILE = new Set([61, 62, 63]);
 const namesFile = (redirect: Sh.Redirect): boolean => !NOT_A_FILE.has(redirect.Op);
 
-// A variable is kept by name in braces: moon has already substituted its own tokens, and a shell variable's
-// value is not the auditor's to guess. A substitution's commands are walked as their own, so the word that
-// holds one is a marker.
-/** An expansion's marker stands for a value the rules do not read. */
+/** An expansion's marker stands for a value the rules do not read: moon has substituted its own tokens, a shell
+ * variable's value is not the auditor's to guess, and a substitution's commands are walked as their own. */
 const marker = (text: string): Word => ({
   text,
   pattern: maskQuotedSyntax(text),

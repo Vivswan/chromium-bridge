@@ -1,12 +1,8 @@
-//! CLI runner: `revoke <browser>`.
-
 use crate::audit::Surface;
 use crate::ipc::BrowserLabel;
 
 use super::store::{revoke_browser, RevokeBrowserError};
 
-/// `chromium-bridge revoke <browser>`: forget that browser's enrolled authenticators. Returns a process exit
-/// code.
 pub fn run_revoke_browser(label: &BrowserLabel) -> i32 {
     match revoke_browser(label, Surface::Cli) {
         Ok(revoked) => {

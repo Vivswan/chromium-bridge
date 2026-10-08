@@ -1,8 +1,4 @@
 #!/usr/bin/env bun
-// The front door: render every moon task with its description, grouped by
-// project (the successor to `just --list`). Run via `moon run help`, or
-// directly: `bun scripts/help.ts`. Raw JSON: `moon query tasks`.
-
 import { repoRoot } from "./lib.ts";
 
 const query = Bun.spawnSync(["moon", "query", "tasks"], { cwd: repoRoot });
@@ -21,7 +17,6 @@ const parsed = JSON.parse(query.stdout.toString()) as {
   tasks: Record<string, Record<string, TaskInfo>>;
 };
 
-// Root first (it holds the repo-wide tasks and runbooks), then the projects.
 const projects = Object.keys(parsed.tasks).sort((a, b) => {
   if (a === "root") return -1;
   if (b === "root") return 1;

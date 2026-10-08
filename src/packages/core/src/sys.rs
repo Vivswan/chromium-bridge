@@ -1,10 +1,7 @@
-//! Quarantined libc shims: the only `unsafe` outside the designated FFI
-//! modules (`ipc::platform`, `ipc::peercred`, and `enclave::macos`). Each
-//! wrapper exposes a small libc surface through a safe function so callers
-//! (broker, attest, lockfile, protocol) never hold an `unsafe` block
-//! themselves: `geteuid`/`getppid` are infallible by POSIX contract, and
-//! ignoring SIGPIPE cannot fail for that signal. The signal-cleanup thread
-//! below holds no unsafe at all; signal-hook owns the handler.
+//! Quarantined libc shims: the only `unsafe` outside the FFI modules (`ipc::platform`, `ipc::peercred`),
+//! each behind a safe function so no caller holds an `unsafe` block. `geteuid`/`getppid` are infallible by
+//! POSIX contract, and ignoring SIGPIPE cannot fail for that signal; the signal-cleanup thread holds no
+//! unsafe at all, since signal-hook owns the handler.
 #![cfg_attr(
     unix,
     expect(

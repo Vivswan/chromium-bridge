@@ -63,7 +63,6 @@ interface Contract {
     serverInfo: string;
   };
   auditForwardedKinds: string[];
-  /** The RefusalCode roster: every reason code a refused presence_result or enroll_result can carry. */
   refusalCodes: string[];
   identity: {
     nativeMessagingHostId: string;
@@ -73,7 +72,6 @@ interface Contract {
   tools: ContractTool[];
   errors: ContractError[];
   capabilities: ContractCapability[];
-  /** The host's user-facing constants (what the docs state and the CLI prints); HostSchema parses it. */
   host: unknown;
 }
 
@@ -84,7 +82,6 @@ mkdirSync(generatedDir, { recursive: true });
 
 const contract = emitFromRust(root, "emit_contract") as Contract;
 
-// Bare when a valid JS identifier, quoted otherwise.
 const emitKey = (key: string): string =>
   /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? key : JSON.stringify(key);
 
@@ -478,13 +475,10 @@ const hostOut = `// GENERATED from the Rust core (enclave/mod.rs KEY_LABEL, ipc/
 // The host's user-facing constants. scripts/check-docs-literals.ts holds the docs to these, so a rename in the Rust
 // core fails the docs gate instead of leaving a troubleshooting page quietly wrong.
 
-// The keychain label of the enclave signing key.
 export const KEYCHAIN_LABEL = ${JSON.stringify(keychainLabel)};
 
-// The lock file under the per-user runtime directory.
 export const LOCK_FILENAME = ${JSON.stringify(lockFilename)};
 
-// The env var a harness may set to name itself in logs and the audit surface.
 export const CLIENT_NAME_ENV = ${JSON.stringify(clientNameEnv)};
 
 // The stderr threshold env var and its accepted values, least to most verbose.
@@ -495,17 +489,15 @@ export const LOG_LEVELS = [${wordList(logLevels)}] as const;
 export const LOG_FORMAT_ENV = ${JSON.stringify(logFormatEnv)};
 export const LOG_FORMATS = [${wordList(logFormats)}] as const;
 
-// How many records \`audit\` prints without \`--limit\`.
 export const AUDIT_DEFAULT_LIMIT = ${auditDefaultLimit};
 
-// The browser CLI keys (\`--browser\`), in report order.
+// In report order.
 export const BROWSER_KEYS = [${wordList(browserKeys)}] as const;
 `;
 
 writeFileSync(join(generatedDir, "host.ts"), hostOut);
 console.log("generated src/packages/shared/generated/host.ts from the Rust core");
 // ---- enclave.ts + enclave-fixture.ts --------------------------------
-// Its own Rust emitter (examples/emit_enclave_contract.rs); shares no state with the emit_contract flow above.
 
 interface EnclaveVector {
   nonce: string;
@@ -739,9 +731,8 @@ console.log(
 );
 
 // ---- policy.ts -----------------------------------------------------------
-// Its own Rust emitter (examples/emit_policy_contract.rs). The one cross-reference is the domain-separation check
-// against the enclave contract above: the policy domain must differ from the host-key challenge domain, or a
-// policy signature could be replayed as a challenge proof.
+// The one cross-reference is the domain-separation check against the enclave contract above: the policy domain
+// must differ from the host-key challenge domain, or a policy signature could be replayed as a challenge proof.
 
 // The direction tags each value kind may carry (Rust BoolPole / MsOrder / the set order), so generation refuses an
 // unknown tag with a clear message instead of emitting a table the typed TS object rejects.
@@ -1002,8 +993,8 @@ ${await typeSource("PolicyOverlay", policyOverlay)}
 
 ${schemaSource("PolicyOverlaySchema", "PolicyOverlay", policyOverlay)}
 
-// Deep-frozen: the pre-cutover posture hands this instance out as the effective policy, so a caller mutating its
-// "copy" must throw instead of rewriting the defaults for everyone after it.
+// Deep-frozen: the effective policy's pre-cutover branch hands this instance out as the policy in force, so a
+// caller mutating its "copy" must throw instead of rewriting the defaults for everyone after it.
 export const POLICY_DEFAULTS: Readonly<PolicyValues> = deepFreeze(
   PolicyValuesSchema.parse({
 ${policyDefaultItems}

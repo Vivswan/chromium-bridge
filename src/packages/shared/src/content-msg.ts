@@ -1,24 +1,16 @@
-// The service-worker <-> content-script messaging contract, parsed with Zod
-// on both sides of the boundary: the SW validates what it is about to send
-// (backends/content-script.ts), the content script parses every inbound
-// message before acting (lib/content/handle.ts), and the SW parses every
-// reply (the same backend, plus background/precise.ts for the info toast).
+// Parsed with Zod on both sides: the SW validates what it sends (backends/content-script.ts), the content
+// script parses every inbound message (lib/content/handle.ts), and the SW parses every reply (the same backend,
+// plus background/precise.ts).
 //
-// Page-ACTING ops carry a REQUIRED guard: the origin the allowlist check and
-// any user confirmation were based on, and - for page_click - the exact
-// target descriptor the user approved. The guard is the confirmation-to-act
-// binding, so a message without it is refused outright; there is no
-// "guard absent, skip the check" state. The only guard-less messages are the
-// internal ops (ping / _info_toast / _probe_click), none of which act on the
-// page.
+// Page-acting ops carry a REQUIRED guard, the origin the allowlist check and any confirmation were based on (for
+// page_click also the approved target), so a message without one is refused: there is no "guard absent, skip
+// the check" state.
 
 import { z } from "zod";
 import { OpArgsSchema } from "../generated/ops";
 
-// What the SW probed before classifying (and confirming) a click. The page
-// re-probes immediately before clicking and refuses if the target no longer
-// matches. Kept in lockstep with the page API's ClickProbe; the extension's
-// tests assert two-way type parity.
+// The SW probes before classifying a click; the page re-probes before clicking and refuses a changed target.
+// Kept in lockstep with the page API's ClickProbe (the extension's handle.test.ts assigns each to the other).
 export const ClickProbeSchema = z.strictObject({
   tagName: z.string(),
   role: z.string(),
@@ -29,18 +21,16 @@ export const ClickProbeSchema = z.strictObject({
 
 export type ClickProbeWire = z.infer<typeof ClickProbeSchema>;
 
-// Every page-acting op must carry the origin its checks were based on.
 export const PageOpGuardSchema = z.strictObject({
   expectOrigin: z.string().min(1),
 });
 
-// page_click additionally carries the approved target descriptor.
 export const ClickGuardSchema = z.strictObject({
   expectOrigin: z.string().min(1),
   clickExpect: ClickProbeSchema,
 });
 
-// The informational in-page notice (NOT a confirmation surface).
+// NOT a confirmation surface.
 const InfoToastArgsSchema = z.strictObject({
   message: z.string(),
   cancelLabel: z.string().optional(),
@@ -55,14 +45,10 @@ function guardedOp<O extends string>(op: O) {
   });
 }
 
-// The SW -> content-script envelope, discriminated on op. page_screenshot is
-// absent on purpose: it is captured in the SW and never reaches the page.
-// The extension's roster test holds the guarded branches to exactly
-// PAGE_OPS minus page_screenshot.
+// page_screenshot is absent on purpose: captured in the SW, it never reaches the page (the extension's
+// rosters.test.ts holds the guarded branches to PAGE_OPS minus it).
 export const ContentMsgSchema = z.discriminatedUnion("op", [
-  // Internal, guard-less ops. None of them act on the page: ping is the
-  // injection probe, _info_toast shows a courtesy notice, and _probe_click is
-  // the pre-approval DOM read whose result IS what the user then approves.
+  // None of these act on the page; _probe_click's result IS what the user then approves.
   z.strictObject({ op: z.literal("ping") }),
   z.strictObject({ op: z.literal("_info_toast"), args: InfoToastArgsSchema }),
   z.strictObject({
@@ -90,14 +76,11 @@ export const ContentMsgSchema = z.discriminatedUnion("op", [
 
 export type ContentMsg = z.infer<typeof ContentMsgSchema>;
 
-// The ops the content script only acts on under a guard.
 export type GuardedContentOp = Extract<ContentMsg, { guard: unknown }>["op"];
 
-// The content-script reply envelope, constructed at ONE place (the
-// entrypoint's onMessage listener) and parsed once by every SW consumer.
-// `data` may legitimately be undefined (an eval returning nothing), and a
-// user cancellation travels as structured data ({ cancelled: true } from
-// _info_toast), never as a falsy sentinel.
+// Constructed at ONE place (the entrypoint's onMessage listener). `data` may be undefined (an eval returning
+// nothing); a cancellation travels as structured data ({ cancelled: true } from _info_toast), never a falsy
+// sentinel.
 export const PageReplySchema = z.discriminatedUnion("ok", [
   z.strictObject({ ok: z.literal(true), data: z.unknown().optional() }),
   z.strictObject({ ok: z.literal(false), error: z.string() }),
@@ -105,15 +88,12 @@ export const PageReplySchema = z.discriminatedUnion("ok", [
 
 export type PageReply = z.infer<typeof PageReplySchema>;
 
-// _info_toast's structured result: cancelled=true means the user actively
-// cancelled the notice within its timeout.
 export const InfoToastResultSchema = z.strictObject({
   cancelled: z.boolean(),
 });
 
-// The three shapes the page API's readStorage can produce. The SW's egress mask
-// (background/egress.ts) parses against this union and REFUSES anything else -
-// a drifted shape must fail closed, not pass through raw.
+// The three shapes readStorage produces; the egress mask (background/egress.ts) refuses anything else, so a
+// drifted shape fails closed.
 export const StorageReadResultSchema = z.union([
   z.strictObject({ key: z.string(), found: z.literal(false) }),
   z.strictObject({ key: z.string(), found: z.literal(true), value: z.string() }),

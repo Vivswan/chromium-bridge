@@ -53,7 +53,6 @@ describe("isolationProblems", () => {
     expect(isolationProblems(`${clean}\n└── my-ts-rs v0.1.0`, () => viaRmcp)).toEqual([]);
   });
 
-  // The inverse tree's rows: depth digit glued to the name, so depth 10 starts with "10".
   const deep = `${viaRmcp}\n${Array.from({ length: 7 }, (_, i) => `${i + 4}crate${i} v0.1.0`).join("\n")}\n10leaf v0.1.0`;
   const outsideRmcp = `${viaRmcp}\n1chromium-bridge-core v0.0.0 (/repo/src/packages/core)`;
   test.each<[string, string, string[]]>([

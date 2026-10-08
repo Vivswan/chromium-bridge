@@ -1,11 +1,10 @@
 #!/usr/bin/env bun
 
-// CJK containment gate: a CJK character outside the files that are deliberately Chinese is an untranslated
-// string on a canonical English surface (an inherited Chinese tool label once reached the options page).
-// One `git grep -P` over the tracked tree does the scan; this wrapper owns the exclude list, the locale,
-// and the exit contract. PCRE2 reads \p{} and \x{} only under a UTF-8 ctype locale and refuses the pattern
-// outright otherwise, and the zh_CN bundle is grepped first so an engine that goes blind fails here
-// instead of passing vacuously.
+// A CJK character outside the deliberately Chinese files is an untranslated string on an English surface (an
+// inherited Chinese tool label once reached the options page). One `git grep -P` scans the tracked tree.
+//
+//   PCRE2 under a non-UTF-8 ctype locale  -> refuses \p{} and \x{} outright, so grepEnv picks a UTF-8 locale first
+//   zh_CN bundle grepped before the tree   -> an engine that goes blind fails here instead of passing vacuously
 
 import { type Env, repoRoot } from "./lib.ts";
 
@@ -17,9 +16,7 @@ export const CJK_CLASS =
 /** The one file guaranteed to contain CJK: the engine control. */
 export const CONTROL_FILE = "src/apps/extension/src/locales/zh_CN.yml";
 
-/** Git pathspecs for the files allowed to carry CJK: the zh locale bundles, the language picker's native
- * names, the i18n fixtures, and the translated docs (the locale trees under docs/ and the root README
- * translations, which check-docs-locales holds file-for-file to the English tree). */
+/** Allowed to carry CJK. check-docs-locales holds the translated trees file-for-file to the English tree. */
 export const ALLOWED_PATHSPECS = [
   CONTROL_FILE,
   "src/apps/extension/src/locales/zh_TW.yml",
