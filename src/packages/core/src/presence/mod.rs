@@ -17,7 +17,6 @@
 
 pub mod request;
 
-use std::fmt;
 use std::io::{self, BufRead, IsTerminal, Write};
 
 use sha2::{Digest, Sha256};
@@ -96,25 +95,36 @@ impl PresenceAttestation {
 
 /// Why presence could not be attested. Every variant means the same thing to the caller (refuse, change
 /// nothing) but the distinctions reach the user message, the audit record, and the extension's reason code.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum PresenceError {
     /// The CLI path needs a terminal on stdin and did not get one.
+    #[error("stdin is not a terminal; this action restores or grants capability and requires an interactive confirmation (run it from a terminal)")]
     NotInteractive,
     /// The user did not type the confirmation phrase (mismatch, empty, EOF).
+    #[error("the confirmation phrase was not entered; nothing was changed")]
     Declined,
     /// The confirmation could not be read at all.
+    #[error("could not read the confirmation: {0}")]
     Io(io::Error),
     /// The assertion failed verification; the refusal names the check.
+    #[error("assertion refused: {0}")]
     Refused(Refusal),
     /// The asserting credential matches no enrollment on this machine.
+    #[error("the asserting credential is not enrolled on this machine")]
     CredentialNotEnrolled,
     /// The credential is enrolled, under another browser's label.
+    #[error("the asserting credential is enrolled under browser '{enrolled_under}', not this one")]
     WrongBrowser { enrolled_under: BrowserLabel },
     /// The browser has an enrolled credential, so the window may not vouch in its place.
+    #[error(
+        "this browser has an enrolled authenticator; a window confirmation cannot stand in for it"
+    )]
     SoftwareConfirmationNotAllowed,
     /// The window's confirmation names a request that is not the outstanding one (a superseded nonce).
+    #[error("the confirmation names a request that is not the outstanding one")]
     RequestMismatch,
     /// The enrollment record could not be read or the sign counter could not be persisted.
+    #[error("enrollment store: {0}")]
     Store(io::Error),
 }
 
@@ -133,42 +143,6 @@ impl PresenceError {
             }
             PresenceError::RequestMismatch => RefusalCode::RequestMismatch,
             PresenceError::Store(_) => RefusalCode::StoreError,
-        }
-    }
-}
-
-impl fmt::Display for PresenceError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            PresenceError::NotInteractive => write!(
-                f,
-                "stdin is not a terminal; this action restores or grants capability \
-                 and requires an interactive confirmation (run it from a terminal)"
-            ),
-            PresenceError::Declined => {
-                write!(
-                    f,
-                    "the confirmation phrase was not entered; nothing was changed"
-                )
-            }
-            PresenceError::Io(e) => write!(f, "could not read the confirmation: {e}"),
-            PresenceError::Refused(refusal) => write!(f, "assertion refused: {refusal}"),
-            PresenceError::CredentialNotEnrolled => {
-                write!(f, "the asserting credential is not enrolled on this machine")
-            }
-            PresenceError::WrongBrowser { enrolled_under } => write!(
-                f,
-                "the asserting credential is enrolled under browser '{enrolled_under}', not this one"
-            ),
-            PresenceError::SoftwareConfirmationNotAllowed => write!(
-                f,
-                "this browser has an enrolled authenticator; a window confirmation cannot stand in for it"
-            ),
-            PresenceError::RequestMismatch => write!(
-                f,
-                "the confirmation names a request that is not the outstanding one"
-            ),
-            PresenceError::Store(e) => write!(f, "enrollment store: {e}"),
         }
     }
 }
