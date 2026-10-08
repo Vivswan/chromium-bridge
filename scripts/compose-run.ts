@@ -35,7 +35,7 @@ const env: NodeJS.ProcessEnv = {
 };
 
 // The Containerfile's one build arg: proto's pin is .prototools's and no script runs inside the build, so the
-// launcher reads it, as container-image.yml does for the published image. A flag rather than compose.yaml
+// launcher reads it. A flag rather than compose.yaml
 // build.args: the portable compose subset (check-compose) has no args key. Read before the scratch dir
 // below exists, so a refused pin leaves nothing behind.
 let protoPin: string;

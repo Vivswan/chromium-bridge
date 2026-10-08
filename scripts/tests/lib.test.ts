@@ -59,12 +59,12 @@ describe("githubOutput", () => {
     const dir = tempDir("output");
     const file = join(dir, "output");
     const env = { GITHUB_OUTPUT: file };
-    githubOutput("name", "ghcr.io/example-user/repo-ci", env);
+    githubOutput("name", "example.invalid/example-user/repo", env);
     githubOutput("tag", "0123456789ab", env);
     expect(() => githubOutput("proto", "0.58.2\n9.9.9", env)).toThrow(/proto would span lines/);
     expect(() => githubOutput("bad name", "x", env)).toThrow(/not a step output name/);
     expect(readFileSync(file, "utf8")).toBe(
-      "name=ghcr.io/example-user/repo-ci\ntag=0123456789ab\n",
+      "name=example.invalid/example-user/repo\ntag=0123456789ab\n",
     );
     expect(() => githubOutput("name", "x", {})).toThrow(/GITHUB_OUTPUT is not set/);
   });
