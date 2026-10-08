@@ -10,10 +10,10 @@ Rust 只由 rustup 管理, 來自 `rust-toolchain.toml`, 所以新機器要先�
 
 ```sh
 proto install    # provisions bun, moon, node, uv at the pinned versions (rustup owns rust)
-moon run setup   # installs the bun workspace, the pinned Rust toolchain, and the crates; wires the git hooks (lefthook); the gate itself never installs
+moon run setup   # installs the bun workspace, the pinned Rust toolchain, and the crates; wires the git hooks (lefthook); the hooks install no project dependency
 ```
 
-有四個工具沒有第一方的 proto 外掛, 需手動安裝一次: `cargo install cargo-nextest` (`moon run gate` 使用的測試執行器) 與 `brew install typos-cli cargo-machete actionlint` (只有 `moon run ci` 才執行的工具; typos 與 cargo-machete 也可透過 `cargo install` 取得)。CI 從哪裡取得它們:
+有四個工具沒有第一方的 proto 外掛, 需手動安裝一次: `cargo install cargo-nextest` (`moon run gate` 使用的測試執行器) 與 `brew install typos-cli cargo-machete actionlint` (typos 與 actionlint 在提交前 hook `moon run static` 中執行; cargo-machete 只在 `moon run ci` 中執行; typos 與 cargo-machete 也可透過 `cargo install` 取得)。CI 從哪裡取得它們:
 
 - **`Containerfile` 以 `ARG <TOOL>_VERSION` 固定這四個工具加上 cargo-deb**。CI 映像檔帶有這四個; cargo-deb 只安裝在裸機的發行與安裝程式執行器上。
 - **自行安裝某個工具的工作透過 `bun scripts/pin.ts <tool>` 讀取同一個固定版本**: checks.yml 的 tooling 工作讀 cargo-machete (在映像檔內, 該版本已經就位), `installers.yml` 與 `update-release.yml` 在各自的裸機執行器上讀 cargo-deb。
@@ -31,7 +31,7 @@ moon run setup   # installs the bun workspace, the pinned Rust toolchain, and th
 | [`typos`](https://github.com/crate-ci/typos) + [`cargo-machete`](https://github.com/bnjbvr/cargo-machete) | 拼字 + 未使用相依套件閘門 | `moon run typos` / `moon run machete`; CI 在受管理的 ci.yml 中把關 typos, 在 checks.yml 中把關 machete |
 | [`actionlint`](https://github.com/rhysd/actionlint) | GitHub Actions 工作流程 lint 閘門 | `moon run check-actions`; CI 在受管理的 ci.yml 的 actionlint 工作中執行 |
 
-Git hooks 由 [lefthook](https://lefthook.dev) 管理 (`lefthook.yml`): `moon run setup` 會接上多個 hooks, 在提交前與 rebase 後執行 `moon run gate`, 即儲存庫自身工具鏈所能提供的檢查; `moon run ci` 再加上只有 CI 才配備的工具。
+Git hooks 由 [lefthook](https://lefthook.dev) 管理 (`lefthook.yml`), 由 `moon run setup` 接上; 它們在提交前與 rebase 後執行什麼, 見 [CONTRIBUTING.md](../../CONTRIBUTING.md#workflow)。
 
 ## 目錄配置
 
@@ -72,6 +72,8 @@ moon run build     # build everything (see below)
 moon run dev       # dev everything: extension (WXT) + the landing page (Astro) + a dev browser
 moon run test      # rust tests (nextest + doctests) + protocol e2e
 moon run ci        # THE GATE: the cross-platform CI steps (see below for what CI adds)
+moon run static    # the pre-commit hook's checks: formatting, lint, types, spelling, yaml + workflow lint, hygiene
+moon run gate      # every check the repository's own toolchain provides: static's cargo and bun members + tests + builds
 moon run release   # pre-release gate: version checks + full ci
 moon run install   # build the release binary, then register it (doctor --fix)
 moon run lint      # lint everything: clippy -D warnings + biome lint

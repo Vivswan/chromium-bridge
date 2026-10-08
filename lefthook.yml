@@ -1,32 +1,45 @@
-# Git hooks, managed by lefthook (https://lefthook.dev). The hooks check and fail, never install, stage, or
-# commit; what `gate` may run is the root moon.yml header's rule.
+# Git hooks, managed by lefthook (https://lefthook.dev). The hooks check and fail; they never stage, write, or
+# commit, and install no project dependency. `static` is the root moon.yml's task, and its header says what the
+# task may run.
 #
 #   wire or re-wire the hooks   -> `moon run setup` (lefthook's postinstall) or `lefthook install`
-#   a commit staging a change   -> pre-commit runs the gate
-#   a message-only amend        -> no gate: lefthook skips every pre-commit job when nothing is staged, and the tree
-#                                  is unchanged (judged already if the commit that made it ran the gate)
-#   a rebase rewriting commits  -> post-rewrite runs the gate, since the commits a rebase re-creates pass no gate (git
-#                                  invokes pre-commit for none of them but a reword, which stages nothing); the
-#                                  verdict comes after they exist, and a red one is fixed and amended, which
+#   a commit staging a change   -> pre-commit runs `moon run static`; the test suites and builds are CI's on every PR
+#   a refused commit            -> nothing was written; each fail text names the fix tasks that exist (spelled out
+#                                  twice, since lefthook expands a template in `run` alone)
+#   a message-only amend        -> no check: lefthook skips every pre-commit job when nothing is staged, and the tree
+#                                  is unchanged (judged already if the commit that made it ran the checks)
+#   a rebase rewriting commits  -> post-rewrite runs the same checks, since the commits a rebase re-creates pass no
+#                                  hook (git invokes pre-commit for none of them but a reword, which stages nothing);
+#                                  the verdict comes after they exist, and a red one is fixed and amended, which
 #                                  pre-commit judges
 #   automatic commits           -> a clean cherry-pick or merge, and filter-branch, meet no hook here (a conflict
 #                                  resolved by hand commits through pre-commit); CI judges the PR
 #   moon and cargo              -> proto's ~/.proto/shims and ~/.proto/bin (`proto install`, .prototools) and rustup's
 #                                  ~/.cargo/bin, prefixed below so a git client that starts hooks without your
-#                                  shell's PATH still finds them
-#   rust                        -> RUSTUP_AUTO_INSTALL=0 here as well as in the gate's cargo tasks: moon's task env
-#                                  yields to an inherited value, and a commit must never download a toolchain
+#                                  shell's PATH still finds them; typos and actionlint come from the PATH the shell
+#                                  gives git (docs/development.md says how they are installed)
+#   rust                        -> RUSTUP_AUTO_INSTALL=0 here as well as in the cargo tasks: moon's task env yields to
+#                                  an inherited value, and a commit must never download a toolchain
 #   skip for a WIP commit       -> LEFTHOOK=0 git commit (CI runs the full gate on the PR)
 
 templates:
-  gate: PATH="$HOME/.proto/shims:$HOME/.proto/bin:$HOME/.cargo/bin:$PATH" RUSTUP_AUTO_INSTALL=0 moon run gate
+  static: PATH="$HOME/.proto/shims:$HOME/.proto/bin:$HOME/.cargo/bin:$PATH" RUSTUP_AUTO_INSTALL=0 moon run static
 
 pre-commit:
   jobs:
-    - name: gate
-      run: '{gate}'
+    - name: static checks
+      run: '{static}'
+      fail_text: >-
+        refused; nothing was written. Fix what the failing check reported above (when a task exists it is named:
+        `moon run fmt` for formatting, `moon run fix` for Biome's fixable lints, `moon run gen-architecture-map` for
+        the module map; otherwise edit the reported source or translation), stage, and commit again.
 
 post-rewrite:
   jobs:
-    - name: gate after a rebase
-      run: 'test "{1}" != rebase || {gate}'
+    - name: static checks after a rebase
+      run: 'test "{1}" != rebase || {static}'
+      fail_text: >-
+        the commits the rebase re-created exist, and the tree fails the static checks; nothing was written. Fix what
+        the failing check reported above (when a task exists it is named: `moon run fmt` for formatting,
+        `moon run fix` for Biome's fixable lints, `moon run gen-architecture-map` for the module map; otherwise edit
+        the reported source or translation), stage, and amend the rewritten commit, which pre-commit judges.

@@ -20,7 +20,7 @@ This is a small, security-sensitive project (it drives a real logged-in browser)
 
 - Read [docs/development.md](./docs/development.md) for the dev loop and [docs/architecture.md](./docs/architecture.md) for the design.
 - Behavioral or security-model changes state their reason in the PR body and, when they change a load-bearing decision, update its row in [docs/security/rationale.md](./docs/security/rationale.md). Don't quietly weaken a confirmation/allowlist boundary.
-- The local gate is `moon run ci` (see [Workflow](#workflow)) - run it, not individual commands, before pushing.
+- `moon run ci` runs every check locally (see [Workflow](#workflow)) - run it, not individual commands, when you want the verdict before pushing.
 
 ## Workflow
 
@@ -37,7 +37,7 @@ This is a small, security-sensitive project (it drives a real logged-in browser)
    ```sh
    git pull --rebase origin main
    ```
-4. **Gate locally - everything must pass.** The lefthook hooks (wired by `moon run setup`) run `moon run gate`, the own-toolchain part of this, for you before a commit and after a rebase; `moon run help` lists every task:
+4. **Commit; the hook checks.** The lefthook hooks (wired by `moon run setup`) run `moon run static`, the static checks (formatting, lint, types, spelling, the YAML and workflow lints, hygiene), before a commit and after a rebase; a refused commit's message names the fix task. The test suites and builds run in CI on every pull request; `moon run ci` runs everything locally, and `moon run help` lists every task:
    ```sh
    moon run ci        # rust fmt/clippy/nextest + typos/machete + TS typecheck/biome/test/build + protocol e2e
    ```
