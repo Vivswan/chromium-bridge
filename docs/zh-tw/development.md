@@ -131,7 +131,7 @@ bun run --cwd src/apps/extension build
 | 模糊測試工作區 | `fuzz-seeds`、`fuzz-smoke`、`check-fuzz-smoke`、`test-fuzz` (該工作區的 clippy 與 fmt 檢查分別由 `core:lint-fuzz` 與 `core:fmt-check-fuzz` 執行) |
 | TypeScript | `typecheck`、`test-ts` (= `shared:test` + `extension:test` + `check-harness-driver`)、`lint-ts`、`check-ts`、`fmt-ts`、`fmt-check-ts`、`extension:prepare`、`extension:build`、`web:build` |
 | 契約程式碼產生 | `gen` (= `gen-shared` = `gen-ops` + `gen-envelope`)、`gen-icons`、`gen-architecture-map`、`check-envelope`、`check-gen-isolation` |
-| 協定測試套件 | `test-e2e`、`test-adversarial`、`test-chaos`、`check-uv` |
+| 協定測試套件 | `test-e2e`、`test-adversarial`、`test-chaos` |
 | 互通測試套件 | `test-interop` (官方 MCP SDK v2 用戶端對發行執行檔)、`harness-smoke` (真實的用戶端程式 (harness) CLI 搭配隔離的設定目錄; 舊時代開啟方式的金絲雀) |
 | 瀏覽器測試套件 | `test-browser`、`test-integration` (僅限隔離的 Chrome; 絕不納入 `ci`) |
 | 版本管理 | `check-version`、`check-extension-id`、`check-refresh-lockfiles` |
@@ -202,7 +202,7 @@ uv 只固定於 `.prototools`, 而 python 由 uv 擁有: 協定測試套件透�
 | `rust` | 在 ubuntu、macOS 與 Windows 上執行 clippy 與測試; fmt、loom 模型、rustdoc, 以及模糊測試工作區的 fmt、clippy 與測試只在 Linux 上執行 | 各作業系統的執行器 |
 | `build-release` | `moon run build-release`, 上傳供下方的測試套件使用 | ubuntu 執行器 |
 | `coverage` | `cargo llvm-cov`, 僅供參考 (`continue-on-error`, 無門檻) | ubuntu 執行器 |
-| `moon` | 閘門的 bun 側任務, 每個矩陣列一次 `moon run`: `typecheck check-ts shared:test extension:test check-extension-id`; `check-envelope check-gen-isolation check-refresh-lockfiles`; `hygiene` | 每列一個 ubuntu 執行器 |
+| `moon` | 閘門的 bun 側任務, 每個矩陣列一次 `moon run`: `typecheck check-ts shared:test extension:test`; `check-envelope check-gen-isolation check-refresh-lockfiles`; `hygiene` | 每列一個 ubuntu 執行器 |
 | `tooling` | `machete`, 使用 `Containerfile` 固定版本的 cargo-machete | ubuntu 執行器 |
 | `web` | `web:build` | ubuntu 執行器 |
 | `linux-install` | 先下載 `build-release` 的執行檔, 再執行 `scripts/linux-registration.ts`: 在隔離的 HOME 與 XDG 目錄下執行 `doctor --fix`、重新註冊、多瀏覽器、`uninstall` | ubuntu 執行器, 並帶有 cargo 與 moon 以建置情境驅動指令碼讀取的產生身分模組 |

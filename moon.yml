@@ -406,35 +406,27 @@ tasks:
 
   # ----- python protocol suites (uv-provisioned interpreter) -----------------
 
-  check-uv:
-    # The protocol suites run under the exact interpreter pinned in .python-version, provisioned by uv, so
-    # local runs and CI cannot diverge (a PATH python3 already bit us once: 3.12 vs 3.14 subprocess
-    # semantics). No fallback by design.
-    description: 'Fail loudly if uv (which provisions the pinned Python) is missing: proto install uv'
-    command: 'uv --version'
-
-  # The three protocol suites are stdlib unittest modules under tests/protocol
-  # (discovery, so a new test cannot be forgotten); --no-project because the
-  # harness is stdlib-only by design (its independence from our code and from
-  # any package is the point) - never add dependencies to it.
+  # The three protocol suites are stdlib unittest modules under tests/protocol (discovery, so a new test
+  # cannot be forgotten). They run under the exact interpreter pinned in .python-version, provisioned by
+  # uv, so local runs and CI cannot diverge (a PATH python3 already bit us once: 3.12 vs 3.14 subprocess
+  # semantics); no fallback by design, and a missing uv fails the run with its own message. --no-project
+  # because the harness is stdlib-only by design (its independence from our code and from any package is
+  # the point) - never add dependencies to it.
   test-e2e:
     description: 'Protocol-layer e2e tests (drives the real release binary)'
     deps:
-      - '~:check-uv'
       - '~:build-release'
     command: 'uv run --no-project --isolated python -m unittest discover -s tests/protocol -p e2e.py -v'
 
   test-adversarial:
     description: "Adversarial break-in suite (CI's protocol matrix; drives the real release binary)"
     deps:
-      - '~:check-uv'
       - '~:build-release'
     command: 'uv run --no-project --isolated python -m unittest discover -s tests/protocol -p adversarial.py -v'
 
   test-chaos:
     description: "Fault-injection chaos suite (CI's protocol matrix; drives the real release binary)"
     deps:
-      - '~:check-uv'
       - '~:build-release'
     command: 'uv run --no-project --isolated python -m unittest discover -s tests/protocol -p chaos.py -v'
 
@@ -527,8 +519,8 @@ tasks:
 
   # ----- version + repo hygiene checks ---------------------------------------
 
-  # The one list of the bun-side checks: CI's hygiene job (checks.yml) runs this task and `ci` depends on it,
-  # so a check added here runs in both.
+  # The one list of the bun-side checks: checks.yml's moon matrix runs this task as its own row and `ci`
+  # depends on it, so a check added here runs in both.
   hygiene:
     description: 'Every bun-side check (versions, the built manifest, pins, CJK, docs parity, compose); CI runs the same task'
     deps:

@@ -58,11 +58,8 @@ jobs:
         run: bun scripts/release-package.ts installer-from-cargo
 
       # The smoke driver reads the host id and extension id from the generated identity module, a build output
-      # of the gen tasks (their cargo runs take --frozen, which never fetches, so the crates are fetched first).
-      - run: bun install --frozen-lockfile
-      - run: |
-          cargo fetch --locked
-          cargo fetch --locked --manifest-path src/packages/core/fuzz/Cargo.toml
+      # of the gen tasks.
+      - uses: ./.github/actions/workspace-deps
       - run: moon run gen-shared
 
       - name: Install, drive the installed binary, uninstall

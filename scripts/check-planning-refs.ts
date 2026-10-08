@@ -14,7 +14,14 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { parse } from "@babel/parser";
+import {
+  type Argument,
+  type CallExpression,
+  type Expression,
+  parseSync,
+  Visitor,
+} from "oxc-parser";
+import { TextDocument } from "vscode-languageserver-textdocument";
 import { gitEnv, repoRoot } from "./lib.ts";
 
 export const COVERED: readonly string[] = [
@@ -60,65 +67,58 @@ const TITLE_CALLS = new Set(["test", "describe", "it"]);
 const TITLE_CODE = /\b(?:CS|SFX|[HFUS])-?\d[a-z]?\b/;
 const TITLE_CODE_NAME = "audit code in a test title";
 const SCRIPT_EXTENSIONS = /\.(?:[cm]?[jt]s|[jt]sx)$/;
+const JS_EXTENSIONS = /\.(?:[cm]?js|jsx)$/;
 
-type Node = { type: string; loc?: { start: { line: number } } } & Record<string, unknown>;
-
-function titleOf(arg: Node | undefined): string | null {
-  if (arg?.type === "StringLiteral") return arg.value as string;
+function titleOf(arg: Argument | undefined): string | null {
+  if (arg?.type === "Literal" && typeof arg.value === "string") return arg.value;
   if (arg?.type === "TemplateLiteral") {
-    const quasis = arg.quasis as Array<{ value: { cooked: string | null; raw: string } }>;
-    return quasis.map((q) => q.value.cooked ?? q.value.raw).join(" ");
+    return arg.quasis.map((q) => q.value.cooked ?? q.value.raw).join(" ");
   }
   return null;
 }
 
 /** The leftmost identifier of a callee chain: `test.each(x)` and `it.skip` both resolve to the name. */
-function calleeName(node: Node): string | null {
-  let e = node;
+function calleeName(callee: Expression): string | null {
+  let e = callee;
   while (e.type === "MemberExpression" || e.type === "CallExpression") {
-    e = (e.type === "MemberExpression" ? e.object : e.callee) as Node;
+    e = e.type === "MemberExpression" ? e.object : e.callee;
   }
-  return e.type === "Identifier" ? (e.name as string) : null;
+  return e.type === "Identifier" ? e.name : null;
 }
 
 /** Every test/describe/it title in a script, with the 1-based line its title starts on. A parse failure
- * is returned as a hit at the failing line, so the gate reports it and exits 1 like any other finding. */
+ * is returned as a hit at the failing line, so the gate reports it and exits 1 like any other finding.
+ * The grammar per extension is tsc's (JSX allowed in .js, .jsx, and .tsx, not in .ts), so a file this
+ * rejects is one typecheck rejects too. Lines are counted by newline, the split the hit text comes from. */
 export function testTitles(
   path: string,
   text: string,
 ): { titles: Array<{ line: number; title: string }>; parseFailure: Hit | null } {
   if (!SCRIPT_EXTENSIONS.test(path)) return { titles: [], parseFailure: null };
-  let ast: Node;
-  try {
-    ast = parse(text, { sourceType: "module", plugins: ["typescript", "jsx"] }) as unknown as Node;
-  } catch (e) {
-    const err = e as Error & { loc?: { line: number } };
-    const line = err.loc?.line ?? 1;
-    const reason = err.message.replace(/\s*\(\d+:\d+\)$/, "");
+  const document = TextDocument.create("", "typescript", 0, text);
+  const lineOf = (offset: number): number => document.positionAt(offset).line + 1;
+  const { program, errors } = parseSync(path, text, {
+    lang: JS_EXTENSIONS.test(path) ? "jsx" : undefined,
+    preserveParens: false,
+  });
+  const [error] = errors;
+  if (error) {
+    const line = lineOf(error.labels[0]?.start ?? 0);
     const offending = (text.split("\n")[line - 1] ?? "").trim();
     return {
       titles: [],
-      parseFailure: { path, line, pattern: `cannot parse (${reason})`, text: offending },
+      parseFailure: { path, line, pattern: `cannot parse (${error.message})`, text: offending },
     };
   }
   const found: Array<{ line: number; title: string }> = [];
-  const walk = (node: unknown): void => {
-    if (Array.isArray(node)) {
-      for (const child of node) walk(child);
-      return;
-    }
-    if (node === null || typeof node !== "object") return;
-    const n = node as Node;
-    if (n.type === "CallExpression" && TITLE_CALLS.has(calleeName(n.callee as Node) ?? "")) {
-      const [first] = n.arguments as Node[];
+  new Visitor({
+    CallExpression: (node: CallExpression) => {
+      if (!TITLE_CALLS.has(calleeName(node.callee) ?? "")) return;
+      const [first] = node.arguments;
       const title = titleOf(first);
-      if (title !== null && first?.loc) found.push({ line: first.loc.start.line, title });
-    }
-    for (const [key, value] of Object.entries(n)) {
-      if (key !== "loc" && key !== "start" && key !== "end") walk(value);
-    }
-  };
-  walk(ast);
+      if (title !== null && first) found.push({ line: lineOf(first.start), title });
+    },
+  }).visit(program);
   return { titles: found, parseFailure: null };
 }
 

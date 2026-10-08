@@ -101,7 +101,7 @@ describe("findPlanningRefs", () => {
 
   test("a file the parser rejects is a hit at the failing line, not a crash", () => {
     expect(findPlanningRefs("x.ts", "export const a = 1;\ntest(\n")).toEqual([
-      { path: "x.ts", line: 3, pattern: "cannot parse (Unexpected token)", text: "" },
+      { path: "x.ts", line: 3, pattern: "cannot parse (Expected `)` but found `EOF`)", text: "" },
     ]);
   });
 
