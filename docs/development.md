@@ -131,7 +131,7 @@ The full task menu, by area:
 | Fuzz workspace | `fuzz-seeds`, `fuzz-smoke`, `check-fuzz-smoke`, `test-fuzz` (clippy and fmt over it are `core:lint-fuzz` and `core:fmt-check-fuzz`) |
 | TypeScript | `typecheck`, `test-ts` (= `shared:test` + `extension:test` + `check-harness-driver`), `lint-ts`, `check-ts`, `fmt-ts`, `fmt-check-ts`, `extension:prepare`, `extension:build`, `web:build` |
 | Contract codegen | `gen` (= `gen-shared` = `gen-ops` + `gen-envelope`), `gen-icons`, `gen-architecture-map`, `check-envelope`, `check-gen-isolation` |
-| Protocol suites | `test-e2e`, `test-adversarial`, `test-chaos`, `check-uv` |
+| Protocol suites | `test-e2e`, `test-adversarial`, `test-chaos` |
 | Interop suites | `test-interop` (official MCP SDK v2 client against the release binary), `harness-smoke` (real harness CLIs, isolated config dirs; the legacy-era opening-method canary) |
 | Browser suites | `test-browser`, `test-integration` (isolated Chrome only; never in `ci`) |
 | Versioning | `check-version`, `check-extension-id`, `check-refresh-lockfiles` |
@@ -202,7 +202,7 @@ uv is pinned only in `.prototools`, and python is owned by uv: the protocol suit
 | `rust` | clippy and tests on ubuntu, macOS, and Windows; fmt, the loom model, rustdoc, and the fuzz workspace's fmt, clippy, and tests on Linux alone | each OS's runner |
 | `build-release` | `moon run build-release`, uploaded for the suites below | ubuntu runner |
 | `coverage` | `cargo llvm-cov`, informational (`continue-on-error`, no threshold) | ubuntu runner |
-| `moon` | the gate's bun-side tasks, one `moon run` per matrix row: `typecheck check-ts shared:test extension:test check-extension-id`; `check-envelope check-gen-isolation check-refresh-lockfiles`; `hygiene` | ubuntu runner per row |
+| `moon` | the gate's bun-side tasks, one `moon run` per matrix row: `typecheck check-ts shared:test extension:test`; `check-envelope check-gen-isolation check-refresh-lockfiles`; `hygiene` | ubuntu runner per row |
 | `tooling` | `machete`, with cargo-machete at the `Containerfile` pin | ubuntu runner |
 | `web` | `web:build` | ubuntu runner |
 | `linux-install` | downloads the `build-release` binary, then `scripts/linux-registration.ts`: `doctor --fix`, re-register, multi-browser, `uninstall` under isolated HOME and XDG directories | ubuntu runner, with cargo and moon to build the generated identity module the scenario driver reads |

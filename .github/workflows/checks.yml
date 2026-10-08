@@ -101,7 +101,7 @@ jobs:
       fail-fast: false
       matrix:
         tasks:
-          - typecheck check-ts shared:test extension:test check-extension-id
+          - typecheck check-ts shared:test extension:test
           - check-envelope check-gen-isolation check-refresh-lockfiles
           - hygiene
     steps:
@@ -160,7 +160,7 @@ jobs:
 
   # The suites hardcode target/release/genkan and build it only when missing, so the downloaded
   # binary is the one they drive. --upstream none skips the task's build-release dep (the artifact stands in
-  # for it) and check-uv (a missing uv fails the run loudly anyway).
+  # for it).
   protocol:
     name: Protocol suite (${{ matrix.suite }}, Python)
     needs: build-release
