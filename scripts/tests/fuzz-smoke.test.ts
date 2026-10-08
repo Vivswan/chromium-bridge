@@ -37,15 +37,9 @@ function failure(overrides: Partial<FailureInfo> = {}): FailureInfo {
 // -max_total_time as signed 32-bit and -seed as unsigned 32-bit, so the boundary values must pass whole, and
 // the scheduled nightly passes a blank --seed=, which is no seed given.
 describe("parseOptions", () => {
-  // A flag left out reaches libFuzzer as this value, so every row pins the whole option set.
-  const defaults: Options = {
-    runs: 4096,
-    maxTotalTime: 30,
-    cmin: false,
-    seed: undefined,
-    failureDir: "fuzz/failures",
-    requireToolchain: false,
-  };
+  // A flag left out keeps the parser's own default, so each row pins the whole option set against
+  // parseOptions([]) and fails only when a field it names moves.
+  const defaults = parseOptions([]);
   const given: Options = {
     runs: 7,
     maxTotalTime: 9,

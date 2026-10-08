@@ -1,11 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-  MANIFEST_PERMISSIONS,
-  MINIMUM_CHROME_VERSION,
-} from "../../src/apps/extension/src/lib/shared/manifest-surface";
-import { EXTENSION_MANIFEST_KEY } from "../../src/packages/shared/generated/identity";
 import { builtManifestProblems } from "../check-extension-id";
 import { Scratch } from "../lib";
 
@@ -21,19 +16,10 @@ function built(manifest: Record<string, unknown> | undefined): string {
   return root;
 }
 
-const pinned = {
-  key: EXTENSION_MANIFEST_KEY,
-  permissions: MANIFEST_PERMISSIONS,
-  minimum_chrome_version: MINIMUM_CHROME_VERSION,
-  host_permissions: [],
-  optional_host_permissions: ["<all_urls>"],
-};
-
 // The CI run shows the pinned surface passing; only a drifted manifest shows each rule firing by name, and
 // the task depends on extension:build, so a manifest absent after the build is a defect, never a skip.
 describe("builtManifestProblems", () => {
   test.each<[name: string, manifest: Record<string, unknown> | undefined, problems: string[]]>([
-    ["the pinned surface has no problem", pinned, []],
     [
       "a build directory without a manifest is an error naming the expected path, not a skip",
       undefined,

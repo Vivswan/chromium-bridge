@@ -251,8 +251,7 @@ mod tests {
 
     #[test]
     fn handshake_challenge_response_authenticates_over_a_pipe() {
-        // The client must sign (nonce, label) and ship the label beside the MAC; this is the only client-half
-        // pin that runs on Windows, where the socketpair round trip below does not.
+        // The client must sign (nonce, label) and ship the label beside the MAC.
         use std::io::Cursor;
 
         // A test fixture, not a credential.
