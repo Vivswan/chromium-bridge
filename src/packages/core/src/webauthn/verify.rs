@@ -1,5 +1,3 @@
-//! The assertion verifier: pure over its inputs, every refusal a [`Refusal`] variant.
-
 use p256::ecdsa::signature::Verifier as _;
 use p256::ecdsa::DerSignature;
 use sha2::{Digest, Sha256};
@@ -45,8 +43,8 @@ pub struct Verified {
     pub sign_count: u32,
 }
 
-/// Verify one assertion against the enrolled credential and the statement the host issued. The signature
-/// covers `authenticatorData || sha256(clientDataJSON)`, the spec's signing input.
+/// The spec's signing input is `authenticatorData || sha256(clientDataJSON)`; a DER signature is the client's
+/// spelling.
 pub fn verify_assertion(
     credential: &Credential,
     statement: &Statement,
@@ -68,10 +66,8 @@ pub fn verify_assertion(
     if stored != received {
         return Err(Refusal::BackupEligibilityChanged { stored, received });
     }
-    // A zero on both sides is an authenticator that does not count; once either side counts, the value
-    // must move forward on every assertion.
     let (stored, received) = (credential.sign_count, auth.sign_count);
-    if (stored != 0 || received != 0) && received <= stored {
+    if !super::store::counter_advances(stored, received) {
         return Err(Refusal::SignCountNotIncreased { stored, received });
     }
     client_data::check(

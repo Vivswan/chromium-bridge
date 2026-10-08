@@ -1,77 +1,45 @@
-// The off-DOM confirmation surface protocol: what the service worker shows in
-// the extension-owned confirmation window, and the two runtime messages the
-// window exchanges with it.
+// What the service worker shows in the extension-owned confirmation window and the two runtime messages they
+// exchange. A guarded PAGE cannot reach it: the window is an extension page (separate origin and process) and
+// the router (background/messages.ts) accepts confirm_ready / confirm_resolve from the confirmation window alone.
 //
-// The whole point of this surface is that a guarded PAGE cannot reach it: the
-// window is an extension page (chrome-extension:// origin, separate process),
-// and the router additionally accepts confirm_ready / confirm_resolve ONLY
-// from extension pages. A content script or page script can therefore
-// neither read a pending confirmation nor answer one.
-//
-// ConfirmKind "eval" and "upload" are the two kinds the host's presence exchange
-// may answer instead of the window's Allow (the service's
-// ConfirmRequestBase.presenceRouting decides per request). `presence: true`
-// marks such a payload: the window shows it and runs the answer (a tap on the
-// browser's enrolled authenticator, or its software confirmation where none is
-// enrolled), the host verifies and audits it, and the service refuses a
-// window-side approval - the host's verdict is the approval.
-//
-// The payload is a discriminated union on `kind`, each arm carrying exactly
-// its own fields, so the combinations the service never produces cannot even
-// parse: `presence` exists only on the two presence-gated kinds (a
-// `policy_relax` or `click` payload claiming the presence route is a schema
-// error, not a rendering decision), and `policy_relax` - where no page is
-// involved - pins origin/tabTitle to the empty string instead of merely
-// defaulting them there.
+// Each arm carries exactly its own fields, so a combination the service never produces fails to parse:
+//   presence                      -> only on eval and upload, the kinds the host's presence exchange may answer
+//                                    instead of Allow (the service's presenceRouting decides per request)
+//   policy_relax origin, tabTitle -> pinned to "": no page is involved
 
 import { z } from "zod";
 
 export const ConfirmKindSchema = z.enum([
-  "click", // a high-risk click (submit button / navigating link)
-  "press", // a synthetic keypress (can submit or trigger)
-  "select", // a <select> change (form state)
-  "eval", // page_eval - arbitrary JS; detail carries the FULL code
-  "tab_close", // closing a tab
-  "upload", // page_upload - detail carries the exact local file path
-  // The unpinned lane: an UNSIGNED host policy push that would relax the
-  // enforced effective policy on an extension with no pinned key.
-  // origin/tabTitle are "" (no page is involved). detail carries the relaxing
-  // fields' wire names, one per line; the first-ever document (nothing stored
-  // to compare against) rides this lane too, and its detail lists every field
-  // as `name = value`.
-  // Never presented on a pinned extension.
+  "click",
+  "press",
+  "select",
+  "eval", // detail carries the FULL code
+  "tab_close",
+  "upload", // detail carries the exact local file path
+  // An UNSIGNED host push that would relax the enforced policy on an extension with no pinned key; never
+  // presented on a pinned one. detail lists the relaxing fields' wire names one per line, or every field as
+  // `name = value` for the first-ever document.
   "policy_relax",
 ]);
 
 export type ConfirmKind = z.infer<typeof ConfirmKindSchema>;
 
-// The fields every arm carries.
 const confirmCommon = {
   id: z.string().min(1),
-  /** Auto-deny deadline, ms since epoch. The window renders a countdown and
-   * the service worker enforces it regardless. */
+  /** Auto-deny deadline, ms since epoch; the service worker enforces it whatever the window's countdown shows. */
   deadline: z.int().positive(),
 } as const;
 
-// The page-context fields of the six tool-call kinds.
 const confirmPage = {
-  /** Origin of the affected page ("" when not applicable). */
   origin: z.string(),
-  /** Title of the affected tab ("" when not applicable). */
   tabTitle: z.string(),
-  /** Action-specific detail: element description, keys, option value, the
-   * full eval code, or the exact upload path. Rendered as text, never HTML. */
+  /** Rendered as text, never HTML: it carries the full eval code or the exact upload path. */
   detail: z.string(),
 } as const;
 
-/** Approval comes through the host's presence exchange, not the window's Allow:
- * the window answers the host's request (the authenticator's tap, or the
- * software confirmation where this browser has no credential) and the service
- * refuses a window-side approval; denial stays window-reachable (removing
- * capability is always friction-free). Only the two presence-gated kinds
- * ("eval"/"upload") may carry it, and only as the literal `true`: the service
- * never emits `presence: false` (absence IS the not-gated state), so the
- * boolean's dead false arm is unrepresentable. */
+/** Approval for a presence-gated payload comes through the host's presence exchange, never the window's Allow;
+ * denial stays window-reachable. Only the literal `true`: the service never emits `presence: false`, so absence
+ * is the not-gated state and the false arm is unrepresentable. */
 const presence = z.literal(true).optional();
 
 export const ConfirmPayloadSchema = z.discriminatedUnion("kind", [
@@ -84,23 +52,17 @@ export const ConfirmPayloadSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("policy_relax"),
     ...confirmCommon,
-    /** No page is involved: the push arrives over the native-messaging
-     * port, so the page-context fields are structurally empty rather than
-     * conventionally empty. */
+    /** The push arrives over the native-messaging port, so the page fields are structurally empty, not
+     * conventionally. */
     origin: z.literal(""),
     tabTitle: z.literal(""),
-    /** The relaxing fields' wire names, one per line - or, for the
-     * first-ever document, the full `field = value` set. */
     detail: z.string(),
   }),
 ]);
 
 export type ConfirmPayload = z.infer<typeof ConfirmPayloadSchema>;
 
-/** Whether this payload's approval belongs to the host's presence exchange. The
- * union already confines `presence` to the two presence-gated kinds; this is the
- * one place consumers read it, so the narrowing lives here instead of at every
- * call site. */
+/** The one place consumers read `presence`, so the narrowing lives here and not at every call site. */
 export function isPresenceGated(payload: ConfirmPayload): boolean {
   return (payload.kind === "eval" || payload.kind === "upload") && payload.presence === true;
 }

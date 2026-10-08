@@ -3,8 +3,8 @@ import { symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   decodeStrict,
-  FORBIDDEN_RANGES,
   forbiddenIn,
+  type Hit,
   isUtf16,
   loadAllowlist,
   looksBinary,
@@ -19,69 +19,55 @@ afterAll(() => scratch.remove());
 // Every character under test is written as a \u escape, so this file passes
 // its own gate (and check-cjk.ts).
 
+const hit = (line: number, column: number, char: string): Hit => ({
+  line,
+  column,
+  char,
+  codepoint: `U+${char.codePointAt(0)?.toString(16).toUpperCase().padStart(4, "0")}`,
+});
+
+// The scan is a hand-rolled walk over codepoints: the column is a codepoint index (an astral character is
+// one column), every hit on a line is reported, a BOM is a hit the decoder must not eat, and the CJK prose
+// marks and each range's neighbours stay allowed.
 describe("forbiddenIn", () => {
-  test("clean ASCII text has no hits", () => {
-    expect(forbiddenIn('plain text -- quotes "like this", dashes - and... dots\n')).toEqual([]);
-  });
-
-  test("flags an em-dash with its line, column, and codepoint", () => {
-    const hits = forbiddenIn("line one\nan em\u2014dash here\n");
-    expect(hits).toEqual([{ line: 2, column: 6, char: "\u2014", codepoint: "U+2014" }]);
-  });
-
-  test("flags every occurrence, not just the first per line", () => {
-    const hits = forbiddenIn("\u201Ccurly\u201D and \u2018curlier\u2019");
-    expect(hits.map((h) => h.codepoint)).toEqual(["U+201C", "U+201D", "U+2018", "U+2019"]);
-  });
-
-  test("every codepoint of every banned range is a hit", () => {
-    for (const [first, last] of FORBIDDEN_RANGES) {
-      for (let cp = first; cp <= last; cp++) {
-        const hits = forbiddenIn(`x${String.fromCodePoint(cp)}y`);
-        expect(hits).toHaveLength(1);
-        expect(hits[0]?.codepoint).toBe(`U+${cp.toString(16).toUpperCase().padStart(4, "0")}`);
-      }
-    }
-  });
-
-  test("astral characters count as one column and are not misflagged", () => {
-    // U+1F600 (emoji) before an em-dash: the dash sits at codepoint column 3.
-    const hits = forbiddenIn("\u{1F600}a\u2014b");
-    expect(hits).toEqual([{ line: 1, column: 3, char: "\u2014", codepoint: "U+2014" }]);
-  });
-
-  test("a leading BOM is a hit at 1:1 (the decoder must not eat it)", () => {
-    expect(forbiddenIn(decodeStrict(new Uint8Array([0xef, 0xbb, 0xbf, 0x68, 0x69])))).toEqual([
-      { line: 1, column: 1, char: "\uFEFF", codepoint: "U+FEFF" },
-    ]);
-  });
-
-  test("the CJK prose marks stay allowed (they are not in the set)", () => {
-    // U+3001 U+3002 U+300C U+300D: ideographic comma/full stop and corner
-    // brackets - legitimate in CJK prose, deliberately not banned.
-    expect(forbiddenIn("\u4F60\u597D\u3002\u300C\u5F15\u7528\u300D\u3001")).toEqual([]);
-  });
-
-  test("neighbours of banned ranges stay allowed", () => {
-    // U+2016 (after U+2000-2015), U+2017, U+2022 bullet, U+2192 arrow,
-    // U+2260 not-equal, U+2FFF (before U+3000), U+FF5F (after U+FF5E).
-    expect(forbiddenIn("\u2016\u2017\u2022\u2192\u2260\u2FFF\uFF5F")).toEqual([]);
+  test.each<[name: string, text: string, hits: Hit[]]>([
+    [
+      "clean ASCII text has no hits",
+      'plain text -- quotes "like this", dashes - and... dots\n',
+      [],
+    ],
+    [
+      "an em-dash is flagged with its line and column",
+      "line one\nan em\u2014dash here\n",
+      [hit(2, 6, "\u2014")],
+    ],
+    [
+      "every occurrence is flagged, not just the first per line",
+      "\u201Ccurly\u201D and \u2018curlier\u2019",
+      [hit(1, 1, "\u201C"), hit(1, 7, "\u201D"), hit(1, 13, "\u2018"), hit(1, 21, "\u2019")],
+    ],
+    ["an astral character counts as one column", "\u{1F600}a\u2014b", [hit(1, 3, "\u2014")]],
+    [
+      "a leading BOM is a hit at 1:1 (the decoder must not eat it)",
+      decodeStrict(new Uint8Array([0xef, 0xbb, 0xbf, 0x68, 0x69])),
+      [hit(1, 1, "\uFEFF")],
+    ],
+    ["the CJK prose marks stay allowed", "\u4F60\u597D\u3002\u300C\u5F15\u7528\u300D\u3001", []],
+    // Each sits one codepoint past a banned range's edge, or is a symbol the set leaves alone.
+    ["neighbours of banned ranges stay allowed", "\u2016\u2017\u2022\u2192\u2260\u2FFF\uFF5F", []],
+  ])("%s", (_name, text, hits) => {
+    expect(forbiddenIn(text)).toEqual(hits);
   });
 });
 
-describe("parseAllowlist", () => {
-  test("ignores comments and blanks, keeps exact paths", () => {
-    const set = parseAllowlist("# comment\n\ndocs/legacy.md\n  spaced/path.txt  \n");
-    expect(set).toEqual(new Set(["docs/legacy.md", "spaced/path.txt"]));
-  });
-
-  test("matching is exact, never prefix (the original action's footgun)", () => {
-    const set = parseAllowlist("docs\n");
-    expect(set.has("docs")).toBe(true);
-    expect(set.has("docs/anything.md")).toBe(false);
-  });
+test("parseAllowlist ignores comments and blanks and keeps exact paths", () => {
+  expect(parseAllowlist("# comment\n\ndocs/legacy.md\n  spaced/path.txt  \n")).toEqual(
+    new Set(["docs/legacy.md", "spaced/path.txt"]),
+  );
 });
 
+// The sniffs decide what the gate reads: a null byte means binary, a UTF-16 BOM means text the gate must
+// not skip, and the decoder refuses invalid UTF-8 instead of emitting U+FFFD.
 describe("content sniffing", () => {
   test("null byte means binary", () => {
     expect(looksBinary(new Uint8Array([0x68, 0x00, 0x69]))).toBe(true);
@@ -102,105 +88,133 @@ describe("content sniffing", () => {
 describe("scanFile (temp fixtures, never the repo)", () => {
   const dir = scratch.dir("check-typography-test");
 
-  test("fails a fixture containing an em-dash", () => {
-    const path = join(dir, "dirty.md");
-    writeFileSync(path, "an em\u2014dash\n");
-    expect(scanFile(path)).toEqual([{ line: 1, column: 6, char: "\u2014", codepoint: "U+2014" }]);
+  // A file is scanned by content, never by name, and proven binary content is null, not clean.
+  test.each<[name: string, file: string, content: string | Buffer, hits: Hit[] | null]>([
+    [
+      "a fixture containing an em-dash fails",
+      "dirty.md",
+      "an em\u2014dash\n",
+      [hit(1, 6, "\u2014")],
+    ],
+    ["a clean fixture passes", "clean.md", "plain ASCII only - no lookalikes\n", []],
+    [
+      "a text file named .png is scanned",
+      "not-an-image.png",
+      "sneaky \u2019quote\u2019 in a fake image\n",
+      [hit(1, 8, "\u2019"), hit(1, 14, "\u2019")],
+    ],
+    [
+      "binary content (null-byte sniff) is null, not clean",
+      "blob",
+      Buffer.from([0x00, 0x14, 0x20, 0x00]),
+      null,
+    ],
+  ])("%s", (_name, file, content, hits) => {
+    const path = join(dir, file);
+    writeFileSync(path, content);
+    expect(scanFile(path)).toEqual(hits);
   });
 
-  test("passes a clean fixture", () => {
-    const path = join(dir, "clean.md");
-    writeFileSync(path, "plain ASCII only - no lookalikes\n");
-    expect(scanFile(path)).toEqual([]);
-  });
-
-  test("scans by content, not extension: a text file named .png is scanned", () => {
-    const path = join(dir, "not-an-image.png");
-    writeFileSync(path, "sneaky \u2019quote\u2019 in a fake image\n");
-    expect(scanFile(path)?.map((h) => h.codepoint)).toEqual(["U+2019", "U+2019"]);
-  });
-
-  test("skips binary content (null-byte sniff) as null, not as clean", () => {
-    const path = join(dir, "blob");
-    writeFileSync(path, Buffer.from([0x00, 0x14, 0x20, 0x00]));
-    expect(scanFile(path)).toBeNull();
-  });
-
-  test("throws on UTF-16 content instead of skipping it as binary", () => {
-    const path = join(dir, "utf16.txt");
-    writeFileSync(path, Buffer.from([0xff, 0xfe, 0x41, 0x00, 0x42, 0x00]));
-    expect(() => scanFile(path)).toThrow("UTF-16");
-  });
-
-  test("throws on non-UTF-8 content instead of silently passing", () => {
-    const path = join(dir, "latin1.txt");
-    // 0xA0 alone is not valid UTF-8; a lenient decode would turn it into
-    // U+FFFD and the no-break space it encodes in latin-1 would go unseen.
-    writeFileSync(path, Buffer.from([0x68, 0x69, 0xa0, 0x0a]));
-    expect(() => scanFile(path)).toThrow();
+  // Anything unscannable throws, so the caller fails rather than skips. Worktree deletions are excused by
+  // main() via `git ls-files --deleted`, not here: an unexplained missing path stays an error.
+  type Unscannable = [name: string, prepare: () => string, error: string | undefined];
+  const unscannable: Unscannable[] = [
+    [
+      "UTF-16 content throws instead of being skipped as binary",
+      () => {
+        const path = join(dir, "utf16.txt");
+        writeFileSync(path, Buffer.from([0xff, 0xfe, 0x41, 0x00, 0x42, 0x00]));
+        return path;
+      },
+      "UTF-16",
+    ],
+    [
+      "non-UTF-8 content throws instead of silently passing",
+      () => {
+        // 0xA0 alone is not valid UTF-8; a lenient decode would turn it into
+        // U+FFFD and the no-break space it encodes in latin-1 would go unseen.
+        const path = join(dir, "latin1.txt");
+        writeFileSync(path, Buffer.from([0x68, 0x69, 0xa0, 0x0a]));
+        return path;
+      },
+      undefined,
+    ],
+    ["a missing file throws instead of silently passing", () => join(dir, "nope.txt"), undefined],
+  ];
+  // mode 000 is not enforced on Windows, root reads anything, and raw-byte link names are a unix affair.
+  if (process.platform !== "win32") {
+    if (process.getuid?.() !== 0) {
+      unscannable.push([
+        "an unreadable but present file throws instead of silently passing",
+        () => {
+          const path = join(dir, "unreadable.txt");
+          writeFileSync(path, "content\n", { mode: 0o000 });
+          return path;
+        },
+        undefined,
+      ]);
+    }
+    unscannable.push([
+      "a symlink whose raw target bytes are invalid UTF-8 throws, not U+FFFD",
+      () => {
+        const link = join(dir, "raw-link");
+        symlinkSync(Buffer.from([0x6e, 0x6f, 0xa0, 0x70, 0x65]), link);
+        return link;
+      },
+      undefined,
+    ]);
+  }
+  test.each(unscannable)("%s", (_name, prepare, error) => {
+    const path = prepare();
+    if (error === undefined) expect(() => scanFile(path)).toThrow();
+    else expect(() => scanFile(path)).toThrow(error);
   });
 
   test("a symlink is scanned as its link text and never followed", () => {
-    // Target holds a banned char; the link text is clean: no hits. And a
-    // link whose TEXT carries a banned char is flagged even when dangling.
     const target = join(dir, "target.txt");
     writeFileSync(target, "followed \u2014 content\n");
     const cleanLink = join(dir, "clean-link");
     symlinkSync(target, cleanLink);
-    expect(scanFile(cleanLink)).toEqual([]);
     const dirtyLink = join(dir, "dirty-link");
     symlinkSync(join(dir, "no\u2014where"), dirtyLink);
-    expect(scanFile(dirtyLink)?.map((h) => h.codepoint)).toEqual(["U+2014"]);
-  });
-
-  test("throws on a missing file instead of silently passing", () => {
-    // Worktree deletions are excused by main() via `git ls-files --deleted`,
-    // not here: an unexplained missing path stays an error.
-    expect(() => scanFile(join(dir, "nope.txt"))).toThrow();
-  });
-
-  test("throws on an unreadable but present file instead of silently passing", () => {
-    if (process.platform === "win32") return; // mode 000 is not enforced there
-    if (process.getuid?.() === 0) return; // root reads anything
-    const path = join(dir, "unreadable.txt");
-    writeFileSync(path, "content\n", { mode: 0o000 });
-    expect(() => scanFile(path)).toThrow();
-  });
-
-  test("a symlink whose raw target bytes are invalid UTF-8 throws, not U+FFFD", () => {
-    if (process.platform === "win32") return; // raw-byte link names are a unix affair
-    const link = join(dir, "raw-link");
-    symlinkSync(Buffer.from([0x6e, 0x6f, 0xa0, 0x70, 0x65]), link);
-    expect(() => scanFile(link)).toThrow();
+    expect({ clean: scanFile(cleanLink), dirty: scanFile(dirtyLink) }).toEqual({
+      clean: [],
+      dirty: [hit(1, [...join(dir, "no")].length + 1, "\u2014")],
+    });
   });
 });
 
+// The allowlist refuses every shape that could smuggle an exemption past the scan.
 describe("loadAllowlist (temp fixtures)", () => {
   const dir = scratch.dir("check-typography-allow");
-
-  test("loads a plain UTF-8 list", () => {
-    const path = join(dir, "allow");
-    writeFileSync(path, "# why: reviewed\ndocs/legacy.md\n");
-    expect(loadAllowlist(path)).toEqual(new Set(["docs/legacy.md"]));
+  test.each<
+    [name: string, file: string, content: Buffer, outcome: Set<string> | { throws: string }]
+  >([
+    [
+      "a plain UTF-8 list loads",
+      "allow",
+      Buffer.from("# why: reviewed\ndocs/legacy.md\n"),
+      new Set(["docs/legacy.md"]),
+    ],
+    [
+      "NUL bytes are refused (they would make the scan skip the file as binary)",
+      "allow-nul",
+      Buffer.from("docs/legacy.md\n\u0000", "latin1"),
+      { throws: "NUL" },
+    ],
+    ["invalid UTF-8 is refused", "allow-latin1", Buffer.from([0x64, 0xa0, 0x0a]), { throws: "" }],
+  ])("%s", (_name, file, content, outcome) => {
+    const path = join(dir, file);
+    writeFileSync(path, content);
+    if (outcome instanceof Set) expect(loadAllowlist(path)).toEqual(outcome);
+    else expect(() => loadAllowlist(path)).toThrow(outcome.throws);
   });
 
-  test("refuses a symlinked allowlist", () => {
+  test("a symlinked allowlist is refused", () => {
     const real = join(dir, "real-allow");
     writeFileSync(real, "docs/legacy.md\n");
     const link = join(dir, "allow-link");
     symlinkSync(real, link);
     expect(() => loadAllowlist(link)).toThrow("symlink");
-  });
-
-  test("refuses NUL bytes (they would make the scan skip the file as binary)", () => {
-    const path = join(dir, "allow-nul");
-    writeFileSync(path, Buffer.from("docs/legacy.md\n\u0000", "latin1"));
-    expect(() => loadAllowlist(path)).toThrow("NUL");
-  });
-
-  test("refuses invalid UTF-8", () => {
-    const path = join(dir, "allow-latin1");
-    writeFileSync(path, Buffer.from([0x64, 0xa0, 0x0a]));
-    expect(() => loadAllowlist(path)).toThrow();
   });
 });

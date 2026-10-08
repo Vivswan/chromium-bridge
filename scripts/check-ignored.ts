@@ -11,8 +11,8 @@ import { type Env, repoRoot, runGit } from "./lib.ts";
 
 export type IgnoredReport = { status: "clean" } | { status: "ignored"; files: string[] };
 
-/** List the tracked files under `cwd` that .gitignore matches. Throws when .gitignore itself is not
- * tracked: the file the gate reads must be in the index, or an empty result proves nothing. */
+/** Throws when .gitignore itself is untracked: the file the gate reads must be in the index, or an empty
+ * result proves nothing. */
 export function checkIgnored(cwd: string, env: Env = process.env): IgnoredReport {
   runGit(cwd, env, "ls-files", "--error-unmatch", ".gitignore");
   const files = runGit(

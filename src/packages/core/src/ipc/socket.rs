@@ -1,7 +1,5 @@
-//! The bridge transport, unified across platforms so the rest of the crate is
-//! transport-agnostic: a Unix-domain socket on Unix, a named pipe on Windows.
-//! Binding goes through [`super::lockfile::listen_and_publish`], which
-//! serializes the unlink-bind-publish sequence against other instances.
+//! Binding is reached only through [`super::lockfile::listen_and_publish`], which serializes
+//! unlink-bind-publish against other instances.
 
 use std::io;
 
@@ -30,8 +28,6 @@ pub type BridgeStream = pipe::PipeStream;
 #[cfg(windows)]
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Bind the bridge socket and return the listener plus the lock-file contents to publish. Module-private:
-/// only [`super::lockfile::listen_and_publish`] may bind (module docs).
 #[cfg(unix)]
 pub(super) fn listen() -> io::Result<(BridgeListener, LockFile)> {
     use std::fs;
@@ -64,8 +60,6 @@ pub(super) fn listen() -> io::Result<(BridgeListener, LockFile)> {
     Ok((listener, lf))
 }
 
-/// Read the lock file and connect; authentication follows in [`super::handshake::client_handshake`]. A failed
-/// connect hands the lock to [`super::lockfile::cleanup_stale_lock`], which decides whether it is stale.
 #[cfg(unix)]
 pub fn connect() -> io::Result<BridgeStream> {
     let lf = read_lock_or_err()?;
@@ -74,8 +68,6 @@ pub fn connect() -> io::Result<BridgeStream> {
     })
 }
 
-/// Windows: the lock's endpoint is parsed as a [`PipeName`] before it is
-/// opened, so a planted lock cannot point the host at a file or a remote pipe.
 #[cfg(windows)]
 pub fn connect() -> io::Result<BridgeStream> {
     let lf = read_lock_or_err()?;
@@ -86,8 +78,7 @@ pub fn connect() -> io::Result<BridgeStream> {
     })
 }
 
-/// Whether a server answers at `endpoint` (a lock file's endpoint field):
-/// connect and drop, sending nothing. The `doctor` reachability probe.
+/// Connects and drops without a byte; the pipe listener's ERROR_NO_DATA path exists for exactly this.
 pub fn probe_endpoint(endpoint: &str) -> bool {
     #[cfg(unix)]
     {
@@ -100,8 +91,6 @@ pub fn probe_endpoint(endpoint: &str) -> bool {
     }
 }
 
-/// A connected pair of bridge streams, both ends in this process, for tests of
-/// the peer-keyed mechanisms (credentials, attestation, handshake).
 #[cfg(test)]
 pub(super) fn loopback_pair() -> (BridgeStream, BridgeStream) {
     #[cfg(unix)]

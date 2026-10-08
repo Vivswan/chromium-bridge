@@ -27,8 +27,6 @@ export type WebAuthnInboundFrame = z.infer<typeof WebAuthnInboundFrameSchema>;
  * it beside a pushed presence_request, and the page runs the approval step for that request. */
 export const PRESENCE_REQUIRED = "presence_required" satisfies RefusalCode;
 
-// ---- page <-> worker shapes ---------------------------------------------------------
-
 /** Which surface a presence tap lands on, from the page's own feature probe (never the host's claim). The
  * label the user sees is keyed on this: a software confirmation must never be presented as a hardware one. */
 export const PRESENCE_SURFACES = [

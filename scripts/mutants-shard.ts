@@ -1,9 +1,8 @@
 #!/usr/bin/env bun
 
-// nightly.yml's mutants job: one shard of the cargo-mutants pass, with the outcome files printed into the
-// log. cargo-mutants exits 2 for a missed mutant and 3 for one that timed out; both mean a mutant survived
-// the suite, which the job reports and does not fail on. Every other nonzero exit (the baseline build or
-// test failing, a usage error) is real and is the shard's exit.
+// nightly.yml's mutants job: one shard of the cargo-mutants pass. cargo-mutants exits 2 for a missed mutant and 3
+// for one that timed out; both mean a mutant survived the suite, which the job reports and does not fail on. Every
+// other nonzero exit (the baseline build or test failing, a usage error) is real and is the shard's exit.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

@@ -25,7 +25,6 @@ impl Record for HostKeyFile {
     const LADDER: Ladder = crate::migrations::host_key::LADDER;
 }
 
-/// Where the scalar lives: the user's choice at `pair`, and what `enclave-status` reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum KeyStore {

@@ -28,11 +28,9 @@ import {
 
 const BUILT_MANIFEST = "build/extension/chrome-mv3/manifest.json";
 
-/** What the built manifest under root gets wrong, against the pinned surface. */
 export function builtManifestProblems(root: string): string[] {
   const problems: string[] = [];
   const builtManifestPath = resolve(root, BUILT_MANIFEST);
-  // The task depends on extension:build, so after it an absent manifest is a defect, not a reason to skip.
   if (!existsSync(builtManifestPath)) {
     return [`built manifest missing at ${BUILT_MANIFEST}`];
   }
@@ -71,7 +69,6 @@ export function builtManifestProblems(root: string): string[] {
   return problems;
 }
 
-/** The core source files besides identity.rs that define an identity constant, by name or by value. */
 export function identityDefiners(root: string): string[] {
   const coreSrc = resolve(root, "src/packages/core/src");
   const identityNames = ["NATIVE_HOST_ID", "PINNED_EXTENSION_ID", "EXTENSION_MANIFEST_KEY"];

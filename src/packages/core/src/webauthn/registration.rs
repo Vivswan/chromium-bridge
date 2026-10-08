@@ -39,15 +39,6 @@ pub struct Registered {
     pub user_verified: bool,
 }
 
-/// Parse one registration against the enrollment statement the host issued.
-///
-/// ```text
-/// clientDataJSON      -> type webauthn.create, challenge == base64url(sha256(statement)), origin == the
-///                        extension's, crossOrigin absent or false, no topOrigin
-/// attestationObject   -> CBOR map of exactly fmt "none", an empty attStmt, and authData, with no bytes after it
-/// authData            -> parses, rpIdHash == sha256(rp id), UP set, attested credential present with an
-///                        ES256 P-256 key
-/// ```
 pub fn parse_registration(
     statement: &Statement,
     rp_id: &RpId,
@@ -79,8 +70,6 @@ pub fn parse_registration(
     })
 }
 
-/// The `authData` of an attestation object whose format is `none`. Exactly the three spec keys, each of its
-/// CBOR type, and nothing after the map: any other shape is refused rather than searched.
 fn attestation_none_auth_data(attestation_object: &[u8]) -> Result<Vec<u8>, Refusal> {
     let mut cursor = attestation_object;
     let value: ciborium::Value =

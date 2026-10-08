@@ -1,27 +1,14 @@
 #!/usr/bin/env bun
-// Guard for .moon/workspace.yml's hasher.ignorePatterns: no TRACKED file may
-// match any pattern there.
-//
-// The ignore list exists to keep generated and downloaded output (target/,
-// build/, .wxt/, rendered icons, ...) out of every moon task hash. A missing
-// pattern is safe (it can only over-invalidate a cache or fail a run
-// loudly); a pattern that matches a tracked source file is the dangerous
-// direction - it silently drops that file from every hash, so an edit to it
-// could produce a stale cache hit. This script closes that hole: it globs
-// every ignore pattern against `git ls-files` and fails on any match (e.g.
-// someone naming a tracked source directory build/ or tmp/).
-//
-// Run via `moon run check-hasher` (part of the ci gate) and CI's
-// version-consistency job.
+// hasher.ignorePatterns keeps generated and downloaded output out of every moon task hash. A missing pattern
+// only over-invalidates a cache or fails a run loudly; a pattern that matches a TRACKED file silently drops it
+// from every hash, so an edit to it could hit a stale cache. Every pattern is globbed against `git ls-files`
+// and any match fails.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { die, repoRoot } from "./lib.ts";
 
-// Read hasher.ignorePatterns as real YAML (Bun.YAML, like the sibling
-// check-toolchain.ts), and fail loudly on a missing,
-// empty, or malformed list - silently checking nothing is the failure mode
-// this script exists to prevent.
+// A missing, empty, or malformed list fails loudly: checking nothing is the failure this gate exists to prevent.
 const workspaceYml = readFileSync(join(repoRoot, ".moon/workspace.yml"), "utf8");
 const workspace = Bun.YAML.parse(workspaceYml) as {
   hasher?: { ignorePatterns?: unknown };

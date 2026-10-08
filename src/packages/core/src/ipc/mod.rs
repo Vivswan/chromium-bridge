@@ -1,24 +1,6 @@
-//! IPC between the MCP server (long-lived) and the native-host subprocess (spawned fresh by Chrome on each
-//! connectNative). The public API is re-exported here so callers keep using `ipc::...`; each submodule's own
-//! doc describes its concern.
-//!
-//! ```text
-//! Unix     -> 0600 Unix-domain socket in a private 0700 runtime dir: no port to reach, other users kept out
-//! Windows  -> named pipe whose descriptor admits the current user alone: no port to reach, other users kept out
-//! both     -> endpoint (socket path, or pipe name) + per-run secret published in the lock file the host reads on startup
-//! ```
-//!
-//! Before the handshake each end kernel-attests the other ([`attest_peer`]): the peer must run the same
-//! executable image, so a different same-user program is rejected at accept.
-//! ```text
-//! Linux    -> SHA256 of `/proc/<pid>/exe`
-//! macOS    -> code-directory hash of the running image via its kernel audit token (survives a re-open TOCTOU)
-//! Windows  -> SHA256 of the image file the pipe peer's pid is running; its Authenticode publisher feeds the allowlist
-//! ```
-//!
-//! The handshake is an HMAC-SHA256 challenge-response ([`server_handshake`] / [`client_handshake`]): a random
-//! nonce per connection, answered with HMAC(secret, nonce), so the secret never travels and a captured reply
-//! cannot replay.
+//! IPC between the long-lived MCP server and the native host Chrome spawns per connectNative. Every
+//! connection passes the same-user gate, image attestation ([`attest_peer`]), then the HMAC handshake
+//! ([`server_handshake`]); each submodule's doc owns its mechanism.
 
 mod attest;
 mod handshake;

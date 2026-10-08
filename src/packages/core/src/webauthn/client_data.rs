@@ -1,5 +1,3 @@
-//! `clientDataJSON` as the WebAuthn client writes it, checked against the statement and the RP.
-
 use serde::de::{Deserializer, Error as _, MapAccess, Visitor};
 use serde::Deserialize;
 use serde_json::Value;
@@ -55,13 +53,15 @@ impl<'de> Deserialize<'de> for Members {
     }
 }
 
-/// `want` is `webauthn.get` for an assertion and `webauthn.create` for a registration: the same bytes
-/// signed under the other type are refused, so a registration response cannot answer a presence request.
+/// `want` is `webauthn.get` for an assertion and `webauthn.create` for a registration, so a registration
+/// response cannot answer a presence request.
 ///
-/// The client may add members this host does not read (`tokenBinding`, a forward-compatibility marker), so
-/// unknown ones are not refused; a member this host reads must have its spec type. `topOrigin` only exists
-/// for a cross-origin ceremony, which this deployment never permits, so its presence is refused like
-/// `crossOrigin: true`.
+/// ```text
+/// unknown member (`tokenBinding`, a forward-compatibility marker) -> kept: the client may add them
+/// a member this host reads, not its spec type                     -> ClientDataMalformed
+/// `topOrigin` present at all                                      -> CrossOrigin: only a cross-origin
+///                                                                    ceremony carries it
+/// ```
 pub(super) fn check(
     client_data_json: &[u8],
     want: &'static str,

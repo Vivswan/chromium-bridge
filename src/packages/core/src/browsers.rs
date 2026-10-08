@@ -1136,8 +1136,8 @@ mod tests {
     #[test]
     fn detection_requires_the_app_on_macos_and_a_config_root_or_package_dir_elsewhere() {
         // Fixture tree in a temp dir; never a real user dir or system root.
-        let root = std::env::temp_dir().join(format!("bb-browsers-detect-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path();
         let d = BaseDirs {
             home: root.join("home"),
             xdg_config_home: None,
@@ -1183,8 +1183,6 @@ mod tests {
         std::fs::create_dir_all(d.home.join(".config/chromium")).unwrap();
         assert_eq!(detected(Os::Linux, Scope::User), vec!["chromium"]);
         assert_eq!(detected(Os::Linux, Scope::System), vec!["edge"]);
-
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

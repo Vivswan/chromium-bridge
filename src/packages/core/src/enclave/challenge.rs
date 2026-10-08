@@ -1,46 +1,34 @@
-//! Challenge message construction: the exact byte strings the host-key challenge and policy signatures
-//! cover, shared as a contract with the extension's WebCrypto verifier.
-
 use super::EnclaveError;
+use crate::webauthn::{bounded_nul_free, FieldFault, MAX_NONCE_LEN};
 
-/// Domain-separation prefix for host-key CHALLENGE signatures (the pair / verify ceremony). Binds every such
-/// signature to the ceremony, so a proof can never be replayed as a signature over some other meaning of the
-/// same bytes.
+/// Domain separation for the pair / verify ceremony: a proof can never be replayed as a signature over
+/// another meaning of the same bytes.
 pub const CHALLENGE_DOMAIN: &str = "chromium-bridge-enclave-v1";
 
-/// Domain-separation prefix for POLICY document signatures: the host key's signature over the host-owned
-/// policy baseline. Distinct from [`CHALLENGE_DOMAIN`] on purpose, so a policy signature can never be replayed
-/// as a challenge proof, nor a proof as a policy.
+/// Distinct from [`CHALLENGE_DOMAIN`] so a policy signature is never a challenge proof, nor a proof a policy.
 pub const POLICY_DOMAIN: &str = "chromium-bridge-policy-v1";
 
 /// Bounds on attacker-supplied challenge fields (the extension relays them
 /// from its own logic today, but zero trust says bound them anyway).
-pub const MAX_NONCE_LEN: usize = 256;
 pub const MAX_CONTEXT_LEN: usize = 4096;
 
-/// Build the exact byte string a host-key CHALLENGE signature covers:
+/// The exact bytes a CHALLENGE signature covers; the extension rebuilds them byte for byte before WebCrypto
+/// verifies. The NUL separators make the encoding injective, so both fields must be NUL-free.
 ///
 /// ```text
 /// UTF8(CHALLENGE_DOMAIN) || 0x00 || UTF8(nonce) || 0x00 || UTF8(context or "")
 /// ```
-///
-/// The NUL separators make the encoding injective (no nonce/context pair can
-/// collide with another), so both fields must be NUL-free; they are also
-/// length-bounded. The extension must reconstruct this byte string exactly to
-/// verify the proof with WebCrypto.
 pub fn challenge_message(nonce: &str, context: Option<&str>) -> Result<Vec<u8>, EnclaveError> {
     domain_message(CHALLENGE_DOMAIN, nonce, context)
 }
 
-/// Build the exact byte string a POLICY signature covers:
+/// The exact bytes a POLICY signature covers: the document as stored, no canonicalization, NULs allowed.
+/// Injectivity across domains holds because both domain constants are NUL-free and neither prefixes the other
+/// (`the_two_domains_can_never_collide`).
 ///
 /// ```text
 /// UTF8(POLICY_DOMAIN) || 0x00 || doc_bytes
 /// ```
-///
-/// The document is signed exactly as stored, no canonicalization, and MAY contain NULs. Cross-domain injectivity
-/// still holds because both domain constants are NUL-free and distinct, so the bytes before the first NUL name
-/// the domain unambiguously (pinned by `the_two_domains_can_never_collide` below).
 pub fn policy_message(doc_bytes: &[u8]) -> Vec<u8> {
     let mut msg = Vec::with_capacity(
         POLICY_DOMAIN
@@ -59,21 +47,17 @@ fn domain_message(
     nonce: &str,
     context: Option<&str>,
 ) -> Result<Vec<u8>, EnclaveError> {
-    if nonce.is_empty() {
-        return Err(EnclaveError::InvalidChallenge("empty nonce"));
-    }
-    if nonce.len() > MAX_NONCE_LEN {
-        return Err(EnclaveError::InvalidChallenge("nonce too long"));
-    }
-    if nonce.contains('\0') {
-        return Err(EnclaveError::InvalidChallenge("nonce contains NUL"));
+    match bounded_nul_free(nonce, MAX_NONCE_LEN) {
+        Ok(()) => {}
+        Err(FieldFault::Empty) => return Err(EnclaveError::InvalidChallenge("empty nonce")),
+        Err(FieldFault::TooLong) => return Err(EnclaveError::InvalidChallenge("nonce too long")),
+        Err(FieldFault::Nul) => return Err(EnclaveError::InvalidChallenge("nonce contains NUL")),
     }
     let context = context.unwrap_or("");
-    if context.len() > MAX_CONTEXT_LEN {
-        return Err(EnclaveError::InvalidChallenge("context too long"));
-    }
-    if context.contains('\0') {
-        return Err(EnclaveError::InvalidChallenge("context contains NUL"));
+    match bounded_nul_free(context, MAX_CONTEXT_LEN) {
+        Ok(()) | Err(FieldFault::Empty) => {}
+        Err(FieldFault::TooLong) => return Err(EnclaveError::InvalidChallenge("context too long")),
+        Err(FieldFault::Nul) => return Err(EnclaveError::InvalidChallenge("context contains NUL")),
     }
     let mut msg = Vec::with_capacity(
         domain
@@ -94,6 +78,8 @@ fn domain_message(
 mod tests {
     use super::*;
 
+    /// The extension rebuilds these bytes before WebCrypto verifies, and protocol/control.rs promises that
+    /// an absent context and "" sign identically while no nonce can borrow the context's bytes.
     #[test]
     fn challenge_message_is_domain_separated_and_injective() {
         let m = challenge_message("abc", Some("ctx")).unwrap();
@@ -105,8 +91,6 @@ mod tests {
         expected.extend_from_slice(b"ctx");
         assert_eq!(m, expected);
 
-        // No context serializes as an empty context, and cannot collide with
-        // a nonce that happens to contain the other field's bytes.
         assert_eq!(
             challenge_message("abc", None).unwrap(),
             challenge_message("abc", Some("")).unwrap()
@@ -117,19 +101,58 @@ mod tests {
         );
     }
 
+    /// The refusal texts are what `respond_to_challenge` logs, and the bounds are the contract
+    /// protocol/control.rs states: a field at the bound signs, one past it is refused.
     #[test]
     fn challenge_message_rejects_bad_fields() {
-        assert!(matches!(
-            challenge_message("", None),
-            Err(EnclaveError::InvalidChallenge(_))
-        ));
-        assert!(challenge_message(&"x".repeat(MAX_NONCE_LEN + 1), None).is_err());
-        assert!(challenge_message("a\0b", None).is_err());
-        assert!(challenge_message("ok", Some("a\0b")).is_err());
-        assert!(challenge_message("ok", Some(&"x".repeat(MAX_CONTEXT_LEN + 1))).is_err());
-        // At the bounds is fine.
-        assert!(challenge_message(&"x".repeat(MAX_NONCE_LEN), None).is_ok());
-        assert!(challenge_message("ok", Some(&"x".repeat(MAX_CONTEXT_LEN))).is_ok());
+        let long_nonce = "x".repeat(MAX_NONCE_LEN + 1);
+        let max_nonce = "x".repeat(MAX_NONCE_LEN);
+        let long_context = "x".repeat(MAX_CONTEXT_LEN + 1);
+        let max_context = "x".repeat(MAX_CONTEXT_LEN);
+        let cases = [
+            (
+                "empty nonce",
+                "",
+                None,
+                Err("invalid challenge: empty nonce"),
+            ),
+            (
+                "nonce past the bound",
+                &long_nonce,
+                None,
+                Err("invalid challenge: nonce too long"),
+            ),
+            (
+                "NUL in the nonce",
+                "a\0b",
+                None,
+                Err("invalid challenge: nonce contains NUL"),
+            ),
+            (
+                "NUL in the context",
+                "ok",
+                Some("a\0b"),
+                Err("invalid challenge: context contains NUL"),
+            ),
+            (
+                "context past the bound",
+                "ok",
+                Some(&long_context),
+                Err("invalid challenge: context too long"),
+            ),
+            ("nonce at the bound", &max_nonce, None, Ok(())),
+            ("context at the bound", "ok", Some(&max_context), Ok(())),
+        ];
+        for (case, nonce, context, expected) in cases {
+            let got = challenge_message(nonce, context)
+                .map(drop)
+                .map_err(|e| e.to_string());
+            assert_eq!(
+                got.as_ref().map(drop).map_err(String::as_str),
+                expected,
+                "{case}"
+            );
+        }
     }
 
     #[test]
@@ -140,9 +163,7 @@ mod tests {
         expected.push(0);
         expected.extend_from_slice(b"doc-bytes");
         assert_eq!(m, expected);
-        // Empty and NUL-carrying documents are legal: the doc bytes are
-        // signed as-is, and within the policy domain the message is the
-        // identity on them.
+        // Empty and NUL-carrying documents are legal: the bytes are signed as stored.
         assert_eq!(policy_message(b""), {
             let mut e = POLICY_DOMAIN.as_bytes().to_vec();
             e.push(0);
@@ -151,10 +172,11 @@ mod tests {
         assert_ne!(policy_message(b"a\0b"), policy_message(b"a\0c"));
     }
 
+    /// The domain constants are distinct, NUL-free, and neither is a prefix of the other, so the bytes before
+    /// the first NUL identify the domain of any message. The hard case: a policy document embedding a NUL
+    /// where the challenge shape puts its separator matches a challenge message byte for byte after the domain.
     #[test]
     fn the_two_domains_can_never_collide() {
-        // The domain constants are distinct, NUL-free, and neither is a prefix of the other, so the bytes
-        // before the first NUL identify the domain of any message unambiguously.
         for domain in [CHALLENGE_DOMAIN, POLICY_DOMAIN] {
             assert!(!domain.contains('\0'), "{domain} must be NUL-free");
         }
@@ -162,9 +184,6 @@ mod tests {
         assert!(!CHALLENGE_DOMAIN.starts_with(POLICY_DOMAIN));
         assert!(!POLICY_DOMAIN.starts_with(CHALLENGE_DOMAIN));
 
-        // The tricky case: a policy document whose bytes embed a NUL exactly where the challenge shape puts
-        // its separator. Everything after the domain matches the challenge message byte for byte, so only
-        // the domain prefix keeps them apart.
         let challenge = challenge_message("nonce", Some("ctx")).unwrap();
         let policy = policy_message(b"nonce\0ctx");
         assert_ne!(challenge, policy);

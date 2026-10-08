@@ -7,7 +7,6 @@ use super::authenticator_data::AuthDataError;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Refusal {
-    /// A base64url field did not decode; `field` names it.
     #[error("{field} is not base64url")]
     Encoding { field: &'static str },
     #[error(transparent)]
@@ -22,7 +21,6 @@ pub enum Refusal {
     /// Either counter nonzero and the received one not strictly greater: a cloned authenticator or a replay.
     #[error("signCount {received} did not increase past the stored {stored}")]
     SignCountNotIncreased { stored: u32, received: u32 },
-    /// Backup eligibility is fixed at creation; a change means another credential source is answering.
     #[error("backup eligibility {received} differs from the enrolled {stored}")]
     BackupEligibilityChanged { stored: bool, received: bool },
     #[error("clientDataJSON is not the JSON object the WebAuthn client writes")]
@@ -33,7 +31,6 @@ pub enum Refusal {
     ChallengeMismatch,
     #[error("clientDataJSON.origin {got:?} is not this extension's origin")]
     OriginMismatch { got: String },
-    /// `crossOrigin: true`, or a `topOrigin` (which only a cross-origin ceremony carries).
     #[error("clientDataJSON describes a cross-origin ceremony")]
     CrossOrigin,
     #[error("signature is not a DER ECDSA signature")]
@@ -44,7 +41,6 @@ pub enum Refusal {
     AttestationMalformed,
     #[error("{len} unparsed bytes follow the attestation object")]
     AttestationTrailingBytes { len: usize },
-    /// Only `none` is accepted: this host never trusts an attestation chain, so no other format is parsed.
     #[error("attestation format {got:?} is not \"none\"")]
     AttestationFormat { got: String },
     #[error("attestation statement is not empty")]
@@ -162,7 +158,6 @@ pub enum RefusalCode {
 }
 
 impl RefusalCode {
-    /// This code with the host's own detail after it (an io::Error's text, the nonce failure).
     pub fn detailed(self, detail: impl fmt::Display) -> Reason {
         Reason {
             code: self,

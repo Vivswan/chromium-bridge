@@ -1,8 +1,5 @@
-// Shared helpers for the chromium-bridge TypeScript tooling scripts.
-//
-// scripts/build-repro.ts and scripts/fuzz-smoke.ts deliberately do NOT import this file: they stay
-// self-contained on node builtins so they run before `bun install` (the release workflow builds the binary
-// first, and the nightly fuzz job never installs the workspace).
+// Imports node builtins only: the release workflow runs build-repro.ts and the nightly fuzz job runs
+// fuzz-smoke.ts before any `bun install`, so nothing here may need node_modules.
 
 import {
   appendFileSync,
@@ -14,28 +11,26 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Repo root, derived from this file's location (scripts/ is a direct child).
 export const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-// Where the contract generators write the shared package's TypeScript side. A build output: gitignored, rebuilt by
-// the moon tasks that read it, never tracked.
+/** Repo-relative paths are compared and printed with forward slashes on every platform. */
+export const toPosix = (path: string): string => path.split(sep).join("/");
+
+// A build output: gitignored and rebuilt by every moon task that reads it.
 export const generatedDir = join(repoRoot, "src/packages/shared/generated");
 
-// The JSON manifests that carry a copy of the crate version (Cargo.toml is the source of truth). The
-// release PR bumps each one through release-please-config.json's extra-files; scripts/check-version.ts
-// requires that coverage and verifies the copies agree. Add new version copies here, nowhere else.
+// Copies of the crate version (Cargo.toml is the source). release-please-config.json's extra-files bumps each,
+// and scripts/check-version.ts requires that coverage; new copies go here, nowhere else.
 export const versionedJsonFiles = ["src/apps/extension/package.json"] as const;
 
-// Print an error to stderr and exit.
 export function die(message: string, exitCode = 1): never {
   console.error(`error: ${message}`);
   process.exit(exitCode);
 }
 
-// The crate version from the workspace Cargo.toml: `[workspace.package] version`.
 export function cargoVersion(): string {
   const toml = Bun.TOML.parse(readFileSync(join(repoRoot, "Cargo.toml"), "utf8")) as {
     workspace?: { package?: { version?: unknown } };
@@ -45,22 +40,23 @@ export function cargoVersion(): string {
   return version;
 }
 
-// The "version" string from a JSON file. ("manifest_version" is a distinct
-// key; JSON.parse reads the real field, not a textual match.)
 export function jsonVersion(path: string): string {
   const parsed = JSON.parse(readFileSync(path, "utf8")) as { version?: unknown };
   if (typeof parsed.version !== "string") die(`no "version" string in ${path}`);
   return parsed.version;
 }
 
-// The environment for a git spawned in a scratch repository by a test: `base` minus every GIT_* variable. A
-// pre-commit hook exports GIT_DIR and GIT_INDEX_FILE, so an inheriting child acts on the repository under
-// commit: a scratch `git init` re-initialised the shared .git (core.bare flipped to true) and a scratch
-// `git add` rewrote the worktree index. The real gates keep the inherited env on purpose: a partial commit
-// (`git commit --only`) is judged on the hook's temporary index, not the ordinary one.
 /** The environment a child git is spawned with: process.env, or a test's scrubbed copy. */
 export type Env = Record<string, string | undefined>;
 
+/**
+ * The environment for a git a test spawns in a scratch repository: `base` minus every GIT_* variable. A pre-commit
+ * hook exports GIT_DIR and GIT_INDEX_FILE, so an inheriting child acts on the repository under commit; the gates
+ * keep that env on purpose, since `git commit --only` is judged on the hook's temporary index.
+ *
+ *   scratch `git init` under the hook's GIT_DIR -> re-initialised the shared .git (core.bare flipped to true)
+ *   scratch `git add`                            -> rewrote the worktree index
+ */
 export function gitEnv(base: Env = process.env): Record<string, string> {
   return Object.fromEntries(
     Object.entries(base).filter(
@@ -129,7 +125,6 @@ export class Scratch {
   }
 }
 
-/** A finished command: its exit status and both streams. */
 export interface Finished {
   exitCode: number;
   stdout: string;
@@ -139,8 +134,8 @@ export interface Finished {
 export type Presence = "present" | "absent";
 
 /**
- * Whether a directory entry exists, by lstat, so a dangling symlink counts as present. Only ENOENT is
- * absence: a path that could not be looked at throws, so a check never reads a failed look as "gone".
+ * lstat, so a dangling symlink counts as present. Only ENOENT is absence: a path that could not be looked at
+ * throws, so a check never reads a failed look as "gone".
  */
 export function presenceOf(path: string): Presence {
   try {
@@ -154,9 +149,8 @@ export function presenceOf(path: string): Presence {
 
 /**
  * The command checks the scenario drivers share (linux-registration.ts, installer-smoke.ts), so every driver
- * fails a step the same way: the command as the reader would type it, what was expected, and what it printed.
- * A command that exits 0 is the vacuous pass `refused` exists to catch; silence from one that exits 0 is the
- * one `outputMatches` catches.
+ * fails a step the same way: the command as typed, what was expected, what it printed. `refused` exists for the
+ * vacuous pass (exit 0); `outputMatches` for silence from an exit 0.
  */
 export class CommandChecks {
   constructor(
@@ -190,7 +184,6 @@ export class CommandChecks {
     if (this.run(...argv).exitCode === 0) throw this.failed(argv, "exited 0, expected a refusal");
   }
 
-  /** The one exit a caller tells apart from success and refusal, with the line that explains it. */
   exits(code: number, stderr: RegExp, ...argv: string[]): void {
     const finished = this.run(...argv);
     if (finished.exitCode !== code || !stderr.test(finished.stderr)) {

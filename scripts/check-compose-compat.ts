@@ -8,8 +8,6 @@
 //   privileged, network_mode,   -> not in the subset by choice: the container's isolation from the
 //   cap_add, devices, ports        host is the point of the file
 //   volume ":cached"/":delegated" -> Docker Desktop mount hints podman rejects
-//
-// Run via `moon run check-compose` (part of the ci gate).
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

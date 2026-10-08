@@ -1,7 +1,3 @@
-//! Kernel-reported peer credentials (uid/pid) for a connected bridge socket,
-//! plus process-liveness checks. The per-OS syscalls live in
-//! [`super::platform`]; this module holds the cross-platform policy (pid
-//! range validation, the EPERM-means-alive convention).
 #![cfg_attr(
     unix,
     expect(
@@ -10,17 +6,13 @@
     )
 )]
 
-// `io` is only touched on the Unix paths (peer credentials + kill(0)); the
-// Windows liveness check goes through platform::windows.
 #[cfg(unix)]
 use std::io;
 
 #[cfg(unix)]
 use super::socket::BridgeStream;
 
-/// The effective UID of the process on the other end of a freshly-accepted
-/// Unix-domain connection. The server compares this against its own euid to
-/// reject connections from other local users before authenticating them.
+/// The same-user gate's input: the accept loop compares it with its own euid before anything else is read.
 #[cfg(unix)]
 pub fn peer_uid(stream: &BridgeStream) -> io::Result<u32> {
     use std::os::unix::io::AsRawFd;
@@ -34,8 +26,7 @@ pub fn peer_uid(stream: &BridgeStream) -> io::Result<u32> {
 
     #[cfg(not(target_os = "linux"))]
     {
-        // macOS and the BSDs: getpeereid yields the effective uid/gid of the
-        // peer that opened the socket.
+        // getpeereid yields the EFFECTIVE uid/gid of the peer that opened the socket.
         let mut uid: libc::uid_t = 0;
         let mut gid: libc::gid_t = 0;
         // SAFETY: uid/gid are live locals the call writes into; an invalid fd
@@ -48,16 +39,9 @@ pub fn peer_uid(stream: &BridgeStream) -> io::Result<u32> {
     }
 }
 
-/// The PID of the process on the other end of a connected Unix-domain socket.
-/// On Linux [`super::attest::attest_peer`] uses it to resolve the peer's
-/// on-disk executable; on macOS it is only the fallback identity source when
-/// the kernel audit token is unavailable (see `platform::macos`).
-///
-/// The kernel records this pid for the process that opened the peer end; it is
-/// stable for the connection even if that process later exits. Resolving the
-/// pid to an executable afterwards, however, is a separate step that can race
-/// with pid reuse if the peer exits mid-connection (e.g. after passing the
-/// descriptor to another process). `docs/security/trust-boundaries.md` carries that residual.
+/// The pid the kernel recorded for the process that opened the peer end, stable for the connection even after
+/// that process exits; resolving it to an executable afterwards can race with pid reuse (the peer passed its
+/// descriptor on, then exited). docs/security/trust-boundaries.md carries that residual.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn peer_pid(stream: &BridgeStream) -> io::Result<u32> {
     use std::os::unix::io::AsRawFd;
@@ -75,9 +59,8 @@ pub fn peer_pid(stream: &BridgeStream) -> io::Result<u32> {
     }
 }
 
-/// Whether a process with the given pid is alive. Used by the takeover logic
-/// and by the stale-lock cleanup on the connect path. On Unix `kill(pid, 0)`
-/// checks existence without delivering a signal.
+/// `kill(pid, 0)` delivers nothing; EPERM means the process exists but belongs to another user, so it counts
+/// as alive.
 pub fn pid_is_alive(pid: u32) -> bool {
     #[cfg(unix)]
     {
@@ -137,8 +120,7 @@ mod tests {
     fn peer_uid_of_local_socketpair_is_current_euid() {
         use std::os::unix::net::UnixStream;
 
-        // Both ends of a socketpair live in this process, so the peer's uid is
-        // our own euid -- exactly what the accept-loop check requires to pass.
+        // Both ends live in this process, so the kernel must report our own euid as the peer's.
         let (a, _b) = UnixStream::pair().unwrap();
         assert_eq!(peer_uid(&a).unwrap(), crate::sys::effective_uid());
     }
@@ -148,8 +130,7 @@ mod tests {
     fn peer_pid_of_local_socketpair_is_current_process() {
         use std::os::unix::net::UnixStream;
 
-        // Both ends of a socketpair belong to this process, so the kernel
-        // reports our own pid as the peer -- the basis for self-attestation.
+        // Both ends live in this process, so the kernel must report our own pid as the peer's.
         let (a, _b) = UnixStream::pair().unwrap();
         assert_eq!(peer_pid(&a).unwrap(), std::process::id());
     }

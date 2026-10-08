@@ -1,8 +1,5 @@
-//! The Authenticode publisher of an image file: `WinVerifyTrust` verifies the
-//! embedded signature against the machine's trust store, and the leaf
-//! certificate's subject names the publisher, the Windows analog of a macOS
-//! Team ID. A catalog-signed image (most of Windows itself) has no embedded
-//! signature and anchors by hash alone.
+//! The leaf certificate's subject is the publisher, the Windows analog of a macOS Team ID. A catalog-signed
+//! image (most of Windows itself) has no embedded signature and anchors by hash alone.
 #![expect(
     unsafe_code,
     reason = "audited FFI quarantine: WinVerifyTrust and the signer-chain helpers, each behind a safe wrapper"
@@ -27,12 +24,8 @@ use windows_sys::Win32::Security::WinTrust::{
 use super::super::super::identity::SignerId;
 use super::{publisher_anchor, TrustStatus};
 
-/// The publisher anchor of the image at `image`, `None` when the image is
-/// unsigned or its chain is not trusted. Runs where a harness is measured
-/// (admission at server startup, and the unenrolled log that prints the
-/// anchors to pair with), not on the bridge accept path, which hashes the
-/// image alone. Revocation is not checked (`WTD_REVOKE_NONE`); the threat
-/// model's residual list owns why.
+/// `None` for an unsigned image or an untrusted chain. Revocation is not checked (`WTD_REVOKE_NONE`);
+/// docs/security/trust-boundaries.md owns why.
 pub(crate) fn publisher_of(image: &Path) -> io::Result<Option<SignerId>> {
     let session = TrustSession::verify(image)?;
     let status = TrustStatus::classify(session.status, || session.signer_subject())?;
@@ -96,7 +89,6 @@ impl TrustSession {
         Ok(session)
     }
 
-    /// Run the verification action for the current `dwStateAction`.
     fn call(&mut self) -> i32 {
         let mut action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
         // SAFETY: `data` and the file record and path it points at are live

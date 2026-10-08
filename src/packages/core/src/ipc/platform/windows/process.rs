@@ -1,5 +1,3 @@
-//! Process handles: the image path a pid is running (the input to the identity
-//! measurement) and liveness.
 #![expect(
     unsafe_code,
     reason = "audited FFI quarantine: process-handle calls, each behind a safe wrapper"
@@ -22,7 +20,6 @@ const STILL_ACTIVE: u32 = 259;
 /// Windows allows paths up to this many UTF-16 units.
 const PATH_CAPACITY: usize = 32_768;
 
-/// A process opened for queries only (no terminate, no memory access).
 struct Process(OwnedHandle);
 
 impl Process {
@@ -78,14 +75,12 @@ impl Process {
     }
 }
 
-/// Whether a process with the given pid is alive.
 pub(crate) fn is_alive(pid: u32) -> bool {
     Process::open(pid)
         .and_then(|process| process.is_alive())
         .unwrap_or(false)
 }
 
-/// The on-disk path of the image a pid is running.
 pub(crate) fn image_path(pid: u32) -> io::Result<PathBuf> {
     Process::open(pid)?.image_path()
 }

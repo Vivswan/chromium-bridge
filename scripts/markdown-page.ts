@@ -1,18 +1,16 @@
-// The line-positioned view of a Markdown page that the architecture checks need and Bun's renderer
-// does not give: which lines are fenced code (and what each fence holds) and which lines are page
-// text. Headings, GENERATED markers, and "Demonstrated by:" lines are read from the text view only,
-// so a quoted example never steers a check. A multi-line HTML comment block hides its lines as a
-// fence does, since Markdown renders neither; a one-line comment stays text, because the GENERATED
-// markers are one-line comments.
+// The line view of a Markdown page the architecture checks read: which lines are fenced code (and what each
+// fence holds) and which are page text, so a quoted example never steers a check. remark rather than Bun's
+// renderer, because the view needs source positions, which Bun's renderer does not give. A multi-line HTML
+// comment that is a block of its own hides its lines as a fence does; a one-line comment stays text, because
+// the GENERATED markers are one-line comments.
 
 import remarkParse from "remark-parse";
 import { unified } from "unified";
 import { visit } from "unist-util-visit";
 
 export interface Fence {
-  /** Zero-based line of the opening fence. */
+  /** Zero-based; `end` is the last line when the fence never closes. */
   line: number;
-  /** Zero-based line of the closing fence (or the last line when the fence never closes). */
   end: number;
   /** The info string names mermaid; other fences are text the page quotes. */
   mermaid: boolean;
@@ -31,9 +29,8 @@ const parser = unified().use(remarkParse);
 /**
  * The parser decides what is code and what is a comment (CommonMark: a closer at least as long as its
  * opener, a quoted fence that ends with its quote, an inline ```mermaid``` run that is not a fence); this
- * view only maps its nodes back onto lines. A fence body is the node's value, with the opener's
- * indentation and the quote markers already dropped. CRLF and lone CR line ends are folded first, so the
- * parser and the line array count the same lines.
+ * view only maps its nodes back onto lines. CRLF and lone CR line ends are folded first, so the parser and
+ * the line array count the same lines.
  */
 export function readPage(markdown: string): Page {
   const normalized = markdown.replace(/\r\n?/g, "\n");

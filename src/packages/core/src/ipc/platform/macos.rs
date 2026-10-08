@@ -1,14 +1,6 @@
-//! macOS mechanisms: running-image-bound peer attestation via the Security
-//! framework - identify the peer by its kernel audit token, validate its
-//! dynamic code signature, and read its code-directory hash (cdhash) and Team
-//! ID - plus peer credentials via `LOCAL_PEERPID`. Unlike re-opening a path,
-//! the audit token names the running image, so this closes both the path
-//! re-open TOCTOU and the pid-reuse race. cdhash works for ad-hoc-signed
-//! builds (it is the hash of the code pages), so it is enforceable on unsigned
-//! dev and CI binaries too.
-//!
-//! The vetted `security-framework` and `core-foundation` crates carry the
-//! object lifetimes; raw FFI remains only where they have no binding.
+//! The peer is identified by its kernel audit token, which names the running image and so closes both the
+//! path re-open TOCTOU and the pid-reuse race. cdhash exists for ad-hoc signatures too, so unsigned dev and
+//! CI builds are enforceable. Raw FFI remains only where `security-framework` has no binding:
 //! ```text
 //! LOCAL_PEERPID / LOCAL_PEERTOKEN   -> libc getsockopt (no crate binds the macOS peer options)
 //! SecCodeCheckValidity              -> the crate's method demands a requirement; ours is the null "signature only"
@@ -34,18 +26,14 @@ use security_framework_sys::code_signing::{SecCSFlags, SecCodeCheckValidity, Sec
 use super::super::identity::{ClientIdentity, HashDigest, SignerId};
 use super::super::socket::BridgeStream;
 
-/// Error message for an unmeasurable self identity, used by
-/// [`super::super::attest`].
 pub(crate) const OWN_IDENTITY_ERROR: &str = "cannot compute own code-directory hash";
 
-/// This process's own executable identity: the cdhash of its running image.
 pub(crate) fn own_identity() -> io::Result<HashDigest> {
     let me = SecCode::for_self(Flags::NONE).map_err(|e| sec_err("SecCodeCopySelf", e))?;
     Ok(validated_identity(&me, "self")?.hash)
 }
 
-/// The peer's running-image identity, identified by its kernel audit token so the measurement binds to the
-/// running image.
+/// Identified by its kernel audit token.
 ///
 /// ```text
 /// ENOPROTOOPT (no LOCAL_PEERTOKEN on this system) -> the pid path: still running-image-validated, but it
@@ -69,18 +57,12 @@ pub(crate) fn peer_identity(stream: &BridgeStream) -> io::Result<HashDigest> {
     }
 }
 
-/// The running-image identity of an arbitrary process named by pid. Carries
-/// the pid-reuse race documented on [`super::super::peercred::peer_pid`].
 pub(crate) fn pid_identity(pid: u32) -> io::Result<HashDigest> {
     Ok(pid_client_identity(pid)?.hash)
 }
 
-/// The full client identity of an arbitrary process named by pid: its running
-/// image's `cdhash` plus its signing Team ID when the image is Team-ID signed.
-/// Used to attest the harness (parent) for the trusted-client allowlist. Like
-/// [`pid_identity`] this identifies the guest by pid (not audit token), so it
-/// carries the narrow pid-reuse race; the running signature is still validated
-/// via `SecCodeCheckValidity`.
+/// Identified by pid, not audit token, so the narrow pid-reuse race applies; the running signature is still
+/// validated.
 pub(crate) fn pid_client_identity(pid: u32) -> io::Result<ClientIdentity> {
     let pid = libc::pid_t::try_from(pid)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "pid out of range"))?;
@@ -89,9 +71,7 @@ pub(crate) fn pid_client_identity(pid: u32) -> io::Result<ClientIdentity> {
     guest_identity(&guest, "pid")
 }
 
-/// The PID of the peer of a connected Unix-domain socket. macOS has no
-/// SO_PEERCRED pid; LOCAL_PEERPID on the AF_UNIX socket yields the pid of the
-/// process that opened the peer end.
+/// macOS has no SO_PEERCRED; LOCAL_PEERPID yields the pid of the process that opened the peer end.
 pub(crate) fn peer_pid(fd: libc::c_int) -> io::Result<u32> {
     let mut pid: libc::pid_t = 0;
     let expected_len = libc::socklen_t::try_from(std::mem::size_of::<libc::pid_t>())
@@ -161,19 +141,16 @@ fn peer_audit_token(fd: libc::c_int) -> io::Result<[u8; AUDIT_TOKEN_LEN]> {
     Ok(token)
 }
 
-/// Copy the guest the kernel (the system root, `host = None`) identifies by
-/// `guest`'s one attribute, then measure it.
+/// `host = None` asks the kernel's own guest table, not a hosting app's.
 fn guest_identity(guest: &GuestAttributes, what: &str) -> io::Result<ClientIdentity> {
     let code = SecCode::copy_guest_with_attribues(None, guest, Flags::NONE)
         .map_err(|e| sec_err("SecCodeCopyGuestWithAttributes", e))?;
     validated_identity(&code, what)
 }
 
-/// The one measurement path: validate a dynamic `SecCode`'s running signature,
-/// then read its signing identity. The validity check is the running-image-
-/// bound step (the code pages match the signature of the process actually
-/// executing); its null requirement is the API's "the signature alone, no
-/// anchor", which the crate's `check_validity` cannot express.
+/// The validity check is the running-image-bound step: the code pages must match the signature of the process
+/// actually executing. Its null requirement means "the signature alone, no anchor", which the crate's
+/// `check_validity` cannot express.
 fn validated_identity(code: &SecCode, what: &str) -> io::Result<ClientIdentity> {
     // SAFETY: `code` is a live SecCode held by the caller for the whole call;
     // a null requirement is allowed by the API and imposes no requirement.
@@ -190,11 +167,9 @@ fn validated_identity(code: &SecCode, what: &str) -> io::Result<ClientIdentity> 
     signing_identity(code)
 }
 
-/// Read a validated `SecCode`'s signing identity: its `cdhash` (required) and
-/// its Team ID (optional). `kSecCSSigningInformation` makes the dictionary
-/// carry the Team ID; `kSecCodeInfoUnique` (the cdhash) is present regardless.
-/// An unsigned / ad-hoc image has no Team ID, so `signer` is `None` and the
-/// allowlist must anchor it on the hash instead.
+/// `kSecCSSigningInformation` makes the dictionary carry the Team ID; `kSecCodeInfoUnique` (the cdhash) is
+/// present regardless. An ad-hoc image has no Team ID, so `signer` is `None` and the allowlist anchors on the
+/// hash.
 fn signing_identity(code: &SecCode) -> io::Result<ClientIdentity> {
     let info = signing_information(code)?;
     // SAFETY: a Security.framework constant, initialized before any Rust code
@@ -262,8 +237,6 @@ fn signing_information(code: &SecCode) -> io::Result<CFDictionary<CFString, CFTy
     Ok(unsafe { CFDictionary::wrap_under_create_rule(info) })
 }
 
-/// The value under a framework-constant key, as the concrete type the key
-/// documents, or `None` when absent or of another type.
 fn info_value<T: ConcreteCFType>(
     info: &CFDictionary<CFString, CFType>,
     key: CFStringRef,
@@ -292,11 +265,8 @@ mod tests {
 
     #[test]
     fn own_cdhash_equals_what_codesign_reports_for_the_running_image() {
-        // External fact: `kSecCodeInfoUnique` read off the DYNAMIC SecCode (no
-        // static-code hop) is the image's cdhash, the same value Apple's
-        // codesign prints for the executable on disk. Would drift silently if
-        // the signing-information read ever picked another field or the
-        // dynamic read stopped agreeing with the static image.
+        // External fact: `kSecCodeInfoUnique` read off the DYNAMIC SecCode is the image's cdhash, the value
+        // Apple's codesign prints for the executable on disk; a read of another field would drift silently.
         let exe = std::env::current_exe().unwrap();
         let out = std::process::Command::new("codesign")
             .arg("-dvvv")
@@ -314,11 +284,9 @@ mod tests {
 
     #[test]
     fn a_pid_identity_carries_the_same_hash_as_the_audit_token_path() {
-        // External fact: the kernel resolves the audit-token and pid guest
-        // attributes of one process to the same image, so the ENOPROTOOPT
-        // fallback in peer_identity attests the same value as the primary
-        // path. The token is read directly, so a fallback cannot make both
-        // sides the pid path.
+        // External fact: the kernel resolves the audit-token and pid guests of one process to the same image,
+        // so the ENOPROTOOPT fallback attests the same value; the token is read directly, so a fallback
+        // cannot make both sides the pid path.
         use std::os::unix::io::AsRawFd;
 
         let (a, _b) = std::os::unix::net::UnixStream::pair().unwrap();

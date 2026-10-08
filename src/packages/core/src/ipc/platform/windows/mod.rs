@@ -1,20 +1,6 @@
-//! Windows mechanisms: a named pipe in the local pipe namespace as the bridge
-//! transport, the pipe peer's process identity (image hash plus Authenticode
-//! publisher), and process liveness. The contract with Windows that nothing
-//! native is needed for (the pipe name, the user-only descriptor text) is pure
-//! and compiles into every platform's test build; the mechanisms behind it,
-//! and the trust-verdict fold they feed, are Windows-only FFI quarantines, one
-//! per concern.
-//!
-//! ```text
-//! pipe     -> CreateNamedPipeW / CreateFileW, overlapped reads with a deadline, cross-thread shutdown
-//! acl      -> the current user's SID rendered to an SDDL descriptor only that SID can open
-//! process  -> OpenProcess, the image path, liveness
-//! signer   -> WinVerifyTrust and the leaf certificate's subject
-//! ```
-//!
-//! The image is measured by re-opening its path; the threat model's residual
-//! list records what that leaves open.
+//! The pipe name and the descriptor text are pure and compile into every platform's test build; the trust
+//! fold and the FFI behind it are Windows-only, one quarantine per concern. The image is measured by
+//! re-opening its path; docs/security/trust-boundaries.md records what that leaves open.
 
 use std::path::Path;
 
@@ -88,10 +74,8 @@ impl From<PipeName> for String {
     }
 }
 
-/// A SID in its string form (`S-1-5-21-...`), as `ConvertSidToStringSidW`
-/// spells it. Parsed so only the digits-and-dashes alphabet can reach the SDDL
-/// text in [`user_only_sddl`], where any other character would change the
-/// descriptor's meaning.
+/// Parsed so only the digits-and-dashes alphabet of `ConvertSidToStringSidW` can reach the SDDL text in
+/// [`user_only_sddl`], where any other character would change the descriptor's meaning.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SidString(String);
 
@@ -117,10 +101,9 @@ pub fn user_only_sddl(sid: &SidString) -> String {
     format!("D:P(A;;GA;;;{})", sid.0)
 }
 
-/// The process that created a pipe, from the pids the kernel recorded for its
-/// two ends. A spawner opens both ends of a child's stdio pipe itself, so they
-/// agree and name it; ends opened by different processes mean the pipe was
-/// handed on, and an end we opened ourselves cannot be the harness's.
+/// Every spawner (CreatePipe, libuv, Rust's Command) opens both ends of a child's stdio pipe itself, so the
+/// two pids agree and name it; ends opened by different processes mean the pipe was handed on, and an end we
+/// opened ourselves cannot be the harness's.
 #[cfg(windows)]
 pub fn pipe_creator(client: u32, server: u32, me: u32) -> Result<u32, String> {
     if client != server {
@@ -134,25 +117,17 @@ pub fn pipe_creator(client: u32, server: u32, me: u32) -> Result<u32, String> {
     Ok(client)
 }
 
-/// `WinVerifyTrust`'s verdict on an image, folded to the outcomes the publisher
-/// anchor distinguishes. A trusted chain carries the signer subject it was
-/// read with, so "trusted but no subject" cannot be represented.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg(windows)]
 pub enum TrustStatus {
-    /// The signature verifies and chains to a trusted root; the leaf's subject.
     Trusted(String),
-    /// No embedded Authenticode signature.
     Unsigned,
-    /// A signature is present but does not match the file's contents.
     Tampered,
-    /// Signed, but the chain is not trusted (self-signed, expired, revoked, or
-    /// another verdict); the HRESULT is kept for the log.
+    /// Self-signed, expired, revoked, or another verdict; the HRESULT is kept for the log.
     Untrusted(i32),
 }
 
-/// `winerror.h` values; the `windows-sys` spellings are pinned to these in a
-/// Windows-only test.
+/// Local copies of the `winerror.h` values, pinned to `windows-sys` by a test.
 #[cfg(windows)]
 pub const TRUST_E_NOSIGNATURE: i32 = hresult(0x800B_0100);
 #[cfg(windows)]
@@ -165,7 +140,6 @@ const fn hresult(code: u32) -> i32 {
 
 #[cfg(windows)]
 impl TrustStatus {
-    /// Fold a verdict code, reading the signer subject only for a trusted chain.
     pub fn classify(
         code: i32,
         subject: impl FnOnce() -> std::io::Result<String>,
@@ -202,33 +176,24 @@ pub fn publisher_anchor(
     }
 }
 
-/// Error message for an unmeasurable self identity, used by
-/// [`super::super::attest`].
 #[cfg(windows)]
 pub(crate) const OWN_IDENTITY_ERROR: &str = "cannot hash own executable image";
 
-/// This process's own executable identity: the SHA-256 of its image file,
-/// found the same way a peer's is so the two measurements compare.
 #[cfg(windows)]
 pub(crate) fn own_identity() -> io::Result<HashDigest> {
     pid_identity(std::process::id())
 }
 
-/// The peer's running-image identity, keyed by the pid the kernel records
-/// for the other end of the pipe.
 #[cfg(windows)]
 pub(crate) fn peer_identity(stream: &BridgeStream) -> io::Result<HashDigest> {
     pid_identity(stream.peer_pid()?)
 }
 
-/// The running-image identity of an arbitrary process named by pid.
 #[cfg(windows)]
 pub(crate) fn pid_identity(pid: u32) -> io::Result<HashDigest> {
     HashDigest::of_file(&process::image_path(pid)?)
 }
 
-/// The full client identity of a process: its image hash plus the
-/// Authenticode publisher of that image when the signature verifies.
 #[cfg(windows)]
 pub(crate) fn pid_client_identity(pid: u32) -> io::Result<ClientIdentity> {
     let image = process::image_path(pid)?;
@@ -244,11 +209,9 @@ mod tests {
 
     #[test]
     fn a_derived_pipe_name_parses_back_and_differs_per_runtime_dir_and_broker() {
-        // External facts the type carries: the lock's endpoint is read by
-        // another process, so what the server derives must parse on the client;
-        // the pipe namespace is machine-global, so two users' runtime
-        // directories must not share a name; and a name held by a surviving
-        // broker cannot be bound again, so two brokers must not share one.
+        // The lock's endpoint is read by another process, so what the server derives must parse on the
+        // client; the namespace is machine-global, so two runtime dirs or two brokers must never share a
+        // name.
         let alice = Path::new(r"C:\Users\alice\AppData\Local\chromium-bridge");
         let bob = Path::new(r"C:\Users\bob\AppData\Local\chromium-bridge");
         let a = PipeName::for_broker(alice, 4100);
@@ -259,8 +222,8 @@ mod tests {
 
     #[test]
     fn a_planted_lock_endpoint_outside_the_local_pipe_namespace_is_refused() {
-        // CreateFileW opens whatever path it is handed: a UNC pipe reaches
-        // another machine, a file path a plain file. Each is refused at parse.
+        // CreateFileW opens whatever path it is handed: a UNC pipe reaches another machine, a file path a
+        // file.
         for (endpoint, why) in [
             (r"\\evil\pipe\chromium-bridge", "remote pipe"),
             (r"C:\Users\alice\run.lock", "file path"),
@@ -280,9 +243,8 @@ mod tests {
 
     #[test]
     fn the_descriptor_grants_the_one_sid_and_refuses_an_injectable_sid() {
-        // Windows parses the SDDL text, so its spelling is a cross-process
-        // contract; and a SID string carrying other characters could rewrite
-        // the descriptor, so the alphabet is pinned at the parse.
+        // Windows parses the SDDL text, so its spelling is a contract; a SID carrying other characters could
+        // rewrite the descriptor.
         let sid = SidString::try_from("S-1-5-21-1-2-3-1001".to_string()).unwrap();
         assert_eq!(user_only_sddl(&sid), "D:P(A;;GA;;;S-1-5-21-1-2-3-1001)");
         for bad in ["", "S-1-", "S-1-5-21)(A;;GA;;;WD", "s-1-5-18", "S-2-5-18"] {

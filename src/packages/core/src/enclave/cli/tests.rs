@@ -56,7 +56,6 @@ fn plant(clients: Option<&[&str]>) {
     .unwrap();
 }
 
-/// `(kind, name)` of every record in the trail, in order.
 fn trail() -> Vec<(AuditKind, Option<String>)> {
     std::fs::read_to_string(audit_path().unwrap())
         .unwrap()
@@ -109,7 +108,17 @@ fn revoke_all_on_a_never_paired_machine_keeps_the_bootstrap_posture() {
     let reset = dispose_everything(Surface::Cli).unwrap();
 
     let forgotten = reset.pairings.unwrap();
-    assert_eq!(forgotten.enrollments.len(), 2);
+    assert_eq!(
+        forgotten
+            .enrollments
+            .iter()
+            .map(|e| e.label.clone())
+            .collect::<Vec<_>>(),
+        [
+            BrowserLabel::parse("brave").unwrap(),
+            BrowserLabel::parse("chrome").unwrap()
+        ]
+    );
     assert!(forgotten.clients.is_empty());
     assert_eq!(*forgotten.trust.clients(), Clients::NeverPaired);
     assert_eq!(
@@ -136,7 +145,15 @@ fn revoke_all_reports_an_uncleared_baseline_and_still_trails_what_it_forgot() {
     assert!(EnrollmentKey::lookup().unwrap().is_none());
     assert!(trust.enrollments().is_empty());
     assert_eq!(*trust.clients(), Clients::Paired(Vec::new()));
-    assert_eq!(trail().len(), 4, "{:?}", trail());
+    assert_eq!(
+        trail(),
+        vec![
+            (AuditKind::HostKeyRevoke, None),
+            (AuditKind::RevokeBrowser, Some("brave".into())),
+            (AuditKind::RevokeBrowser, Some("chrome".into())),
+            (AuditKind::RevokeClient, Some("codex".into())),
+        ]
+    );
 }
 
 /// The host-key-only seam (`pair --reset`, the extension's `enclave_revoke`) shares the critical section but

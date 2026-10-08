@@ -1,13 +1,11 @@
-//! The per-user runtime directory: where the lock file, the bridge socket, the runtime mutex, the trust and
-//! policy records, and the audit log live. [`RuntimeDir`] is the one place the directory is resolved, and the
-//! one check that the bridge socket can be bound under it.
+//! [`RuntimeDir`] is the one place the per-user runtime directory is resolved, so every path under it
+//! inherits the socket-length check.
 
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// The environment variable that places the runtime dir when it is set; the per-platform fallbacks in
-/// [`RuntimeDir::resolve`] apply only without it. `crate::test_support` points tests at it, and the protocol
-/// harness mirrors it by hand (tests/protocol/harness.py, `runtime_dir_var`).
+/// `crate::test_support` points tests at it, and tests/protocol/harness.py mirrors the name by hand
+/// (`runtime_dir_var`).
 #[cfg(unix)]
 pub(crate) const RUNTIME_DIR_VAR: &str = "XDG_RUNTIME_DIR";
 #[cfg(windows)]
@@ -25,18 +23,16 @@ pub(crate) const SOCKET_PATH_MAX: usize = std::mem::size_of::<libc::sockaddr_un>
     - std::mem::offset_of!(libc::sockaddr_un, sun_path)
     - 1;
 
-/// A per-user runtime directory the bridge can run in: on Unix, one whose socket path fits `sun_path`. The
-/// check runs where the directory is resolved, so no path derived from a `RuntimeDir` fails `bind` on length,
-/// and a directory that cannot hold the socket is refused by every consumer with one error naming the path, its
-/// length, and the limit. `doctor --paths` resolves first, so the protocol harness refuses to run on such a dir
-/// before any suite spawns a server.
+/// On Unix, a directory whose socket path fits `sun_path`: the check runs at resolution, so no path derived
+/// from a `RuntimeDir` fails `bind` on length, and every consumer refuses with one error naming the path, its
+/// length, and the limit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeDir(PathBuf);
 
 impl RuntimeDir {
-    /// Where the runtime dir resolves under this process's environment, with nothing created or hardened.
-    /// `doctor --paths` prints this alone, so the protocol harness can refuse a misrouted binary before it
-    /// touches the real runtime dir; every writer goes through [`ensure`](Self::ensure).
+    /// Nothing is created or hardened here: `doctor --paths` prints this alone, so the protocol harness can
+    /// refuse a misrouted binary before it touches the real runtime dir. Every writer goes through
+    /// [`ensure`](Self::ensure).
     pub(crate) fn resolve() -> io::Result<RuntimeDir> {
         let dir = resolve_from_env();
         #[cfg(unix)]

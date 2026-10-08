@@ -2,8 +2,7 @@
 
 // checks.yml's linux-install job: the release binary registers and unregisters itself against isolated
 // HOME/XDG roots on a bare runner, so what it writes is checked where a browser would read it, never on a
-// developer's machine. Each scenario is a sequence of commands and the files they must leave. A failed
-// check names its step, and a command expected to refuse fails its step when it exits 0.
+// developer's machine. Each scenario is a sequence of commands and the files they must leave.
 //
 //   bun scripts/linux-registration.ts fresh-machine   -> nothing to register (exit 3), detect, repair, a foreign manifest
 //                                                        survives uninstall and is overwritten by --fix; no extension pointer
@@ -25,7 +24,6 @@ import { join, relative } from "node:path";
 import { NATIVE_HOST_ID, PINNED_EXTENSION_ID } from "../src/packages/shared/generated/identity.ts";
 import { CommandChecks, die, type Finished, repoRoot, selectMode } from "./lib.ts";
 
-/** The binary under test behind one call, so a test can stand a fake in for it. */
 export type RunBinary = (args: string[], env: Record<string, string>) => Finished;
 
 /** Where each browser reads native-messaging manifests on Linux, under XDG_CONFIG_HOME. */

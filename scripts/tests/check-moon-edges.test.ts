@@ -251,9 +251,10 @@ const graph: TaskGraph = {
         "bun scripts/read.ts in\\{stall,it\\}\nbun scripts/read.ts <<E{O,O}F\nin{stall,it}\nE{O,O}F",
       deps: [],
     },
-    // A `..`, a dot-led pattern a bash without globskipdots may expand to `..`, or a brace alternative spelling
-    // it, behind the first pattern segment climbs out of whatever that segment matched; one before it
-    // normalizes, `..x` is a name, a quoted or escaped brace is text, and a quoted `..` is still the parent.
+    // A `..` behind the first pattern segment climbs out of whatever that segment matched, however spelled;
+    // one before it normalizes, `..x` is a name, and a quoted or escaped brace is text.
+    //   .[.] or .[[:punct:]]  -> a bash without globskipdots expands the dot-led pattern to `..`
+    //   {a,..} or {a,'..'}    -> a brace alternative spells it; the quoted `..` is still the parent
     "climbs-out-of-a-glob": {
       command: "bun",
       script: [

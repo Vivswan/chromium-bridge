@@ -1,8 +1,8 @@
-// The rules scripts/gen-schema.ts holds every emitted validator to (R1-R4), each shown firing on the schema
-// it exists to refuse; and the external facts the emission leans on (which keywords json-schema-to-zod reads,
-// what json-schema-to-typescript makes of the node shapes the generators produce). The emitted validator is
-// the artifact under test, so every case goes through the real emitter, never a hand-built reading, except
-// R3, which guards the emitter itself.
+// The rules scripts/gen-schema.ts holds every emitted validator to, each shown firing on the schema it exists
+// to refuse, and the external facts the emission leans on: which keywords json-schema-to-zod reads, and what
+// json-schema-to-typescript makes of the node shapes the generators produce. Every case goes through the real
+// emitter, never a hand-built reading, except the two refusals that fire before any emission (R3 and the
+// OpArgs conflict).
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -152,9 +152,8 @@ test("a property without a null arm refuses null; the null arm admits it", () =>
 });
 
 describe("the emitted source", () => {
-  // The type reader's choices the exported types depend on: an empty strict object is Record<string, never>
-  // (never `{}`), a false property is `never`, the any-schema is `unknown`, a loose object carries the index
-  // signature, a const is a literal, a nullable type keeps its null, and a bounded array stays an array.
+  // The exported types depend on these readings; an empty strict object must be Record<string, never>,
+  // never `{}`.
   test("the type reader's shapes", async () => {
     expect(await typeSource("Empty", strict({}))).toBe("export type Empty = Record<string, never>");
     const frame = {
