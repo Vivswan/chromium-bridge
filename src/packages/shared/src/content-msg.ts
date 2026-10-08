@@ -10,7 +10,7 @@ import { z } from "zod";
 import { OpArgsSchema } from "../generated/ops";
 
 // The SW probes before classifying a click; the page re-probes before clicking and refuses a changed target.
-// Kept in lockstep with the page API's ClickProbe (the extension's handle.test.ts assigns each to the other).
+// Kept in lockstep with the page API's ClickProbe (the extension's handle.test.ts asserts the two types equal).
 export const ClickProbeSchema = z.strictObject({
   tagName: z.string(),
   role: z.string(),
