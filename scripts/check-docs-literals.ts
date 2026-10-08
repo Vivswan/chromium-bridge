@@ -47,8 +47,8 @@ export interface Violation {
 export const BUNDLE_TOKEN = /(?<![\w.-])attestation\.[\w.-]*\w/g;
 
 /** Mirrors `BUNDLE_NAME` in the fleet's fleet-release-publish.yml, which no file here carries, so a fleet
- * rename is a manual update; SECURITY.md tells users to pass it to `gh attestation verify --bundle`.
- * check-docs-literals.test.ts pins that it matches [`BUNDLE_TOKEN`], or no doc could satisfy the family check. */
+ * rename is a manual update; SECURITY.md tells users to pass it to `gh attestation verify --bundle`. It must
+ * match [`BUNDLE_TOKEN`], or no doc could satisfy the family check. */
 export const RELEASE_BUNDLE_NAME = "attestation.json";
 
 export const CHROME_VERSION_TOKEN = /\bChrom(?:e|ium) \d+\b/g;

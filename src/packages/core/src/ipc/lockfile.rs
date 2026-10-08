@@ -65,8 +65,9 @@ impl LockFile {
         Ok(Some(lf))
     }
 
-    /// Private like [`write`](Self::write): every caller first proves under the [`RuntimeMutex`] that the
-    /// on-disk state is its own: an unguarded remove deletes a live server's files.
+    /// Private like [`write`](Self::write): reached only under the [`RuntimeMutex`], after the caller read the
+    /// lock and judged it (its own, a dead owner's, one it supersedes, or unreadable), so no path removes a
+    /// live server's files without having looked.
     fn remove() {
         let Ok(dir) = RuntimeDir::ensure() else {
             return;
@@ -101,8 +102,9 @@ struct RuntimeMutex(
 );
 
 /// Witness that the [`RuntimeMutex`] is held, minted only by [`with_runtime_lock`] and lent by reference so
-/// it cannot outlive the hold. The lock-guarded mutators (`Trust::mutate_locked` and `mutate_locked_with`
-/// in trust.rs, `EnrollmentKey::mint` and `revoke` in enclave/key.rs) demand it.
+/// it cannot outlive the hold. Every mutator of a runtime record takes it (the `*_locked` functions in
+/// trust.rs, policy/store.rs, lang.rs, and enclave, plus the record's own write and remove), so a record
+/// write outside the hold does not compile; the lock file and socket are written only inside this module.
 pub struct RuntimeLockToken(());
 
 impl RuntimeMutex {

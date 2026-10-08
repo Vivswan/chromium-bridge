@@ -82,6 +82,8 @@ fn domain_message(
 mod tests {
     use super::*;
 
+    /// The extension rebuilds these bytes before WebCrypto verifies, and protocol/control.rs promises that
+    /// an absent context and "" sign identically while no nonce can borrow the context's bytes.
     #[test]
     fn challenge_message_is_domain_separated_and_injective() {
         let m = challenge_message("abc", Some("ctx")).unwrap();
@@ -93,8 +95,6 @@ mod tests {
         expected.extend_from_slice(b"ctx");
         assert_eq!(m, expected);
 
-        // No context serializes as an empty context, and cannot collide with
-        // a nonce that happens to contain the other field's bytes.
         assert_eq!(
             challenge_message("abc", None).unwrap(),
             challenge_message("abc", Some("")).unwrap()
@@ -105,18 +105,58 @@ mod tests {
         );
     }
 
+    /// The refusal texts are what `respond_to_challenge` logs, and the bounds are the contract
+    /// protocol/control.rs states: a field at the bound signs, one past it is refused.
     #[test]
     fn challenge_message_rejects_bad_fields() {
-        assert!(matches!(
-            challenge_message("", None),
-            Err(EnclaveError::InvalidChallenge(_))
-        ));
-        assert!(challenge_message(&"x".repeat(MAX_NONCE_LEN + 1), None).is_err());
-        assert!(challenge_message("a\0b", None).is_err());
-        assert!(challenge_message("ok", Some("a\0b")).is_err());
-        assert!(challenge_message("ok", Some(&"x".repeat(MAX_CONTEXT_LEN + 1))).is_err());
-        assert!(challenge_message(&"x".repeat(MAX_NONCE_LEN), None).is_ok());
-        assert!(challenge_message("ok", Some(&"x".repeat(MAX_CONTEXT_LEN))).is_ok());
+        let long_nonce = "x".repeat(MAX_NONCE_LEN + 1);
+        let max_nonce = "x".repeat(MAX_NONCE_LEN);
+        let long_context = "x".repeat(MAX_CONTEXT_LEN + 1);
+        let max_context = "x".repeat(MAX_CONTEXT_LEN);
+        let cases = [
+            (
+                "empty nonce",
+                "",
+                None,
+                Err("invalid challenge: empty nonce"),
+            ),
+            (
+                "nonce past the bound",
+                &long_nonce,
+                None,
+                Err("invalid challenge: nonce too long"),
+            ),
+            (
+                "NUL in the nonce",
+                "a\0b",
+                None,
+                Err("invalid challenge: nonce contains NUL"),
+            ),
+            (
+                "NUL in the context",
+                "ok",
+                Some("a\0b"),
+                Err("invalid challenge: context contains NUL"),
+            ),
+            (
+                "context past the bound",
+                "ok",
+                Some(&long_context),
+                Err("invalid challenge: context too long"),
+            ),
+            ("nonce at the bound", &max_nonce, None, Ok(())),
+            ("context at the bound", "ok", Some(&max_context), Ok(())),
+        ];
+        for (case, nonce, context, expected) in cases {
+            let got = challenge_message(nonce, context)
+                .map(drop)
+                .map_err(|e| e.to_string());
+            assert_eq!(
+                got.as_ref().map(drop).map_err(String::as_str),
+                expected,
+                "{case}"
+            );
+        }
     }
 
     #[test]
@@ -137,7 +177,8 @@ mod tests {
     }
 
     /// The domain constants are distinct, NUL-free, and neither is a prefix of the other, so the bytes before
-    /// the first NUL identify the domain of any message unambiguously.
+    /// the first NUL identify the domain of any message. The hard case: a policy document embedding a NUL
+    /// where the challenge shape puts its separator matches a challenge message byte for byte after the domain.
     #[test]
     fn the_two_domains_can_never_collide() {
         for domain in [CHALLENGE_DOMAIN, POLICY_DOMAIN] {
@@ -147,9 +188,6 @@ mod tests {
         assert!(!CHALLENGE_DOMAIN.starts_with(POLICY_DOMAIN));
         assert!(!POLICY_DOMAIN.starts_with(CHALLENGE_DOMAIN));
 
-        // The tricky case: a policy document whose bytes embed a NUL exactly where the challenge shape puts
-        // its separator. Everything after the domain matches the challenge message byte for byte, so only
-        // the domain prefix keeps them apart.
         let challenge = challenge_message("nonce", Some("ctx")).unwrap();
         let policy = policy_message(b"nonce\0ctx");
         assert_ne!(challenge, policy);

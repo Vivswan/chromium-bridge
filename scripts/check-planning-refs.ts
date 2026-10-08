@@ -36,7 +36,8 @@ export const COVERED: readonly string[] = [
 export const FIXTURES: readonly string[] = ["scripts/tests/check-planning-refs.test.ts"];
 
 /** Line patterns, one per artifact kind. Each is written so this file's own text never matches it (the
- * record prefix goes through a character class, the examples carry no digit), which its test pins. A tag
+ * record prefix goes through a character class, the examples carry no digit); the gate scans scripts/** and
+ * so holds this file to that. A tag
  * may be hyphenated. A bare audit code (a letter or two and a digit) is flagged on a line only inside
  * parentheses, the shape the audit left behind; in prose the same letters name a heading or a key. */
 export const PATTERNS: ReadonlyArray<readonly [name: string, re: RegExp]> = [

@@ -1,23 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { findPlanningRefs, gitEnv, scanFiles } from "../check-planning-refs";
+import { Scratch } from "../lib";
 
 const script = join(dirname(fileURLToPath(import.meta.url)), "..", "check-planning-refs.ts");
-const scratchDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of scratchDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-
-function scratch(): string {
-  const dir = mkdtempSync(join(tmpdir(), "check-planning-refs-"));
-  scratchDirs.push(dir);
-  return dir;
-}
+const scratch = new Scratch();
+afterEach(() => scratch.remove());
+const repo = () => scratch.dir("check-planning-refs");
 
 // Every tag shape the scrub removed, as it stood in the tree, each caught by exactly the pattern named
 // for it. A regex rewrite that lets one shape through fails here, not in the next sweep.
@@ -125,15 +117,11 @@ describe("findPlanningRefs", () => {
     ].join("\n");
     expect(findPlanningRefs("x.ts", text)).toEqual([]);
   });
-
-  test("the gate's own source is clean under its own patterns, so widening COVERED to scripts/ cannot trip on it", () => {
-    expect(findPlanningRefs("check-planning-refs.ts", readFileSync(script, "utf8"))).toEqual([]);
-  });
 });
 
 describe("scanFiles", () => {
   test("reports a planted tag with its path and line, and nothing for a clean file", () => {
-    const dir = scratch();
+    const dir = repo();
     writeFileSync(join(dir, "clean.ts"), "// states the rule itself\nexport const a = 1;\n");
     writeFileSync(join(dir, "tagged.ts"), "export const b = 2;\n// per ADR-0032 decision 3\n");
     expect(scanFiles(dir, ["clean.ts", "tagged.ts"])).toEqual([
@@ -169,7 +157,7 @@ function writeAndStageFile(root: string, rel: string, lines: string[]): void {
 test.each(coveredPaths)(
   "the CLI exits 1 on a tracked tag in %s and 0 once it is gone",
   (rel, comment) => {
-    const root = scratch();
+    const root = repo();
     const env = gitEnv();
     execFileSync("git", ["-C", root, "init", "-q"], { stdio: "pipe", env });
     writeAndStageFile(root, rel, [
@@ -179,8 +167,14 @@ test.each(coveredPaths)(
     ]);
 
     const red = spawnSync("bun", [script, root], { encoding: "utf8", env });
-    expect({ status: red.status, stdout: red.stdout }).toEqual({ status: 1, stdout: "" });
-    expect(red.stderr).toContain(`${rel}:3: design record number: ${comment} The gate refuses`);
+    expect({ status: red.status, stdout: red.stdout, stderr: red.stderr }).toEqual({
+      status: 1,
+      stdout: "",
+      stderr:
+        `${rel}:3: design record number: ${comment} The gate refuses (ADR-0032 decision 4).\n` +
+        "check-planning-refs: 1 planning reference(s) in 1 file(s). Replace each with the reason it " +
+        "stood for, or delete it when the sentence already states the rule.\n",
+    });
 
     writeAndStageFile(root, rel, [
       `${comment} Guide`,
@@ -188,15 +182,18 @@ test.each(coveredPaths)(
       `${comment} The gate refuses until the push verified.`,
     ]);
     const green = spawnSync("bun", [script, root], { encoding: "utf8", env });
-    expect({ status: green.status, stderr: green.stderr }).toEqual({ status: 0, stderr: "" });
-    expect(green.stdout).toMatch(/^check-planning-refs: 1 file\(s\) clean/);
+    expect({ status: green.status, stdout: green.stdout, stderr: green.stderr }).toEqual({
+      status: 0,
+      stdout: "check-planning-refs: 1 file(s) clean\n",
+      stderr: "",
+    });
   },
 );
 
 // The negative control for the cases above: the pathspecs select, they do not scan the whole tree, so a
 // tag in an unlisted class is invisible and the red runs above come from the roots reaching their files.
 test("a tag in a file class no pathspec names is not scanned", () => {
-  const root = scratch();
+  const root = repo();
   const env = gitEnv();
   execFileSync("git", ["-C", root, "init", "-q"], { stdio: "pipe", env });
   writeAndStageFile(root, "notes/scratch.txt", ["The gate refuses (ADR-0032 decision 4)."]);
@@ -209,7 +206,7 @@ test("a tag in a file class no pathspec names is not scanned", () => {
 //   hook repo = a second scratch repo, its variables inherited unstripped  -> the isolation is the script's own
 //   the page tagged in the index, clean in the working tree                -> hook run exits 1, plain run exits 0
 test("under a hook an explicit root is judged by its own staged content, not the hook's repository", () => {
-  const target = scratch();
+  const target = repo();
   const setup = gitEnv();
   execFileSync("git", ["-C", target, "init", "-q"], { stdio: "pipe", env: setup });
   mkdirSync(join(target, "docs"));
@@ -218,7 +215,7 @@ test("under a hook an explicit root is judged by its own staged content, not the
   execFileSync("git", ["-C", target, "add", "docs/guide.md"], { stdio: "pipe", env: setup });
   writeFileSync(page, "# Guide\n\nThe gate refuses until this connection's push verified.\n");
 
-  const hookRepo = scratch();
+  const hookRepo = repo();
   execFileSync("git", ["-C", hookRepo, "init", "-q"], { stdio: "pipe", env: setup });
   const hookGitDir = join(hookRepo, ".git");
   const hookIndex = join(hookGitDir, "index");
@@ -244,14 +241,17 @@ test("under a hook an explicit root is judged by its own staged content, not the
     encoding: "utf8",
     env: { ...setup, GIT_INDEX_FILE: hookIndex },
   });
-  expect(plainHook.status).toBe(1);
-  expect(plainHook.stderr).toContain("docs/guide.md:3: design record number: The gate refuses");
+  expect({ status: plainHook.status, stdout: plainHook.stdout, stderr: plainHook.stderr }).toEqual({
+    status: 1,
+    stdout: "",
+    stderr: expect.stringContaining("docs/guide.md:3: design record number: The gate refuses"),
+  });
 });
 
 // `git cat-file --batch` reads one request per line, so a tracked path with a newline in it would turn
 // into two requests and shift every later answer onto the wrong path. The scan refuses such a path.
 test("a tracked path containing a newline fails the staged scan instead of misreading it", () => {
-  const root = scratch();
+  const root = repo();
   const env = gitEnv();
   execFileSync("git", ["-C", root, "init", "-q"], { stdio: "pipe", env });
   mkdirSync(join(root, "docs"));

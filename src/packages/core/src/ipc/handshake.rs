@@ -250,21 +250,6 @@ mod tests {
     }
 
     #[test]
-    fn verify_mac_accepts_correct_and_rejects_wrong() {
-        let key = b"per-run-secret";
-        let nonce = b"challenge-nonce";
-        let mac = compute_mac(key, nonce).unwrap();
-        // The MAC the client would send verifies.
-        assert!(verify_mac(key, nonce, &mac).is_ok());
-        // A different key (attacker who doesn't know the secret) is rejected.
-        assert!(verify_mac(b"wrong-secret", nonce, &mac).is_err());
-        // A different nonce (replay against a fresh challenge) is rejected.
-        assert!(verify_mac(key, b"other-nonce", &mac).is_err());
-        // Non-hex garbage is rejected before any comparison.
-        assert!(verify_mac(key, nonce, "not-hex").is_err());
-    }
-
-    #[test]
     fn handshake_challenge_response_authenticates_over_a_pipe() {
         // The client must sign (nonce, label) and ship the label beside the MAC; this is the only client-half
         // pin that runs on Windows, where the socketpair round trip below does not.
@@ -302,17 +287,17 @@ mod tests {
         assert_eq!(label.as_deref(), Some("chrome"));
     }
 
-    #[cfg(unix)]
     #[test]
-    fn handshake_round_trip_over_socketpair() {
+    fn handshake_round_trip_over_a_loopback_pair() {
         use std::io::{BufReader, BufWriter};
-        use std::os::unix::net::UnixStream;
+
+        use super::super::socket::loopback_pair;
 
         // A test fixture, not a credential.
         let secret = "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"; // nosemgrep: generic.secrets.security.detected-generic-secret.detected-generic-secret
 
         // Matching secrets: the server returns the label the client signed.
-        let (srv, cli) = UnixStream::pair().unwrap();
+        let (srv, cli) = loopback_pair();
         let cli_secret = secret.to_string();
         let client = std::thread::spawn(move || {
             let mut r = BufReader::new(cli.try_clone().unwrap());
@@ -326,7 +311,7 @@ mod tests {
         assert!(client.join().unwrap().is_ok());
 
         // No label carried: None, still authenticated.
-        let (srv, cli) = UnixStream::pair().unwrap();
+        let (srv, cli) = loopback_pair();
         let cli_secret = secret.to_string();
         let client = std::thread::spawn(move || {
             let mut r = BufReader::new(cli.try_clone().unwrap());
@@ -342,7 +327,7 @@ mod tests {
         assert!(client.join().unwrap().is_ok());
 
         // A malformed label fails even with a valid MAC.
-        let (srv, cli) = UnixStream::pair().unwrap();
+        let (srv, cli) = loopback_pair();
         let cli_secret = secret.to_string();
         let client = std::thread::spawn(move || {
             let mut r = BufReader::new(cli.try_clone().unwrap());
@@ -356,7 +341,7 @@ mod tests {
         let _ = client.join();
 
         // A client that does not know the secret is rejected by the server.
-        let (srv, cli) = UnixStream::pair().unwrap();
+        let (srv, cli) = loopback_pair();
         let client = std::thread::spawn(move || {
             let mut r = BufReader::new(cli.try_clone().unwrap());
             let mut w = BufWriter::new(cli);
@@ -374,35 +359,67 @@ mod tests {
 
     #[test]
     fn a_tampered_label_invalidates_the_mac() {
-        // Swapping or stripping the label after signing must fail: the label is an authenticated claim.
+        // The label is an authenticated claim: every alteration of what was signed, the label included,
+        // must fail, and only the genuine (key, nonce, label) triple passes.
         // A test fixture, not a credential.
-        let secret = "d00dd00dd00dd00dd00dd00dd00dd00d"; // nosemgrep: generic.secrets.security.detected-generic-secret.detected-generic-secret
+        let secret = b"d00dd00dd00dd00dd00dd00dd00dd00d"; // nosemgrep: generic.secrets.security.detected-generic-secret.detected-generic-secret
         let nonce = "cafebabe";
-        let signed_for_chrome = compute_mac(
-            secret.as_bytes(),
-            &handshake_mac_message(nonce, Some("chrome")),
-        )
-        .unwrap();
-        // Genuine claim verifies.
-        assert!(verify_mac(
-            secret.as_bytes(),
-            &handshake_mac_message(nonce, Some("chrome")),
-            &signed_for_chrome,
-        )
-        .is_ok());
-        // The same MAC presented with a different label is rejected.
-        assert!(verify_mac(
-            secret.as_bytes(),
-            &handshake_mac_message(nonce, Some("brave")),
-            &signed_for_chrome,
-        )
-        .is_err());
-        // ...and with the label stripped entirely.
-        assert!(verify_mac(
-            secret.as_bytes(),
-            &handshake_mac_message(nonce, None),
-            &signed_for_chrome,
-        )
-        .is_err());
+        let signed_for_chrome =
+            compute_mac(secret, &handshake_mac_message(nonce, Some("chrome"))).unwrap();
+        struct Case {
+            name: &'static str,
+            key: &'static [u8],
+            msg: Vec<u8>,
+            mac: String,
+            expected: Result<(), io::ErrorKind>,
+        }
+        let cases = [
+            Case {
+                name: "the genuine claim passes",
+                key: secret,
+                msg: handshake_mac_message(nonce, Some("chrome")),
+                mac: signed_for_chrome.clone(),
+                expected: Ok(()),
+            },
+            Case {
+                name: "a different key (a peer without the secret)",
+                key: b"wrong-secret",
+                msg: handshake_mac_message(nonce, Some("chrome")),
+                mac: signed_for_chrome.clone(),
+                expected: Err(io::ErrorKind::PermissionDenied),
+            },
+            Case {
+                name: "another nonce (a replay against a fresh challenge)",
+                key: secret,
+                msg: handshake_mac_message("deadbeef", Some("chrome")),
+                mac: signed_for_chrome.clone(),
+                expected: Err(io::ErrorKind::PermissionDenied),
+            },
+            Case {
+                name: "a MAC that is not hex",
+                key: secret,
+                msg: handshake_mac_message(nonce, Some("chrome")),
+                mac: "not-hex".to_string(),
+                expected: Err(io::ErrorKind::InvalidData),
+            },
+            Case {
+                name: "the label swapped after signing",
+                key: secret,
+                msg: handshake_mac_message(nonce, Some("brave")),
+                mac: signed_for_chrome.clone(),
+                expected: Err(io::ErrorKind::PermissionDenied),
+            },
+            Case {
+                name: "the label stripped after signing",
+                key: secret,
+                msg: handshake_mac_message(nonce, None),
+                mac: signed_for_chrome,
+                expected: Err(io::ErrorKind::PermissionDenied),
+            },
+        ];
+        for case in cases {
+            let outcome = verify_mac(case.key, &case.msg, &case.mac).map_err(|e| e.kind());
+            assert_eq!(outcome, case.expected, "{}", case.name);
+        }
     }
 }

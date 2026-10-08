@@ -75,13 +75,6 @@ mod tests {
     use super::super::socket::loopback_pair;
     use super::*;
 
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn peer_identity_of_own_pid_matches_own_identity() {
-        let by_pid = os::pid_identity(std::process::id()).unwrap();
-        assert_eq!(&by_pid, own_identity().unwrap());
-    }
-
     #[test]
     fn attest_peer_accepts_our_own_process() {
         // The peer of a local pair is this process, so the real OS path runs end to end (macOS: audit

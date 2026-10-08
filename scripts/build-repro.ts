@@ -56,7 +56,8 @@ function findCargo(): string {
 const bbCargo = findCargo();
 env.BB_CARGO = bbCargo;
 const cargoDir = dirname(bbCargo);
-// cargo resolves rustc through PATH unless RUSTC is set, so the chosen cargo's directory is put there.
+// cargo's default rustc lookup is PATH (RUSTC and build.rustc override it), so the chosen cargo's directory
+// is put there.
 const pathEntries = (env.PATH ?? "").split(delimiter);
 if (!pathEntries.includes(cargoDir)) {
   env.PATH = `${cargoDir}${delimiter}${env.PATH ?? ""}`;
