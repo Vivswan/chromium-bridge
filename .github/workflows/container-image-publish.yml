@@ -6,18 +6,27 @@
 # rebuilds, before any login, from a context it writes itself out of the merge commit's blobs, exactly
 # the files the content tag hashes. The trusted builder recomputes everything with main's scripts:
 # eligibility, the merge commit's parentage against the run's head, the content tag and proto pin, and
-# whether the tag is still free (a content tag never moves; :latest moves from main alone).
+# whether the tag is still free (a content tag never moves; :latest moves from main alone). The pushed
+# digest's provenance is signed as this workflow on main, which is what lets checks.yml pin it.
 
 name: Container image (publish for a pull request)
 
-on:
+# zizmor dangerous-triggers ignore: the audit assumes the triggering pull request's code runs here with a
+# token in reach. The checkout and every step on the runner are main's; the pull request is read only as
+# blobs out of its merge commit, and its Containerfile runs only inside the builder, before the login,
+# with no registry credential in reach; only the content-hash tag, checked free first, is pushed and attested.
+on: # zizmor: ignore[dangerous-triggers]
   workflow_run:
     workflows: [Container image]
     types: [completed]
 
+# id-token and attestations: the pushed digest's provenance is signed as this workflow on main, which
+# checks.yml's image job requires before it pins any image.
 permissions:
   contents: read
   packages: write
+  id-token: write
+  attestations: write
 
 # One lane per pull request head: a shared lane keeps one pending run and would cancel another pull
 # request's publish; two heads publish different tags, and the same inputs under two heads push the same
@@ -74,7 +83,7 @@ jobs:
         with:
           context: pull-request-context
           file: pull-request-context/Containerfile
-          platforms: linux/amd64
+          platforms: ${{ steps.image.outputs.platform }}
           push: false
           load: true
           build-args: PROTO_VERSION=${{ steps.image.outputs.proto }}
@@ -86,7 +95,15 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # The digest the attestation signs is the one this push reported, never a tag read back.
       - if: steps.free.outputs.publish == 'true'
+        id: pushed
         env:
-          REFERENCE: ${{ steps.image.outputs.name }}:${{ steps.image.outputs.tag }}
-        run: docker push "$REFERENCE"
+          CI_IMAGE_CONTENT_TAG: ${{ steps.image.outputs.tag }}
+        run: bun scripts/ci-image.ts push
+      - if: steps.free.outputs.publish == 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.image.outputs.name }}
+          subject-digest: ${{ steps.pushed.outputs.digest }}
+          push-to-registry: true

@@ -201,7 +201,7 @@ uv 只固定在 `.prototools` 中, python 由 uv 管理: 协议测试套件通�
 
 | 作业 | 运行内容 | 位置 |
 |-----|------|-------|
-| `image` | 选定镜像标签并解析为摘要一次, 这样每个作业固定的都是同一份内容; 等待拉取请求自己的构建 | 裸运行器 |
+| `image` | 选定镜像标签, 解析为摘要一次, 并在每个作业固定它之前验证该摘要的来源证明 (由 main 上的受信工作流签署); 等待拉取请求自己的构建 | 裸运行器 |
 | `rust` | 在 ubuntu、macOS 和 Windows 上运行 clippy 和测试; fmt、loom 模型、rustdoc 以及模糊测试工作区的 fmt、clippy 和测试只在 Linux 上运行 | Linux 上用镜像, 其他平台用裸运行器 |
 | `build-release` | `moon run build-release`, 上传供下面的测试套件使用 | 裸运行器, 这样二进制链接到运行器上较旧的 glibc, 在两种环境中都能运行 |
 | `coverage` | `cargo llvm-cov`, 仅供参考 (`continue-on-error`, 无阈值) | 镜像 |

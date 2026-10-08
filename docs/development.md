@@ -201,7 +201,7 @@ The pull request's own `container-image.yml` run only builds, holding no package
 
 | Job | Runs | Where |
 |-----|------|-------|
-| `image` | picks the image tag and resolves it to its digest once, so every job pins the same content; waits for a pull request's own build | bare runner |
+| `image` | picks the image tag, resolves it to its digest once, and verifies the digest's provenance attestation (signed by a trusted workflow on main) before every job pins it; waits for a pull request's own build | bare runner |
 | `rust` | clippy and tests on ubuntu, macOS, and Windows; fmt, the loom model, rustdoc, and the fuzz workspace's fmt, clippy, and tests on Linux alone | image on Linux, bare elsewhere |
 | `build-release` | `moon run build-release`, uploaded for the suites below | bare runner, so the binary links against the runner's older glibc and runs in both environments |
 | `coverage` | `cargo llvm-cov`, informational (`continue-on-error`, no threshold) | image |

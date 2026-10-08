@@ -15,6 +15,9 @@ import {
   materializeContext,
   mergeHeadCheck,
   publishEligibility,
+  publishWorkflow,
+  pushedDigest,
+  signerWorkflows,
   triggerPaths,
 } from "../ci-image.ts";
 import { repoRoot, runGit, Scratch, writeTree } from "../lib.ts";
@@ -97,6 +100,76 @@ describe("image inputs and the content tag", () => {
     expect([...parsed.on.push.paths].sort()).toEqual(expected);
     expect([...parsed.on.pull_request.paths].sort()).toEqual(expected);
   });
+});
+
+// What would drift silently: a build arg or platform typed into a workflow's build step shapes the image
+// without moving the content tag, and the next build of the same inputs would then not match its tag.
+// So every build step takes the platform from scripts/ci-image.ts's output and passes exactly the
+// Containerfile's default-less ARGs, each from the coordinates output of the pin it names.
+describe("the build steps carry no build definition of their own", () => {
+  type Step = { uses?: string; with?: Record<string, string> };
+  const buildSteps = (workflow: string): Step[] => {
+    const parsed = Bun.YAML.parse(readFileSync(join(repoRoot, workflow), "utf8")) as {
+      jobs: Record<string, { steps: Step[] }>;
+    };
+    return Object.values(parsed.jobs)
+      .flatMap((job) => job.steps)
+      .filter((step) => step.uses?.startsWith("docker/build-push-action@"));
+  };
+  const steps = [...buildSteps(imageWorkflow), ...buildSteps(publishWorkflow)];
+  // Docker leaves a default-less ARG empty when no build passes it, never refusing, so the Containerfile's
+  // list is what every build step must pass. The output is named as scripts/pin.ts names the tool.
+  const expectedArgs = readFileSync(join(repoRoot, "Containerfile"), "utf8")
+    .split("\n")
+    .map((line) => /^ARG ([A-Z_]+)$/.exec(line)?.[1])
+    .filter((name): name is string => name !== undefined)
+    .map((name) => {
+      const tool = name
+        .replace(/_VERSION$/, "")
+        .toLowerCase()
+        .replaceAll("_", "-");
+      return `${name}=\${{ steps.image.outputs.${tool} }}`;
+    })
+    .sort();
+
+  test("the scan finds all three build steps (the control: an empty scan would pass the cases below vacuously)", () => {
+    expect(steps).toHaveLength(3);
+  });
+
+  test.each(steps.map((step, index) => [index, step] as const))(
+    "build step %i takes its platform and each build arg from the coordinates outputs, inside a materialized context",
+    (_index, step) => {
+      const inputs = step.with ?? {};
+      expect(inputs.platforms).toBe(`\${{ steps.image.outputs.platform }}`);
+      expect((inputs["build-args"] ?? "").trim().split("\n").sort()).toEqual(expectedArgs);
+      expect(inputs.file).toBe(`${inputs.context}/Containerfile`);
+      expect(inputs.context).toMatch(/-context$/);
+    },
+  );
+});
+
+// The external fact: docker's push report, whose digest line is the one binding the attestation to the
+// bytes this job pushed; a tag read back afterwards could name someone else's push.
+describe("pushedDigest", () => {
+  const digest = `sha256:${"ef".repeat(32)}`;
+  test("docker push's closing line yields the digest", () => {
+    const output = `The push refers to repository [ghcr.io/example-user/repo-ci]\n5f70bf18a086: Pushed\n0123456789ab: digest: ${digest} size: 1234\n`;
+    expect(pushedDigest(output)).toBe(digest);
+  });
+  test("a report with no digest line yields nothing (the control for the match above)", () => {
+    expect(
+      pushedDigest("The push refers to repository [ghcr.io/example-user/repo-ci]\n"),
+    ).toBeUndefined();
+  });
+});
+
+// The external shape: `gh attestation verify --signer-workflow` takes `<owner>/<repo>/<workflow path>`
+// with the repository's case kept, not a URL and not the lowercased package name.
+test("the accepted signers are this repository's two trusted workflows", () => {
+  expect(signerWorkflows("Example-User/Repo")).toEqual([
+    "Example-User/Repo/.github/workflows/container-image.yml",
+    "Example-User/Repo/.github/workflows/container-image-publish.yml",
+  ]);
 });
 
 // The one predicate both image workflows and the image job apply. The fork row is the fact GitHub

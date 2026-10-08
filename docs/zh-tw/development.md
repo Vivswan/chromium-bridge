@@ -201,7 +201,7 @@ pull request 自己的 `container-image.yml` 執行只建置, 不持有任何套
 
 | 工作 | 執行內容 | 位置 |
 |-----|------|-------|
-| `image` | 選定映像檔標籤並解析成摘要一次, 讓每個工作固定到同一份內容; 等待 pull request 自己的建置 | 裸機執行器 |
+| `image` | 選定映像檔標籤, 解析成摘要一次, 並在每個工作固定它之前驗證該摘要的來源證明 (由 main 上的受信工作流程簽署); 等待 pull request 自己的建置 | 裸機執行器 |
 | `rust` | 在 ubuntu、macOS 與 Windows 上執行 clippy 與測試; fmt、loom 模型、rustdoc, 以及模糊測試工作區的 fmt、clippy 與測試只在 Linux 上執行 | Linux 用映像檔, 其他平台用裸機 |
 | `build-release` | `moon run build-release`, 上傳供下方的測試套件使用 | 裸機執行器, 讓執行檔連結執行器較舊的 glibc, 在兩種環境中都能執行 |
 | `coverage` | `cargo llvm-cov`, 僅供參考 (`continue-on-error`, 無門檻) | 映像檔 |

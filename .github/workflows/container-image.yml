@@ -6,7 +6,9 @@
 # pull_request with contents: read and pushes nothing. Nothing a pull request produced is ever pushed:
 # container-image-publish.yml, which runs main's own definition after this workflow completes, rebuilds
 # from the pull request's merge checkout and pushes the content tag alone. A fork's pull request builds
-# nothing here (scripts/ci-image.ts eligible).
+# nothing here (scripts/ci-image.ts eligible). What a pull request's YAML can still do by default, grant
+# itself packages: write and push any tag, is made harmless by the consumer: checks.yml's image job pins
+# only a digest whose provenance attestation was signed by this workflow or the publisher on main.
 
 name: Container image
 
@@ -80,13 +82,15 @@ jobs:
         with:
           context: image-context
           file: image-context/Containerfile
-          platforms: linux/amd64
+          platforms: ${{ steps.image.outputs.platform }}
           push: false
           build-args: PROTO_VERSION=${{ steps.image.outputs.proto }}
           tags: ${{ steps.image.outputs.name }}:${{ steps.image.outputs.tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  # id-token and attestations: the pushed digest's provenance is signed as this workflow on main, which
+  # checks.yml's image job requires before it pins any image.
   publish:
     name: Build and push the CI image
     if: github.event_name != 'pull_request'
@@ -95,6 +99,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -129,10 +135,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        id: build
         with:
           context: image-context
           file: image-context/Containerfile
-          platforms: linux/amd64
+          platforms: ${{ steps.image.outputs.platform }}
           push: true
           build-args: PROTO_VERSION=${{ steps.image.outputs.proto }}
           tags: |
@@ -140,3 +147,8 @@ jobs:
             ${{ steps.latest.outputs.publish == 'true' && format('{0}:latest', steps.image.outputs.name) || '' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.image.outputs.name }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true

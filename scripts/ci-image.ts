@@ -3,14 +3,16 @@
 // The CI image's coordinates for the workflows, from one derivation of its name. Each mode writes step
 // outputs (GITHUB_OUTPUT) and nothing else.
 //
-//   digest          checks.yml image job: the image every Linux job pins, by digest (imageSelection)  -> container
+//   digest          checks.yml image job: the image every Linux job pins, by digest (imageSelection), its
+//                   provenance verified                                                                 -> container
 //   eligible        both image workflows: whether this run is a pull request this repository builds for -> eligible
 //   merge-checkout  container-image-publish.yml: the pull request's merge commit into CI_IMAGE_ROOT, refused
 //                   unless it merges the run's head, then its build context into CI_IMAGE_CONTEXT       -> (dies)
 //   context         container-image.yml: this checkout's build context into CI_IMAGE_CONTEXT             -> (dies)
-//   coordinates     both image workflows: the image name, the content tag, the proto build arg, read
-//                   from CI_IMAGE_ROOT (default: this checkout)                                          -> name, tag, proto
+//   coordinates     both image workflows: the image name, the content tag, the platform, the proto build
+//                   arg, read from CI_IMAGE_ROOT (default: this checkout)                                -> name, tag, platform, proto
 //   unpublished     container-image-publish.yml: whether the content tag is still free to push            -> publish
+//   push            container-image-publish.yml: docker push of the content tag; the digest it reported -> digest
 //   latest          container-image.yml: whether this commit may move the :latest tag                    -> publish
 
 import { createHash } from "node:crypto";
@@ -39,6 +41,18 @@ export function imageName(repository: string): string {
 export const imageWorkflow = ".github/workflows/container-image.yml";
 /** The workflow that publishes a pull request's image, running main's own definition after the build above. */
 export const publishWorkflow = ".github/workflows/container-image-publish.yml";
+
+/**
+ * The platform the image is built for, part of the content tag. Every build step takes it from the
+ * coordinates output and passes exactly the Containerfile's default-less ARGs, each from the output of
+ * the pin it names (ci-image.test.ts holds every build step to both).
+ */
+export const imagePlatform = "linux/amd64";
+
+/** The workflows whose provenance attestation the image job accepts, as `gh attestation verify --signer-workflow` names them. */
+export function signerWorkflows(repository: string): string[] {
+  return [imageWorkflow, publishWorkflow].map((workflow) => `${repository}/${workflow}`);
+}
 
 /**
  * Everything the image is built from: the Containerfile, .dockerignore, and the files .dockerignore lets
@@ -132,7 +146,7 @@ export function materializeContext(root: string, out: string, env: Env): string[
 
 /**
  * The content tag: a digest over each input's name and digest, so bytes moving across file boundaries
- * change it as surely as an edit does.
+ * change it as surely as an edit does, and over the platform the image is built for.
  */
 export function contentTag(root: string, inputs: readonly string[]): string {
   const sha256 = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
@@ -141,6 +155,7 @@ export function contentTag(root: string, inputs: readonly string[]): string {
     if (lstatSync(join(root, path)).isSymbolicLink()) throw new Error(`${path} is a symlink`);
     return `${sha256(readFileSync(join(root, path)))}  ${path}\n`;
   });
+  manifest.push(`platform ${imagePlatform}\n`);
   return sha256(manifest.join("")).slice(0, 12);
 }
 
@@ -333,6 +348,73 @@ async function inspect(reference: string): Promise<Inspected> {
   return inspected;
 }
 
+/** `docker push` ends with `<tag>: digest: sha256:<hex> size: <n>`: the manifest digest it pushed, bound to this push alone. */
+export function pushedDigest(output: string): string | undefined {
+  return /\bdigest: (sha256:[0-9a-f]{64}) size: \d+/.exec(output)?.[1];
+}
+
+/** One `gh attestation verify` of the subject against one trusted signer: its output, or what it refused. */
+async function attestationBy(
+  subject: string,
+  repository: string,
+  signer: string,
+): Promise<{ ok: true; said: string } | { ok: false; said: string }> {
+  const argv = [
+    "gh",
+    "attestation",
+    "verify",
+    subject,
+    "--repo",
+    repository,
+    "--signer-workflow",
+    signer,
+    "--source-ref",
+    "refs/heads/main",
+  ];
+  const run = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe", timeout: 120_000 });
+  const [stdout, stderr] = await Promise.all([
+    new Response(run.stdout).text(),
+    new Response(run.stderr).text(),
+  ]);
+  const ok = (await run.exited) === 0;
+  return { ok, said: (ok ? stdout : stderr || stdout).trim() };
+}
+
+/**
+ * The digest's provenance: an attestation signed by one of this repository's two trusted workflows on
+ * main, checked with `gh attestation verify`. Anything a pull request's own YAML pushed carries no such
+ * signature, whatever tag it took, so a missing or foreign signer stops the job; it never falls back.
+ * The publishers attest right after they push, so a digest seen first is given the bound below (plus
+ * the asks in flight at it) to acquire its attestation before the refusal.
+ */
+async function verifyProvenance(image: string, digest: string, repository: string): Promise<void> {
+  const subject = `oci://${image}@${digest}`;
+  const signers = signerWorkflows(repository);
+  let refusals: string[] = [];
+  const minutes = 10;
+  try {
+    const signed = await pWaitFor(
+      async () => {
+        refusals = [];
+        for (const signer of signers) {
+          const verified = await attestationBy(subject, repository, signer);
+          if (verified.ok) return pWaitFor.resolveWith(`${signer}\n${verified.said}`);
+          refusals.push(`${signer}: ${verified.said}`);
+        }
+        console.log(`${subject}: no accepted attestation yet, asking again`);
+        return false;
+      },
+      { interval: 30_000, timeout: minutes * 60_000 },
+    );
+    console.log(`${subject}: provenance signed on main by ${signed}`);
+  } catch (error) {
+    if (!(error instanceof TimeoutError)) throw error;
+    die(
+      `${subject} has no provenance attestation from this repository's trusted workflows on main after at least ${minutes} minutes of asking; refusing to run in it.\n${refusals.join("\n")}`,
+    );
+  }
+}
+
 const modes: Record<string, () => Promise<void>> = {
   async digest() {
     const fallback = process.env.CI_IMAGE_TAG ?? "";
@@ -382,6 +464,7 @@ const modes: Record<string, () => Promise<void>> = {
       digest = fallen.digest;
     }
     const container = containerRecord(reference, digest);
+    await verifyProvenance(name, digest.trim(), requiredEnv("GITHUB_REPOSITORY"));
     console.log(`CI image: ${reference} is ${(JSON.parse(container) as { image: string }).image}`);
     githubOutput("container", container);
   },
@@ -424,7 +507,19 @@ const modes: Record<string, () => Promise<void>> = {
     const root = join(repoRoot, process.env.CI_IMAGE_ROOT ?? ".");
     githubOutput("name", imageName(requiredEnv("GITHUB_REPOSITORY")));
     githubOutput("tag", contentTag(root, imageInputs(root)));
+    githubOutput("platform", imagePlatform);
     githubOutput("proto", readPin("proto", root));
+  },
+  async push() {
+    const reference = `${imageName(requiredEnv("GITHUB_REPOSITORY"))}:${requiredEnv("CI_IMAGE_CONTENT_TAG")}`;
+    const run = Bun.spawn(["docker", "push", reference], { stdout: "pipe", stderr: "inherit" });
+    const output = await new Response(run.stdout).text();
+    console.log(output.trimEnd());
+    if ((await run.exited) !== 0) die(`docker push ${reference} failed`);
+    // The digest of this push, read from its own report: a tag re-read from the registry could by then
+    // name an image someone else pushed, and the attestation would sign that one.
+    const digest = pushedDigest(output) ?? die(`docker push ${reference} reported no digest`);
+    githubOutput("digest", digest);
   },
   async unpublished() {
     const reference = `${imageName(requiredEnv("GITHUB_REPOSITORY"))}:${requiredEnv("CI_IMAGE_CONTENT_TAG")}`;
