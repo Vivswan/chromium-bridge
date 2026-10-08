@@ -1,31 +1,12 @@
 /**
- * Real end-to-end integration test - the seam e2e.py deliberately mocks.
+ * The real native-messaging chain, the seam e2e.py mocks: MCP client (this) -> release-binary MCP server ->
+ * bridge socket -> native host spawned by Chrome -> extension -> its enrollment gate -> back. A throwaway
+ * profile holds no pinned host key, so the proof is tab_list refused with the enrollment reason; a served
+ * reply fails the suite.
  *
- * Exercises the chain with nothing stubbed: MCP client (this) -> real MCP
- * server (release binary) -> bridge socket -> real native host (release
- * binary, spawned by Chrome) -> real extension (background.js) -> its
- * enrollment gate -> back. The gate's refusal of tab_list proves the whole
- * native-messaging path e2e.py can't reach.
- *
- * Isolation matters: a raw Chrome launch merges into an already-running Chrome
- * (and would query your real session). puppeteer launches a truly isolated
- * instance. If the manifest has a pinned public key, the test derives the
- * pinned extension id; otherwise it derives the id from the throwaway path.
- *
- * OPT-IN, macOS or Windows + Chrome for Testing (or Chromium). Pops a
- * non-headless window. Enrollment is required on every platform and a
- * throwaway profile has no pinned host key, so the proof this test gives is
- * that the chain reaches the extension's enrollment gate: tab_list comes back
- * refused with the enrollment reason, and a served reply fails the test.
- *
- * The MCP server and the host run in a throwaway runtime dir (XDG_RUNTIME_DIR
- * and HOME, LOCALAPPDATA on Windows), proved by the binary's own `doctor
- * --paths`: a lock resolving anywhere else refuses the run, since the host
- * unlinks the existing socket before binding and would take the user's live
- * broker down. On Windows the host registration is an HKCU value every Chrome
- * of the account shares, so the suite runs only where none exists (a real
- * install's Chrome must never be pointed at the test host) and removes the one
- * it wrote. Not part of the default suite or CI.
+ * Opt-in, macOS or Windows, non-headless, never in CI. The run refuses unless CHROME_BIN is an isolated Chrome
+ * for Testing and the binary's own `doctor --paths` resolves its lock into the throwaway runtime dir: a raw
+ * Chrome launch would merge into a running Chrome, and a stray lock would take the user's live broker down.
  *
  * Run:  GENKAN_REAL_E2E=1 bun tests/browser/integration_e2e.ts
  */

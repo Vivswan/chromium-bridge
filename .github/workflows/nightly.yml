@@ -1,23 +1,12 @@
 name: Nightly checks
 
-# Scheduled, never PR-gating: everything here is too slow for a PR, depends on the outside world, or reruns
-# a PR-time check against that day's world so a quiet repository still learns about a break.
+# Scheduled, never PR-gating: each job is too slow for a PR, depends on the outside world, or reruns a PR-time
+# check against that day's world, so a quiet repository still learns about a break. Fuzzing is nightly-fuzz.yml.
 #
-#   browser        -> the PR job's suites (browser.yml, the one definition), against that day's Chrome `stable`
-#   mutants        -> the full cargo-mutants pass, sharded
-#   harness-smoke  -> real agent-harness CLIs (Claude Code, Codex) at their CURRENT releases connect to our
-#                     stdio MCP server; frames are captured and the opening method logged (the canary for
-#                     retiring the legacy-initialize shim)
-#   audits         -> the same cargo deny pass that gates every merge (checks.yml -> audits.yml), rerun daily
-#                     so an advisory disclosed between pushes surfaces here instead of at the next PR
-#   setup-chrome   -> installs Chrome into the ephemeral runner (CHROME_BIN), never a developer's own browser
-#   fuzzing        -> nightly-fuzz.yml
-#
-# The report job is the fleet's nightly module (repo-platform docs/nightly.md): one label-deduplicated issue.
-#   red night    -> files or updates the `nightly-failure` issue
-#   green night  -> closes it
-#   fuzz stream  -> its own label, fuzz-nightly; a shared label would let one stream's green close the other's issue
-# Repo-owned, so a sync never updates it: a breaking change to the fuzz-issue action's inputs is a manual edit here.
+# The report job is the fleet's nightly module (repo-platform docs/nightly.md): one label-deduplicated
+# `nightly-failure` issue, filed or updated on a red night and closed on a green one. The fuzz stream keeps its
+# own label, since a shared label would let one stream's green close the other's issue. Repo-owned, so a sync
+# never updates it: a breaking change to the fuzz-issue action's inputs is a manual edit here.
 
 on:
   schedule:
