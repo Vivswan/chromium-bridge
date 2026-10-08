@@ -895,6 +895,7 @@ const policyOut = `// GENERATED from the Rust core (src/packages/core/src/policy
 // direction table itself, never trusting a host's claim about which way a change points, and verifies a signed
 // baseline under POLICY_DOMAIN against its pinned key before strict-parsing the same bytes with PolicyDocSchema.
 
+import deepFreeze from "deep-freeze-es6";
 import { z } from "zod";
 
 // The host key signs UTF8(POLICY_DOMAIN) || 0x00 || doc_bytes. Distinct from the host-key challenge domain, so a
@@ -1005,13 +1006,6 @@ export const POLICY_DEFAULTS: Readonly<PolicyValues> = deepFreeze(
 ${policyDefaultItems}
   }),
 );
-
-function deepFreeze<T>(value: T): T {
-  for (const inner of Object.values(value as object)) {
-    if (typeof inner === "object" && inner !== null) deepFreeze(inner);
-  }
-  return Object.freeze(value);
-}
 `;
 
 writeFileSync(join(generatedDir, "policy.ts"), policyOut);
