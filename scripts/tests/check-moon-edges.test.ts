@@ -1,12 +1,28 @@
 import { describe, expect, test } from "bun:test";
-import { auditGraph, GATE, type TaskGraph } from "../check-moon-edges";
+import { auditGraph, GATE, STATIC, type TaskGraph } from "../check-moon-edges";
 
-// Drift answer: moon cannot express "no task runs bunx", "the pre-commit gate runs only the repository's own
-// toolchain", or "a task that names a build/ path depends on its writer", and a task added without them fails on
-// its first cold run, inside a commit, or against a stale artifact. The graph is hand-written in the shape
-// `moon query tasks` returns.
+// Drift answer: moon cannot express "no task runs bunx", "gate runs only the repository's own toolchain and
+// static, the pre-commit hook's task, adds three static-check binaries alone", or "a task that names a build/
+// path depends on its writer", and a task added without them fails on its first cold run, inside a commit, or
+// against a stale artifact. The graph is hand-written in the shape `moon query tasks` returns.
 const graph: TaskGraph = {
   root: {
+    // static shares typecheck with gate (judged once, under gate), runs each of the three binaries it may, and
+    // one it may not.
+    static: {
+      command: "noop",
+      deps: [
+        { target: "root:typecheck" },
+        { target: "root:spells" },
+        { target: "root:lints-yaml" },
+        { target: "root:lints-actions" },
+        { target: "root:lints-shell" },
+      ],
+    },
+    spells: { command: "typos", deps: [] },
+    "lints-yaml": { command: "uvx", args: ["yamllint@1.38.0", "-s", "."], deps: [] },
+    "lints-actions": { command: "actionlint", deps: [] },
+    "lints-shell": { command: "shellcheck", args: ["scripts/x.sh"], deps: [] },
     gate: {
       command: "noop",
       deps: [
@@ -373,9 +389,10 @@ const graph: TaskGraph = {
 };
 
 describe("auditGraph", () => {
-  test("names every rule a task breaks, sorted: no bunx anywhere, own-toolchain commands with --frozen and RUSTUP_AUTO_INSTALL=0 and no bun install inside the gate's closure only, and every named build/ path ordered after its writer", () => {
+  test("names every rule a task breaks, sorted: no bunx anywhere, own-toolchain commands with --frozen and RUSTUP_AUTO_INSTALL=0 and no bun install inside the gate's closure, the same plus the three static-check binaries inside static's, and every named build/ path ordered after its writer", () => {
     expect(auditGraph(graph)).toEqual(
       [
+        "root:lints-shell: runs shellcheck inside root:static (not bun or a cargo toolchain verb, nor typos, actionlint, or uvx)",
         "root:reads-built-without-dependency: names build/extension/chrome-mv3/manifest.json without depending on extension:build, which writes build/extension",
         "root:reads-dotted-path: names build/extension/chrome-mv3/manifest.json without depending on extension:build, which writes build/extension",
         "root:reads-spaced-path-without-dependency: names build/report html/index.json without depending on root:writes-spaced, which writes build/report html",
@@ -476,6 +493,7 @@ describe("auditGraph", () => {
     const whole: TaskGraph = {
       root: {
         gate: { command: "noop", deps: [{ target: "root:reads-anywhere" }] },
+        static: { command: "noop", deps: [] },
         "writes-build": { command: "bun", deps: [], outputFiles: { build: { optional: false } } },
         "writes-part": {
           command: "bun",
@@ -512,6 +530,7 @@ describe("auditGraph", () => {
     const redirects: TaskGraph = {
       root: {
         gate: { command: "noop", deps: [] },
+        static: { command: "noop", deps: [] },
         redirects: {
           command: "bun",
           script: [
@@ -534,10 +553,10 @@ describe("auditGraph", () => {
     );
   });
 
-  test("a graph without the gate reports the gate itself, not a clean census", () => {
-    const { gate: _gate, ...rootWithoutGate } = graph.root ?? {};
-    expect(auditGraph({ ...graph, root: rootWithoutGate })).toContain(
-      `${GATE}: reachable from ${GATE} but not in the graph`,
+  test.each([GATE, STATIC])("a graph without %s reports it, not a clean census", (root) => {
+    const { [root.split(":")[1] as string]: _root, ...rootWithout } = graph.root ?? {};
+    expect(auditGraph({ ...graph, root: rootWithout })).toContain(
+      `${root}: reachable from ${root} but not in the graph`,
     );
   });
 });

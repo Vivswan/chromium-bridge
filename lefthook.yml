@@ -16,9 +16,11 @@
 #   automatic commits           -> a clean cherry-pick or merge, and filter-branch, meet no hook here (a conflict
 #                                  resolved by hand commits through pre-commit); CI judges the PR
 #   PATH                        -> a GUI git client gives hooks /usr/bin:/bin, so the template prefixes every tool's
-#                                  home: proto's shims and bin (moon, bun, uvx), rustup's ~/.cargo/bin, and Homebrew's
-#                                  keg-only rustup (`brew --prefix rustup`/bin, ahead of its bin so rustup's proxies
-#                                  win) and bin (typos, actionlint), each at the Apple-silicon and the Intel prefix
+#                                  home: proto's shims and bin (moon, bun, uvx), rustup's ~/.cargo/bin, Homebrew's
+#                                  keg-only rustup (`brew --prefix rustup`/bin) at both the Apple-silicon and the
+#                                  Intel prefix, then both Homebrew bins (typos, actionlint): a machine with the
+#                                  rust formula at one prefix and rustup at the other would otherwise put a
+#                                  formula cargo ahead of rustup's proxies
 #   hand-installed tools        -> typos and actionlint have no proto plugin (.prototools names the gap) and are
 #                                  installed once by hand (docs/development.md)
 #   rust                        -> RUSTUP_AUTO_INSTALL=0 here as well as in the cargo tasks: moon's task env yields to
@@ -26,7 +28,7 @@
 #   skip for a WIP commit       -> LEFTHOOK=0 git commit (CI runs the full gate on the PR)
 
 templates:
-  static: PATH="$HOME/.proto/shims:$HOME/.proto/bin:$HOME/.cargo/bin:/opt/homebrew/opt/rustup/bin:/opt/homebrew/bin:/usr/local/opt/rustup/bin:/usr/local/bin:$PATH" RUSTUP_AUTO_INSTALL=0 moon run static
+  static: PATH="$HOME/.proto/shims:$HOME/.proto/bin:$HOME/.cargo/bin:/opt/homebrew/opt/rustup/bin:/usr/local/opt/rustup/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" RUSTUP_AUTO_INSTALL=0 moon run static
 
 pre-commit:
   jobs:

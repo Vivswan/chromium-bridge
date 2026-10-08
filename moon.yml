@@ -598,7 +598,7 @@ tasks:
     command: 'bun scripts/check-moon-hasher.ts'
 
   check-moon-edges:
-    description: "The header's first four rules, read from moon's resolved task graph: no bunx anywhere, the gate's graph holds only own-toolchain commands (cargo verbs with --frozen, no bun install), and every named build/ path follows the task that writes it"
+    description: "The header's first four rules, read from moon's resolved task graph: no bunx anywhere, the gate's graph holds only own-toolchain commands (cargo verbs with --frozen, no bun install) and static's adds typos, actionlint, and uvx alone, and every named build/ path follows the task that writes it"
     script: |
       set -e
       bun scripts/check-moon-edges.ts

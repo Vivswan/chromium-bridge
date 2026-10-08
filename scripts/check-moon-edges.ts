@@ -41,6 +41,10 @@ export type TaskGraph = Record<
 type Task = TaskGraph[string][string];
 
 export const GATE = "root:gate";
+/** The pre-commit hook's task (lefthook.yml): gate's static members plus three static-check binaries. */
+export const STATIC = "root:static";
+/** The binaries from outside the toolchain that static may run and gate may not (moon.yml's static task). */
+export const STATIC_BINARIES: ReadonlySet<string> = new Set(["typos", "actionlint", "uvx"]);
 
 /** bun subcommands that install or change what is installed, aliases included (`bun i`, `bun a`, `bun rm`). */
 const BUN_INSTALLERS = new Set([
@@ -497,10 +501,24 @@ export function auditGraph(graph: TaskGraph): string[] {
       }
     }
   }
+  // A task in both closures keeps gate's rule: the three binaries are static's own members, and a shared task
+  // runs in CI's gate too, where no outside binary exists.
   const gate = closure(graph, GATE);
-  for (const target of gate.unknown)
-    findings.push(`${target}: reachable from ${GATE} but not in the graph`);
-  for (const target of gate.reached) {
+  const statics = closure(graph, STATIC);
+  const judged: [target: string, root: string, outside: ReadonlySet<string>][] = [
+    ...gate.reached.map((target): (typeof judged)[number] => [target, GATE, new Set()]),
+    ...statics.reached
+      .filter((target) => !gate.reached.includes(target))
+      .map((target): (typeof judged)[number] => [target, STATIC, STATIC_BINARIES]),
+  ];
+  for (const [root, { unknown }] of [
+    [GATE, gate],
+    [STATIC, statics],
+  ] as const) {
+    for (const target of unknown)
+      findings.push(`${target}: reachable from ${root} but not in the graph`);
+  }
+  for (const [target, root, outside] of judged) {
     const [project, id] = target.split(":") as [string, string];
     const task = graph[project]?.[id];
     if (task === undefined) continue;
@@ -514,13 +532,13 @@ export function auditGraph(graph: TaskGraph): string[] {
       (w) => w.reading === "expansion" && !unread.has(w.text),
     )) {
       findings.push(
-        `${target}: the word ${w.text} inside ${GATE} is not literal (the rules judge only what they can read)`,
+        `${target}: the word ${w.text} inside ${root} is not literal (the rules judge only what they can read)`,
       );
     }
     for (const { words, assigns } of parsed.commands) {
       for (const name of assigns) {
         findings.push(
-          `${target}: ${name} is assigned inside ${GATE} (the rules read the task's env, not its script's)`,
+          `${target}: ${name} is assigned inside ${root} (the rules read the task's env, not its script's)`,
         );
       }
       if (words[0] === undefined || words[0].reading !== "literal") continue;
@@ -528,26 +546,33 @@ export function auditGraph(graph: TaskGraph): string[] {
       if (word === undefined) continue;
       const installer = word === "bun" ? rest.find((w) => BUN_INSTALLERS.has(w)) : undefined;
       if (installer !== undefined) {
-        findings.push(`${target}: bun ${installer} inside ${GATE} (installs)`);
+        findings.push(`${target}: bun ${installer} inside ${root} (installs)`);
       }
       // `noop` is moon's placeholder command for a dependency-only aggregate.
-      if (word === "bun" || word === "set" || word === "noop") continue;
+      if (word === "bun" || word === "set" || word === "noop" || outside.has(word)) continue;
       if (word !== "cargo") {
-        findings.push(`${target}: runs ${word} inside ${GATE} (not bun or a cargo toolchain verb)`);
+        const binaries = [...outside];
+        const allowed =
+          binaries.length === 0
+            ? ""
+            : `, nor ${binaries.slice(0, -1).join(", ")}, or ${binaries.at(-1)}`;
+        findings.push(
+          `${target}: runs ${word} inside ${root} (not bun or a cargo toolchain verb${allowed})`,
+        );
         continue;
       }
       const verb = rest[0] ?? "";
       if (!TOOLCHAIN_CARGO_VERBS.has(verb)) {
-        findings.push(`${target}: runs cargo ${verb} inside ${GATE} (not a toolchain verb)`);
+        findings.push(`${target}: runs cargo ${verb} inside ${root} (not a toolchain verb)`);
       }
       // Past cargo's `--` the words belong to the tool it runs, so a --frozen there is not cargo's.
       const cargoArgs = rest.includes("--") ? rest.slice(0, rest.indexOf("--")) : rest;
       if (verb !== "fmt" && !cargoArgs.includes("--frozen")) {
-        findings.push(`${target}: cargo ${verb} inside ${GATE} without --frozen`);
+        findings.push(`${target}: cargo ${verb} inside ${root} without --frozen`);
       }
       if (task.env?.RUSTUP_AUTO_INSTALL !== "0") {
         findings.push(
-          `${target}: cargo ${verb} inside ${GATE} without RUSTUP_AUTO_INSTALL=0 in env`,
+          `${target}: cargo ${verb} inside ${root} without RUSTUP_AUTO_INSTALL=0 in env`,
         );
       }
     }
@@ -559,10 +584,12 @@ if (import.meta.main) {
   const query = Bun.spawnSync(["moon", "query", "tasks"], { cwd: repoRoot });
   if (!query.success) die(`moon query tasks failed: ${query.stderr.toString()}`);
   const { tasks } = JSON.parse(query.stdout.toString()) as { tasks?: TaskGraph };
-  // The gate is the control: a graph without it, or with a record that is not a task, is a misread, not a
-  // clean census.
-  if (!tasks || Array.isArray(tasks) || !tasks.root?.gate) {
-    die(`moon query tasks returned no ${GATE} task; refusing to judge an unreadable graph`);
+  // The two roots are the control: a graph without either, or with a record that is not a task, is a misread,
+  // not a clean census.
+  if (!tasks || Array.isArray(tasks) || !tasks.root?.gate || !tasks.root?.static) {
+    die(
+      `moon query tasks returned no ${GATE} or ${STATIC} task; refusing to judge an unreadable graph`,
+    );
   }
   for (const [project, projectTasks] of Object.entries(tasks)) {
     for (const [id, task] of Object.entries(projectTasks)) {
@@ -576,6 +603,6 @@ if (import.meta.main) {
   }
   const total = Object.values(tasks).reduce((n, project) => n + Object.keys(project).length, 0);
   console.log(
-    `check-moon-edges: no bunx, ${GATE} runs only the repository's own toolchain, and every named build/ path follows its writer (${total} tasks)`,
+    `check-moon-edges: no bunx, ${GATE} runs only the repository's own toolchain and ${STATIC} adds ${[...STATIC_BINARIES].join(", ")} alone, and every named build/ path follows its writer (${total} tasks)`,
   );
 }
