@@ -1,6 +1,6 @@
 # proto is the bootstrap toolchain manager: `proto install` in a fresh checkout provisions every pin
-# below, and CI provisions from this same file (.github/actions/setup-moon in every job; the Containerfile
-# at image build). rust is deliberately absent: rust-toolchain.toml is its only pin, read by rustup, IDEs,
+# below, CI provisions from this same file (.github/actions/setup-moon in every job), and the Containerfile
+# reads it at image build. rust is deliberately absent: rust-toolchain.toml is its only pin, read by rustup, IDEs,
 # and CI's setup-rust-toolchain, and proto's rust plugin would register a toolchain without a rustc that
 # makes rustup believe the pin is installed.
 #
@@ -11,8 +11,8 @@
 # `uv run --no-project --isolated`, so proto never provisions python (the allow-list below excludes it).
 #
 # Named residual gap: four gate tools have no first-party proto plugin and are NOT provisioned here:
-# cargo-nextest, typos, cargo-machete, actionlint. Install them once by hand (docs/development.md); the CI
-# image carries pinned copies, and the managed ci.yml runs typos and actionlint through fleet actions.
+# cargo-nextest, typos, cargo-machete, actionlint. Install them once by hand (docs/development.md); the
+# container image carries pinned copies, and the managed ci.yml runs typos and actionlint through fleet actions.
 proto = "0.58.2"
 bun = "1.4.2"
 moon = "2.4.5"
