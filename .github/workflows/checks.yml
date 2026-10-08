@@ -6,11 +6,12 @@
 # `if:` does not fail the gate. A check that needs secrets, more permissions, or must never be skippable
 # belongs in its own workflow wired into the ruleset via .github/settings.yml.
 #
-# moon (moon.yml at the repo root) is the command interface; .github/actions/setup-moon provisions it and
-# the pinned tools on every job's runner. The rust matrix keeps the raw cargo verbs: the moon tasks wrap the
-# same commands, and nextest is not on the runners. The Containerfile is the developer's isolated
-# environment (compose.yaml), never CI's: GitHub's runners are already isolated, and container-build.yml
-# only proves the image builds.
+# Every job runs on a GitHub-hosted runner, already isolated, so the Containerfile (the developer's isolated
+# environment) is never CI's. .github/actions/setup-moon provisions moon and the pinned tools on each runner.
+#
+# Full history (fetch-depth: 0) on every job that runs moon: in a pull request, `moon run` diffs HEAD against
+# GITHUB_BASE_REF even without --affected, and that `git diff main HEAD` fails when `main` is unknown, as in
+# a depth-1 checkout.
 
 name: Checks
 
@@ -21,9 +22,10 @@ permissions:
   contents: read
 
 jobs:
-  # macOS compiles the cfg(target_os = "macos") enclave code and Windows the cfg(windows) named-pipe
-  # code; neither is visible to the Linux build, which alone runs fmt (platform-independent) and the
-  # fuzz-workspace check.
+  # macOS compiles the cfg(target_os = "macos") enclave code and Windows the cfg(windows) named-pipe code;
+  # neither is visible to the Linux build, which alone runs the platform-independent steps (fmt, the loom
+  # model, rustdoc) and the fuzz workspace, which the root workspace excludes so nothing else compiles or
+  # lints it. Raw cargo verbs rather than the moon tasks: those wrap nextest, which is not on the runners.
   rust:
     name: Rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -43,19 +45,14 @@ jobs:
         run: cargo fmt --check --manifest-path src/packages/core/fuzz/Cargo.toml
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
-      # The loom model check of the broker ref-count (core/moon.yml's test-loom). Platform-independent, like fmt.
       - if: runner.os == 'Linux'
         run: cargo test -p chromium-bridge-core --lib --features loom loom_model
       - if: runner.os == 'Linux'
         run: cargo doc --workspace --no-deps --document-private-items
         env:
           RUSTDOCFLAGS: -D warnings
-      # The fuzz crate is excluded from the root workspace, so nothing above compiles or lints it, and
-      # nightly-fuzz.yml is the only job that runs its targets (core/moon.yml's lint-fuzz).
       - if: runner.os == 'Linux'
         run: cargo clippy --locked --manifest-path src/packages/core/fuzz/Cargo.toml --all-targets -- -D warnings
-      # The fuzz workspace's own tests (moon test-fuzz): every generated seed through its target
-      # in-process, held to its reader's verdict. Stable rust, no libFuzzer.
       - if: runner.os == 'Linux'
         run: cargo test --locked --manifest-path src/packages/core/fuzz/Cargo.toml
 
@@ -65,8 +62,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      # Full history on every job that runs moon: in a pull request, `moon run` diffs HEAD against GITHUB_BASE_REF
-      # even without --affected, and that `git diff main HEAD` fails when `main` is unknown, as in a depth-1 checkout.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -96,13 +91,19 @@ jobs:
           tool: cargo-llvm-cov
       - run: cargo llvm-cov --summary-only
 
-  # The typecheck, test, and build tasks read the generated contract modules, which their moon dependency on
-  # gen-shared builds from the Rust core first, hence the cargo toolchain and the crate fetch (the gen tasks'
-  # cargo runs take --frozen, which never fetches).
-  extension:
-    name: Extension (typecheck, lint, format, test, build)
+  # The gate's bun-side tasks, one runner per row. moon.yml owns what each task does; the first two rows
+  # select theirs here, and a check added to the `hygiene` aggregate runs without a change to this file.
+  moon:
+    name: moon run ${{ matrix.tasks }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        tasks:
+          - typecheck check-ts shared:test extension:test check-extension-id
+          - check-envelope check-gen-isolation check-refresh-lockfiles
+          - hygiene
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -110,57 +111,8 @@ jobs:
       - uses: ./.github/actions/setup-moon
         with:
           cargo: "true"
-      - run: bun install --frozen-lockfile
-      - run: |
-          cargo fetch --locked
-          cargo fetch --locked --manifest-path src/packages/core/fuzz/Cargo.toml
-      - run: moon run typecheck check-ts shared:test extension:test
-      # Builds the extension through its dependency, then asserts the built manifest's security surface (key,
-      # permissions, host access, the Chrome floor); the hygiene job runs the same task.
-      - run: moon run check-extension-id
-
-  # The checks that need BOTH toolchains: the hand-written layer over the generated wire validators must stay
-  # within the pinned parser asymmetries (check-envelope builds the validators from the Rust core first), and
-  # the gen-only crates must stay out of the shipped binary.
-  contract:
-    name: Contract (envelope asymmetry gate, gen isolation)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-      - uses: ./.github/actions/setup-moon
-        with:
-          cargo: "true"
-      - run: bun install --frozen-lockfile
-      # The gen tasks and check-gen-isolation spawn cargo with --frozen, which never fetches, so this job fetches
-      # the crates first; a restored rust-cache may hold no registry.
-      - run: |
-          cargo fetch --locked
-          cargo fetch --locked --manifest-path src/packages/core/fuzz/Cargo.toml
-      - run: moon run check-envelope check-gen-isolation check-refresh-lockfiles
-
-  # Every bun-side check. moon.yml's `hygiene` task owns the list (the `ci` gate depends on the same task), so a
-  # check added there runs here without a change to this file. check-docs-policy imports the settings schema and
-  # check-extension-id builds the extension, hence the install; the docs gates and the extension build read the
-  # generated contract modules, which their gen-shared dependency builds from the Rust core, hence cargo.
-  hygiene:
-    name: Repository hygiene (versions, pins, CJK, typography, docs parity, compose)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-      - uses: ./.github/actions/setup-moon
-        with:
-          cargo: "true"
-      - run: bun install --frozen-lockfile
-      - run: |
-          cargo fetch --locked
-          cargo fetch --locked --manifest-path src/packages/core/fuzz/Cargo.toml
-      - run: moon run hygiene
+      - uses: ./.github/actions/workspace-deps
+      - run: moon run ${{ matrix.tasks }}
 
   # typos is not here: the managed ci.yml's standard-checks job runs the fleet's typos action over the same
   # _typos.toml (the local gate keeps its `moon run typos`).
@@ -175,7 +127,6 @@ jobs:
       - uses: ./.github/actions/setup-moon
         with:
           cargo: "true"
-      # The Containerfile owns the pin (ARG CARGO_MACHETE_VERSION), read by scripts/pin.ts.
       - id: pin
         run: bun scripts/pin.ts cargo-machete --output machete
       - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
@@ -183,9 +134,8 @@ jobs:
           tool: cargo-machete@${{ steps.pin.outputs.machete }}
       - run: moon run machete
 
-  # Drives the downloaded binary. The scenario driver (scripts/linux-registration.ts) reads the host id and
-  # extension id from the generated identity module, so the job builds the generated TS from the Rust core
-  # first.
+  # The scenario driver reads the host id and extension id from the generated identity module, hence
+  # gen-shared before it runs.
   linux-install:
     name: Linux registration (doctor --fix / uninstall, isolated XDG directories)
     needs: build-release
@@ -201,10 +151,7 @@ jobs:
       - uses: ./.github/actions/setup-moon
         with:
           cargo: "true"
-      - run: bun install --frozen-lockfile
-      - run: |
-          cargo fetch --locked
-          cargo fetch --locked --manifest-path src/packages/core/fuzz/Cargo.toml
+      - uses: ./.github/actions/workspace-deps
       - run: moon run gen-shared
       - name: doctor --fix registers, re-registers, and uninstall reverses it (isolated HOME/XDG)
         run: bun scripts/linux-registration.ts fresh-machine
@@ -231,10 +178,11 @@ jobs:
       - uses: ./.github/actions/release-binary
         with:
           mode: download
-      - env:
-          SUITE: ${{ matrix.suite }}
-        run: moon run "test-${SUITE}" --upstream none
+      - run: moon run test-${{ matrix.suite }} --upstream none
 
+  # moon does not resolve runInCI:false tasks when CI=true, and test-interop, test-browser, and harness-smoke
+  # keep that flag so affected-only `moon ci` runs never need the release binary or a browser; CI invokes
+  # those suites' commands directly (here, browser.yml, nightly.yml).
   interop:
     name: MCP SDK v2 client interop (bun)
     needs: build-release
@@ -247,9 +195,6 @@ jobs:
         with:
           mode: download
       - run: bun install --frozen-lockfile
-      # moon does not resolve runInCI:false tasks when CI=true, and test-interop, test-browser, and
-      # harness-smoke keep that flag so affected-only `moon ci` runs never need the release binary or a
-      # browser; CI invokes those suites' commands directly (here, browser.yml, nightly.yml).
       - run: bun test tests/interop/sdk-client.test.ts
 
   browser:
@@ -266,8 +211,8 @@ jobs:
     permissions:
       contents: read
 
-  # The public landing page (src/apps/web) must keep building. Build-only here: the deploy is the managed
-  # ci.yml's site leg, which runs .github/actions/site-build and renders docs/ beside it.
+  # Build-only: the deploy is the managed ci.yml's site leg, which runs .github/actions/site-build and
+  # renders docs/ beside it.
   web:
     name: web app builds
     runs-on: ubuntu-latest

@@ -125,7 +125,7 @@ The full task menu, by area:
 
 | Area | Tasks |
 |------|-------|
-| Aggregates | `build`, `test`, `ci`, `hygiene` (the bun-side checks CI's hygiene job runs; `ci` depends on it), `release`, `lint`, `fmt`, `fix` |
+| Aggregates | `build`, `test`, `ci`, `hygiene` (the bun-side checks CI's `moon run hygiene` row runs; `ci` depends on it), `release`, `lint`, `fmt`, `fix` |
 | Dev loops | `dev`, `dev-web`, `extension:dev` |
 | Rust | `core:fmt-check` (= `core:fmt-check-workspace` + `core:fmt-check-fuzz`), `core:lint` (= `core:lint-workspace` + `core:lint-fuzz`), `test-rust` (= `core:test` + `core:test-doc` + `core:test-loom`, the broker ref-count model check under the core's `loom` feature), `doc`, `build-release`, `build-repro`, `typos`, `machete`, `audit` |
 | Fuzz workspace | `fuzz-seeds`, `fuzz-smoke`, `check-fuzz-smoke`, `test-fuzz` (clippy and fmt over it are `core:lint-fuzz` and `core:fmt-check-fuzz`) |
@@ -187,7 +187,7 @@ The container image (`Containerfile`) runs the same `proto install` at build tim
 | proto, bun, moon, node, uv | `.prototools` | `tool = "x.y.z"` |
 | cargo-nextest, typos, actionlint, cargo-machete (the image's tools) and cargo-deb (the release and installer runners') | `Containerfile` | `ARG <TOOL>_VERSION=x.y.z` |
 
-One pin also lives in a second file, and `moon run check-toolchain` (part of the gate and of CI's hygiene job) fails if the copies disagree, or if `.prototools` ever pins rust or enables proto's rust or python plugin:
+One pin also lives in a second file, and `moon run check-toolchain` (part of the gate and of CI's `moon run hygiene` row) fails if the copies disagree, or if `.prototools` ever pins rust or enables proto's rust or python plugin:
 
 - **bun**: mirrored in `package.json` `packageManager` and the template-managed `.bun-version`.
 
@@ -195,16 +195,14 @@ uv is pinned only in `.prototools`, and python is owned by uv: the protocol suit
 
 ## CI layout
 
-`checks.yml` defines each concern once, called by the managed ci.yml inside the all-green gate. Every job runs on a GitHub-hosted runner, already isolated, so CI never uses the container; the Toolchain pinning section above says how a job provisions its tools.
+`checks.yml` defines each concern once, called by the managed ci.yml inside the all-green gate. Every job runs on a GitHub-hosted runner, already isolated, so CI never uses the container; the Toolchain pinning section above says how a job provisions its tools, and `.github/actions/workspace-deps` installs the bun workspace and fetches the crates for the jobs whose moon tasks build the generated contract modules.
 
 | Job | Runs | Where |
 |-----|------|-------|
 | `rust` | clippy and tests on ubuntu, macOS, and Windows; fmt, the loom model, rustdoc, and the fuzz workspace's fmt, clippy, and tests on Linux alone | each OS's runner |
 | `build-release` | `moon run build-release`, uploaded for the suites below | ubuntu runner |
 | `coverage` | `cargo llvm-cov`, informational (`continue-on-error`, no threshold) | ubuntu runner |
-| `extension` | `typecheck`, `check-ts`, `shared:test`, `extension:test`, `extension:build`, then `check-extension-id` against the built manifest | ubuntu runner |
-| `contract` | `check-envelope`, `check-gen-isolation`, `check-refresh-lockfiles` | ubuntu runner |
-| `hygiene` | `moon run hygiene` | ubuntu runner |
+| `moon` | the gate's bun-side tasks, one `moon run` per matrix row: `typecheck check-ts shared:test extension:test check-extension-id`; `check-envelope check-gen-isolation check-refresh-lockfiles`; `hygiene` | ubuntu runner per row |
 | `tooling` | `machete`, with cargo-machete at the `Containerfile` pin | ubuntu runner |
 | `web` | `web:build` | ubuntu runner |
 | `linux-install` | downloads the `build-release` binary, then `scripts/linux-registration.ts`: `doctor --fix`, re-register, multi-browser, `uninstall` under isolated HOME and XDG directories | ubuntu runner, with cargo and moon to build the generated identity module the scenario driver reads |

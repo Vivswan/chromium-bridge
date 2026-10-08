@@ -125,7 +125,7 @@ bun run --cwd src/apps/extension build
 
 | 領域 | 任務 |
 |------|-------|
-| 彙總 | `build`、`test`、`ci`、`hygiene` (CI 的 hygiene 工作所執行的 bun 側檢查; `ci` 相依於它)、`release`、`lint`、`fmt`、`fix` |
+| 彙總 | `build`、`test`、`ci`、`hygiene` (CI 的 `moon run hygiene` 列所執行的 bun 側檢查; `ci` 相依於它)、`release`、`lint`、`fmt`、`fix` |
 | 開發迴圈 | `dev`、`dev-web`、`extension:dev` |
 | Rust | `core:fmt-check` (= `core:fmt-check-workspace` + `core:fmt-check-fuzz`)、`core:lint` (= `core:lint-workspace` + `core:lint-fuzz`)、`test-rust` (= `core:test` + `core:test-doc` + `core:test-loom`, 即核心 `loom` 功能下的中介 (broker) 參考計數模型檢查)、`doc`、`build-release`、`build-repro`、`typos`、`machete`、`audit` |
 | 模糊測試工作區 | `fuzz-seeds`、`fuzz-smoke`、`check-fuzz-smoke`、`test-fuzz` (該工作區的 clippy 與 fmt 檢查分別由 `core:lint-fuzz` 與 `core:fmt-check-fuzz` 執行) |
@@ -187,7 +187,7 @@ moon ci                    # affected-only, based on touched files - a LOCAL
 | proto、bun、moon、node、uv | `.prototools` | `tool = "x.y.z"` |
 | cargo-nextest、typos、actionlint、cargo-machete (映像檔的工具) 與 cargo-deb (發行與安裝程式執行器的工具) | `Containerfile` | `ARG <TOOL>_VERSION=x.y.z` |
 
-有一個固定版本也存在於第二個檔案, 而 `moon run check-toolchain` (閘門與 CI hygiene 工作的一部分) 會在兩份副本不一致, 或 `.prototools` 竟固定了 rust、啟用了 proto 的 rust 或 python 外掛時失敗:
+有一個固定版本也存在於第二個檔案, 而 `moon run check-toolchain` (閘門與 CI 的 `moon run hygiene` 列的一部分) 會在兩份副本不一致, 或 `.prototools` 竟固定了 rust、啟用了 proto 的 rust 或 python 外掛時失敗:
 
 - **bun**: 鏡像於 `package.json` 的 `packageManager` 與範本管理的 `.bun-version`。
 
@@ -195,16 +195,14 @@ uv 只固定於 `.prototools`, 而 python 由 uv 擁有: 協定測試套件透�
 
 ## CI 配置
 
-`checks.yml` 把每個關注點定義一次, 由受管理的 ci.yml 在 all-green 閘門內呼叫。每個工作都在 GitHub 代管的執行器上執行, 執行器本身已是隔離的, 所以 CI 從不使用容器; 上文的工具鏈固定一節說明工作如何佈建自己的工具。
+`checks.yml` 把每個關注點定義一次, 由受管理的 ci.yml 在 all-green 閘門內呼叫。每個工作都在 GitHub 代管的執行器上執行, 執行器本身已是隔離的, 所以 CI 從不使用容器; 上文的工具鏈固定一節說明工作如何佈建自己的工具, 而 `.github/actions/workspace-deps` 為那些 moon 任務要建置產生契約模組的工作安裝 bun workspace 並抓取 crate。
 
 | 工作 | 執行內容 | 位置 |
 |-----|------|-------|
 | `rust` | 在 ubuntu、macOS 與 Windows 上執行 clippy 與測試; fmt、loom 模型、rustdoc, 以及模糊測試工作區的 fmt、clippy 與測試只在 Linux 上執行 | 各作業系統的執行器 |
 | `build-release` | `moon run build-release`, 上傳供下方的測試套件使用 | ubuntu 執行器 |
 | `coverage` | `cargo llvm-cov`, 僅供參考 (`continue-on-error`, 無門檻) | ubuntu 執行器 |
-| `extension` | `typecheck`、`check-ts`、`shared:test`、`extension:test`、`extension:build`, 然後對建置出的資訊清單執行 `check-extension-id` | ubuntu 執行器 |
-| `contract` | `check-envelope`、`check-gen-isolation`、`check-refresh-lockfiles` | ubuntu 執行器 |
-| `hygiene` | `moon run hygiene` | ubuntu 執行器 |
+| `moon` | 閘門的 bun 側任務, 每個矩陣列一次 `moon run`: `typecheck check-ts shared:test extension:test check-extension-id`; `check-envelope check-gen-isolation check-refresh-lockfiles`; `hygiene` | 每列一個 ubuntu 執行器 |
 | `tooling` | `machete`, 使用 `Containerfile` 固定版本的 cargo-machete | ubuntu 執行器 |
 | `web` | `web:build` | ubuntu 執行器 |
 | `linux-install` | 先下載 `build-release` 的執行檔, 再執行 `scripts/linux-registration.ts`: 在隔離的 HOME 與 XDG 目錄下執行 `doctor --fix`、重新註冊、多瀏覽器、`uninstall` | ubuntu 執行器, 並帶有 cargo 與 moon 以建置情境驅動指令碼讀取的產生身分模組 |

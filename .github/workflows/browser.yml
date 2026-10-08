@@ -39,12 +39,8 @@ jobs:
         id: chrome
         with:
           chrome-version: ${{ inputs.chrome-version }}
-      - run: bun install --frozen-lockfile
-      # The suites import the generated contract modules and run_all.ts builds the extension over them, so the
-      # generated TS is built from the Rust core first (the gen tasks' cargo runs take --frozen, which never fetches).
-      - run: |
-          cargo fetch --locked
-          cargo fetch --locked --manifest-path src/packages/core/fuzz/Cargo.toml
+      - uses: ./.github/actions/workspace-deps
+      # The suites import the generated contract modules and run_all.ts builds the extension over them.
       - run: moon run gen-shared
       - name: Isolation guard and canary unit tests (no browser needed)
         run: bun test tests/browser/*.test.ts

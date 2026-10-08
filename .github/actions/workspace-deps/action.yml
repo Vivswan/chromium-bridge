@@ -1,0 +1,19 @@
+# The gen tasks' cargo runs take --frozen, which never fetches, and a restored rust-cache may hold no
+# registry, so every job whose moon tasks build the generated contract modules fetches the crates first.
+name: Workspace dependencies
+description: |
+  Installs the bun workspace and fetches the crates of both cargo workspaces, so the moon tasks that build the generated contract modules from the Rust core find everything offline.
+
+  The caller's obligations:
+    - run ./.github/actions/setup-moon with cargo set to "true" first, since bun and cargo come from it
+    - skip this action in a job that runs no moon task reading the generated modules, as the fetch is the slow part
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: bun install --frozen-lockfile
+    - shell: bash
+      run: |
+        cargo fetch --locked
+        cargo fetch --locked --manifest-path src/packages/core/fuzz/Cargo.toml
