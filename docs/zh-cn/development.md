@@ -212,6 +212,8 @@ uv 只固定在 `.prototools` 中, python 由 uv 管理: 协议测试套件通�
 | `installers` | `installers.yml` 构建 .pkg、.deb 和 .msi, 并在各自的运行器上安装 | 各平台的运行器 |
 | `audits` | `audits.yml`: 对根工作区和模糊测试工作区运行 cargo deny | ubuntu 运行器 |
 
+`container-build.yml` 是 CI 唯一触及 Docker 的地方: 它只构建 `Containerfile` 而不推送, 并且只在拉取请求或 main 推送改动了 `Containerfile`、`compose.yaml`、`compose.podman.yaml`、`.prototools`、`rust-toolchain.toml` 或该工作流本身时运行。它不在 all-green 的 needs 中, 所以在其他改动上被跳过不花任何代价。
+
 ## 开发扩展
 
 扩展基于 WXT 构建, 它生成清单 (包括固定的密钥) 并打包 `src/apps/extension/src/entrypoints/` 下的入口点。
@@ -248,7 +250,7 @@ CHROME_BIN=/path/to/isolated/chrome bun tests/browser/run_all.ts
 
 ## 在容器中运行门禁与浏览器测试套件
 
-容器是开发者的隔离环境, 而非 CI 的 (上文的 CI 布局一节说明 CI 在哪里运行): 它携带仓库固定版本的每一个门禁工具, 外加一个发行版的 Chromium, 而宿主机上的任何浏览器或进程都不在它的触及范围内。
+容器是开发者的隔离环境, 而非 CI 的: 它是笔记本上的一个沙箱, 用来运行测试或试装一次而不触碰机器本身。它携带仓库固定版本的每一个门禁工具, 外加一个发行版的 Chromium, 而宿主机上的任何浏览器或进程都不在它的触及范围内。
 
 `Containerfile` 构建它; `compose.yaml` 运行它, 且只使用 `docker compose` 和 `podman compose` 都实现的 Compose Specification 子集 (门禁中的 `moon run check-compose` 保证这一点)。
 

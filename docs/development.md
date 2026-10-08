@@ -212,6 +212,8 @@ uv is pinned only in `.prototools`, and python is owned by uv: the protocol suit
 | `installers` | `installers.yml` builds the .pkg, .deb, and .msi and installs each on its runner | each platform's runner |
 | `audits` | `audits.yml`: cargo deny over the root and fuzz workspaces | ubuntu runner |
 
+`container-build.yml` is the one place CI touches Docker: it builds the `Containerfile` without pushing, only on a pull request or main push that changes the `Containerfile`, `compose.yaml`, `compose.podman.yaml`, `.prototools`, `rust-toolchain.toml`, or the workflow itself. It is not in all-green's needs, so its skip on every other change costs nothing.
+
 ## Working on the extension
 
 The extension is built on WXT, which generates the manifest (including the pinned key) and bundles the entrypoints under `src/apps/extension/src/entrypoints/`.
@@ -248,7 +250,7 @@ Without an isolated `CHROME_BIN` the runner skips; the two CI switches that make
 
 ## Running the gate and the browser suites in a container
 
-The container is the developer's isolated environment, never CI's (the CI layout section above says where CI runs): it carries every gate tool at the repository's pins plus a distro Chromium, and no browser or process on the host is in its reach.
+The container is the developer's isolated environment, never CI's: a sandbox on the laptop for running the tests or trying an installation without touching the machine. It carries every gate tool at the repository's pins plus a distro Chromium, and no browser or process on the host is in its reach.
 
 `Containerfile` builds it; `compose.yaml` runs it, within the Compose Specification subset both `docker compose` and `podman compose` implement (`moon run check-compose`, in the gate, holds it there).
 

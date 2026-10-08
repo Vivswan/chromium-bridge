@@ -9,7 +9,8 @@
 # moon (moon.yml at the repo root) is the command interface; .github/actions/setup-moon provisions it and
 # the pinned tools on every job's runner. The rust matrix keeps the raw cargo verbs: the moon tasks wrap the
 # same commands, and nextest is not on the runners. The Containerfile is the developer's isolated
-# environment (compose.yaml), never CI's: GitHub's runners are already isolated.
+# environment (compose.yaml), never CI's: GitHub's runners are already isolated, and container-build.yml
+# only proves the image builds.
 
 name: Checks
 
