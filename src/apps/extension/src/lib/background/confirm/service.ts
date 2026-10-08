@@ -99,19 +99,10 @@ export function installPresenceProvider(p: PresenceProvider): void {
   presence.value = p;
 }
 
-/** The payload and the provider that shows it, for one request. "eval" and
- * "upload" go to the presence provider when the request's decision-time
- * routing verdict says so, their payload marked `presence` so the window
- * answers the host's request instead of offering Allow and resolveConfirm
- * refuses a window approval; with no presence provider installed they deny.
- * Everything else keeps the window. Built per arm of the request union, so
- * each payload carries exactly its kind's fields: `presence` exists only on
- * the two presence-gated kinds, and a policy_relax payload is structurally
- * page-less. Synchronous on purpose: no await sits between the front-of-queue
- * latch check and the `active` registration below, so a panic can never land
- * "mid-selection" INSIDE the service; the awaits that remain in a decision
- * (the caller-side routing probe, the queue wait) are covered by the
- * decision-start epoch the request carries (ConfirmRequest.panicEpoch). */
+/** The payload and the provider that shows it. `presence: true` is what the window reads to offer the host's
+ * request instead of Allow, and what resolveConfirm refuses a window approval on. Synchronous: presentOne
+ * checks the latch, routes, and registers `active` with no await between, so a panic cannot land mid-selection;
+ * the awaits before that are covered by the request's panicEpoch. */
 function routeFor(
   req: ConfirmRequest,
   common: { id: string; deadline: number },

@@ -9,18 +9,9 @@ import { send } from "@/lib/messages";
 import { ceremonyFailure, refusalSentence } from "@/lib/refusals";
 import { assert, register } from "@/lib/shared/webauthn-ceremony";
 
-// This browser's WebAuthn enrollment: the worker's note of the last credential enrolled here, and the ceremony
-// that enrolls one. The host decides everything (src/packages/core/src/native_host/presence.rs); this page
-// runs the two `navigator.credentials` calls it cannot and shows each step.
-//
-//   fresh machine        enroll_begin -> options -> create -> enroll_finish -> enrolled
-//   enrolled machine     enroll_begin -> presence_required; the pushed request is shown and the user approves it
-//                        with an authenticator already enrolled here; the approved tap is good for 60 s, so the
-//                        page asks again at once and the ceremony continues as above
-//   forget               webauthn_forget -> the host forgets this browser's credentials (its own label, no proof)
-//                        and the worker clears its note; the same act as `genkan revoke <browser>`
-//
-// Every refusal is one sentence (refusals.ts), never a raw code.
+// This browser's WebAuthn enrollment. The host decides everything (src/packages/core/src/native_host/presence.rs);
+// this page runs the two `navigator.credentials` calls a service worker cannot and shows each step. Forget is
+// the twin of `genkan revoke <browser>`: the host acts on its own label, with no proof asked.
 
 type Step =
   | { kind: "idle" }

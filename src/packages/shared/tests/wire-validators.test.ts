@@ -48,28 +48,28 @@ const entry: Frame = {
   added_unix: 1700000000,
 };
 
-// One representative valid frame per generated schema; the harness below derives the hostile variants. The
-// enforced validator runs too: a generator change that silently coerces (z.preprocess) is invisible to the
-// asymmetry gate's structural view and is caught only here, behaviorally.
-//   freeForm          -> fields the CONTRACT leaves unconstrained (BridgeReq.args is validated per-op
-//                        downstream, BridgeResp.data varies per op), so type confusion on them is legal here
-//   enforced          -> the validator the extension actually runs
-//   enforcedStringOk  -> fields where a string is legal on the enforced side only (the id's forward-compat arm)
-//   enforcedStrict    -> enforced validators that must ALSO refuse unknown fields (the envelopes; the control
-//                        frames read loose under the asymmetry table's loose-frames rule)
-//   enforcedRequired  -> fields the enforced side requires beyond the base (policy_current's ok:true arm needs
-//                        baseline); the minimal-frame probe keeps them and proves dropping each fails only there
-const WIRE_CASES: ReadonlyArray<{
+/** One representative valid frame per generated schema; the harness below derives the hostile variants. */
+interface WireCase {
   name: string;
   schema: z.ZodType;
+  /** The validator the extension actually runs. It is probed too: a generator change that silently coerces
+   * (z.preprocess) is invisible to the asymmetry gate's structural view and is caught only here, behaviorally. */
   enforced: z.ZodType;
   valid: Frame;
   required: readonly string[];
+  /** Fields the CONTRACT leaves unconstrained (BridgeReq.args is validated per-op downstream, BridgeResp.data
+   * varies per op), so type confusion on them is legal here. */
   freeForm?: readonly string[];
+  /** Fields where a string is legal on the enforced side only (the id's forward-compat arm). */
   enforcedStringOk?: readonly string[];
+  /** The enforced validator must ALSO refuse unknown fields: the envelopes. The control frames read loose under
+   * the asymmetry table's loose-frames rule. */
   enforcedStrict?: boolean;
+  /** Fields the enforced side requires beyond the base (policy_current's ok:true arm needs baseline). */
   enforcedRequired?: readonly string[];
-}> = [
+}
+
+const WIRE_CASES: ReadonlyArray<WireCase> = [
   {
     name: "BridgeReqWireSchema",
     schema: BridgeReqWireSchema,

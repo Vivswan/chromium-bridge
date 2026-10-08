@@ -7,19 +7,12 @@ import { ceremonyFailure } from "@/lib/refusals";
 import { assert } from "@/lib/shared/webauthn-ceremony";
 
 // One presence-gated act as the options page runs it, whichever panel asked (the kill release, a policy grant or
-// relaxing rollback, a client pairing): the panel posts the message that begins it, the host answers with its
-// presence request, this browser's authenticator signs it, and the answer's verdict is the act's outcome. The
-// panel never claims an outcome itself; the host decides and audits.
-//
-//   begin -> { request: null }   the host applied the act on its free lane; nothing to answer
-//   begin -> { request }         allowed_credential_ids empty -> the window may confirm (the host re-checks that
-//                                when the answer arrives); otherwise this browser's authenticator signs it
-//   begin -> { ok: false }       the host's refusal before any request, in the CLI's words
-//
-// Every state that holds the host's request carries it, so the page can show what the tap or the click
-// approves before the authenticator is asked; WebAuthn's request options have no field for that text (the
-// challenge is the host's statement, which binds it).
+// rollback, a client pairing). The panel never claims an outcome itself: the host decides and audits, and its
+// verdict on this browser's answer is the act's outcome.
 
+/** Every state that holds the host's request carries it, so the page can show what the tap or the click approves
+ * before the authenticator is asked: WebAuthn's request options have no field for that text (the challenge is
+ * the host's statement, which binds it). */
 export type PresenceAct =
   | { kind: "idle" }
   | { kind: "asking" }
@@ -29,7 +22,7 @@ export type PresenceAct =
   | { kind: "refused"; reason: string };
 
 /** How an act began, as the runtime contract answers kill_release, grant_policy, rollback_policy, and
- * pair_client. */
+ * pair_client: `request: null` when the host applied the act on its free lane, with nothing to answer. */
 export type ActBegun = { ok: true; request: PresenceRequestFrame | null } | Refusal;
 
 /** The states in which the host holds an act the page has not settled: the controls that could start another
