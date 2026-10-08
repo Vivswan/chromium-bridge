@@ -20,7 +20,7 @@ use crate::browsers::{self, BaseDirs, ExtensionPointer, Lookup, Os, Scope, Scope
 use crate::cli::DoctorCommand;
 use crate::identity::NATIVE_HOST_ID;
 use crate::ipc::{LockFile, RuntimeDir};
-use crate::policy::{PolicyStatusReport, PolicyStoreState};
+use crate::policy::{PolicyStatusReport, PolicyStoreState, PRE_CUTOVER_STORE_NOTE};
 use crate::protocol::control::{DoctorRow, HealthReport};
 use crate::registration::{self, PointerState, RegState};
 
@@ -241,10 +241,7 @@ impl Report {
     /// unsigned, never valid or invalid, since the host never self-certifies the signature.
     fn policy_row(&self) -> DoctorRow {
         match &self.policy {
-            PolicyStatusReport::None { .. } => DoctorRow::new(
-                "none yet (pre-cutover; the extension keeps enforcing its deny baseline until \
-                 `chromium-bridge policy set` signs a baseline)",
-            ),
+            PolicyStatusReport::None { .. } => DoctorRow::new(PRE_CUTOVER_STORE_NOTE),
             PolicyStatusReport::Present {
                 revision,
                 signed,
@@ -774,6 +771,9 @@ mod tests {
         let r = healthy_report();
         let text = render(&r);
         assert!(text.contains("policy baseline: none yet"));
+        // Both surfaces that can sign the first baseline are named, the same words `policy show` prints.
+        assert!(text.contains("`chromium-bridge policy set`"), "{text}");
+        assert!(text.contains("options page"), "{text}");
         assert!(text.trim_end().ends_with("OK"));
         assert_eq!(exit_code(&r), 0);
     }

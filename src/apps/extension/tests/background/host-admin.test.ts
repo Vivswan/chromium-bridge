@@ -4,34 +4,47 @@
 // resolver read, the fix, the restriction seam, the trail reader) is covered by the Rust unit tests.
 
 import type { AuditTrailEntry, RegistrationRow } from "@chromium-bridge/shared/generated/envelope";
+import { POLICY_DEFAULTS } from "@chromium-bridge/shared/generated/policy";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   collaborator,
   handleHostAdminFrame,
   repairRegistration,
   requestHostAudit,
+  requestPolicyHistory,
   requestRegistrationStatus,
   restrictPolicy,
 } from "@/lib/background/host-admin";
+import {
+  assertPresence,
+  beginAct,
+  handleWebAuthnFrame,
+  resetWebAuthnForTests,
+  collaborator as webauthn,
+} from "@/lib/webauthn/exchange";
 import { attach } from "./fake-connection";
 
 let posted: Array<Record<string, unknown>>;
 
 function reattach(): void {
-  attach(collaborator, (frame) => {
+  const post = (frame: object) => {
     posted.push(frame as Record<string, unknown>);
     return true;
-  });
+  };
+  attach(collaborator, post);
+  attach(webauthn, post);
 }
 
 beforeEach(() => {
   posted = [];
   collaborator.onDetach();
+  resetWebAuthnForTests();
   reattach();
 });
 
 afterEach(() => {
   collaborator.onDetach();
+  resetWebAuthnForTests();
   vi.useRealTimers();
 });
 
@@ -126,17 +139,28 @@ describe("registration status and repair (one shared slot)", () => {
 });
 
 describe("host audit trail", () => {
-  test("posts a limitless audit_read (the CLI's default page) and resolves with the host's page", async () => {
-    const p = requestHostAudit();
-    expect(posted).toEqual([{ type: "audit_read" }]);
-    handleHostAdminFrame(trailResult);
-    await expect(p).resolves.toEqual({
-      ok: true,
-      entries: TRAIL,
-      older: 1,
-      path: "/run/user/1000/chromium-bridge/audit.log",
-    });
-  });
+  // A limitless read is the CLI's default page; a named limit is `audit --limit <n>` on the frame.
+  test.each([
+    { name: "limitless", request: () => requestHostAudit(), frame: { type: "audit_read" } },
+    {
+      name: "limit 600",
+      request: () => requestHostAudit(600),
+      frame: { type: "audit_read", limit: 600 },
+    },
+  ])(
+    "a $name read posts its frame and resolves with the host's page",
+    async ({ request, frame }) => {
+      const p = request();
+      expect(posted).toEqual([frame]);
+      handleHostAdminFrame(trailResult);
+      await expect(p).resolves.toEqual({
+        ok: true,
+        entries: TRAIL,
+        older: 1,
+        path: "/run/user/1000/chromium-bridge/audit.log",
+      });
+    },
+  );
 
   test("an unreadable trail is the host's error text, and a page beside an error is refused", async () => {
     const unreadable = requestHostAudit();
@@ -197,8 +221,133 @@ describe("the slots are independent", () => {
   });
 });
 
+describe("the grant lanes behind the presence exchange", () => {
+  const request = {
+    type: "presence_request",
+    challenge: "cHJlc2VuY2U",
+    nonce: "nonce-0002",
+    action: "set policy: pageEvalEnabled=on",
+    allowed_credential_ids: ["Y3JlZC1h"],
+  };
+  const answer = {
+    nonce: "nonce-0002",
+    credential_id: "Y3JlZC1h",
+    authenticator_data: "YXV0aA",
+    client_data_json: "Y2Rq",
+    signature: "c2ln",
+  };
+
+  test("a grant posts the overlay, is answered by the presence request, and its verdict follows the tap", async () => {
+    const begun = beginAct({ type: "policy_set", overlay: { pageEvalEnabled: true } });
+    expect(posted).toEqual([{ type: "policy_set", overlay: { pageEvalEnabled: true } }]);
+    handleWebAuthnFrame(request as never);
+    await expect(begun).resolves.toEqual({ ok: true, request });
+    const answered = assertPresence(answer);
+    handleWebAuthnFrame({ type: "presence_result", ok: true });
+    handleHostAdminFrame({ type: "policy_set_result", ok: true });
+    await expect(answered).resolves.toEqual({ ok: true });
+  });
+
+  test("a grant the host refuses before any request resolves with the host's words", async () => {
+    const begun = beginAct({ type: "policy_set", overlay: { cdpMode: true } });
+    handleHostAdminFrame({
+      type: "policy_set_result",
+      ok: false,
+      error:
+        "no host key on this machine; a policy grant is a signed baseline and refuses without one (pair first)",
+    });
+    expect(failed(await begun).error).toBe(
+      "no host key on this machine; a policy grant is a signed baseline and refuses without one (pair first)",
+    );
+  });
+
+  test("a rollback the host applies free resolves with no request; one that relaxes waits for the tap", async () => {
+    const free = beginAct({ type: "policy_rollback", revision: 1 });
+    expect(posted).toEqual([{ type: "policy_rollback", revision: 1 }]);
+    handleHostAdminFrame({ type: "policy_rollback_result", ok: true });
+    await expect(free).resolves.toEqual({ ok: true, request: null });
+
+    const relaxing = beginAct({ type: "policy_rollback", revision: 2 });
+    const rollbackRequest = {
+      ...request,
+      action: "roll policy back to revision 2: pageEvalEnabled=on",
+    };
+    handleWebAuthnFrame(rollbackRequest as never);
+    await expect(relaxing).resolves.toEqual({ ok: true, request: rollbackRequest });
+    const answered = assertPresence(answer);
+    handleWebAuthnFrame({ type: "presence_result", ok: true });
+    handleHostAdminFrame({
+      type: "policy_rollback_result",
+      ok: false,
+      error: "the policy store changed while this write was pending",
+    });
+    expect(failed(await answered).error).toContain("changed while this write was pending");
+  });
+
+  test("a verdict the typed producer cannot emit is a refusal naming the frame, never a success", async () => {
+    const begun = beginAct({ type: "policy_set", overlay: { cdpMode: true } });
+    handleHostAdminFrame({ type: "policy_set_result", ok: true, error: "boom" } as never);
+    expect(failed(await begun).error).toBe("malformed policy_set_result from host");
+  });
+});
+
+describe("policy history", () => {
+  test("round-trips the ring as the host reports it, and a refusal as its error", async () => {
+    const entries = [
+      {
+        id: "a1",
+        signed: true,
+        overlay_active: false,
+        superseded_unix: 20,
+        held: { revision: 2, effective: POLICY_DEFAULTS },
+      },
+      { id: "b2", signed: false, overlay_active: true, superseded_unix: 21 },
+    ];
+    const p = requestPolicyHistory();
+    expect(posted).toEqual([{ type: "policy_history" }]);
+    handleHostAdminFrame({ type: "policy_history_result", ok: true, entries });
+    await expect(p).resolves.toEqual({ ok: true, entries });
+    // A record's revision and the policy it held are one value: a row carrying one without the other is not
+    // the host's frame, so no reader downstream has to decide what half a record means.
+    for (const held of [{ revision: 2 }, { effective: POLICY_DEFAULTS }]) {
+      const half = requestPolicyHistory();
+      handleHostAdminFrame({
+        type: "policy_history_result",
+        ok: true,
+        entries: [{ ...entries[1], held }],
+      } as never);
+      expect(failed(await half).error).toBe("malformed policy_history_result from host");
+    }
+    const refused = requestPolicyHistory();
+    handleHostAdminFrame({
+      type: "policy_history_result",
+      ok: false,
+      error: "the policy history is unreadable",
+    });
+    expect(failed(await refused).error).toBe("the policy history is unreadable");
+  });
+
+  test("a row the host could not date is accepted as damaged; a timestamp past the JS-safe bound still fails the frame", async () => {
+    // The host omits a timestamp it cannot represent (with what the record held) rather than emitting a number
+    // the safe-integers reader rule refuses, so one damaged record no longer sinks every readable row. The rule
+    // itself stays: a frame carrying such a number is not the host's.
+    const dated = { id: "b2", signed: false, overlay_active: true, superseded_unix: 21 };
+    const undated = { id: "c3", signed: true, overlay_active: false };
+    const p = requestPolicyHistory();
+    handleHostAdminFrame({ type: "policy_history_result", ok: true, entries: [undated, dated] });
+    await expect(p).resolves.toEqual({ ok: true, entries: [undated, dated] });
+    const past = requestPolicyHistory();
+    handleHostAdminFrame({
+      type: "policy_history_result",
+      ok: true,
+      entries: [{ ...dated, superseded_unix: Number.MAX_SAFE_INTEGER + 1 }],
+    });
+    expect(failed(await past).error).toBe("malformed policy_history_result from host");
+  });
+});
+
 describe("fail-closed: every unanswered or unusable exchange resolves to a refusal", () => {
-  // One axis varies (how the reply fails to arrive or to parse); both exchanges take every row.
+  // One axis varies (how the reply fails to arrive or to parse); every exchange takes every row.
   const exchanges = [
     { name: "status", request: requestRegistrationStatus, reply: rowsResult },
     {
@@ -207,6 +356,11 @@ describe("fail-closed: every unanswered or unusable exchange resolves to a refus
       reply: { type: "policy_restrict_result" as const, ok: true },
     },
     { name: "audit", request: requestHostAudit, reply: trailResult },
+    {
+      name: "history",
+      request: requestPolicyHistory,
+      reply: { type: "policy_history_result" as const, ok: true, entries: [] },
+    },
   ];
   const failures = [
     {

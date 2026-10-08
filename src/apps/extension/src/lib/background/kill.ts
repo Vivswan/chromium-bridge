@@ -30,7 +30,7 @@ import pLimit from "p-limit";
 import { browser } from "wxt/browser";
 import { inLife } from "../shared/in-life";
 import { readKey, readKeyOr, type Stored } from "../shared/read-key";
-import { claimKillRelease, type PresenceAssertView } from "../webauthn/exchange";
+import { claimAct, type PresenceAssertView } from "../webauthn/exchange";
 import { auditEvent } from "./audit-log";
 import { advance, engageOutstanding, resetBrakeForTests, stampArrival } from "./brake";
 import type { PortCollaborator } from "./connection";
@@ -219,8 +219,8 @@ const frames = inLife(() => pLimit(1));
  * why). */
 export function handleKillFrame(msg: KillStatusResult): Promise<void> {
   const seq = stampArrival();
-  // Claimed at arrival, like the stamp (exchange.ts claimKillRelease says why).
-  const settleRelease = claimKillRelease(msg);
+  // Claimed at arrival, like the stamp (exchange.ts claimAct says why).
+  const settleRelease = claimAct("kill_status_result", msg);
   return frames
     .value(() => handleOneKillFrame(msg, seq, settleRelease))
     .catch((e) => {

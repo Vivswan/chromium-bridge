@@ -10,13 +10,15 @@
 //! The on-disk store and the two write seams live in [`store`]:
 //! [`PolicyStore`] / [`PolicyHistory`] (fail-closed loads, atomic
 //! runtime-locked writes), and [`set_signed`] / [`restrict`], the only
-//! mutation paths every editing surface shares. The host-side dispatch gate
+//! mutation paths every editing surface shares; a rollback's writes are the
+//! same seams held to the store the plan was read over. The host-side dispatch gate
 //! lives in [`gating`]. Owned elsewhere: the signing domain and the host key
 //! ([`crate::enclave`]), the presence attestation a grant consumes
 //! ([`crate::presence`]), and the control frames that carry the document
 //! (`crate::protocol`).
 
 mod cli;
+mod plan;
 mod store;
 
 pub mod gating;
@@ -24,10 +26,16 @@ pub mod gating;
 pub use cli::{
     gather_history_report, gather_policy_status, run_policy, PolicyErrorReport,
     PolicyHistoryEntryReport, PolicyHistoryReport, PolicyStatusReport, PolicyStoreState,
+    PRE_CUTOVER_STORE_NOTE,
+};
+pub use plan::{
+    audit_grant_refused, plan_grant, refused_grant, rollback_inputs, touched_fields, wire_names,
+    Grant, HeldPolicy, HistoryEntryRef, RollbackInputs, RollbackPlan,
 };
 pub use store::{
-    clear_baseline_locked, restrict, set_signed, PolicyHistory, PolicyHistoryEntry, PolicyStore,
-    PolicyWriteError,
+    clear_baseline_locked, confirm_unmoved, prepare_grant, restrict, restrict_planned, set_signed,
+    PolicyHistory, PolicyHistoryEntry, PolicyStore, PolicyWriteError, PreparedGrant,
+    StoreObservation,
 };
 
 use serde::{Deserialize, Serialize};
@@ -72,6 +80,9 @@ pub(crate) fn validate_disabled_tools(tools: &[String]) -> Result<(), &'static s
         .any(|t| t.is_empty() || t.len() > DISABLED_TOOL_NAME_MAX_BYTES)
     {
         return Err("a disabledTools entry is empty or longer than 128 bytes");
+    }
+    if tools.iter().any(|t| t.contains('\0')) {
+        return Err("a disabledTools entry contains a NUL byte");
     }
     if tools.iter().any(|t| t.contains(',')) {
         return Err(
@@ -277,7 +288,9 @@ macro_rules! policy_fields {
         ///
         /// Its own `deny_unknown_fields` is load-bearing: serde does NOT inherit a container attribute from an
         /// embedding type, so without it an unknown field inside a report's `effective` would parse silently.
-        #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+        /// Equality is the lattice's ([`field_differs`]), implemented below, never derived.
+        #[derive(Debug, Clone, Serialize, Deserialize)]
+        #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
         #[serde(deny_unknown_fields)]
         pub struct PolicyValues {
             $(#[serde(rename = $bw)] pub $bf: bool,)+
@@ -655,6 +668,19 @@ fn field_relaxes(field: PolicyField, candidate: &PolicyValues, anchor: &PolicyVa
 pub(crate) fn field_differs(field: PolicyField, a: &PolicyValues, b: &PolicyValues) -> bool {
     field_relaxes(field, a, b) || field_relaxes(field, b, a)
 }
+
+/// Two policies are equal when no field differs under the lattice: the tool list compares as the set it is
+/// everywhere else, every other field exactly. The one equality every containing type inherits, since a
+/// vector's identity is not a policy's.
+impl PartialEq for PolicyValues {
+    fn eq(&self, other: &Self) -> bool {
+        PolicyField::ALL
+            .iter()
+            .all(|f| !field_differs(*f, self, other))
+    }
+}
+
+impl Eq for PolicyValues {}
 
 /// Whether `candidate` moves ANY field toward its permissive pole relative
 /// to `anchor` (the current effective policy). A relaxation is a capability

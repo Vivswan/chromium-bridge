@@ -65,12 +65,12 @@ Chrome 按主机清单派生主机, 清单的 `allowed_origins` 固定了扩展 
 | 家族 | 来自扩展 | 来自主机 |
 | --- | --- | --- |
 | 主机密钥 | `enclave_challenge`、`enclave_revoke` | `enclave_proof`、`enclave_error` (没有密钥时为 `not_enrolled`)、`enclave_revoked` |
-| 客户端管理 | `client_list`、`client_revoke` | `client_list_result`、`client_revoke_result` |
+| 客户端管理 | `client_list`、`client_revoke`、`client_pair` | `client_list_result`、`client_revoke_result`、`client_pair_result`; `client_pair` 先打开在场交换 |
 | 紧急开关 | `kill_status`、`kill_engage`、`kill_release` | `kill_status_result` |
 | WebAuthn | `enroll_begin`、`enroll_finish`、`presence_begin`、`presence_assert`、`presence_confirm`、`browser_revoke` | `enroll_options`、`enroll_result`、`presence_request`、`presence_result`、`browser_revoke_result` |
 | 注册 | `registration_status`、`registration_repair` | `registration_status_result` |
 | 健康报告 | `doctor_report` | `doctor_report_result` |
-| 策略与语言 | `policy_get`、`policy_restrict`、`lang_get`、`lang_set` | `policy_current`、`policy_restrict_result`、`lang_current` |
+| 策略与语言 | `policy_get`、`policy_restrict`、`policy_set`、`policy_history`、`policy_rollback`、`lang_get`、`lang_set` | `policy_current`、`policy_restrict_result`、`policy_set_result`、`policy_history_result`、`policy_rollback_result`、`lang_current`; `policy_set` 与放宽的 `policy_rollback` 先打开在场交换 |
 | 审计 | `audit_event` (即发即忘)、`audit_read` | `audit_read_result` |
 
 - **`audit_event`** 受种类白名单限制 (只允许扩展拥有的确认与登记种类), 且由主机自行标记来源界面, 因此浏览器一侧无法向审计日志伪造主机侧事件。

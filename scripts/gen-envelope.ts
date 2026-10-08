@@ -649,6 +649,7 @@ export const READER_FRAMES: Record<
       wire: "ClientRevokeResultWireSchema",
       enforced: "ClientRevokeResultSchema",
     },
+    client_pair_result: { wire: "ClientPairResultWireSchema", enforced: "ClientPairResultSchema" },
     kill_status_result: { wire: "KillStatusResultWireSchema", enforced: "KillStatusResultSchema" },
     registration_status_result: {
       wire: "RegistrationStatusResultWireSchema",
@@ -665,6 +666,15 @@ export const READER_FRAMES: Record<
     policy_restrict_result: {
       wire: "PolicyRestrictResultWireSchema",
       enforced: "PolicyRestrictResultSchema",
+    },
+    policy_set_result: { wire: "PolicySetResultWireSchema", enforced: "PolicySetResultSchema" },
+    policy_rollback_result: {
+      wire: "PolicyRollbackResultWireSchema",
+      enforced: "PolicyRollbackResultSchema",
+    },
+    policy_history_result: {
+      wire: "PolicyHistoryResultWireSchema",
+      enforced: "PolicyHistoryResultSchema",
     },
     lang_current: { wire: "LangCurrentWireSchema", enforced: "LangCurrentFrameSchema" },
   },
@@ -700,6 +710,7 @@ export const WRITER_FRAMES: Record<Group, Readonly<Record<string, string>>> = {
   admin: {
     client_list: "ClientListWireSchema",
     client_revoke: "ClientRevokeWireSchema",
+    client_pair: "ClientPairWireSchema",
     kill_status: "KillStatusWireSchema",
     kill_engage: "KillEngageWireSchema",
     kill_release: "KillReleaseWireSchema",
@@ -712,6 +723,9 @@ export const WRITER_FRAMES: Record<Group, Readonly<Record<string, string>>> = {
   policy: {
     policy_get: "PolicyGetWireSchema",
     policy_restrict: "PolicyRestrictWireSchema",
+    policy_set: "PolicySetWireSchema",
+    policy_history: "PolicyHistoryWireSchema",
+    policy_rollback: "PolicyRollbackWireSchema",
     lang_set: "LangSetWireSchema",
     lang_get: "LangGetWireSchema",
   },
@@ -995,6 +1009,14 @@ async function main(): Promise<void> {
       wire: "HealthReportWireSchema",
       enforced: "HealthReportSchema",
       doc: "The health report (protocol::control::HealthReport), embedded as doctor_report_result's `report`.",
+    },
+    {
+      group: "policy",
+      tag: "policy_history_result",
+      field: "entries",
+      wire: "PolicyHistoryRowWireSchema",
+      enforced: "PolicyHistoryRowSchema",
+      doc: "One superseded policy record (protocol::control::PolicyHistoryRow), embedded in policy_history_result's `entries` array.",
     },
   ] as const satisfies readonly {
     group: Group;

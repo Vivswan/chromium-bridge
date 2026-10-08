@@ -35,9 +35,13 @@ export const EnclaveInboundFrameSchema = z.looseObject({
 
 export type EnclaveInboundFrame = z.infer<typeof EnclaveInboundFrameSchema>;
 
-// The admin replies the host sends back. Requests (client_list / client_revoke) are outbound only and never
-// classify inbound; kill_status_result classifies by full parse (isKillStatusFrame).
-export const ADMIN_RESULT_FRAME_TYPES = ["client_list_result", "client_revoke_result"] as const;
+// The admin replies the host sends back. Requests (client_list / client_revoke / client_pair) are outbound only
+// and never classify inbound; kill_status_result classifies by full parse (isKillStatusFrame).
+export const ADMIN_RESULT_FRAME_TYPES = [
+  "client_list_result",
+  "client_revoke_result",
+  "client_pair_result",
+] as const;
 
 export const AdminInboundFrameSchema = z.looseObject({
   type: z.enum(ADMIN_RESULT_FRAME_TYPES),

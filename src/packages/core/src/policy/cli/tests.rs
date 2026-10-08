@@ -1,6 +1,6 @@
 use super::*;
 use crate::enclave::base64_encode;
-use crate::policy::Ms;
+use crate::policy::PolicyDoc;
 use crate::test_support::scratch_runtime_dir;
 
 /// The grant lane's order: the terminal witness, then the host key. With the witness refused (a piped stdin)
@@ -126,12 +126,14 @@ fn history_report_maps_entries_and_tolerates_a_damaged_one() {
     use super::super::PolicyHistoryEntry;
     let good = PolicyDoc {
         revision: 5,
+        page_eval_enabled: true,
         ..PolicyDoc::default()
     };
+    let good_b64 = base64_encode(&serde_json::to_vec(&good).unwrap());
     let history = PolicyHistory {
         entries: vec![
             PolicyHistoryEntry {
-                baseline_b64: base64_encode(&serde_json::to_vec(&good).unwrap()),
+                baseline_b64: good_b64.clone(),
                 sig_b64: Some(base64_encode(b"s")),
                 key_id: None,
                 overlay: Some(PolicyOverlay {
@@ -147,175 +149,50 @@ fn history_report_maps_entries_and_tolerates_a_damaged_one() {
                 overlay: None,
                 superseded_unix: 222,
             },
+            // A readable baseline under an overlay the policy's own bounds refuse: the ring's parse admits
+            // it, so the report must, or the extension's reader would refuse the whole frame over one row.
+            PolicyHistoryEntry {
+                baseline_b64: good_b64,
+                sig_b64: None,
+                key_id: None,
+                overlay: Some(PolicyOverlay {
+                    disabled_tools: Some(vec![String::new()]),
+                    ..PolicyOverlay::default()
+                }),
+                superseded_unix: 333,
+            },
         ],
     };
     let r = history_report(&history);
-    assert_eq!(r.entries[0].revision, Some(5));
+    assert_eq!(r.entries.len(), 3);
+    assert_eq!(r.entries[2].held, None);
     assert!(r.entries[0].signed);
     assert!(r.entries[0].overlay_active);
-    // A damaged entry keeps its slot with a null revision.
-    assert_eq!(r.entries[1].revision, None);
+    // The effective policy is the baseline under its overlay: pageEval restricted back off.
+    assert_eq!(
+        r.entries[0].held,
+        Some(HeldPolicy {
+            revision: 5,
+            effective: PolicyValues {
+                page_eval_enabled: false,
+                ..good.values()
+            },
+        })
+    );
+    // A damaged entry keeps its slot holding nothing.
+    assert_eq!(r.entries[1].held, None);
     assert!(!r.entries[1].signed);
     assert_eq!(r.entries[1].superseded_unix, 222);
-}
-
-#[test]
-fn a_tightening_rollback_uses_the_free_lane() {
-    // current has pageEval ON; target (a past revision) has it OFF: rolling
-    // back only tightens, so it rides the free restrict lane. Rolling back onto the current state is no plan.
-    let current = PolicyValues {
-        page_eval_enabled: true,
-        ..PolicyValues::default()
-    };
-    let target = PolicyValues::default();
-    assert_eq!(
-        plan_rollback(&current, &current, &current),
-        RollbackPlan::NoChange
-    );
-    let plan = plan_rollback(&target, &current, &current);
-    let RollbackPlan::Tighten { overlay, fields } = plan else {
-        panic!("expected Tighten, got {plan:?}");
-    };
-    assert_eq!(fields, vec![PolicyField::PageEvalEnabled]);
-    assert_eq!(overlay.page_eval_enabled, Some(false));
-    // Folding the diff overlay over current lands exactly on target.
-    assert_eq!(fold(&current, &overlay), target);
-}
-
-#[test]
-fn a_relaxing_rollback_takes_the_signed_lane_with_the_changed_fields_touched() {
-    // The current baseline and effective differ on confirmGraceMs (a
-    // restriction overlay holds it at 30000 under a 45000 baseline).
-    // Target (past revision) relaxes pageEval and evalMask but leaves
-    // confirmGraceMs at its current effective value, so the plan must
-    // build the fresh baseline over the CURRENT baseline - never the
-    // historical effective wholesale - with only the changed fields
-    // touched.
-    let baseline = PolicyValues {
-        confirm_grace_ms: Ms::from(45_000u32),
-        ..PolicyValues::default()
-    };
-    // The overlay restricts confirmGraceMs to 30000, so effective differs
-    // from baseline on a field the rollback does NOT change.
-    let current = PolicyValues {
-        confirm_grace_ms: Ms::from(30_000u32),
-        ..PolicyValues::default()
-    };
-    let target = PolicyValues {
-        page_eval_enabled: true,
-        confirm_grace_ms: Ms::from(30_000u32), // unchanged vs current effective
-        eval_mask: false,                      // also relax a second field
-        ..PolicyValues::default()
-    };
-    let plan = plan_rollback(&target, &current, &baseline);
-    let RollbackPlan::Relax {
-        values,
-        touched,
-        fields,
-    } = plan
-    else {
-        panic!("expected Relax, got {plan:?}");
-    };
-    // Changed fields carry the target value; untouched fields
-    // carry the BASELINE value, so the overlay entry
-    // on confirmGraceMs survives the write instead of being
-    // silently folded into the signed baseline.
-    assert!(values.page_eval_enabled);
-    assert!(!values.eval_mask);
-    assert_eq!(values.confirm_grace_ms, Ms::from(45_000u32));
-    assert!(touched.contains(&PolicyField::PageEvalEnabled));
-    assert!(touched.contains(&PolicyField::EvalMask));
-    assert!(!touched.contains(&PolicyField::ConfirmGraceMs));
-    assert_eq!(touched, fields);
-}
-
-#[test]
-fn diff_overlay_treats_disabled_tools_as_a_set() {
-    let a = PolicyValues {
-        disabled_tools: vec!["x".into(), "y".into()],
-        ..PolicyValues::default()
-    };
-    let b = PolicyValues {
-        disabled_tools: vec!["y".into(), "x".into()],
-        ..PolicyValues::default()
-    };
-    // Reordered but equal as sets: no diff.
-    let (_, fields) = diff_overlay(&a, &b);
-    assert!(fields.is_empty());
-    // A genuinely different set diffs.
-    let c = PolicyValues {
-        disabled_tools: vec!["x".into()],
-        ..PolicyValues::default()
-    };
-    let (_, fields) = diff_overlay(&a, &c);
-    assert_eq!(fields, vec![PolicyField::DisabledTools]);
-}
-
-#[test]
-fn find_history_effective_folds_the_target_and_reports_misses() {
-    use super::super::PolicyHistoryEntry;
-    let doc = PolicyDoc {
-        revision: 4,
-        page_eval_enabled: true,
-        ..PolicyDoc::default()
-    };
-    let history = PolicyHistory {
-        entries: vec![PolicyHistoryEntry {
-            baseline_b64: base64_encode(&serde_json::to_vec(&doc).unwrap()),
-            sig_b64: None,
-            key_id: None,
-            overlay: Some(PolicyOverlay {
-                page_eval_enabled: Some(false),
-                ..PolicyOverlay::default()
-            }),
-            superseded_unix: 1,
-        }],
-    };
-    // The target effective folds the entry's overlay over its baseline.
-    let effective = find_history_effective(&history, 4).unwrap();
-    assert!(!effective.page_eval_enabled);
-    // A miss names the available revisions.
-    let err = find_history_effective(&history, 9).unwrap_err();
-    assert!(err.contains("available revisions: [4]"));
-}
-
-#[test]
-fn find_history_effective_refuses_an_ambiguous_revision() {
-    use super::super::PolicyHistoryEntry;
-    // Every restriction while a baseline is current pushes a history
-    // entry at the UNCHANGED revision, so one revision can name several
-    // distinct effective states. Rolling back must land exactly one.
-    let doc = PolicyDoc {
-        revision: 4,
-        page_eval_enabled: true,
-        ..PolicyDoc::default()
-    };
-    let baseline_b64 = base64_encode(&serde_json::to_vec(&doc).unwrap());
-    let entry = |overlay| PolicyHistoryEntry {
-        baseline_b64: baseline_b64.clone(),
-        sig_b64: None,
-        key_id: None,
-        overlay,
-        superseded_unix: 1,
-    };
-    let history = PolicyHistory {
-        entries: vec![
-            entry(None),
-            entry(Some(PolicyOverlay {
-                page_eval_enabled: Some(false),
-                ..PolicyOverlay::default()
-            })),
-        ],
-    };
-    let err = find_history_effective(&history, 4).unwrap_err();
-    assert!(err.contains("ambiguous"), "got: {err}");
-    // Identical duplicates are NOT ambiguous: same effective state.
-    let history = PolicyHistory {
-        entries: vec![entry(None), entry(None)],
-    };
+    // The prose names each row's record and the policy it held, so two records at one revision read apart.
+    let text = render_history(&r);
     assert!(
-        find_history_effective(&history, 4)
-            .unwrap()
-            .page_eval_enabled
+        text.contains(&format!("entry={} effective=cdpMode=off,", r.entries[0].id)),
+        "{text}"
     );
+    assert!(text.contains("pageEvalEnabled=off,"), "{text}");
+    assert!(
+        text.contains("revision ?      unsigned no-overlay superseded_unix=222 entry="),
+        "{text}"
+    );
+    assert!(text.contains(" effective=?\n"), "{text}");
 }

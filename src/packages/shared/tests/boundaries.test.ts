@@ -5,7 +5,13 @@ import { describe, expect, test } from "bun:test";
 import { z } from "zod";
 import { EnclaveProofFrameSchema } from "../generated/envelope";
 import { CompromisedMarkSchema, EnclaveInboundFrameSchema, EnclavePinSchema } from "../src/enclave";
-import { RUNTIME_CONTRACT, RuntimeMsgSchema, type RuntimeMsgType } from "../src/runtime-msg";
+import {
+  anchorFault,
+  ClientAnchorSchema,
+  RUNTIME_CONTRACT,
+  RuntimeMsgSchema,
+  type RuntimeMsgType,
+} from "../src/runtime-msg";
 import { AllowlistSchema, PendingApprovalsSchema } from "../src/storage";
 
 // The router's one parse is all that stands between an extension-page message and a trust-state mutation; a
@@ -62,6 +68,59 @@ describe("RuntimeMsgSchema", () => {
     ],
     revoke_client: [
       { name: "with a non-label name", msg: { type: "revoke_client", name: "../etc" } },
+    ],
+    // The host refuses these at its frame parse without touching its pending presence slot, so the page
+    // must refuse them first (runtime-msg.ts ClientAnchorSchema says why).
+    pair_client: [
+      {
+        name: "with a hash anchor outside the digest grammar",
+        msg: { type: "pair_client", name: "codex", anchor: { kind: "hash", value: "zz" } },
+      },
+      {
+        name: "with an uppercase hash anchor",
+        msg: {
+          type: "pair_client",
+          name: "codex",
+          anchor: { kind: "hash", value: "A".repeat(40) },
+        },
+      },
+      {
+        name: "with an empty signer anchor",
+        msg: { type: "pair_client", name: "codex", anchor: { kind: "signer", value: "" } },
+      },
+      {
+        name: "with a NUL inside the signer anchor",
+        msg: { type: "pair_client", name: "codex", anchor: { kind: "signer", value: "A\u0000B" } },
+      },
+      {
+        name: "with an unpaired high surrogate as the signer anchor",
+        msg: { type: "pair_client", name: "codex", anchor: { kind: "signer", value: "\uD800" } },
+      },
+      {
+        name: "with an unpaired low surrogate inside the signer anchor",
+        msg: { type: "pair_client", name: "codex", anchor: { kind: "signer", value: "A\uDC00B" } },
+      },
+      {
+        name: "with an anchor kind the host has no parser for",
+        msg: { type: "pair_client", name: "codex", anchor: { kind: "parent", value: "x" } },
+      },
+    ],
+    grant_policy: [
+      {
+        name: "with a field the catalogue does not own",
+        msg: { type: "grant_policy", overlay: { unknownField: true } },
+      },
+    ],
+    rollback_policy: [
+      {
+        name: "with a negative revision",
+        msg: { type: "rollback_policy", revision: -1, entry: { id: "a1" } },
+      },
+      { name: "without the listed row", msg: { type: "rollback_policy", revision: 1 } },
+      {
+        name: "with a row named by something other than its id",
+        msg: { type: "rollback_policy", revision: 1, entry: { index: 1 } },
+      },
     ],
     set_kill: [
       {
@@ -132,6 +191,12 @@ describe("RuntimeMsgSchema", () => {
       { name: "with a non-object overlay", msg: { type: "restrict_policy", overlay: "deny" } },
     ],
     lang_choose: [{ name: "outside the enum", msg: { type: "lang_choose", value: "fr" } }],
+    // The host's frame parse refuses these too, after the exchange slot is taken; here they never post.
+    get_host_audit: [
+      { name: "with a zero limit", msg: { type: "get_host_audit", limit: 0 } },
+      { name: "with a limit over the frame's cap", msg: { type: "get_host_audit", limit: 1001 } },
+      { name: "with a fractional limit", msg: { type: "get_host_audit", limit: 2.5 } },
+    ],
   };
 
   test("every field-bearing request has a malformed-field case, and only those", () => {
@@ -145,6 +210,33 @@ describe("RuntimeMsgSchema", () => {
   )("refuses $type $name", ({ msg }) => {
     expect(RuntimeMsgSchema.safeParse(msg).success).toBe(false);
   });
+});
+
+// The page shows the CLI's sentence for the fault the host's SignerId grammar names (ipc::identity), so the
+// fault must be told apart here, not folded into one refusal; and a value no terminal can type (an unpaired
+// UTF-16 surrogate) is refused before the host's JSON reader would close the connection over it, while a
+// paired surrogate is ordinary text. Well-formedness is the platform's own judgment (String.isWellFormed).
+describe("ClientAnchorSchema", () => {
+  test.each([
+    { kind: "hash", value: "zz", fault: "hash_grammar" },
+    { kind: "signer", value: "", fault: "signer_empty" },
+    { kind: "signer", value: "A\u0000B", fault: "signer_nul" },
+    { kind: "signer", value: "\uD800", fault: "signer_ill_formed" },
+    { kind: "signer", value: "A\uDC00B", fault: "signer_ill_formed" },
+  ] as const)("names the fault of $kind $value", ({ kind, value, fault }) => {
+    const result = ClientAnchorSchema.safeParse({ kind, value });
+    expect(result.success ? "accepted" : anchorFault(result.error)).toBe(fault);
+  });
+
+  test.each(["TEAMID", "\uD83D\uDE00 Corp", "Developer ID: Example"])(
+    "accepts signer %j",
+    (value) => {
+      expect(ClientAnchorSchema.safeParse({ kind: "signer", value })).toEqual({
+        success: true,
+        data: { kind: "signer", value },
+      });
+    },
+  );
 });
 
 describe("enclave frame schemas", () => {

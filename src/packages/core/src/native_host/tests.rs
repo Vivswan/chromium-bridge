@@ -435,10 +435,16 @@ fn policy_restrict_tightens_the_store_and_refuses_a_relaxation() {
     let _dir = scratch_runtime_dir();
     signed_baseline_granting_page_eval();
 
-    let tightened = policy_restrict_replies(crate::policy::PolicyOverlay {
-        page_eval_enabled: Some(false),
-        ..Default::default()
-    });
+    let tightened = restrict_replies(
+        crate::policy::restrict(
+            crate::policy::PolicyOverlay {
+                page_eval_enabled: Some(false),
+                ..Default::default()
+            },
+            crate::audit::Surface::Extension,
+        ),
+        WriteLane::PolicyRestrict,
+    );
     assert_eq!(
         serde_json::to_value(&tightened[0]).unwrap(),
         serde_json::json!({ "type": "policy_restrict_result", "ok": true })
@@ -452,14 +458,20 @@ fn policy_restrict_tightens_the_store_and_refuses_a_relaxation() {
     };
     assert_eq!(overlay.page_eval_enabled, Some(false));
 
-    let relaxed = policy_restrict_replies(crate::policy::PolicyOverlay {
-        page_eval_enabled: Some(true),
-        ..Default::default()
-    });
-    let [PolicyControl::PolicyRestrictResult {
+    let relaxed = restrict_replies(
+        crate::policy::restrict(
+            crate::policy::PolicyOverlay {
+                page_eval_enabled: Some(true),
+                ..Default::default()
+            },
+            crate::audit::Surface::Extension,
+        ),
+        WriteLane::PolicyRestrict,
+    );
+    let [HostReply::Policy(PolicyControl::PolicyRestrictResult {
         ok: false,
         error: Some(error),
-    }] = relaxed.as_slice()
+    })] = relaxed.as_slice()
     else {
         panic!("a relaxation must be refused with nothing pushed: {relaxed:?}");
     };
@@ -485,6 +497,45 @@ fn policy_restrict_tightens_the_store_and_refuses_a_relaxation() {
     );
 }
 
+/// The page's history read is the CLI's report row for row: a superseded record keeps its revision, and an
+/// empty ring is an empty list, not an error.
+#[test]
+fn policy_history_answers_the_superseded_ring_as_the_cli_reports_it() {
+    let _dir = scratch_runtime_dir();
+    assert_eq!(
+        serde_json::to_value(policy_history_reply()).unwrap(),
+        serde_json::json!({ "type": "policy_history_result", "ok": true, "entries": [] })
+    );
+    signed_baseline_granting_page_eval();
+    restrict_replies(
+        crate::policy::restrict(
+            crate::policy::PolicyOverlay {
+                page_eval_enabled: Some(false),
+                ..Default::default()
+            },
+            crate::audit::Surface::Extension,
+        ),
+        WriteLane::PolicyRestrict,
+    );
+    let PolicyControl::PolicyHistoryResult {
+        ok: true,
+        entries: Some(entries),
+        error: None,
+    } = policy_history_reply()
+    else {
+        panic!("the ring has one superseded record");
+    };
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(
+        (
+            entries[0].held.as_ref().map(|held| held.revision),
+            entries[0].signed,
+            entries[0].overlay_active
+        ),
+        (Some(1), true, false)
+    );
+}
+
 #[test]
 fn an_applied_restrict_pushes_policy_current_even_when_the_epoch_bump_fails() {
     // The store write and the epoch bump are two steps, and the bump is best-effort. A trust record whose
@@ -498,14 +549,20 @@ fn an_applied_restrict_pushes_policy_current_even_when_the_epoch_bump_fails() {
     })
     .unwrap();
 
-    let replies = policy_restrict_replies(crate::policy::PolicyOverlay {
-        page_eval_enabled: Some(false),
-        ..Default::default()
-    });
-    let [PolicyControl::PolicyRestrictResult { ok: true, .. }, PolicyControl::PolicyCurrent {
+    let replies = restrict_replies(
+        crate::policy::restrict(
+            crate::policy::PolicyOverlay {
+                page_eval_enabled: Some(false),
+                ..Default::default()
+            },
+            crate::audit::Surface::Extension,
+        ),
+        WriteLane::PolicyRestrict,
+    );
+    let [HostReply::Policy(PolicyControl::PolicyRestrictResult { ok: true, .. }), HostReply::Policy(PolicyControl::PolicyCurrent {
         overlay: Some(overlay),
         ..
-    }] = replies.as_slice()
+    })] = replies.as_slice()
     else {
         panic!("an applied restriction must be followed by policy_current: {replies:?}");
     };

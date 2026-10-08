@@ -6,9 +6,12 @@
 
 import { z } from "zod";
 import {
+  AuditReadWireSchema,
   AuditTrailEntrySchema,
   EnrollOptionsFrameSchema,
   HealthReportSchema,
+  PolicyHistoryRowSchema,
+  PolicyRollbackWireSchema,
   PresenceRequestFrameSchema,
   RegistrationRowSchema,
   TrustedClientSchema,
@@ -93,6 +96,64 @@ export const KillViewSchema = z.object({
 });
 
 export type KillView = z.infer<typeof KillViewSchema>;
+
+/** The host's client-name grammar (allowlist::ClientName), applied here so a malformed name never reaches
+ * the wire; the host re-checks it at the frame boundary. */
+export const ClientNameSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/);
+
+/** Why an anchor is refused, one code per sentence the host's grammar prints (ipc::identity HashDigest and
+ * SignerId), plus the fault no terminal can type: an unpaired UTF-16 surrogate, which the host's JSON reader
+ * would answer by closing the connection, not with a refusal. The page's sentence table is a Record over this
+ * union, so a fault added here has no sentence until that table gains it, and that is a type error. */
+export const ANCHOR_FAULTS = [
+  "hash_grammar",
+  "signer_empty",
+  "signer_nul",
+  "signer_ill_formed",
+] as const;
+
+export type AnchorFault = (typeof ANCHOR_FAULTS)[number];
+
+const isAnchorFault = (message: string): message is AnchorFault =>
+  (ANCHOR_FAULTS as readonly string[]).includes(message);
+
+function signerFault(value: string): AnchorFault | null {
+  if (value.length === 0) return "signer_empty";
+  if (value.includes("\u0000")) return "signer_nul";
+  if (!value.isWellFormed()) return "signer_ill_formed";
+  return null;
+}
+
+/** The host's anchor grammars (ipc::identity HashDigest: 20 or 32 bytes of lowercase hex; SignerId: non-empty,
+ * NUL-free, and here also well-formed), applied here because the host refuses a malformed anchor at its frame
+ * parse WITHOUT touching its pending presence slot, while the worker drops its copy of any pending request the
+ * moment an act frame is posted; a frame the host would refuse must therefore never be posted. A refused
+ * `{ kind, value: string }` input's issue carries an [`AnchorFault`] as its message. */
+export const ClientAnchorSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("hash"),
+    value: z
+      .string()
+      .regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/, { error: "hash_grammar" satisfies AnchorFault }),
+  }),
+  z.strictObject({
+    kind: z.literal("signer"),
+    value: z.string().superRefine((value, ctx) => {
+      const fault = signerFault(value);
+      if (fault) ctx.addIssue({ code: "custom", message: fault });
+    }),
+  }),
+]);
+
+/** The fault behind a refused anchor parse of a `{ kind, value: string }` input. */
+export function anchorFault(error: z.ZodError): AnchorFault {
+  const fault = error.issues.map((issue) => issue.message).find(isAnchorFault);
+  if (fault === undefined) throw new Error(`anchor refused without a fault: ${error.message}`);
+  return fault;
+}
+
+/** The answer to a presence-gated act: the host's request, which the page settles with the tap. */
+const TapRequired = z.object({ ok: z.literal(true), request: PresenceRequestFrameSchema });
 
 // The browser-registration rows the host reports (its registration_status_result), one per known browser.
 const RegistrationViewSchema = z.object({
@@ -188,11 +249,19 @@ export const RUNTIME_CONTRACT = contract({
   },
   revoke_client: {
     gate: "extension-page",
-    req: z.strictObject({
-      type: z.literal("revoke_client"),
-      name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/),
-    }),
+    req: z.strictObject({ type: z.literal("revoke_client"), name: ClientNameSchema }),
     res: Acknowledged,
+  },
+  // Pairing GRANTS capability, so the host answers with its presence request rather than acting. The page
+  // names an explicit anchor only: a browser has no parent process to measure (`--this-parent` is the CLI's).
+  pair_client: {
+    gate: "extension-page",
+    req: z.strictObject({
+      type: z.literal("pair_client"),
+      name: ClientNameSchema,
+      anchor: ClientAnchorSchema,
+    }),
+    res: TapRequired,
   },
   get_kill: {
     gate: "extension-page",
@@ -212,7 +281,7 @@ export const RUNTIME_CONTRACT = contract({
   kill_release: {
     gate: "extension-page",
     req: z.strictObject({ type: z.literal("kill_release") }),
-    res: z.object({ ok: z.literal(true), request: PresenceRequestFrameSchema }),
+    res: TapRequired,
   },
   get_audit: {
     gate: "extension-page",
@@ -220,10 +289,14 @@ export const RUNTIME_CONTRACT = contract({
     res: z.object({ ok: z.literal(true), entries: z.array(AuditEntrySchema) }),
   },
   // The host's durable trail (its audit_read_result): the newest records `chromium-bridge audit` prints,
-  // newest first, with the count of older lines left out and the live file for the CLI's empty state.
+  // newest first, with the count of older lines left out and the live file for the CLI's empty state. `limit`
+  // is `--limit <n>`, bounded here by the frame's own schema so an over-cap read is refused before the wire.
   get_host_audit: {
     gate: "extension-page",
-    req: z.strictObject({ type: z.literal("get_host_audit") }),
+    req: z.strictObject({
+      type: z.literal("get_host_audit"),
+      limit: AuditReadWireSchema.shape.limit,
+    }),
     res: z.object({
       ok: z.literal(true),
       entries: z.array(AuditTrailEntrySchema),
@@ -375,6 +448,30 @@ export const RUNTIME_CONTRACT = contract({
     gate: "extension-page",
     req: z.strictObject({ type: z.literal("restrict_policy"), overlay: PolicyOverlaySchema }),
     res: Acknowledged,
+  },
+  // The grant lanes `policy set` and `policy rollback` run: the host answers with its presence request, or
+  // refuses before any request in the words the CLI prints. A rollback that only tightens is applied free,
+  // with no request to answer.
+  grant_policy: {
+    gate: "extension-page",
+    req: z.strictObject({ type: z.literal("grant_policy"), overlay: PolicyOverlaySchema }),
+    res: TapRequired,
+  },
+  // The page names the row it listed by the record's content identity (policy/plan.rs find_history_effective
+  // says when a revision alone is ambiguous); the host refuses a record the ring no longer holds.
+  rollback_policy: {
+    gate: "extension-page",
+    req: z.strictObject({
+      type: z.literal("rollback_policy"),
+      revision: PolicyRollbackWireSchema.shape.revision,
+      entry: z.strictObject({ id: PolicyHistoryRowSchema.shape.id }),
+    }),
+    res: z.object({ ok: z.literal(true), request: PresenceRequestFrameSchema.nullable() }),
+  },
+  get_policy_history: {
+    gate: "extension-page",
+    req: z.strictObject({ type: z.literal("get_policy_history") }),
+    res: z.object({ ok: z.literal(true), entries: z.array(PolicyHistoryRowSchema) }),
   },
   // Enum-pinned here, at the trust boundary, so the relay can never put an
   // out-of-enum string on the wire.

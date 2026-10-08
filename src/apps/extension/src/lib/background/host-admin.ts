@@ -1,17 +1,27 @@
 // The options page's host-admin exchanges that clients.ts and kill.ts do not own: the browser-registration
-// rows (status, and the repair that `doctor --fix` runs), the policy restriction lane, the host's audit
-// trail (what `chromium-bridge audit` reads), and the doctor report (what plain `doctor` prints). port.ts
-// drives `collaborator`; messages.ts routes the options-page actions here. A repair writes manifests and
-// wrapper scripts for the detected browsers, or for the browsers the page names, still a local operation
-// in this account's scope; nothing here can raise a presence prompt.
+// rows (status, and the repair that `doctor --fix` runs), the policy lanes, the host's audit trail (what
+// `chromium-bridge audit` reads), and the doctor report (what plain `doctor` prints). port.ts drives
+// `collaborator`; messages.ts routes the options-page actions here. A repair writes manifests and wrapper
+// scripts for the detected browsers, or for the browsers the page names, still a local operation in this
+// account's scope.
+//
+//   policy_restrict  -> policy_restrict_result here: the free lane, no prompt
+//   policy_history   -> policy_history_result here: a read
+//   policy_set       -> the presence exchange's act (beginAct): its presence_request lands in lib/webauthn, and
+//   policy_rollback     the result frame arriving here is handed back through claimAct, whether it reports the
+//                       tap's outcome or the host's answer before any request (a refusal, a free rollback)
 
 import {
   AuditReadResultSchema,
   type AuditReadWire,
   DoctorReportResultSchema,
   type DoctorReportWire,
+  PolicyHistoryResultSchema,
+  type PolicyHistoryWire,
   PolicyRestrictResultSchema,
   type PolicyRestrictWire,
+  PolicyRollbackResultSchema,
+  PolicySetResultSchema,
   type RegistrationRepairWire,
   RegistrationStatusResultSchema,
   type RegistrationStatusWire,
@@ -23,6 +33,7 @@ import {
 } from "@chromium-bridge/shared/host-admin";
 import type { Refusal, RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
 import { inLife } from "../shared/in-life";
+import { handOverVerdict } from "../webauthn/exchange";
 import type { PortCollaborator } from "./connection";
 import { exchange } from "./exchange";
 
@@ -30,6 +41,7 @@ type RegistrationView = RuntimeResponse<"get_registration">;
 type RestrictView = RuntimeResponse<"restrict_policy">;
 type HostAuditView = RuntimeResponse<"get_host_audit">;
 type DoctorView = RuntimeResponse<"get_doctor">;
+type HistoryView = RuntimeResponse<"get_policy_history">;
 
 /** True for the host-admin result frame tags. */
 export function isHostAdminFrame(msg: unknown): msg is HostAdminInboundFrame {
@@ -43,6 +55,7 @@ const auditTrail = exchange<HostAdminInboundFrame>("an audit read is already in 
 const doctor = exchange<HostAdminInboundFrame>("a doctor report is already in flight");
 // Two panels read the report at mount; the second joins the first's round trip instead of being refused.
 const doctorInFlight = inLife<Promise<DoctorView> | null>(() => null);
+const history = exchange<HostAdminInboundFrame>("a policy history read is already in flight");
 
 export const collaborator: PortCollaborator = {
   onAttach(c) {
@@ -50,12 +63,14 @@ export const collaborator: PortCollaborator = {
     restriction.attach(c);
     auditTrail.attach(c);
     doctor.attach(c);
+    history.attach(c);
   },
   onDetach() {
     registration.detach();
     restriction.detach();
     auditTrail.detach();
     doctor.detach();
+    history.detach();
   },
   onFrame(msg) {
     if (!isHostAdminFrame(msg)) return false;
@@ -109,16 +124,31 @@ export function restrictPolicy(overlay: PolicyOverlay): Promise<RestrictView> {
   }).view;
 }
 
-/** Read the newest records of the host's audit trail, the page `chromium-bridge audit` prints by default (the
+/** Read the newest records of the host's audit trail, the page `chromium-bridge audit --limit <n>` prints (the
  * host applies the CLI's default page size when no limit travels). An unreadable trail is the host's error. */
-export function requestHostAudit(): Promise<HostAuditView> {
-  return auditTrail.request({ type: "audit_read" } satisfies AuditReadWire, {
+export function requestHostAudit(limit?: number): Promise<HostAuditView> {
+  const frame: AuditReadWire =
+    limit === undefined ? { type: "audit_read" } : { type: "audit_read", limit };
+  return auditTrail.request(frame, {
     read(frame): HostAuditView {
       const parsed = AuditReadResultSchema.safeParse(frame);
       if (!parsed.success) return refusal("malformed audit_read_result from host");
       if (!parsed.data.ok) return refusal(parsed.data.error);
       const { entries, older, path } = parsed.data;
       return { ok: true, entries, older, path };
+    },
+  }).view;
+}
+
+/** The superseded-revision ring, as `policy history` prints it. */
+export function requestPolicyHistory(): Promise<HistoryView> {
+  return history.request({ type: "policy_history" } satisfies PolicyHistoryWire, {
+    read(frame): HistoryView {
+      const parsed = PolicyHistoryResultSchema.safeParse(frame);
+      if (!parsed.success) return refusal("malformed policy_history_result from host");
+      return parsed.data.ok
+        ? { ok: true, entries: parsed.data.entries }
+        : refusal(parsed.data.error);
     },
   }).view;
 }
@@ -145,14 +175,27 @@ export function requestDoctorReport(): Promise<DoctorView> {
   return view;
 }
 
-/** Route one inbound result frame to its waiting request. Unsolicited frames (nothing outstanding: a replay,
- * or an injected frame the host-side filter somehow missed) are dropped without touching any state. */
+/** Route one inbound result frame to its waiting request or act. Unsolicited frames (nothing outstanding: a
+ * replay, or an injected frame the host-side filter somehow missed) are dropped without touching any state. */
 export function handleHostAdminFrame(msg: HostAdminInboundFrame): void {
-  const slot = {
-    registration_status_result: registration,
-    policy_restrict_result: restriction,
-    audit_read_result: auditTrail,
-    doctor_report_result: doctor,
-  }[msg.type];
-  if (!slot.answer(msg)) console.warn(`[bb] dropping unsolicited ${msg.type}`);
+  let answered: boolean;
+  switch (msg.type) {
+    case "policy_set_result":
+      answered = handOverVerdict(msg.type, PolicySetResultSchema, msg);
+      break;
+    case "policy_rollback_result":
+      answered = handOverVerdict(msg.type, PolicyRollbackResultSchema, msg);
+      break;
+    default: {
+      const slot = {
+        registration_status_result: registration,
+        policy_restrict_result: restriction,
+        policy_history_result: history,
+        audit_read_result: auditTrail,
+        doctor_report_result: doctor,
+      }[msg.type];
+      answered = slot.answer(msg);
+    }
+  }
+  if (!answered) console.warn(`[bb] dropping unsolicited ${msg.type}`);
 }

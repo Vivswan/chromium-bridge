@@ -183,6 +183,9 @@ fn now_unix() -> u64 {
 /// allowlist untouched.
 #[derive(Debug)]
 pub enum PairClientError {
+    /// The request cannot be put to a prompt as asked (a summary past the bound a presence prompt can show);
+    /// refused BEFORE any prompt, unaudited like every promptless validity refusal.
+    Invalid(String),
     /// The user-presence gate refused: a hardware refusal, a non-interactive
     /// stdin, or a declined prompt. Never downgraded, already audited.
     Presence(presence::PresenceError),
@@ -193,6 +196,7 @@ pub enum PairClientError {
 impl std::fmt::Display for PairClientError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            PairClientError::Invalid(e) => write!(f, "invalid pairing request: {e}"),
             PairClientError::Presence(e) => write!(f, "user presence not attested: {e}"),
             PairClientError::Io(e) => write!(f, "could not write the allowlist: {e}"),
         }
@@ -200,35 +204,29 @@ impl std::fmt::Display for PairClientError {
 }
 
 /// Pair a trusted client behind the user-presence gate: the one entry point every surface uses to
-/// GRANT harness capability. Runs the presence ladder, then writes the allowlist, and audits each outcome after
-/// the fact (refusal, write, write failure) with the rung that decided it; returns the attesting path so the
-/// surface can tell the user which proof authorized the pairing. Revocation stays friction-free on purpose:
-/// removing capability never needs a human proof (the presence symmetry rule).
+/// GRANT harness capability. Runs `attest`, the surface's presence proof (the CLI's typed phrase, the host's
+/// already-verified tap), then writes the allowlist, and audits each outcome after the fact (refusal, write,
+/// write failure) with the rung that decided it; returns the attesting path so the surface can tell the user
+/// which proof authorized the pairing. Revocation stays friction-free on purpose: removing capability never
+/// needs a human proof (the presence symmetry rule).
 ///
-/// `terminal` is the CLI floor's witness, or the precondition failure that kept the surface from constructing one
-/// (`TerminalStdin::require()`: a piped stdin arrives as the `Err`).
+/// `attest` receives the reason a prompt shows; it runs after the name and anchor validated at the frame or
+/// argv boundary, so a malformed request never reaches a prompt.
 pub fn pair_client_with_presence(
     name: &ClientName,
     anchor: Anchor,
     surface: crate::audit::Surface,
-    terminal: Result<presence::TerminalStdin, presence::PresenceError>,
+    attest: impl FnOnce(&str) -> Result<presence::PresenceAttestation, presence::PresenceError>,
 ) -> Result<presence::PresencePath, PairClientError> {
     use crate::audit::{self, AuditKind, AuditRecord};
     let reason = format!(
         "Pair '{name}' as a trusted client of chromium-bridge? A trusted \
          client can drive your browser through this bridge."
     );
-    let auth = match terminal.and_then(|terminal| presence::tty_confirm(&reason, terminal)) {
+    let auth = match attest(&reason) {
         Ok(auth) => auth,
         Err(e) => {
-            // A refused pairing is audited too, so a silent enrollment attempt shows in the trail.
-            audit::record(
-                AuditRecord::new(AuditKind::PairClient)
-                    .surface(surface)
-                    .name(name.as_str())
-                    .outcome("refused")
-                    .detail(&format!("presence: {e}")),
-            );
+            audit_pair_refused(name, surface, &e);
             return Err(PairClientError::Presence(e));
         }
     };
@@ -261,6 +259,23 @@ pub fn pair_client_with_presence(
     }
 }
 
+/// The pairing trail for a presence gate that refused: log-after-decide, so the attempted silent enrollment is
+/// visible whichever surface's gate refused it (the CLI's phrase inside [`pair_client_with_presence`], the
+/// host's tap before the pairing ran).
+pub fn audit_pair_refused(
+    name: &ClientName,
+    surface: crate::audit::Surface,
+    e: &presence::PresenceError,
+) {
+    crate::audit::record(
+        crate::audit::AuditRecord::new(crate::audit::AuditKind::PairClient)
+            .surface(surface)
+            .name(name.as_str())
+            .outcome("refused")
+            .detail(&format!("presence: {e}")),
+    );
+}
+
 // ---- CLI handlers ----------------------------------------------------------
 
 /// `pair-client`: add or replace a trusted client in the allowlist, behind
@@ -275,12 +290,12 @@ pub fn run_pair_client(client: PairClientArgs) -> i32 {
         }
     };
     let shown = anchor.to_string();
-    match pair_client_with_presence(
-        &client.name,
-        anchor,
-        crate::audit::Surface::Cli,
-        presence::TerminalStdin::require(),
-    ) {
+    // The terminal witness comes first, by construction: a piped stdin arrives at the gate as the
+    // precondition failure, refused (and audited) after the name check, promptless.
+    match pair_client_with_presence(&client.name, anchor, crate::audit::Surface::Cli, |reason| {
+        presence::TerminalStdin::require()
+            .and_then(|terminal| presence::tty_confirm(reason, terminal))
+    }) {
         Ok(path) => {
             println!(
                 "paired trusted client '{}' on {shown} (user presence: {})",
@@ -362,7 +377,7 @@ pub fn run_list_clients() -> i32 {
     let trust = match TrustState::current() {
         Ok(trust) => trust,
         Err(e) => {
-            eprintln!("list-clients: could not read the trust record: {e}");
+            eprintln!("list-clients: {}", crate::trust::unreadable_sentence(&e));
             eprintln!("(treating the trust state as suspect; fail closed)");
             return 1;
         }

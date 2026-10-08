@@ -28,7 +28,7 @@ import {
 import { route } from "@/lib/background/messages";
 import {
   assertPresence,
-  beginKillRelease,
+  beginAct,
   handleWebAuthnFrame,
   resetWebAuthnForTests,
   collaborator as webauthn,
@@ -131,10 +131,10 @@ describe("kill mirror updates from host frames only", () => {
   });
 
   test("an ok:false result also fails a kill_release waiting for its presence request", async () => {
-    // The handoff is exchange.ts's claimKillRelease; this pins it from the real frame.
+    // The handoff is exchange.ts's claimAct; this pins it from the real frame.
     resetWebAuthnForTests();
     attach(webauthn);
-    const release = beginKillRelease();
+    const release = beginAct({ type: "kill_release" });
     await handleKillFrame({
       type: "kill_status_result",
       ok: false,
@@ -169,7 +169,7 @@ describe("kill mirror updates from host frames only", () => {
       resetWebAuthnForTests();
       attach(webauthn);
       await fakeBrowser.storage.local.set({ bridgeKillMirror: { state: "killed", at: 5 } });
-      const release = beginKillRelease();
+      const release = beginAct({ type: "kill_release" });
       const request = {
         type: "presence_request",
         challenge: "cHJlc2VuY2U",
@@ -197,7 +197,7 @@ describe("kill mirror updates from host frames only", () => {
     // The connect-time kill_status query's reply says killed:true; it is not an answer to the release.
     resetWebAuthnForTests();
     attach(webauthn);
-    const release = beginKillRelease();
+    const release = beginAct({ type: "kill_release" });
     await handleKillFrame({ type: "kill_status_result", ok: true, killed: true });
     const request = {
       type: "presence_request",
@@ -225,7 +225,7 @@ describe("kill mirror updates from host frames only", () => {
       return realGet(keys as never);
     });
     const earlier = handleKillFrame({ type: "kill_status_result", ok: true, killed: true });
-    const release = beginKillRelease();
+    const release = beginAct({ type: "kill_release" });
     handleWebAuthnFrame({
       type: "presence_request",
       challenge: "cHJlc2VuY2U",

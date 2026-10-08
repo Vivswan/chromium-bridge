@@ -29,12 +29,12 @@
 | `chromium-bridge policy set <field flags> [--json]` | 策略 (授予通道) | 在輸入終端機確認之後產生一份全新的已簽章策略基準。只接受簽章; 沒有主機金鑰時一開始就拒絕。 |
 | `chromium-bridge policy restrict <field flags>` | 策略 (自由通道) | 套用未簽章的限制覆蓋層; 不提示, 因為它只能移除能力。 |
 | `chromium-bridge policy history [--json]` | 唯讀 | 印出已被取代的修訂環。 |
-| `chromium-bridge policy rollback --revision <n> [--json]` | 策略 | 將過去某個修訂的有效策略重新推導為一次全新寫入, 絕非重放。 |
+| `chromium-bridge policy rollback --revision <n> [--entry <id>] [--json]` | 策略 | 將過去某個修訂的有效策略重新推導為一次全新寫入, 絕非重放; 當同一修訂出現不止一次時, 用 `--entry` 指名其中一筆記錄。 |
 | `chromium-bridge audit [--limit <n>]` | 唯讀稽核 | 印出磁碟上的稽核日誌, 最舊的在前 (預設: 最後 200 筆記錄)。 |
 | `chromium-bridge lang [show \| set <value>]` | 顯示語言 | 讀取或設定選項頁面顯示的語言; 單獨的 `lang` 等同於 `show`。 |
 | `chromium-bridge --help` | 說明 | 用法資訊。 |
 
-選項頁面提供同樣的動作。依設計只在終端機上: `uninstall` (見下文), 以及 `--system` 與 `--manifest-dir` 兩種修復形式。選項頁面的稽核檢視只有預設的那一頁; 更長的日誌用 `audit --limit <n>`。網站允許清單、全部允許與分頁分組留在選項頁面上。它們是瀏覽器本機的擴充功能儲存空間 (見[隱私權政策](./privacy-policy.md)), 沒有任何子命令讀寫它們。
+選項頁面提供同樣的動作。依設計只在終端機上: `uninstall` (見下文), 以及 `--system` 與 `--manifest-dir` 兩種修復形式。選項頁面的稽核檢視可用「顯示更早」擴展到幀的上限; 完整日誌用 `audit --limit <n>`。網站允許清單、全部允許與分頁分組留在選項頁面上。它們是瀏覽器本機的擴充功能儲存空間 (見[隱私權政策](./privacy-policy.md)), 沒有任何子命令讀寫它們。
 
 ## doctor / status (唯讀自我檢查)
 
@@ -145,7 +145,7 @@ Chrome 自己的位置來自其文件。其他廠商的位置是從它們存放�
 - 當憑證存放區沒有回應時, `--file-store` 的重置會繼續進行, 並警告存放區中可能仍留有一筆項目。等存放區恢復回應後再執行一次 `pair --reset`; `revoke --all` 也可以, 但它還會忘記每一個瀏覽器與用戶端。
 - `chromium-bridge enclave-status [--json]` 以唯讀方式回報目前狀態: 是否存在金鑰、哪個存放區持有它, 以及它的指紋。
 
-瀏覽器自身動作 (解除緊急開關、登記第二個瀏覽器) 的使用者在場證明, 是在瀏覽器認證器上的一次 WebAuthn 觸碰, 由主機驗證。選項頁面的身分區段登記該認證器, 其緊急開關面板以這次觸碰應答主機的在場請求。
+瀏覽器自身動作 (解除緊急開關、登記第二個瀏覽器) 的使用者在場證明, 是在瀏覽器認證器上的一次 WebAuthn 觸碰, 由主機驗證。選項頁面的身分區段登記該認證器; 其緊急開關面板、策略編輯器與受信任用戶端表單, 各自以下文緊急開關表所述的證明應答主機的在場請求。
 
 忘記操作沒有額外門檻, 因為它只移除能力:
 
@@ -174,6 +174,7 @@ chromium-bridge revoke-client --name codex
 - 授權以經證明的錨點為準, 絕不以 `--name` 標籤為準; 標籤只用於日誌與撤銷。各平台量測的內容見[信任邊界頁面](security/trust-boundaries.md#邊界-1-mcp-用戶端---rust-mcp-伺服器-stdio-json-rpc-20)。
 - 雜湊錨點會在用戶端更新時改變; 以相同名稱重新執行 `pair-client` 即可取代該項目 (重新配對路徑)。
 - 新增用戶端是一種能力授予, 所以需在場驗證: 在互動式終端機輸入一段確認, 以管線輸入的 stdin 會被拒絕。撤銷則刻意設計為無阻力; 執行中的中介會斷開被撤銷的用戶端, 並拒絕其重新接入。
+- 選項頁面的「受信任的 MCP 用戶端」區段以同樣的方式配對用戶端 (一個名稱加一個雜湊或簽署者錨點), 以此瀏覽器的在場證明為門檻; `--this-parent` 只存在於 CLI, 因為頁面沒有可量測的父程序。
 
 允許清單一旦存在, 任何不符合的對象都失敗即關閉, 包括無法量測的身分與無法讀取的允許清單。Windows 的量測方式見 [SECURITY.md](../../.github/SECURITY.md#platform-support)。
 
@@ -208,7 +209,7 @@ chromium-bridge policy show [--json]              # read-only: store state + eff
 chromium-bridge policy set <field flags> [--json] # GRANT lane: sign a fresh baseline (terminal confirmation)
 chromium-bridge policy restrict <field flags>     # FREE lane: unsigned restriction overlay
 chromium-bridge policy history [--json]           # read-only: superseded revisions
-chromium-bridge policy rollback --revision <n> [--json]
+chromium-bridge policy rollback --revision <n> [--entry <id>] [--json]
 ```
 
 **欄位旗標。** `set` 與 `restrict` 共用同一組旗標, 每個策略欄位一個, 寫法是其 camelCase 線路名稱的 kebab-case 形式: `--cdp-mode`、`--file-upload`、`--handle-dialog`、`--page-eval`、`--confirm-high-risk-click`、`--confirm-page-eval`、`--presence-confirm`、`--confirm-tab-close`、`--warn-precise-snapshot`、`--eval-mask`、`--host-reverify-ms`、`--confirm-grace-ms`、`--click-toast-timeout-ms`、`--eval-toast-timeout-ms` 與 `--disabled-tools`。
@@ -228,16 +229,20 @@ chromium-bridge policy rollback --revision <n> [--json]
 - **`policy set` 是授予通道:** 它把編輯內容疊加在目前的基準上 (未碰到的欄位沿用基準值, 絕不是有效值), 把碰到的欄位集合嵌入文件, 並在輸入的終端機確認通過後, 用主機金鑰對該文件的精確位元組簽章。
 - **沒有主機金鑰就沒有授予:** 在沒有執行過 `pair` 的機器上, CLI 一開始就拒絕, 任何提示都不會出現, 因此不會存在擴充功能的固定指紋無法驗證的基準。
 - **`policy restrict` 是自由通道:** 不提示、不簽章, 而接縫的方向檢查拒絕任何會放寬有效策略的編輯, 所以一次腳本化或偽造的限制, 最糟也只是對你自己的橋接造成阻斷服務。
+- **選項頁面的「安全性原則」區段走同樣的兩條通道:** 收緊立即套用, 放寬則以此瀏覽器的在場證明為門檻簽署一份新基準, 沒有金鑰的主機會用同樣的措辭一開始就拒絕。在任何基準存在之前, 那裡的每一次編輯都是授予, 因為還沒有可限制的內容。
 
 **回滾絕不重放。** `policy rollback --revision <n>` 重新推導該修訂的有效策略, 與目前的有效策略做差異比對, 並把差異作為一次全新寫入套用。
 
 - **只收緊的回滾** 走免提示的自由限制通道。
 - **放寬任何內容的回滾** 就是一次新的終端機確認與簽章, 和其他任何授予完全一樣。
 - **舊的已簽章產物絕不寫回:** 較低的修訂必須持續無法通過擴充功能的棘輪, 這是防重放特性, 不是限制。
+- **一個修訂, 多筆記錄:** 某修訂為目前狀態期間所做的每一次限制, 都會推入一筆位於該修訂的記錄, 所以 `policy history` 列出每筆記錄的 `entry` 編號, `--entry <id>` 指名要還原的那一筆; 有歧義時, 只帶 `--revision` 會被拒絕。頁面上的回滾按鈕以同樣的方式指名記錄。
+- **回滾進行中存放區被改動** 會被拒絕: 差異是基於對存放區的一次讀取所規劃的, 所以若另一介面在那次讀取與回滾自身寫入之間落下了一次寫入 (例如來自選項頁面的一次限制), 這次回滾就作為衝突被拒絕, 什麼也不寫; 「已經如此」的結果也以同樣方式確認。請基於新狀態再執行一次回滾。
+- **選項頁面的「歷史版本」清單** 顯示與 `policy history` 相同的環, 並以同樣的方式回滾, 走由方向決定的通道; 每筆記錄都帶著它當時持有的策略, 頁面則為它顯示 CLI 的 `effective=` 行, 並標出回滾會改變的欄位。
 
 **`--json` 契約。** `show`、`history`、`set` 與 `rollback` 都接受 `--json`, 它把文字敘述換成 stdout 上一份帶版本的報告 (寫入通道在拒絕時則是一個帶版本的錯誤物件)。先檢查 `v` 欄位, 遇到更新的值就拒絕, 然後才讀取其他內容 (失敗即關閉)。
 
-每次策略轉換都會記入稽核, 附上介面, 授予時還附上授權該簽章的在場路徑 (`auth=tty`)。
+每次策略轉換都會記入稽核, 附上介面, 授予時還附上授權該簽章的在場路徑: 來自 CLI 的 `auth=tty`, 來自選項頁面的 `auth=webauthn:<fingerprint>` 或 `auth=confirm_window`。[store_tests.rs](../../src/packages/core/src/policy/store/store_tests.rs) 與 [presence/tests.rs](../../src/packages/core/src/native_host/presence/tests.rs) 固定這三種寫法。
 
 ## 顯示語言 (lang)
 
@@ -287,7 +292,7 @@ $ chromium-bridge audit --limit 20
 
 讀取器無法解析的記錄會顯示為 `UNRECOGNIZED RECORD` 並計數, 絕不猜測; `dropped=n` 欄位標記因寫入失敗 (例如磁碟已滿) 而遺失的記錄。記錄過程絕不阻塞或導致操作失敗: 稽核日誌觀察決定, 不把關決定。
 
-選項頁面讀取同一份日誌: 其「近期活動」區段在這個瀏覽器的本機決策環旁邊列出主機日誌 (上文的預設頁, 每行都是主機自己的措辭)。
+選項頁面讀取同一份日誌: 其「近期活動」區段在這個瀏覽器的本機決策環旁邊列出主機日誌 (上文的預設頁, 可用「顯示更早」擴展到幀的上限, 每行都是主機自己的措辭)。
 
 錯誤碼與錯誤分類見 [architecture.md 第 11.1 節](./architecture.md#111-錯誤分類-error_specs)。
 

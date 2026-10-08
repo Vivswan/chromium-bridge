@@ -11,6 +11,13 @@ import {
   requestClientList,
   revokeTrustedClient,
 } from "@/lib/background/clients";
+import {
+  assertPresence,
+  beginAct,
+  handleWebAuthnFrame,
+  resetWebAuthnForTests,
+  collaborator as webauthn,
+} from "@/lib/webauthn/exchange";
 import { attach } from "./fake-connection";
 
 let posted: Array<Record<string, unknown>>;
@@ -18,14 +25,18 @@ let posted: Array<Record<string, unknown>>;
 beforeEach(() => {
   posted = [];
   collaborator.onDetach(); // resolve any leftover pending from a prior test
-  attach(collaborator, (frame) => {
+  resetWebAuthnForTests();
+  const post = (frame: object) => {
     posted.push(frame as Record<string, unknown>);
     return true;
-  });
+  };
+  attach(collaborator, post);
+  attach(webauthn, post);
 });
 
 afterEach(() => {
   collaborator.onDetach();
+  resetWebAuthnForTests();
   vi.useRealTimers();
 });
 
@@ -45,7 +56,7 @@ function failed(view: { ok: true } | { ok: false; error: string }): { ok: false;
 }
 
 describe("frame classification", () => {
-  test("recognizes exactly the two admin result tags", () => {
+  test("recognizes the admin result tags and nothing else", () => {
     expect(isAdminFrame(listResult)).toBe(true);
     expect(isAdminFrame({ type: "client_revoke_result", ok: true })).toBe(true);
     // Requests, enclave frames, and bridge traffic do not classify here.
@@ -144,5 +155,45 @@ describe("client revoke", () => {
     expect(failed(second).error).toContain("in flight");
     handleAdminFrame({ type: "client_revoke_result", ok: true });
     expect((await p).ok).toBe(true);
+  });
+});
+
+describe("client pairing behind the presence exchange", () => {
+  const anchor = { kind: "signer" as const, value: "TEAMID" };
+  const request = {
+    type: "presence_request",
+    challenge: "cHJlc2VuY2U",
+    nonce: "nonce-0002",
+    action: "pair trusted client 'codex' on signer TEAMID",
+    allowed_credential_ids: ["Y3JlZC1h"],
+  };
+
+  test("posts the name and anchor, is answered by the presence request, and its verdict follows the tap", async () => {
+    const begun = beginAct({ type: "client_pair", name: "codex", anchor });
+    expect(posted).toEqual([{ type: "client_pair", name: "codex", anchor }]);
+    handleWebAuthnFrame(request as never);
+    await expect(begun).resolves.toEqual({ ok: true, request });
+    const answered = assertPresence({
+      nonce: "nonce-0002",
+      credential_id: "Y3JlZC1h",
+      authenticator_data: "YXV0aA",
+      client_data_json: "Y2Rq",
+      signature: "c2ln",
+    });
+    handleWebAuthnFrame({ type: "presence_result", ok: true });
+    handleAdminFrame({ type: "client_pair_result", ok: true });
+    await expect(answered).resolves.toEqual({ ok: true });
+  });
+
+  test("a pairing the host refuses before any request resolves with the host's words", async () => {
+    const begun = beginAct({ type: "client_pair", name: "codex", anchor });
+    handleAdminFrame({
+      type: "client_pair_result",
+      ok: false,
+      error: "user presence not attested: enrollment store: permission denied",
+    });
+    expect(failed(await begun).error).toBe(
+      "user presence not attested: enrollment store: permission denied",
+    );
   });
 });

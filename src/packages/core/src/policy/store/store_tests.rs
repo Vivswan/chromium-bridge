@@ -3,25 +3,29 @@ use std::fs;
 use super::*;
 use crate::audit::Surface;
 use crate::enclave::{policy_message, EnrollmentKey, KeyStore};
-use crate::policy::Ms;
+use crate::policy::plan::decode_entry_doc;
+use crate::policy::{Grant, HistoryEntryRef, Ms, RollbackPlan};
 use crate::presence::{PresenceAttestation, PresenceError, PresencePath};
 use p256::ecdsa::signature::Verifier as _;
 use p256::ecdsa::{Signature, VerifyingKey};
 
 use crate::test_support::scratch_runtime_dir;
 
-/// A signed-looking store seeded directly on disk: a baseline document
-/// with `revision` over `values`, plus `overlay`. Returns the store as
-/// written.
-fn seed_store(revision: u64, values: &PolicyValues, overlay: Option<PolicyOverlay>) -> PolicyStore {
+/// A signed-looking store in memory: a baseline document with `revision` over `values`, plus `overlay`.
+fn store_for(revision: u64, values: &PolicyValues, overlay: Option<PolicyOverlay>) -> PolicyStore {
     let doc = PolicyDoc::from_values(values, revision, vec![]);
     let bytes = serde_json::to_vec(&doc).unwrap();
-    let store = PolicyStore {
+    PolicyStore {
         baseline_b64: base64_encode(&bytes),
         sig_b64: Some(base64_encode(b"seed-sig")),
         key_id: Some("seed-kid".into()),
         overlay,
-    };
+    }
+}
+
+/// [`store_for`] seeded directly on disk. Returns the store as written.
+fn seed_store(revision: u64, values: &PolicyValues, overlay: Option<PolicyOverlay>) -> PolicyStore {
+    let store = store_for(revision, values, overlay);
     ipc::with_runtime_lock(|lock| store.write(lock)).unwrap();
     store
 }
@@ -598,10 +602,7 @@ fn a_moved_baseline_revision_conflicts_instead_of_overwriting() {
     // observation that no longer matches the store refuses (the
     // concurrent write survives), a matching one lands.
     let observation = |revision| PrePromptObservation {
-        store: Some(StoreObservation {
-            revision,
-            overlay: None,
-        }),
+        store: Some(store_for(revision, &PolicyValues::default(), None).observation()),
         host_key_epoch: 0,
     };
     let stale = ipc::with_runtime_lock(|lock| {
@@ -667,7 +668,7 @@ fn a_moved_baseline_revision_conflicts_instead_of_overwriting() {
 #[test]
 fn an_overlay_moved_mid_prompt_conflicts_instead_of_clobbering() {
     let _dir = scratch_runtime_dir();
-    seed_store(
+    let seeded = seed_store(
         2,
         &PolicyValues {
             page_eval_enabled: true,
@@ -677,10 +678,7 @@ fn an_overlay_moved_mid_prompt_conflicts_instead_of_clobbering() {
     );
     // The observation a prompt would cover: revision 2, no overlay.
     let observed = PrePromptObservation {
-        store: Some(StoreObservation {
-            revision: 2,
-            overlay: None,
-        }),
+        store: Some(seeded.observation()),
         host_key_epoch: 0,
     };
     // A restrict lands mid-prompt (staged through the internal fn, like
@@ -689,7 +687,7 @@ fn an_overlay_moved_mid_prompt_conflicts_instead_of_clobbering() {
         page_eval_enabled: Some(false),
         ..PolicyOverlay::default()
     };
-    ipc::with_runtime_lock(|lock| Ok(restrict_locked(lock, restriction.clone())))
+    ipc::with_runtime_lock(|lock| Ok(restrict_locked(lock, restriction.clone(), None)))
         .unwrap()
         .unwrap();
     let doc = PolicyDoc::from_values(&PolicyValues::default(), 3, vec![PolicyField::CdpMode]);
@@ -715,10 +713,13 @@ fn an_overlay_moved_mid_prompt_conflicts_instead_of_clobbering() {
         Ok(write_baseline_locked(
             lock,
             PrePromptObservation {
-                store: Some(StoreObservation {
-                    revision: 2,
-                    overlay: Some(restriction),
-                }),
+                store: Some(
+                    PolicyStore {
+                        overlay: Some(restriction),
+                        ..seeded
+                    }
+                    .observation(),
+                ),
                 host_key_epoch: 0,
             },
             &bytes,
@@ -767,6 +768,267 @@ fn a_disposal_during_the_prompt_conflicts_even_with_no_store_on_both_sides() {
     .unwrap();
     assert!(matches!(stale, Err(PolicyWriteError::Conflict)));
     assert!(PolicyStore::load().unwrap().is_none());
+}
+
+/// A signed baseline over `values` touching `touched`, as both grant surfaces write one.
+fn sign(values: PolicyValues, touched: Vec<PolicyField>) {
+    set_signed(values, touched, Surface::Core, attest).unwrap();
+}
+
+/// The store on disk, as a plan's three arms read it back.
+fn store_now() -> (PolicyValues, u64, usize) {
+    let store = PolicyStore::load().unwrap().unwrap();
+    (
+        store.effective().unwrap(),
+        store.baseline_doc().unwrap().revision,
+        PolicyHistory::load().unwrap().unwrap().entries.len(),
+    )
+}
+
+/// A rollback is planned as a diff against one store read. A restriction another surface lands between that
+/// read and the rollback's write makes the diff describe a state nobody chose; each arm holds to its read and
+/// refuses the moved store as the conflict the signed lane reports, the concurrent write standing and no
+/// success reported. Tightening arm: rolling {cdp:on, pageEval:on} back to {cdp:off, pageEval:on} is an
+/// overlay on cdp alone; with pageEval restricted meanwhile, writing it would land {off, off}, not the row.
+#[test]
+fn a_tightening_rollback_over_a_store_that_moved_since_its_plan_is_a_conflict() {
+    let _dir = scratch_runtime_dir();
+    enroll_host_key();
+    let page_eval = PolicyValues {
+        page_eval_enabled: true,
+        ..PolicyValues::default()
+    };
+    sign(page_eval.clone(), vec![PolicyField::PageEvalEnabled]);
+    sign(
+        PolicyValues {
+            cdp_mode: true,
+            ..page_eval
+        },
+        vec![PolicyField::CdpMode],
+    );
+    let inputs = crate::policy::rollback_inputs(1, None).unwrap();
+    let RollbackPlan::Tighten { overlay, .. } = inputs.plan() else {
+        panic!("revision 1 only tightens the current state");
+    };
+    restrict(
+        PolicyOverlay {
+            page_eval_enabled: Some(false),
+            ..PolicyOverlay::default()
+        },
+        Surface::Cli,
+    )
+    .unwrap();
+    let before = store_now();
+
+    let stale = restrict_planned(overlay, &inputs.over, Surface::Cli);
+    assert!(
+        matches!(stale, Err(PolicyWriteError::Conflict)),
+        "{stale:?}"
+    );
+    assert_eq!(
+        store_now(),
+        before,
+        "the concurrent restriction stands alone"
+    );
+    assert!(before.0.cdp_mode && !before.0.page_eval_enabled);
+    assert!(audit_text().contains("refused: the store moved since the plan"));
+
+    // Replanned over the moved store, the same rollback relaxes pageEval: the lane itself changed under the
+    // stale plan, so a free write of it would have smuggled the wrong state past the signed lane.
+    assert!(matches!(
+        crate::policy::rollback_inputs(1, None).unwrap().plan(),
+        RollbackPlan::Relax(_)
+    ));
+}
+
+/// The no-write arm: "already there" was true of the read, so it is confirmed under the lock against the store
+/// as it stands, never reported over one that moved since. Here the move changes the effective policy (cdp
+/// off), so the stale report would have called {cdp:off} revision 1's {cdp:on}.
+#[test]
+fn a_no_change_rollback_over_a_store_that_moved_since_its_plan_is_a_conflict() {
+    let _dir = scratch_runtime_dir();
+    enroll_host_key();
+    let cdp = PolicyValues {
+        cdp_mode: true,
+        ..PolicyValues::default()
+    };
+    sign(cdp.clone(), vec![PolicyField::CdpMode]);
+    sign(
+        PolicyValues {
+            page_eval_enabled: true,
+            ..cdp
+        },
+        vec![PolicyField::PageEvalEnabled],
+    );
+    restrict(
+        PolicyOverlay {
+            page_eval_enabled: Some(false),
+            ..PolicyOverlay::default()
+        },
+        Surface::Cli,
+    )
+    .unwrap();
+    let inputs = crate::policy::rollback_inputs(1, None).unwrap();
+    assert_eq!(inputs.plan(), RollbackPlan::NoChange);
+    assert!(confirm_unmoved(&inputs.over).is_ok());
+
+    restrict(
+        PolicyOverlay {
+            cdp_mode: Some(false),
+            ..PolicyOverlay::default()
+        },
+        Surface::Cli,
+    )
+    .unwrap();
+    let before = store_now();
+    assert_ne!(before.0, inputs.target, "the move left revision 1's state");
+    let stale = confirm_unmoved(&inputs.over);
+    assert!(
+        matches!(stale, Err(PolicyWriteError::Conflict)),
+        "{stale:?}"
+    );
+    assert_eq!(store_now(), before);
+}
+
+/// The relaxing arm: the grant's values carry the read's baseline and its touched set the diff against the
+/// read's effective state, so a restriction landing in between (pageEval off) would survive the grant as a
+/// retained overlay entry and the signed write would land {cdp:on, pageEval:off}, not revision 1's
+/// {on, on}. Held to its read, the prepared grant refuses before any prompt; the store is untouched.
+#[test]
+fn a_relaxing_rollback_over_a_store_that_moved_since_its_plan_is_a_conflict() {
+    let _dir = scratch_runtime_dir();
+    enroll_host_key();
+    let both = PolicyValues {
+        cdp_mode: true,
+        page_eval_enabled: true,
+        ..PolicyValues::default()
+    };
+    sign(
+        both.clone(),
+        vec![PolicyField::CdpMode, PolicyField::PageEvalEnabled],
+    );
+    sign(
+        PolicyValues {
+            cdp_mode: false,
+            ..both
+        },
+        vec![PolicyField::CdpMode],
+    );
+    let inputs = crate::policy::rollback_inputs(1, None).unwrap();
+    let RollbackPlan::Relax(Grant { values, touched }) = inputs.plan() else {
+        panic!("revision 1 relaxes the current state");
+    };
+    restrict(
+        PolicyOverlay {
+            page_eval_enabled: Some(false),
+            ..PolicyOverlay::default()
+        },
+        Surface::Cli,
+    )
+    .unwrap();
+    let before = store_now();
+
+    let stale = prepare_grant(values, touched, Surface::Cli)
+        .and_then(|prepared| prepared.planned_over(&inputs.over))
+        .and_then(|prepared| prepared.attest_and_commit(never_attest!()));
+    assert!(
+        matches!(stale, Err(PolicyWriteError::Conflict)),
+        "{stale:?}"
+    );
+    assert_eq!(store_now(), before, "nothing was signed or written");
+    assert_eq!(before.1, 2);
+}
+
+/// The lock discipline `rollback_inputs` states, pinned from the writer's side.
+#[test]
+fn a_rollback_plan_reads_the_ring_and_the_store_in_one_write_generation() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let _dir = scratch_runtime_dir();
+    enroll_host_key();
+    sign(
+        PolicyValues {
+            cdp_mode: true,
+            ..PolicyValues::default()
+        },
+        vec![PolicyField::CdpMode],
+    );
+    sign(
+        PolicyValues {
+            page_eval_enabled: true,
+            ..PolicyValues::default()
+        },
+        vec![PolicyField::CdpMode, PolicyField::PageEvalEnabled],
+    );
+    // The ring holds revision 1's record as its oldest row, then a filler that brings it to within a few bytes
+    // of its cap, so the next push evicts the oldest row.
+    let oldest = ipc::with_runtime_lock(|lock| {
+        let mut history = PolicyHistory::load()?.unwrap();
+        let oldest = history.entries[0].clone();
+        let cap = <PolicyHistory as Record>::MAX_BYTES;
+        let mut filler_len = cap;
+        loop {
+            history.entries.truncate(1);
+            history.entries.push(PolicyHistoryEntry {
+                baseline_b64: "A".repeat(filler_len),
+                sig_b64: None,
+                key_id: None,
+                overlay: None,
+                superseded_unix: 1,
+            });
+            if history.encode().is_ok() {
+                break;
+            }
+            filler_len -= 64;
+        }
+        history.write(lock)?;
+        Ok(oldest)
+    })
+    .unwrap();
+    let oldest_id = oldest.id();
+    assert_eq!(decode_entry_doc(&oldest.baseline_b64).unwrap().revision, 1);
+
+    let (tx, rx) = mpsc::channel();
+    let plan = ipc::with_runtime_lock(|lock| {
+        let id = oldest_id.clone();
+        let plan = std::thread::spawn(move || {
+            let outcome = crate::policy::rollback_inputs(1, Some(HistoryEntryRef { id }))
+                .map(|inputs| inputs.plan());
+            tx.send(outcome).unwrap();
+        });
+        restrict_locked(
+            lock,
+            PolicyOverlay {
+                page_eval_enabled: Some(false),
+                ..PolicyOverlay::default()
+            },
+            None,
+        )
+        .unwrap();
+        let inside_the_hold = rx.recv_timeout(Duration::from_millis(500));
+        assert!(
+            matches!(inside_the_hold, Err(mpsc::RecvTimeoutError::Timeout)),
+            "the plan read without the runtime lock: {inside_the_hold:?}"
+        );
+        Ok(plan)
+    })
+    .unwrap();
+    let outcome = rx.recv().unwrap();
+    plan.join().unwrap();
+
+    assert_eq!(
+        outcome,
+        Err(
+            "the policy history no longer holds that record; refresh it and choose again"
+                .to_string()
+        )
+    );
+    let ring = PolicyHistory::load().unwrap().unwrap();
+    assert!(ring.entries.iter().all(|e| e.id() != oldest_id));
+    let (effective, revision, _) = store_now();
+    assert_eq!(revision, 2);
+    assert!(!effective.cdp_mode && !effective.page_eval_enabled);
 }
 
 #[test]

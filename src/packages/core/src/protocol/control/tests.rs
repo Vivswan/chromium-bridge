@@ -215,6 +215,66 @@ fn classification_matrix() {
             Malformed(Tag::ClientRevoke),
         ),
         (
+            json!({ "type": "client_pair", "name": "codex",
+                    "anchor": { "kind": "signer", "value": "TEAMID" } }),
+            Handle(HostRequest::ClientPair {
+                name: crate::allowlist::ClientName::try_from("codex").unwrap(),
+                anchor: crate::allowlist::Anchor::Signer(
+                    crate::ipc::SignerId::try_from("TEAMID").unwrap(),
+                ),
+            }),
+        ),
+        // The name grammar and the anchor grammar refuse at the parse, so the exchange never sees them.
+        (
+            json!({ "type": "client_pair", "name": "bad name!",
+                    "anchor": { "kind": "signer", "value": "TEAMID" } }),
+            Malformed(Tag::ClientPair),
+        ),
+        (
+            json!({ "type": "client_pair", "name": "codex",
+                    "anchor": { "kind": "hash", "value": "zz" } }),
+            Malformed(Tag::ClientPair),
+        ),
+        (
+            json!({ "type": "policy_set", "overlay": { "pageEvalEnabled": true } }),
+            Handle(HostRequest::PolicySet {
+                overlay: crate::policy::PolicyOverlay {
+                    page_eval_enabled: Some(true),
+                    ..Default::default()
+                },
+            }),
+        ),
+        (
+            json!({ "type": "policy_set", "overlay": { "unknownField": true } }),
+            Malformed(Tag::PolicySet),
+        ),
+        (
+            json!({ "type": "policy_history" }),
+            Handle(HostRequest::PolicyHistory {}),
+        ),
+        (
+            json!({ "type": "policy_rollback", "revision": 3 }),
+            Handle(HostRequest::PolicyRollback {
+                revision: 3,
+                entry: None,
+            }),
+        ),
+        (
+            json!({ "type": "policy_rollback", "revision": 3, "entry": { "id": "ab12" } }),
+            Handle(HostRequest::PolicyRollback {
+                revision: 3,
+                entry: Some(crate::policy::HistoryEntryRef { id: "ab12".into() }),
+            }),
+        ),
+        (
+            json!({ "type": "policy_rollback", "revision": 3, "entry": { "index": 1 } }),
+            Malformed(Tag::PolicyRollback),
+        ),
+        (
+            json!({ "type": "policy_rollback", "revision": "3" }),
+            Malformed(Tag::PolicyRollback),
+        ),
+        (
             json!({ "type": "kill_status" }),
             Handle(HostRequest::KillStatus {}),
         ),
@@ -623,6 +683,26 @@ fn malformed_replies_match_the_request_type() {
             Frame(json!({ "type": "policy_restrict_result", "ok": false,
                           "error": "malformed policy_restrict frame" })),
         ),
+        (
+            Tag::PolicySet,
+            Frame(json!({ "type": "policy_set_result", "ok": false,
+                          "error": "malformed policy_set frame" })),
+        ),
+        (
+            Tag::PolicyRollback,
+            Frame(json!({ "type": "policy_rollback_result", "ok": false,
+                          "error": "malformed policy_rollback frame" })),
+        ),
+        (
+            Tag::PolicyHistory,
+            Frame(json!({ "type": "policy_history_result", "ok": false,
+                          "error": "malformed policy_history frame" })),
+        ),
+        (
+            Tag::ClientPair,
+            Frame(json!({ "type": "client_pair_result", "ok": false,
+                          "error": "malformed client_pair frame" })),
+        ),
         (Tag::LangGet, LangCurrent),
         (Tag::LangSet, LangCurrent),
         (
@@ -673,6 +753,10 @@ fn malformed_replies_match_the_request_type() {
         (Tag::RegistrationStatusResult, Nothing),
         (Tag::PolicyCurrent, Nothing),
         (Tag::PolicyRestrictResult, Nothing),
+        (Tag::PolicySetResult, Nothing),
+        (Tag::PolicyRollbackResult, Nothing),
+        (Tag::PolicyHistoryResult, Nothing),
+        (Tag::ClientPairResult, Nothing),
         (Tag::LangCurrent, Nothing),
     ];
     let covered: BTreeSet<HostControlTag> = table.iter().map(|(tag, _)| *tag).collect();
@@ -749,20 +833,126 @@ fn registration_and_restrict_outcomes_map_onto_the_pinned_wire_shapes() {
             want
         );
     }
+    // One verdict type answers four lanes; each lane's frame carries the error exactly when refused.
+    for (lane, tag) in [
+        (WriteLane::PolicyRestrict, "policy_restrict_result"),
+        (WriteLane::PolicySet, "policy_set_result"),
+        (WriteLane::PolicyRollback, "policy_rollback_result"),
+        (WriteLane::ClientPair, "client_pair_result"),
+    ] {
+        assert_eq!(
+            serde_json::to_value(WriteVerdict::Applied.into_frame(lane)).unwrap(),
+            json!({ "type": tag, "ok": true })
+        );
+        assert_eq!(
+            serde_json::to_value(
+                WriteVerdict::Refused {
+                    error: "relaxes the effective policy".into(),
+                }
+                .into_frame(lane)
+            )
+            .unwrap(),
+            json!({ "type": tag, "ok": false, "error": "relaxes the effective policy" })
+        );
+    }
+    // The history rows travel exactly when the ring read; a readable entry carries its revision and the policy
+    // it held as one value, so a surface can show what a rollback to it re-derives, and a damaged entry omits
+    // that value, never null.
+    let effective = crate::policy::PolicyValues::default();
+    let held = crate::policy::HeldPolicy {
+        revision: 3,
+        effective: effective.clone(),
+    };
+    let held_json =
+        json!({ "revision": 3, "effective": serde_json::to_value(&effective).unwrap() });
     assert_eq!(
-        serde_json::to_value(RestrictOutcome::Applied.into_frame()).unwrap(),
-        json!({ "type": "policy_restrict_result", "ok": true })
+        serde_json::to_value(
+            HistoryReport::Entries(vec![
+                PolicyHistoryRow {
+                    id: "a1".into(),
+                    signed: true,
+                    overlay_active: false,
+                    superseded_unix: Some(crate::tools::args::JsUint::try_from(10).unwrap()),
+                    held: Some(held),
+                },
+                PolicyHistoryRow {
+                    id: "b2".into(),
+                    signed: false,
+                    overlay_active: true,
+                    superseded_unix: Some(crate::tools::args::JsUint::try_from(11).unwrap()),
+                    held: None,
+                },
+            ])
+            .into_frame()
+        )
+        .unwrap(),
+        json!({
+            "type": "policy_history_result",
+            "ok": true,
+            "entries": [
+                {
+                    "id": "a1",
+                    "signed": true,
+                    "overlay_active": false,
+                    "superseded_unix": 10,
+                    "held": held_json,
+                },
+                { "id": "b2", "signed": false, "overlay_active": true, "superseded_unix": 11 },
+            ],
+        })
     );
     assert_eq!(
         serde_json::to_value(
-            RestrictOutcome::Refused {
-                error: "relaxes the effective policy".into(),
+            HistoryReport::Unavailable {
+                error: "ring unreadable".into()
             }
             .into_frame()
         )
         .unwrap(),
-        json!({ "type": "policy_restrict_result", "ok": false,
-                "error": "relaxes the effective policy" })
+        json!({ "type": "policy_history_result", "ok": false, "error": "ring unreadable" })
+    );
+}
+
+#[test]
+fn a_record_past_the_js_safe_timestamp_travels_as_a_damaged_row_not_as_a_refused_reply() {
+    // The page's generated reader refuses an integer past 2^53 - 1 (its safe-integer rule), so a record the
+    // CLI renders fine would otherwise sink the whole policy_history_result and every readable row with it;
+    // it travels as one damaged row (no timestamp, nothing held) beside them. The bound itself, exactly, is
+    // the positive control.
+    use crate::policy::{HeldPolicy, PolicyHistoryEntryReport, PolicyValues, JS_SAFE_INT_MAX};
+    let effective = PolicyValues::default();
+    let record = |id: &str, superseded_unix: u64| PolicyHistoryEntryReport {
+        id: id.into(),
+        signed: true,
+        overlay_active: false,
+        superseded_unix,
+        held: Some(HeldPolicy {
+            revision: 3,
+            effective: effective.clone(),
+        }),
+    };
+    let records = [
+        record("a1", JS_SAFE_INT_MAX + 1),
+        record("b2", JS_SAFE_INT_MAX),
+    ];
+    let frame =
+        HistoryReport::Entries(records.iter().map(PolicyHistoryRow::from).collect()).into_frame();
+    assert_eq!(
+        serde_json::to_value(frame).unwrap(),
+        json!({
+            "type": "policy_history_result",
+            "ok": true,
+            "entries": [
+                { "id": "a1", "signed": true, "overlay_active": false },
+                {
+                    "id": "b2",
+                    "signed": true,
+                    "overlay_active": false,
+                    "superseded_unix": JS_SAFE_INT_MAX,
+                    "held": { "revision": 3, "effective": serde_json::to_value(&effective).unwrap() },
+                },
+            ],
+        })
     );
 }
 

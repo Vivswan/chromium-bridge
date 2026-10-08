@@ -13,15 +13,25 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{
-    field_differs, fold, restrict, restricts_or_equal, set_signed, FieldKind, PolicyDoc,
-    PolicyField, PolicyHistory, PolicyOverlay, PolicyStore, PolicyValues, PolicyWriteError,
+use super::plan::{
+    entry_state, plan_grant, refused_grant, rollback_inputs, summarize, touched_fields, wire_names,
+    HeldPolicy,
 };
-use crate::audit::{AuditKind, AuditRecord, Surface};
+use super::{
+    confirm_unmoved, prepare_grant, restrict, restrict_planned, set_signed, FieldKind, Grant,
+    HistoryEntryRef, PolicyField, PolicyHistory, PolicyOverlay, PolicyStore, PolicyValues,
+    RollbackPlan,
+};
+use crate::audit::Surface;
 use crate::cli::PolicyCommand;
-use crate::enclave::base64_decode;
 use crate::presence::{self, TerminalStdin};
 use crate::runtime_record::RuntimeRecord as _;
+
+/// The store line for a machine with no baseline, printed by `policy show` and by the doctor row: the deny
+/// baseline holds until either grant surface signs the first one.
+pub const PRE_CUTOVER_STORE_NOTE: &str = "none yet (pre-cutover; the extension keeps enforcing its deny \
+                                          baseline until `chromium-bridge policy set` or the options page's \
+                                          Security policy section signs a baseline)";
 
 // ---- The reports (typed, versioned) ------------------------------------------
 
@@ -124,15 +134,18 @@ pub struct PolicyHistoryReport {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyHistoryEntryReport {
-    /// The record's baseline revision, or `null` if that historical baseline
-    /// is unreadable (a damaged ring entry never blocks the report).
-    pub revision: Option<u64>,
+    /// The record's content identity ([`crate::policy::PolicyHistoryEntry::id`]), what `rollback --entry` names.
+    pub id: String,
     /// Whether the superseded baseline carried a signature.
     pub signed: bool,
     /// Whether it carried a restriction overlay.
     pub overlay_active: bool,
     /// Unix seconds when the record stopped being the current store.
     pub superseded_unix: u64,
+    /// The record's baseline revision with the policy it held (its baseline under its overlay), what a rollback
+    /// to it re-derives; `null` when that historical baseline is unreadable (a damaged ring entry never blocks
+    /// the report).
+    pub held: Option<HeldPolicy>,
 }
 
 /// The failure object the WRITE subcommands print on stdout under `--json`, with the same frozen-wire posture as
@@ -192,7 +205,7 @@ pub fn gather_history_report() -> Result<PolicyHistoryReport, String> {
 }
 
 /// Build a history report from a loaded ring (pure: no disk). A ring entry
-/// whose baseline is unreadable keeps its slot with a `null` revision.
+/// whose baseline is unreadable keeps its slot with nothing held.
 fn history_report(history: &PolicyHistory) -> PolicyHistoryReport {
     PolicyHistoryReport {
         v: 1,
@@ -200,23 +213,14 @@ fn history_report(history: &PolicyHistory) -> PolicyHistoryReport {
             .entries
             .iter()
             .map(|e| PolicyHistoryEntryReport {
-                revision: decode_entry_doc(&e.baseline_b64).ok().map(|d| d.revision),
+                id: e.id(),
                 signed: e.sig_b64.is_some(),
                 overlay_active: e.overlay.is_some(),
                 superseded_unix: e.superseded_unix,
+                held: entry_state(e),
             })
             .collect(),
     }
-}
-
-/// Strict-parse a stored/history baseline (base64, `deny_unknown_fields`
-/// JSON, [`PolicyDoc::validate`]) - the same byte-authority discipline as
-/// [`PolicyStore::baseline_doc`], reused for history entries.
-fn decode_entry_doc(baseline_b64: &str) -> Result<PolicyDoc, String> {
-    let bytes = base64_decode(baseline_b64).map_err(|e| e.to_string())?;
-    let doc: PolicyDoc = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-    doc.validate().map_err(str::to_string)?;
-    Ok(doc)
 }
 
 // ---- Rendering (pure) -------------------------------------------------------
@@ -226,11 +230,7 @@ fn render_status(r: &PolicyStatusReport) -> String {
     let mut out = String::from("chromium-bridge policy\n");
     match r {
         PolicyStatusReport::None { .. } => {
-            out.push_str(
-                "store:      none yet (pre-cutover; the extension keeps enforcing its deny\n            \
-                 baseline until a baseline is signed via\n            \
-                 `chromium-bridge policy set`)\n",
-            );
+            out.push_str(&format!("store:      {PRE_CUTOVER_STORE_NOTE}\n"));
         }
         PolicyStatusReport::Error { detail, .. } => {
             out.push_str(&format!(
@@ -299,12 +299,15 @@ fn render_history(r: &PolicyHistoryReport) -> String {
     }
     let mut out = String::from("chromium-bridge policy history (oldest first)\n");
     for e in &r.entries {
-        let revision = e
-            .revision
-            .map(|n| n.to_string())
-            .unwrap_or_else(|| "?".to_string());
+        let (revision, effective) = match &e.held {
+            Some(held) => (
+                held.revision.to_string(),
+                summarize(&held.effective, PolicyField::ALL),
+            ),
+            None => ("?".to_string(), "?".to_string()),
+        };
         out.push_str(&format!(
-            "  revision {revision:<6} {} {} superseded_unix={}\n",
+            "  revision {revision:<6} {} {} superseded_unix={} entry={} effective={effective}\n",
             if e.signed { "signed  " } else { "unsigned" },
             if e.overlay_active {
                 "overlay"
@@ -312,6 +315,7 @@ fn render_history(r: &PolicyHistoryReport) -> String {
                 "no-overlay"
             },
             e.superseded_unix,
+            e.id,
         ));
     }
     out
@@ -330,104 +334,6 @@ fn cli_attest(
     move || presence::tty_confirm(reason, terminal)
 }
 
-/// The grant lane's trail for a witness refused before `set_signed` ran: the record a refusal inside it
-/// writes, so every refused grant leaves one. Returns the refusal as the lane reports it.
-fn refused_grant(touched: &[PolicyField], e: &presence::PresenceError) -> String {
-    crate::audit::record(
-        AuditRecord::new(AuditKind::PolicyWrite)
-            .surface(Surface::Cli)
-            .outcome("refused")
-            .detail(&format!("presence: {e}; touched={}", wire_names(touched))),
-    );
-    PolicyWriteError::Refused(e.to_string()).to_string()
-}
-
-// ---- Rollback planning (pure) -----------------------------------------------
-
-/// What a rollback will do, decided by diffing a past revision's effective
-/// policy against the current effective policy.
-#[derive(Debug, PartialEq, Eq)]
-enum RollbackPlan {
-    /// The target already equals the current effective policy.
-    NoChange,
-    /// The target only tightens (or holds): the free lane re-derives it as a
-    /// fresh restriction overlay - no tap, no old artifact.
-    Tighten {
-        overlay: PolicyOverlay,
-        fields: Vec<PolicyField>,
-    },
-    /// The target relaxes something: one signed tap mints a fresh baseline, never the old signed bytes back.
-    ///
-    /// ```text
-    /// values   -> the CURRENT baseline with only the changed fields set to the target; the historical effective
-    ///             wholesale would fold overlay-covered untouched fields into the baseline
-    /// touched  -> the changed fields, a superset of the relaxed ones as the coverage check requires
-    /// ```
-    Relax {
-        values: PolicyValues,
-        touched: Vec<PolicyField>,
-        fields: Vec<PolicyField>,
-    },
-}
-
-/// Plan a rollback from `current` effective to `target` effective, over the
-/// current `baseline` values. Pure and unit-testable: the tighten/relax
-/// decision is exactly the direction lattice the extension recomputes, so a
-/// rollback can never smuggle a relaxation into the free lane.
-fn plan_rollback(
-    target: &PolicyValues,
-    current: &PolicyValues,
-    baseline: &PolicyValues,
-) -> RollbackPlan {
-    let (overlay, fields) = diff_overlay(target, current);
-    if fields.is_empty() {
-        RollbackPlan::NoChange
-    } else if restricts_or_equal(target, current) {
-        RollbackPlan::Tighten { overlay, fields }
-    } else {
-        let mut values = baseline.clone();
-        for field in fields.iter().copied() {
-            values.copy_field(field, target);
-        }
-        RollbackPlan::Relax {
-            values,
-            touched: fields.clone(),
-            fields,
-        }
-    }
-}
-
-/// An overlay carrying `target`'s value on exactly the fields where it differs
-/// from `current` (under the lattice, so the tool list differs as a set),
-/// plus those fields in catalogue order. Folding this overlay (free lane) or
-/// minting a baseline of `target` (signed lane) both land the effective
-/// policy on `target`.
-fn diff_overlay(
-    target: &PolicyValues,
-    current: &PolicyValues,
-) -> (PolicyOverlay, Vec<PolicyField>) {
-    let mut overlay = PolicyOverlay::default();
-    let mut fields = Vec::new();
-    for field in PolicyField::ALL
-        .iter()
-        .copied()
-        .filter(|f| field_differs(*f, target, current))
-    {
-        overlay.set_from(field, target);
-        fields.push(field);
-    }
-    (overlay, fields)
-}
-
-/// Comma-joined wire names, for the plan description.
-fn wire_names(fields: &[PolicyField]) -> String {
-    fields
-        .iter()
-        .map(|f| f.wire_name())
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
 // ---- The subcommand runners -------------------------------------------------
 
 /// Dispatch `chromium-bridge policy <sub>` to its lane. Returns the process
@@ -438,9 +344,11 @@ pub fn run_policy(command: PolicyCommand) -> i32 {
         PolicyCommand::History { json } => run_history(json),
         PolicyCommand::Set { overlay, json } => run_set(overlay, json, TerminalStdin::require()),
         PolicyCommand::Restrict { overlay } => run_restrict(overlay),
-        PolicyCommand::Rollback { revision, json } => {
-            run_rollback(revision, json, TerminalStdin::require())
-        }
+        PolicyCommand::Rollback {
+            revision,
+            entry,
+            json,
+        } => run_rollback(revision, entry, json, TerminalStdin::require()),
     }
 }
 
@@ -557,21 +465,9 @@ fn do_set(
     overlay: PolicyOverlay,
     terminal: Result<TerminalStdin, presence::PresenceError>,
 ) -> Result<crate::presence::PresencePath, String> {
-    let touched: Vec<PolicyField> = PolicyField::ALL
-        .iter()
-        .copied()
-        .filter(|field| overlay.has(*field))
-        .collect();
-    let terminal = terminal.map_err(|e| refused_grant(&touched, &e))?;
-    let base = match PolicyStore::load() {
-        Ok(Some(store)) => store
-            .baseline_doc()
-            .map_err(|e| format!("the current baseline is unreadable ({e}); refusing"))?
-            .values(),
-        Ok(None) => PolicyValues::default(),
-        Err(e) => return Err(format!("the policy store is unreadable ({e}); refusing")),
-    };
-    let values = fold(&base, &overlay);
+    let terminal =
+        terminal.map_err(|e| refused_grant(Surface::Cli, &touched_fields(&overlay), &e))?;
+    let Grant { values, touched } = plan_grant(&overlay)?;
     set_signed(
         values,
         touched,
@@ -599,30 +495,32 @@ fn run_restrict(overlay: PolicyOverlay) -> i32 {
     }
 }
 
-/// `policy rollback --revision <n> [--json]`: the plan is [`plan_rollback`]'s (module docs). Under `--json`
+/// `policy rollback --revision <n> [--json]`: the plan is [`RollbackPlan`]'s (`policy/plan.rs`), and every arm
+/// holds to the store the plan was read over, refusing one that moved since as a conflict. Under `--json`
 /// stdout is the report alone: success, a no-op included, prints the post-write status report, a refusal the
 /// error object. `terminal` is the witness, or the precondition failure that stands for it, consumed only by a
 /// relaxing plan.
 fn run_rollback(
     revision: u64,
+    entry: Option<String>,
     json: bool,
     terminal: Result<TerminalStdin, presence::PresenceError>,
 ) -> i32 {
-    let inputs = match rollback_inputs(revision) {
+    let inputs = match rollback_inputs(revision, entry.map(|id| HistoryEntryRef { id })) {
         Ok(inputs) => inputs,
         Err(error) => return refuse_write("policy rollback", json, error),
     };
-    match plan_rollback(&inputs.target, &inputs.current, &inputs.baseline) {
-        RollbackPlan::NoChange => {
-            if json {
-                emit_status_json("policy rollback")
-            } else {
+    match inputs.plan() {
+        RollbackPlan::NoChange => match confirm_unmoved(&inputs.over) {
+            Ok(()) if json => emit_status_json("policy rollback"),
+            Ok(()) => {
                 println!(
                     "policy already matches revision {revision}'s effective policy; nothing to do."
                 );
                 0
             }
-        }
+            Err(e) => refuse_write("policy rollback", json, e.to_string()),
+        },
         RollbackPlan::Tighten { overlay, fields } => {
             if !json {
                 println!(
@@ -630,7 +528,7 @@ fn run_rollback(
                     wire_names(&fields)
                 );
             }
-            match restrict(overlay, Surface::Cli) {
+            match restrict_planned(overlay, &inputs.over, Surface::Cli) {
                 Ok(()) => {
                     if json {
                         emit_status_json("policy rollback")
@@ -644,15 +542,15 @@ fn run_rollback(
                 Err(e) => refuse_write("policy rollback", json, e.to_string()),
             }
         }
-        RollbackPlan::Relax {
-            values,
-            touched,
-            fields,
-        } => {
+        RollbackPlan::Relax(Grant { values, touched }) => {
             let terminal = match terminal {
                 Ok(terminal) => terminal,
                 Err(e) => {
-                    return refuse_write("policy rollback", json, refused_grant(&touched, &e))
+                    return refuse_write(
+                        "policy rollback",
+                        json,
+                        refused_grant(Surface::Cli, &touched, &e),
+                    )
                 }
             };
             if !json {
@@ -660,15 +558,17 @@ fn run_rollback(
                     "rolling back to revision {revision}: this relaxes the effective policy \
                      ({}), so it mints a fresh signed revision (never a replay of the old \
                      artifact) and requires your confirmation.",
-                    wire_names(&fields)
+                    wire_names(&touched)
                 );
             }
-            match set_signed(
-                values,
-                touched,
-                Surface::Cli,
-                cli_attest("This rollback relaxes the effective policy.", terminal),
-            ) {
+            match prepare_grant(values, touched, Surface::Cli)
+                .and_then(|prepared| prepared.planned_over(&inputs.over))
+                .and_then(|prepared| {
+                    prepared.attest_and_commit(cli_attest(
+                        "This rollback relaxes the effective policy.",
+                        terminal,
+                    ))
+                }) {
                 Ok(rung) => {
                     if json {
                         emit_status_json("policy rollback")
@@ -683,92 +583,6 @@ fn run_rollback(
                 Err(e) => refuse_write("policy rollback", json, e.to_string()),
             }
         }
-    }
-}
-
-/// The three effective/baseline states a rollback is planned over.
-struct RollbackInputs {
-    /// The target revision's effective policy, re-derived from the history.
-    target: PolicyValues,
-    /// The current effective policy.
-    current: PolicyValues,
-    /// The current baseline's values (what a relaxing plan folds over).
-    baseline: PolicyValues,
-}
-
-/// The disk reads behind a rollback, output-free so the prose and `--json`
-/// renderings share one path.
-fn rollback_inputs(revision: u64) -> Result<RollbackInputs, String> {
-    let history = match PolicyHistory::load() {
-        Ok(Some(h)) => h,
-        Ok(None) => return Err("there is no policy history on this machine.".to_string()),
-        Err(e) => return Err(format!("the policy history is unreadable ({e}).")),
-    };
-    let target = find_history_effective(&history, revision)?;
-    let (current, baseline) = match PolicyStore::load() {
-        Ok(Some(store)) => match (store.effective(), store.baseline_doc()) {
-            (Ok(effective), Ok(doc)) => (effective, doc.values()),
-            (Err(e), _) | (_, Err(e)) => {
-                return Err(format!(
-                    "the current baseline is unreadable ({e}); refusing"
-                ));
-            }
-        },
-        Ok(None) => {
-            return Err("there is no current policy baseline to roll back from; \
-                 sign one first with `chromium-bridge policy set`."
-                .to_string());
-        }
-        Err(e) => return Err(format!("the policy store is unreadable ({e}); refusing")),
-    };
-    Ok(RollbackInputs {
-        target,
-        current,
-        baseline,
-    })
-}
-
-/// The effective policy of the history entry at `revision`, folding that
-/// record's baseline and overlay. Unreadable ring entries are skipped (never
-/// fatal); a miss names the revisions that ARE available. A revision can
-/// appear more than once (every restriction while it was current pushed an
-/// entry at the unchanged baseline revision): identical effective states are
-/// fine, but differing ones are refused as ambiguous rather than silently
-/// picking one - a rollback must land exactly the state the user asked for.
-fn find_history_effective(history: &PolicyHistory, revision: u64) -> Result<PolicyValues, String> {
-    let mut available = Vec::new();
-    let mut matches: Vec<PolicyValues> = Vec::new();
-    for entry in &history.entries {
-        let Ok(doc) = decode_entry_doc(&entry.baseline_b64) else {
-            continue;
-        };
-        if !available.contains(&doc.revision) {
-            available.push(doc.revision);
-        }
-        if doc.revision == revision {
-            let overlay = entry.overlay.clone().unwrap_or_default();
-            matches.push(fold(&doc.values(), &overlay));
-        }
-    }
-    match matches.first() {
-        None => {
-            let available = available
-                .iter()
-                .map(u64::to_string)
-                .collect::<Vec<_>>()
-                .join(", ");
-            Err(format!(
-                "no history entry at revision {revision}; available revisions: [{available}]"
-            ))
-        }
-        Some(first) if matches.iter().all(|m| m == first) => Ok(first.clone()),
-        Some(_) => Err(format!(
-            "revision {revision} appears {} times in the history with different \
-             effective policies (its restrictions changed while it was current), so \
-             rolling back \"to revision {revision}\" is ambiguous; re-create the state \
-             you want directly with `chromium-bridge policy set` / `policy restrict`.",
-            matches.len()
-        )),
     }
 }
 

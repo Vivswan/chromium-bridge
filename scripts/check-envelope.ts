@@ -22,6 +22,7 @@
 
 import { z } from "zod";
 import * as generated from "../src/packages/shared/generated/envelope";
+import { POLICY_DEFAULTS } from "../src/packages/shared/generated/policy";
 import {
   ADMIN_RESULT_FRAME_TYPES,
   ENCLAVE_FRAME_TYPES,
@@ -35,7 +36,7 @@ import {
 import {
   AUDIT_READ_FRAME_TYPES,
   DOCTOR_FRAME_TYPES,
-  POLICY_RESTRICT_FRAME_TYPES,
+  POLICY_LANE_FRAME_TYPES,
   REGISTRATION_FRAME_TYPES,
 } from "../src/packages/shared/src/host-admin";
 import { WEBAUTHN_FRAME_TYPES } from "../src/packages/shared/src/webauthn";
@@ -91,6 +92,10 @@ const FRAMES: Readonly<Record<string, FrameArms>> = {
     },
   ],
   client_revoke_result: [{ type: "client_revoke_result", ok: true, error: "e" }],
+  client_pair_result: [
+    { type: "client_pair_result", ok: true },
+    { type: "client_pair_result", ok: false, error: "user presence not attested" },
+  ],
   kill_status_result: [{ type: "kill_status_result", ok: true, killed: false, error: "e" }],
   registration_status_result: [
     {
@@ -147,6 +152,30 @@ const FRAMES: Readonly<Record<string, FrameArms>> = {
       path: "/run/user/1000/chromium-bridge/audit.log",
     },
     { type: "audit_read_result", ok: false, error: "cannot read audit.log: permission denied" },
+  ],
+  policy_set_result: [
+    { type: "policy_set_result", ok: true },
+    { type: "policy_set_result", ok: false, error: "no host key on this machine" },
+  ],
+  policy_rollback_result: [
+    { type: "policy_rollback_result", ok: true },
+    { type: "policy_rollback_result", ok: false, error: "no history entry at revision 9" },
+  ],
+  policy_history_result: [
+    {
+      type: "policy_history_result",
+      ok: true,
+      entries: [
+        {
+          id: "a1",
+          signed: true,
+          overlay_active: false,
+          superseded_unix: 1,
+          held: { revision: 3, effective: POLICY_DEFAULTS },
+        },
+      ],
+    },
+    { type: "policy_history_result", ok: false, error: "the policy history is unreadable" },
   ],
   policy_current: [
     {
@@ -470,7 +499,7 @@ export const CLASSIFIED_TAGS: Record<Group, ReadonlySet<string>> = {
     ...AUDIT_READ_FRAME_TYPES,
     ...DOCTOR_FRAME_TYPES,
   ]),
-  policy: new Set([...POLICY_FRAME_TYPES, ...POLICY_RESTRICT_FRAME_TYPES]),
+  policy: new Set([...POLICY_FRAME_TYPES, ...POLICY_LANE_FRAME_TYPES]),
   webauthn: new Set(WEBAUTHN_FRAME_TYPES),
 };
 

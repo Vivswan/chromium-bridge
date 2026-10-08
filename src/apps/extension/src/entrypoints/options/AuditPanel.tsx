@@ -1,5 +1,6 @@
 import type { AuditEntry } from "@chromium-bridge/shared/enclave";
 import type { AuditTrailEntry } from "@chromium-bridge/shared/generated/envelope";
+import { AUDIT_DEFAULT_LIMIT, AUDIT_READ_MAX_LIMIT } from "@chromium-bridge/shared/generated/host";
 import type { RuntimeResponse } from "@chromium-bridge/shared/runtime-msg";
 import { useCallback, useEffect, useState } from "react";
 import { browser } from "wxt/browser";
@@ -10,24 +11,41 @@ import { send } from "@/lib/messages";
 // The read-only audit panel: two lists, newest first. This browser's own ring of security decisions
 // (confirmations, pairing approvals, revocations, kill toggles) lives in the extension-context-only trusted
 // storage and refreshes on storage.onChanged, so a new decision appears without polling. The host's durable
-// trail is the page `chromium-bridge audit` prints, read through the host on demand (mount and Refresh); the
-// host spells each line's words, so the two surfaces cannot disagree. Strictly display.
+// trail is the page `chromium-bridge audit --limit <n>` prints, read through the host on demand (mount,
+// Refresh, and Show older, which widens the page by the CLI's default up to the frame's cap); the host spells
+// each line's words, so the two surfaces cannot disagree. Strictly display.
 export function AuditPanel() {
   const { t } = useI18n();
   const [entries, setEntries] = useState<AuditEntry[] | null>(null);
   const [host, setHost] = useState<RuntimeResponse<"get_host_audit"> | null>(null);
   const [hostBusy, setHostBusy] = useState(false);
+  // Absent until the first Show older: the host then applies the CLI's default page.
+  const [limit, setLimit] = useState<number | undefined>(undefined);
 
   const refresh = useCallback(async () => {
     const r = await send({ type: "get_audit" });
     setEntries(r.ok ? r.entries : null);
   }, []);
 
-  const refreshHost = useCallback(async () => {
+  const refreshHost = useCallback(async (limit?: number) => {
     setHostBusy(true);
-    setHost(await send({ type: "get_host_audit" }));
+    setHost(
+      await send(
+        limit === undefined ? { type: "get_host_audit" } : { type: "get_host_audit", limit },
+      ),
+    );
     setHostBusy(false);
   }, []);
+
+  // The next read's page, one CLI default wider, and how many more lines it adds: the button names the latter,
+  // never the whole backlog, which one click does not fetch.
+  const current = limit ?? AUDIT_DEFAULT_LIMIT;
+  const wider = Math.min(current + AUDIT_DEFAULT_LIMIT, AUDIT_READ_MAX_LIMIT);
+  const added = host?.ok === true ? Math.min(host.older, wider - current) : 0;
+  const showOlder = () => {
+    setLimit(wider);
+    void refreshHost(wider);
+  };
 
   useEffect(() => {
     void refresh();
@@ -73,7 +91,7 @@ export function AuditPanel() {
 
       <div className="mt-5 flex items-start justify-between gap-3">
         <div className="section-title mb-1.5">{t("audit.host_title")}</div>
-        <Button variant="ghost" onClick={() => void refreshHost()} disabled={hostBusy}>
+        <Button variant="ghost" onClick={() => void refreshHost(limit)} disabled={hostBusy}>
           {t("audit.refresh")}
         </Button>
       </div>
@@ -95,7 +113,12 @@ export function AuditPanel() {
           ))}
         </ul>
       )}
-      <p className="consequence mt-2">{t("audit.host_desc")}</p>
+      {added > 0 && (
+        <Button variant="ghost" className="mt-2" onClick={showOlder} disabled={hostBusy}>
+          {t("audit.show_older", [String(added)])}
+        </Button>
+      )}
+      <p className="consequence mt-2">{t("audit.host_desc", [String(AUDIT_READ_MAX_LIMIT)])}</p>
     </div>
   );
 }

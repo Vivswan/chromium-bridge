@@ -148,6 +148,27 @@ function okSplit(
   };
 }
 
+// A full set of policy values for the probes at a PolicyValues node: every field is required there, so a probe
+// is the whole object. This table is generator input and imports nothing the generator writes, so the values
+// are written here; a field the Rust policy gains makes the faithful base refuse the probe, which the gate names.
+const HELD_POLICY_VALUES = {
+  cdpMode: false,
+  fileUploadEnabled: false,
+  handleDialogEnabled: false,
+  pageEvalEnabled: false,
+  confirmHighRiskClick: true,
+  confirmPageEval: true,
+  presenceConfirm: true,
+  confirmTabClose: true,
+  warnPreciseSnapshot: true,
+  evalMask: true,
+  hostReverifyMs: 0,
+  confirmGraceMs: 60000,
+  clickToastTimeoutMs: 30000,
+  evalToastTimeoutMs: 45000,
+  disabledTools: [],
+};
+
 const HOST_MINTED: Asymmetry = {
   direction: "narrow",
   reason:
@@ -372,6 +393,63 @@ export const ASYMMETRIES: Readonly<Record<string, Readonly<Record<string, Asymme
         ],
       },
     ),
+  },
+  ...Object.fromEntries(
+    // The three write lanes the host answers from one WriteVerdict beside policy_restrict_result.
+    ["policy_set_result", "policy_rollback_result", "client_pair_result"].map((frame) => [
+      frame,
+      {
+        $: okSplit(
+          frame,
+          { required: [], forbidden: ["error"] },
+          { required: ["error"], forbidden: [] },
+          {
+            refuses: [
+              { type: frame, ok: true, error: "write failed" },
+              { type: frame, ok: false },
+            ],
+            accepts: [
+              { type: frame, ok: true },
+              { type: frame, ok: false, error: "no host key on this machine" },
+            ],
+          },
+        ),
+      },
+    ]),
+  ),
+  policy_history_result: {
+    $: okSplit(
+      "policy_history_result",
+      { required: ["entries"], forbidden: ["error"] },
+      { required: ["error"], forbidden: ["entries"] },
+      {
+        refuses: [
+          { type: "policy_history_result", ok: true },
+          { type: "policy_history_result", ok: true, entries: [], error: "e" },
+          { type: "policy_history_result", ok: false },
+          { type: "policy_history_result", ok: false, entries: [], error: "e" },
+        ],
+        accepts: [
+          { type: "policy_history_result", ok: true, entries: [] },
+          { type: "policy_history_result", ok: false, error: "the policy history is unreadable" },
+        ],
+      },
+    ),
+    "$.properties.entries.items.properties.held.properties.effective": {
+      direction: "narrow",
+      reason:
+        "A row's effective policy is the generated PolicyValuesSchema: strict like the host's, with the " +
+        "disabledTools caps applied at parse time where the host applies them in PolicyDoc::validate; a field " +
+        "the catalogue does not own is a policy claim nobody owns and fails the frame.",
+      changes: [{ change: "generated-schema", symbol: "PolicyValuesSchema", from: "./policy" }],
+      probes: {
+        refuses: [
+          { ...HELD_POLICY_VALUES, disabledTools: [""] },
+          { ...HELD_POLICY_VALUES, disabledTools: ["a".repeat(129)] },
+        ],
+        accepts: [{ ...HELD_POLICY_VALUES, pageEvalEnabled: true, disabledTools: ["page_upload"] }],
+      },
+    },
   },
   presence_request: {
     "$.properties.challenge": HOST_MINTED,

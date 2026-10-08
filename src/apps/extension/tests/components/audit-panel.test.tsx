@@ -24,8 +24,8 @@ type HostReply =
   | { ok: true; entries: AuditTrailEntry[]; older: number; path: string }
   | { ok: false; error: string };
 
-let sent: Array<{ type: string }>;
-let hostReply: () => HostReply;
+let sent: Array<{ type: string; limit?: number }>;
+let hostReply: (limit?: number) => HostReply;
 
 beforeEach(() => {
   fakeBrowser.reset();
@@ -45,15 +45,16 @@ beforeEach(() => {
     audit_host_loading: { message: "Loading..." },
     audit_host_error: { message: "Could not read the host trail: $1" },
     audit_host_empty: { message: "no audit records yet (looked in $1)" },
+    audit_show_older: { message: "Show $1 older" },
   };
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => ({ ok: true, json: async () => EN }) as Response),
   );
   vi.spyOn(fakeBrowser.runtime, "sendMessage").mockImplementation(async (msg: unknown) => {
-    const m = msg as { type: "get_audit" | "get_host_audit" };
+    const m = msg as { type: "get_audit" | "get_host_audit"; limit?: number };
     sent.push(m);
-    return m.type === "get_audit" ? { ok: true, entries: RING } : hostReply();
+    return m.type === "get_audit" ? { ok: true, entries: RING } : hostReply(m.limit);
   });
 });
 
@@ -103,6 +104,33 @@ describe("AuditPanel", () => {
     hostReply = () => ({ ok: true, entries: [], older: 0, path: "/run/user/1000/audit.log" });
     await mount();
     await screen.findByText("no audit records yet (looked in /run/user/1000/audit.log)");
+  });
+
+  test("Show older re-asks with a wider limit, as `audit --limit <n>` does, up to the frame's cap", async () => {
+    const { AUDIT_DEFAULT_LIMIT, AUDIT_READ_MAX_LIMIT } = await import(
+      "@chromium-bridge/shared/generated/host"
+    );
+    // The host holds more than the cap: every widened read still leaves older lines behind.
+    hostReply = (limit = AUDIT_DEFAULT_LIMIT) => ({
+      ok: true,
+      entries: TRAIL,
+      older: AUDIT_READ_MAX_LIMIT + 1 - limit,
+      path: "/run/user/1000/audit.log",
+    });
+    await mount();
+    await screen.findByText("pair_client");
+    const older = () => screen.queryByRole("button", { name: /older$/ });
+    // The label counts what the next click adds (one default page), not the whole backlog it cannot fetch.
+    expect(older()).toHaveTextContent(`Show ${AUDIT_DEFAULT_LIMIT} older`);
+    await userEvent.click(older() as HTMLElement);
+    // Refresh keeps the widened view rather than snapping back to the default page.
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    const limits = sent.filter((m) => m.type === "get_host_audit").map((m) => m.limit);
+    expect(limits).toEqual([undefined, 2 * AUDIT_DEFAULT_LIMIT, 2 * AUDIT_DEFAULT_LIMIT]);
+    // Widen until the cap: the button then goes, since no frame may ask for more.
+    while (older()) await userEvent.click(older() as HTMLElement);
+    const last = sent.filter((m) => m.type === "get_host_audit").at(-1);
+    expect(last?.limit).toBe(AUDIT_READ_MAX_LIMIT);
   });
 
   test("Refresh re-asks the host trail alone", async () => {
