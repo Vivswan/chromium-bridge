@@ -1,15 +1,7 @@
 // Imports node builtins only: the release workflow runs build-repro.ts and the nightly fuzz job runs
 // fuzz-smoke.ts before any `bun install`, so nothing here may need node_modules.
 
-import {
-  appendFileSync,
-  lstatSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -63,19 +55,6 @@ export function gitEnv(base: Env = process.env): Record<string, string> {
       (entry): entry is [string, string] => !entry[0].startsWith("GIT_") && entry[1] !== undefined,
     ),
   );
-}
-
-// A step output is one `name=value` line appended to the file GITHUB_OUTPUT names, and GitHub keeps the
-// LAST line for a repeated name: a value with a line break would be read as a second record, so it is
-// refused here rather than written as a different value.
-export function githubOutput(name: string, value: string, env: Env = process.env): void {
-  const file = env.GITHUB_OUTPUT;
-  if (!file) throw new Error("GITHUB_OUTPUT is not set (not running as a GitHub Actions step)");
-  if (!/^[A-Za-z_][A-Za-z0-9_-]*$/.test(name)) throw new Error(`not a step output name: ${name}`);
-  if (/[\r\n]/.test(value)) {
-    throw new Error(`step output ${name} would span lines: ${JSON.stringify(value)}`);
-  }
-  appendFileSync(file, `${name}=${value}\n`);
 }
 
 /** A value the calling step must set in `env:`; an absent one is a miswired step, never a default. */

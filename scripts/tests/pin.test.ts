@@ -2,10 +2,11 @@
 // reads .prototools alone, Docker reads the Containerfile alone and lets the last of two ARG lines win.
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Scratch, writeTree } from "../lib.ts";
 import { readAllPins, readPin } from "../pin.ts";
+import { stepOutputs } from "./step-outputs.ts";
 
 const scratch = new Scratch();
 afterAll(() => scratch.remove());
@@ -164,7 +165,7 @@ const cases: Case[] = [
     outcome: { error: /empty or non-string/ },
   },
   {
-    name: "a multi-line string is refused: a value with whitespace would print two lines, and the last `proto=` record written to GITHUB_OUTPUT would win",
+    name: "a multi-line string is refused: a value with whitespace is two tokens where a build arg or a tool spec takes one",
     prototools: ['proto = """0.58.2', '9.9.9"""'],
     tool: "proto",
     outcome: { error: /whitespace/ },
@@ -269,19 +270,20 @@ describe("the CLI's exit status", () => {
     });
   });
 
-  test("--output <name> appends the `name=pin` record for a pinned tool and no record for a refused one", () => {
+  test("--output <name> writes the pin as the step output record for a pinned tool and no record for a refused one", () => {
     const file = join(scratch.dir("pin-test-output"), "output");
+    writeFileSync(file, "");
     const env = { GITHUB_OUTPUT: file };
     const pinned = cli(["proto", "--output", "proto"], env);
     const refused = cli(["nope", "--output", "nope"], env);
     expect({
       pinned: pinned.exitCode,
       refused: refused.exitCode,
-      records: readFileSync(file, "utf8"),
+      records: stepOutputs(file),
     }).toEqual({
       pinned: 0,
       refused: 1,
-      records: `proto=${pinned.stdout.toString().trim()}\n`,
+      records: { proto: pinned.stdout.toString().trim() },
     });
   });
 });
