@@ -849,11 +849,11 @@ where
     }
 }
 
-/// Control-plane-only mode: the bridge is killed or its state is unreadable, so nothing may flow between
-/// browser and broker, yet this host must stay up because the extension's SW-only kill mirror is fed by its
-/// pushes. stdin is read on its own thread feeding a channel so the loop can interleave frames with the unkill
-/// flag; on an observed release, leaving this mode is [`drain_then_decide`]'s decision, and the extension then
-/// reconnects into a bridge host.
+/// Control-plane-only mode: the bridge is killed or its state is unreadable, so nothing flows between browser
+/// and broker, yet the host stays up because the extension's SW-only kill mirror is fed by its pushes.
+///
+/// On an observed release, leaving is [`drain_then_decide`]'s decision, and the extension then reconnects into
+/// a bridge host.
 fn run_control_plane(mut exchange: Exchange) -> i32 {
     let stdout_writer = Arc::new(Mutex::new(BufWriter::new(io::stdout())));
     // The watch raises this flag on an observed release; leaving this mode

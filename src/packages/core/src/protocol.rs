@@ -342,7 +342,9 @@ pub enum AttachReply {
     /// The peer proceeds to session traffic. An empty struct variant, not a unit variant, for the reason on
     /// [`AttachRequest::Browser`].
     Accepted {},
-    /// An authorization denial (an allowlist miss); the peer fails closed.
+    /// A denial the peer fails closed on: a browser when the kill state is engaged or unreadable, a relay when
+    /// the trust record is unreadable or its harness is outside the allowlist. `reason` is the broker's short
+    /// refusal text, for the peer's log.
     Refused { reason: String },
     /// A transient condition (capacity, or the broker shutting down); the peer retries, which for a relay may
     /// mean becoming the broker itself.
@@ -413,10 +415,10 @@ impl BridgeResp {
 }
 
 /// Server->extension frames about a request already on the wire, relayed by the native host untouched like the
-/// request itself; the extension reads each variant with a generated strict validator (`moon run gen`). A
-/// signal is not a host control tag, so the host's socket->stdout pump forwards it instead of dropping it as an
-/// injection; a browser that bounces one back meets the session's strict response parse, which severs that
-/// connection.
+/// request itself; the extension reads each variant with a generated strict validator (`moon run gen`).
+///
+/// A signal is not a host control tag, so the host's socket->stdout pump forwards it; a browser that bounces
+/// one back meets the session's strict response parse, which severs that connection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]

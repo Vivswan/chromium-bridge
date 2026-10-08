@@ -9,12 +9,13 @@ use serde::de::value::StrDeserializer;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Host-key ceremony frames, answered by the native host itself: the stdin->socket pump signs a challenge
-/// with the host key and never forwards these frames to the MCP server. The host keeps no replay state and
-/// signs any valid challenge, so freshness is the extension's job: a fresh single-use CSPRNG nonce per
-/// challenge, a proof accepted only for the outstanding nonce and verified against its PINNED key, never the
-/// `pubkey` field (trustworthy only during the user-verified pairing, when the user compares fingerprints).
-/// Every error is a denial the extension fails closed on; user presence is [`WebAuthnControl`]'s business.
+/// Host-key ceremony frames, answered by the native host itself and never forwarded to the MCP server. The
+/// host keeps no replay state and signs any valid challenge, so freshness is the extension's job.
+/// ```text
+/// nonce      -> fresh, single-use, CSPRNG; a proof is accepted only for the outstanding one
+/// verify key -> the PINNED key, never the frame's pubkey (trusted only during the fingerprint-compared pairing)
+/// any error  -> a denial the extension fails closed on; user presence is WebAuthnControl's business
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -47,11 +48,13 @@ pub enum EnclaveControl {
     EnclaveRevoked {},
 }
 
-/// Host-admin frames, answered by the native host itself exactly like [`EnclaveControl`]: never forwarded
-/// to the MCP server, and dropped if the server leg tries to inject one. They arrive only from the extension
-/// Chrome connected to this host (`allowed_origins`). A frame that only reduces capability (list, revoke,
-/// `kill_engage`) is acted on at once; the two that would RESTORE or GRANT it (`kill_release`, `client_pair`)
-/// are answered with a presence request instead, and `native_host/presence.rs` decides the rest.
+/// Host-admin frames, answered by the native host itself exactly like [`EnclaveControl`] (never forwarded,
+/// injections dropped), accepted only from the extension Chrome connected to this host (`allowed_origins`).
+/// ```text
+/// reads (client_list, the status and report frames)  -> answered at once
+/// reduces capability (client_revoke, kill_engage)     -> acted on at once
+/// restores or grants it (kill_release, client_pair)   -> presence_request first; native_host/presence.rs decides
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -803,9 +806,16 @@ impl HistoryReport {
 #[cfg_attr(feature = "envelope-schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WebAuthnControl {
-    /// Extension -> host: start enrolling a credential for this browser. The host binds the connection's
-    /// browser label into the statement, so the frame carries none; answered with `enroll_options`, or with
-    /// `enroll_result { ok: false }` when refused.
+    /// Extension -> host: start enrolling a credential for this browser; the host binds the connection's
+    /// browser label into the statement, so the frame carries none.
+    ///
+    /// ```text
+    /// no enrollment, or an approval still live  -> enroll_options
+    /// enrolled, no live approval                -> presence_request, then enroll_result { ok: false, reason:
+    ///                                              "presence_required" }; the extension re-sends enroll_begin
+    ///                                              once its assertion is approved
+    /// store or nonce failure                    -> enroll_result { ok: false } alone
+    /// ```
     EnrollBegin {},
     /// Host -> extension: the `PublicKeyCredentialCreationOptions` the host decides.
     EnrollOptions {

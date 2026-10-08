@@ -1,15 +1,19 @@
 //! The global kill switch: one fail-closed latch that halts ALL bridge activity until a trusted surface
 //! explicitly releases it. The latch is the `killed` flag of the trust record ([`crate::trust::Trust`]),
-//! flipped by [`engage`] / [`release`] in one atomic write with an epoch bump, and it IS the authority: every
-//! host-side enforcement point (tool dispatch, the broker's browser leg, the native host) reads that record the
-//! same way and fails closed on an unreadable one; the extension only mirrors what the host pushes.
+//! flipped by [`engage`] / [`release`] in one atomic write with an epoch bump.
 //!
-//! Nothing clears the latch on its own: no timeout, restart, or reconnect. Only [`release`], reached from
-//! `genkan unkill` and from the extension's `kill_release` behind a WebAuthn presence exchange, and it
-//! demands a [`crate::presence::PresenceAttestation`]. Every attempt is audited: an attestation's grant or
-//! refusal with its auth path, a presence-gate refusal with its error ([`audit_refused_release`]). A corrupt
-//! record refuses BOTH directions ([`crate::trust::Trust::mutate_locked`]): an unkill from an unknown state
-//! would be a fail-open.
+//! The record IS the authority: every host-side enforcement point (tool dispatch, the broker's browser leg,
+//! the native host) reads it the same way and fails closed when it is unreadable; the extension only mirrors
+//! what the host pushes.
+//!
+//! Nothing clears the latch on its own: no timeout, restart, or reconnect. Only [`release`] does, reached from
+//! `genkan unkill` and the extension's `kill_release`, and it demands a [`crate::presence::PresenceAttestation`].
+//!
+//! Every attempt is audited, grant or refusal, with its auth path or its presence-gate error
+//! ([`audit_refused_release`]).
+//!
+//! A corrupt record refuses BOTH directions ([`crate::trust::Trust::mutate_locked`]): an unkill from an unknown
+//! state would be a fail-open.
 //!
 //! Residual: the trust record is writable by any same-user process, which can flip the latch off. That is
 //! inside the conceded same-user boundary (such a process could equally replace the host binary); the kill
