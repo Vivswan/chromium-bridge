@@ -9,7 +9,7 @@ modules:
   - nightly
   - uv
 project:
-  name: Chromium Bridge
-  slug: chromium-bridge
+  name: Genkan
+  slug: genkan
   description: "Authenticated MCP bridge to your real Chromium browsers (Brave, Chrome): Rust native-messaging host + MV3 extension, no debug port"
   copyright_holder: Vivswan Shah (https://github.com/Vivswan)

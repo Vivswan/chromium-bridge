@@ -7,7 +7,7 @@ Everything between the BEGIN and END markers is managed by the platform and repl
 
 ## Project
 
-Chromium Bridge: Authenticated MCP bridge to your real Chromium browsers (Brave, Chrome): Rust native-messaging host + MV3 extension, no debug port
+Genkan: Authenticated MCP bridge to your real Chromium browsers (Brave, Chrome): Rust native-messaging host + MV3 extension, no debug port
 
 ## Conventions
 
